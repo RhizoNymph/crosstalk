@@ -264,3 +264,76 @@ pub async fn evicts_expired_spans() {
     );
     db.close().await.expect("close");
 }
+
+/// A forwards a page it fetched; B reads the forward; the forwarded span is
+/// indexed (state still `Relayed`), matched, then expired, on Postgres as
+/// in memory.
+async fn forwarding<I, S>(world: &mut World<I, DisabledSemanticMatcher, S>) -> Vec<String>
+where
+    I: FingerprintIndex + Send + Sync,
+    S: ProvenanceStore + Clone + Send + Sync,
+{
+    let (a, b, c) = (world.agent(), world.agent(), world.agent());
+    let page = sentence("forwarded-page");
+    let sent = world
+        .run(
+            Turn::new(a, at(1))
+                .input(tool_result("call_1", &page))
+                .output(assistant_text(&format!("{}\n\n{page}", sentence("a-note")))),
+        )
+        .await;
+    let read = world.run(Turn::new(b, at(2)).input(user_text(&page))).await;
+    let mut seen = Vec::new();
+    for record in world
+        .store
+        .exchange_spans(sent.exchange)
+        .await
+        .expect("spans")
+    {
+        seen.push(format!(
+            "{:?} {:?} {:?}",
+            record.span.state,
+            record.forward,
+            record.index_seq.is_some()
+        ));
+    }
+    for stored in world.stored_matches(read.exchange).await {
+        seen.push(format!(
+            "{:?} {:?}",
+            stored.content.origin_agent() == a,
+            stored.content.carrier()
+        ));
+    }
+    let later = at(1 + RETENTION.as_secs() + 10);
+    world.engine.expire(later).await.expect("expiry");
+    for record in world
+        .store
+        .exchange_spans(sent.exchange)
+        .await
+        .expect("spans")
+    {
+        seen.push(format!("{:?} {:?}", record.span.state, record.forward));
+    }
+    let late = world.run(Turn::new(c, later).input(user_text(&page))).await;
+    seen.push(format!(
+        "{}",
+        world.stored_matches(late.exchange).await.len()
+    ));
+    seen
+}
+
+pub async fn forwarded_spans_index_and_expire() {
+    let Some(db) = database("pg_forwarded_spans_index_and_expire").await else {
+        return;
+    };
+    let mut memory = World::new(config());
+    let expected = forwarding(&mut memory).await;
+    assert!(
+        expected.iter().any(|line| line.contains("Some(Expired")),
+        "{expected:?}"
+    );
+    let mut pg = pg_world(&db);
+    let got = forwarding(&mut pg).await;
+    assert_eq!(got, expected);
+    db.close().await.expect("close");
+}

@@ -1,6 +1,7 @@
 //! Typed configuration: shingle and winnow parameters, decode limits, the
-//! index's cutoff, retention and shards, the eviction interval and the
-//! semantic threshold.
+//! index's cutoff, retention and shards, the eviction interval, the
+//! semantic threshold, the short-span exact path and the stricter rules for
+//! reader-output matches.
 //!
 //! Every value exists only in a valid state: the constructors check, and
 //! JSON decodes through them (unknown fields refused, every field
@@ -11,7 +12,9 @@
 //!  "decode": {"max_depth": 3, "max_layers": 32, "min_encoded_run": 16},
 //!  "index": {"cutoff": 50, "retention_secs": 2592000, "shards": 1, "owned": [0]},
 //!  "eviction_interval_secs": 3600, "semantic_threshold": 0.85,
-//!  "locator_keys": ["file_path", "path", "notebook_path", "url", "uri"]}
+//!  "locator_keys": ["file_path", "path", "notebook_path", "url", "uri"],
+//!  "short_spans": {"min_chars": 16, "max_chars": 46},
+//!  "reader_output": {"min_chars": 64, "cutoff": 5}}
 //! ```
 
 use std::collections::BTreeSet;
@@ -60,6 +63,115 @@ pub enum ConfigError {
     Threshold,
     #[error("a locator argument key must be non-empty")]
     EmptyLocatorKey,
+    #[error("short spans need {MIN_SHORT_CHARS} <= min_chars <= max_chars, got {min}..={max}")]
+    ShortSpanRange { min: u16, max: u16 },
+}
+
+/// The shortest floor the short-span path accepts: shorter values match
+/// common words between unrelated texts.
+pub const MIN_SHORT_CHARS: u16 = 4;
+
+/// The short-span exact path (`provenance.match.short-span-exact`).
+///
+/// Winnowing guarantees a match only for a shared run of `k + w - 1`
+/// normalized characters and finds nothing under `k`. A whole originated
+/// value shorter than that (a text part, or one string value of a tool
+/// call's arguments) of `min_chars..=max_chars` normalized characters is
+/// also indexed by one exact hash of its whole normalized text, and every
+/// read is looked up by the hashes of its normalized token runs of those
+/// lengths. `min_chars` is also the floor below which the segmenter keeps
+/// no originated text that has no k-gram: below it nothing is matched.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShortSpans {
+    min_chars: u16,
+    max_chars: u16,
+}
+
+impl ShortSpans {
+    pub fn new(min_chars: u16, max_chars: u16) -> Result<Self, ConfigError> {
+        if min_chars < MIN_SHORT_CHARS || min_chars > max_chars {
+            return Err(ConfigError::ShortSpanRange {
+                min: min_chars,
+                max: max_chars,
+            });
+        }
+        Ok(Self {
+            min_chars,
+            max_chars,
+        })
+    }
+
+    /// The fewest normalized characters a short span (and any originated
+    /// text without a k-gram) has.
+    pub fn min_chars(&self) -> usize {
+        usize::from(self.min_chars)
+    }
+
+    /// The most normalized characters a value matched by its exact hash
+    /// has; longer values are left to winnowing.
+    pub fn max_chars(&self) -> usize {
+        usize::from(self.max_chars)
+    }
+
+    /// Whether a value of `chars` normalized characters takes the path.
+    pub fn admits(&self, chars: usize) -> bool {
+        (self.min_chars()..=self.max_chars()).contains(&chars)
+    }
+}
+
+impl Default for ShortSpans {
+    /// 16 to 46 characters: the defaults' `k + w - 2` is the longest value
+    /// winnowing does not guarantee.
+    fn default() -> Self {
+        Self {
+            min_chars: DEFAULT_SHORT_MIN,
+            max_chars: DEFAULT_SHORT_MAX,
+        }
+    }
+}
+
+pub const DEFAULT_SHORT_MIN: u16 = 16;
+pub const DEFAULT_SHORT_MAX: u16 = 46;
+
+/// The stricter rules a `ReaderOutput` match must pass
+/// (`provenance.match.reader-output-strict`): text a reader writes that
+/// another agent wrote, with no visible input holding it, is often domain
+/// text both derived from the same task (SQL, shell idioms, stock phrases),
+/// and per-world postings never reach the index cutoff. The relayed stretch
+/// must have at least `min_chars` normalized characters, and at least one
+/// of the hit fingerprints in it must be observed in at most `cutoff`
+/// texts. Other carriers keep the index's cutoff and no length floor.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReaderOutputRules {
+    min_chars: u32,
+    cutoff: u64,
+}
+
+impl ReaderOutputRules {
+    pub fn new(min_chars: u32, cutoff: u64) -> Self {
+        Self { min_chars, cutoff }
+    }
+
+    /// The fewest normalized characters a `ReaderOutput` match covers.
+    pub fn min_chars(&self) -> usize {
+        usize::try_from(self.min_chars).unwrap_or(usize::MAX)
+    }
+
+    /// The most texts a fingerprint supporting a `ReaderOutput` match may
+    /// have been observed in.
+    pub fn cutoff(&self) -> u64 {
+        self.cutoff
+    }
+}
+
+impl Default for ReaderOutputRules {
+    /// 64 characters, 5 texts.
+    fn default() -> Self {
+        Self {
+            min_chars: 64,
+            cutoff: 5,
+        }
+    }
 }
 
 /// The tool-call argument keys whose string values name the resource a
@@ -268,6 +380,8 @@ pub struct ProvenanceConfig {
     eviction_interval: Duration,
     semantic_threshold: Similarity,
     locator_keys: LocatorKeys,
+    short_spans: ShortSpans,
+    reader_output: ReaderOutputRules,
 }
 
 impl ProvenanceConfig {
@@ -289,7 +403,31 @@ impl ProvenanceConfig {
             eviction_interval,
             semantic_threshold,
             locator_keys: LocatorKeys::default(),
+            short_spans: ShortSpans::default(),
+            reader_output: ReaderOutputRules::default(),
         })
+    }
+
+    /// The short-span exact path and the floor for originated text.
+    pub fn short_spans(&self) -> ShortSpans {
+        self.short_spans
+    }
+
+    /// This configuration with another short-span path.
+    pub fn with_short_spans(mut self, short_spans: ShortSpans) -> Self {
+        self.short_spans = short_spans;
+        self
+    }
+
+    /// The rules a `ReaderOutput` match must pass.
+    pub fn reader_output(&self) -> ReaderOutputRules {
+        self.reader_output
+    }
+
+    /// This configuration with other reader-output rules.
+    pub fn with_reader_output(mut self, reader_output: ReaderOutputRules) -> Self {
+        self.reader_output = reader_output;
+        self
     }
 
     /// The argument keys whose values yield no originated span.
@@ -354,6 +492,8 @@ impl Default for ProvenanceConfig {
             index: IndexSettings::default(),
             eviction_interval: Duration::from_secs(3600),
             locator_keys: LocatorKeys::default(),
+            short_spans: ShortSpans::default(),
+            reader_output: ReaderOutputRules::default(),
             // Infallible: 0.85 is within Similarity's 0..=1.
             semantic_threshold: Similarity::new(DEFAULT_THRESHOLD)
                 .expect("the default threshold is a similarity"),
@@ -478,6 +618,62 @@ struct RawConfig {
     semantic_threshold: f32,
     #[serde(default = "default_locator_keys")]
     locator_keys: Vec<String>,
+    #[serde(default)]
+    short_spans: RawShortSpans,
+    #[serde(default)]
+    reader_output: RawReaderOutput,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawShortSpans {
+    #[serde(default = "default_short_min")]
+    min_chars: u16,
+    #[serde(default = "default_short_max")]
+    max_chars: u16,
+}
+
+fn default_short_min() -> u16 {
+    DEFAULT_SHORT_MIN
+}
+
+fn default_short_max() -> u16 {
+    DEFAULT_SHORT_MAX
+}
+
+impl Default for RawShortSpans {
+    fn default() -> Self {
+        Self {
+            min_chars: DEFAULT_SHORT_MIN,
+            max_chars: DEFAULT_SHORT_MAX,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawReaderOutput {
+    #[serde(default = "default_reader_output_chars")]
+    min_chars: u32,
+    #[serde(default = "default_reader_output_cutoff")]
+    cutoff: u64,
+}
+
+fn default_reader_output_chars() -> u32 {
+    ReaderOutputRules::default().min_chars
+}
+
+fn default_reader_output_cutoff() -> u64 {
+    ReaderOutputRules::default().cutoff
+}
+
+impl Default for RawReaderOutput {
+    fn default() -> Self {
+        Self {
+            min_chars: default_reader_output_chars(),
+            cutoff: default_reader_output_cutoff(),
+        }
+    }
 }
 
 fn default_locator_keys() -> Vec<String> {
@@ -515,6 +711,9 @@ impl TryFrom<RawConfig> for ProvenanceConfig {
         let threshold =
             Similarity::new(raw.semantic_threshold).map_err(|_| ConfigError::Threshold)?;
         let locator_keys = LocatorKeys::new(raw.locator_keys)?;
+        let short_spans = ShortSpans::new(raw.short_spans.min_chars, raw.short_spans.max_chars)?;
+        let reader_output =
+            ReaderOutputRules::new(raw.reader_output.min_chars, raw.reader_output.cutoff);
         Self::new(
             winnow,
             decode,
@@ -522,7 +721,12 @@ impl TryFrom<RawConfig> for ProvenanceConfig {
             Duration::from_secs(raw.eviction_interval_secs),
             threshold,
         )
-        .map(|config| config.with_locator_keys(locator_keys))
+        .map(|config| {
+            config
+                .with_locator_keys(locator_keys)
+                .with_short_spans(short_spans)
+                .with_reader_output(reader_output)
+        })
     }
 }
 

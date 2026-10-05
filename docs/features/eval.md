@@ -1419,6 +1419,28 @@ Reading it:
 10. **Labels: two-string-level splices are in reach for L4.** At a day's window live finds 6 of 6 `OutOfReach` splice labels (a JSON-string file read through a shell): L4 decodes the writer's argument values before fingerprinting (INV-1057), so the reader side needs one level. `MatchNeed::two_string_levels` tiers by the reference's limit, not L4's.
 11. **Speed: live cost grows with request size.** SALT 9.5 min alone (15.5 min shared) against 44 s, open-swe 33 min against 33 s, AI Village 52 min against 3.7 min, τ² 29 min against 2.7 min (about 7 ms per exchange). Not profiled; long requests (SALT histories, SWE trajectories) dominate.
 
+### After the L4 match-quality fixes (findings 3, 4, 5 and 7)
+
+`fix/l4-match-quality` implements the decided L4 changes: context k-grams
+for originated text around a forwarded run (INV-1091), the short-span exact
+path (INV-1092), stricter `ReaderOutput` rules (INV-1093) and forwarded
+spans indexed under the forwarder (INV-1090). SALT `--limit 53`, live,
+release build, run beside the base commit on one machine:
+
+| build | recall | precision | predictions | FP / 1k exchanges | user-turn gate | time |
+| --- | ---: | ---: | ---: | ---: | --- | ---: |
+| base (20b32ff) | 0.722 | 0.622 | 6252 | 200.2 | ok | 15.1 min |
+| INV-1091 to 1093 only (forwarding switched off for the measurement) | 0.792 | 0.703 | 6763 | 170.4 | FAIL 0.816 < 0.830 | about 15 min |
+| all four | 0.957 | 0.310 | 90213 | 5279.9 | FAIL 0.782 < 0.830 | 15.7 min |
+
+- Reader-output false positives fall from 1,029 to 246; exact user-turn
+  recall rises from 0.810 to 0.879, with no forwarding.
+- Forwarding finds every escaped delivery (decoded user-turn recall 1.000,
+  finding 5) but adds 51,881 `ToolResult` decoded false positives: agents
+  paste their own `inspect_database` output, and every peer's own read of
+  the same schema matches the forward. Those tool calls record no access,
+  so INV-963 does not hold them back.
+
 ### Gates
 
 `gates.toml` gates the live detector (`detector = "live"`) a little below

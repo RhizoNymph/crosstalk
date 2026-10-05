@@ -3,10 +3,12 @@
 //! The evidence page reads spans, accesses and resources by id
 //! ([`MemoryEvidence`]). Accesses and resources it reads from the registry
 //! that recorded them; spans this stage copies in as L4 announces them:
-//! on `SpanOriginated`, the span's record from L4's `SpanIndex`
-//! ([`SpanSource`], [`IndexedSpans`]). Provenance commits a span before it
-//! publishes the event naming it, and only originated spans are ever the
-//! origin of a content match.
+//! on `SpanOriginated`, and on `SpanRelayed` from an input (a forwarded
+//! span, indexed under the forwarding agent:
+//! `provenance.index.forwarded-indexed`), the span's record from L4's
+//! `SpanIndex` ([`SpanSource`], [`IndexedSpans`]). Provenance commits a span
+//! before it publishes the event naming it, and only originated and
+//! forwarded spans are ever the origin of a content match.
 //!
 //! Kept to this one module: once the surface reads `SpanIndex` itself,
 //! this stage goes away.
@@ -15,7 +17,7 @@ use std::future::Future;
 
 use crosstalk_api::in_process::MemoryEvidence;
 use crosstalk_spec::batch::IdBatch;
-use crosstalk_spec::derived::provenance::span::{Span, SpanState};
+use crosstalk_spec::derived::provenance::span::{RelaySource, Span, SpanState};
 use crosstalk_spec::events::detect::DetectEvent;
 use crosstalk_spec::events::{BusEvent, Envelope, Subject};
 use crosstalk_spec::ids::SpanId;
@@ -39,10 +41,12 @@ pub trait SpanSource: Send + Sync + 'static {
 }
 
 /// Spans read through the spec's `SpanIndex` (L4's provenance store): an
-/// originated span's record, as the evidence page needs it (its location,
-/// author and exchange). The index keeps no state, so the span is rebuilt
-/// as `Originated`, the state it was recorded in; relayed and common spans
-/// are not in the index and never the origin of a content match.
+/// originated or forwarded span's record, as the evidence page needs it
+/// (its location, author and exchange). The index keeps no state, so the
+/// span is rebuilt as `Originated`; the feeder restates a forwarded span's
+/// `Relayed` state from its event. Spans relayed from another span and
+/// common spans are not in the index and never the origin of a content
+/// match.
 #[derive(Debug, Clone, Default)]
 pub struct IndexedSpans<I>(pub I);
 
@@ -79,9 +83,12 @@ impl<S: SpanSource> EvidenceFeeder<S> {
         Self { evidence, spans }
     }
 
-    async fn span(&self, id: SpanId) -> Result<(), StageError> {
+    async fn span(&self, id: SpanId, state: Option<SpanState>) -> Result<(), StageError> {
         match self.spans.span(id).await {
-            Ok(Some(span)) => {
+            Ok(Some(mut span)) => {
+                if let Some(state) = state {
+                    span.state = state;
+                }
                 self.evidence.insert_span(span);
                 Ok(())
             }
@@ -98,12 +105,21 @@ impl<S: SpanSource> EvidenceFeeder<S> {
 
 impl<S: SpanSource> Stage for EvidenceFeeder<S> {
     fn subjects(&self) -> Vec<Subject> {
-        vec![Subject::SpanOriginated]
+        vec![Subject::SpanOriginated, Subject::SpanRelayed]
     }
 
     async fn handle(&mut self, envelope: &Envelope) -> Result<(), StageError> {
         match &envelope.event {
-            BusEvent::Detect(DetectEvent::SpanOriginated { span, .. }) => self.span(*span).await,
+            BusEvent::Detect(DetectEvent::SpanOriginated { span, .. }) => {
+                self.span(*span, None).await
+            }
+            BusEvent::Detect(DetectEvent::SpanRelayed {
+                span,
+                source: source @ RelaySource::Input(_),
+            }) => {
+                self.span(*span, Some(SpanState::Relayed { source: *source }))
+                    .await
+            }
             _ => Ok(()),
         }
     }

@@ -103,3 +103,10 @@ async fn pg_redelivered_delta_is_idempotent() {
 async fn pg_store_reads_scan_status_and_matches() {
     engine::scan_status_and_match_reads().await;
 }
+
+/// `provenance.index.forwarded-indexed` on Postgres: a forwarded span is
+/// indexed, matched and expired as in memory, its state left `Relayed`.
+#[tokio::test(flavor = "multi_thread")]
+async fn pg_forwarded_spans_index_and_expire() {
+    engine::forwarded_spans_index_and_expire().await;
+}

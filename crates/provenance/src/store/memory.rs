@@ -12,8 +12,8 @@ use crosstalk_spec::interfaces::l4_provenance::{IndexedSpan, SpanIndex, SpanInde
 use crosstalk_spec::support::Timestamp;
 
 use super::{
-    Committed, ExchangeRecord, MessageScan, ProvenanceStore, ProvenanceStoreError, ScanCommit,
-    ScanFailure, ScanStatus, ScannedAs, SpanRecord, StoredMatch,
+    Committed, ExchangeRecord, Forwarding, MessageScan, ProvenanceStore, ProvenanceStoreError,
+    ScanCommit, ScanFailure, ScanStatus, ScannedAs, SpanRecord, StoredMatch,
 };
 
 #[derive(Debug, Default)]
@@ -70,9 +70,11 @@ fn advance(record: &mut SpanRecord, event: SpanEvent) -> Result<(), ProvenanceSt
 
 /// The spec's `SpanIndex` over the spans the scans committed: `commit_scan`
 /// already wrote every classified span, so `record` adds nothing (it is
-/// idempotent by construction), and `spans` reads back the originated ones
-/// (`Originated`, `Indexed`, `Propagated` or `Expired`) as recorded;
-/// relayed and common spans, and unknown ids, are absent.
+/// idempotent by construction), and `spans` reads back the indexed ones as
+/// recorded: the originated ones (`Originated`, `Indexed`, `Propagated` or
+/// `Expired`) and the forwarded ones (`Relayed` from an input,
+/// `provenance.index.forwarded-indexed`). Spans relayed from another span,
+/// common spans and unknown ids are absent.
 impl SpanIndex for MemoryProvenanceStore {
     async fn record(&mut self, _span: &OriginatedSpan) -> Result<(), SpanIndexError> {
         Ok(())
@@ -87,7 +89,10 @@ impl SpanIndex for MemoryProvenanceStore {
             .ids()
             .iter()
             .filter_map(|id| tables.spans.get(id))
-            .filter(|record| record.span.state.origin() == Some(Origin::Originated))
+            .filter(|record| {
+                record.span.state.origin() == Some(Origin::Originated)
+                    || record.span.state.is_forwarded()
+            })
             .map(|record| {
                 (
                     record.span.id,
@@ -235,16 +240,13 @@ impl ProvenanceStore for MemoryProvenanceStore {
             ids.push(span.id);
             tables.spans.insert(
                 span.id,
-                SpanRecord {
-                    span: span.clone(),
-                    ordinal: u32::try_from(ordinal).unwrap_or(u32::MAX),
-                    index_seq: None,
-                },
+                SpanRecord::committed(span.clone(), u32::try_from(ordinal).unwrap_or(u32::MAX)),
             );
         }
         tables.by_exchange.insert(commit.exchange, ids);
         for stored in &commit.matches {
             if let Some(origin) = tables.spans.get_mut(&stored.content.origin())
+                && origin.forward.is_none()
                 && let Err(error) = advance(origin, SpanEvent::Hit { at: commit.at })
             {
                 tracing::debug!(span = ?stored.content.origin(), error = %error, "hit not recorded on the origin span");
@@ -281,13 +283,18 @@ impl ProvenanceStore for MemoryProvenanceStore {
             .unwrap_or_default();
         for id in ids {
             let sequence = tables.sequence + 1;
-            if let Some(record) = tables.spans.get_mut(&id)
-                && record.span.state == SpanState::Originated
-            {
+            let Some(record) = tables.spans.get_mut(&id) else {
+                continue;
+            };
+            if record.span.state == SpanState::Originated {
                 advance(record, SpanEvent::Index { at })?;
-                record.index_seq = Some(sequence);
-                tables.sequence = sequence;
+            } else if record.forward == Some(Forwarding::Pending) {
+                record.forward = Some(Forwarding::Indexed { at });
+            } else {
+                continue;
             }
+            record.index_seq = Some(sequence);
+            tables.sequence = sequence;
         }
         if let Some((_, status)) = tables.exchanges.get_mut(&exchange) {
             *status = ScanStatus::Indexed { at };
@@ -321,13 +328,10 @@ impl ProvenanceStore for MemoryProvenanceStore {
         let mut due: Vec<(Timestamp, SpanId)> = tables
             .spans
             .values()
-            .filter_map(|record| match record.span.state {
-                SpanState::Indexed { at } | SpanState::Propagated { indexed_at: at, .. }
-                    if at.as_micros().saturating_add(retention_micros) < now.as_micros() =>
-                {
-                    Some((at, record.span.id))
-                }
-                _ => None,
+            .filter_map(|record| {
+                let at = record.indexed_at()?;
+                (at.as_micros().saturating_add(retention_micros) < now.as_micros())
+                    .then_some((at, record.span.id))
             })
             .collect();
         due.sort_unstable();
@@ -341,9 +345,12 @@ impl ProvenanceStore for MemoryProvenanceStore {
     ) -> Result<(), ProvenanceStoreError> {
         let mut tables = self.lock();
         for id in spans {
-            if let Some(record) = tables.spans.get_mut(id)
-                && let Err(error) = advance(record, SpanEvent::Expire { at })
-            {
+            let Some(record) = tables.spans.get_mut(id) else {
+                continue;
+            };
+            if let Some(Forwarding::Indexed { at: indexed_at }) = record.forward {
+                record.forward = Some(Forwarding::Expired { indexed_at, at });
+            } else if let Err(error) = advance(record, SpanEvent::Expire { at }) {
                 tracing::debug!(span = ?id, error = %error, "span not expired");
             }
         }

@@ -243,21 +243,22 @@ impl FingerprintIndex for MemoryFingerprintIndex {
     ) -> Result<Vec<FingerprintHit>, IndexError> {
         self.check_shards(fingerprints)?;
         let state = self.state.read();
+        // Postings first: a query with none needs no frequency count, so
+        // large lookups (short-span token runs) stay cheap.
         let hits = fingerprints
             .iter()
-            .filter(|query| !state.boilerplate(&self.config, now, query.fingerprint))
-            .flat_map(|query| {
-                state
-                    .postings
-                    .get(&query.fingerprint)
-                    .into_iter()
-                    .flatten()
-                    .map(|(span, span_offset)| FingerprintHit {
-                        fingerprint: query.fingerprint,
-                        span: *span,
-                        span_offset: *span_offset,
-                        query_offset: query.offset,
-                    })
+            .filter_map(|query| {
+                let postings = state.postings.get(&query.fingerprint)?;
+                (!state.boilerplate(&self.config, now, query.fingerprint))
+                    .then_some((query, postings))
+            })
+            .flat_map(|(query, postings)| {
+                postings.iter().map(|(span, span_offset)| FingerprintHit {
+                    fingerprint: query.fingerprint,
+                    span: *span,
+                    span_offset: *span_offset,
+                    query_offset: query.offset,
+                })
             })
             .collect();
         Ok(hits)

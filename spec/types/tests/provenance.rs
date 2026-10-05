@@ -149,9 +149,18 @@ fn only_live_originated_spans_can_be_indexed() {
     assert!(OriginatedSpan::new(span_in(SpanState::Indexed { at: at(1) })).is_some());
     assert!(OriginatedSpan::new(span_in(SpanState::Extracted)).is_none());
     assert!(OriginatedSpan::new(span_in(SpanState::Common)).is_none());
+    // Forwarded text (relayed from an input) is indexed under the
+    // forwarding agent (`provenance.index.forwarded-indexed`); text relayed
+    // from another indexed span is not.
     assert!(
         OriginatedSpan::new(span_in(SpanState::Relayed {
             source: RelaySource::Input(message(1))
+        }))
+        .is_some()
+    );
+    assert!(
+        OriginatedSpan::new(span_in(SpanState::Relayed {
+            source: RelaySource::Span(span(7))
         }))
         .is_none()
     );

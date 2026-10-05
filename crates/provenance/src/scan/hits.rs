@@ -1,15 +1,15 @@
 //! Which index hits count, and the bytes they cover.
 //!
 //! A hit counts when its span is stored, live (`Indexed` or `Propagated`,
-//! so never after expiry, `provenance.match.none-after-expiry`), was indexed
+//! or a forwarded span whose forwarding is `Indexed`; so never after
+//! expiry, `provenance.match.none-after-expiry`), was indexed
 //! at or before the reader's time, and was indexed before this scan began
 //! (its index sequence at most the watermark read at the start,
 //! `provenance.match.indexed-before-read`).
 
 use std::collections::{BTreeMap, HashMap};
 
-use crosstalk_spec::derived::provenance::fingerprint::FingerprintHit;
-use crosstalk_spec::derived::provenance::span::SpanState;
+use crosstalk_spec::derived::provenance::fingerprint::{Fingerprint, FingerprintHit};
 use crosstalk_spec::ids::SpanId;
 use crosstalk_spec::support::Timestamp;
 
@@ -29,12 +29,10 @@ impl LiveSpans {
         let records = records
             .into_iter()
             .filter(|record| {
-                let indexed_at = match record.span.state {
-                    SpanState::Indexed { at } => at,
-                    SpanState::Propagated { indexed_at, .. } => indexed_at,
-                    _ => return false,
-                };
-                indexed_at <= now && record.index_seq.is_some_and(|seq| seq <= watermark)
+                record
+                    .indexed_at()
+                    .is_some_and(|indexed_at| indexed_at <= now)
+                    && record.index_seq.is_some_and(|seq| seq <= watermark)
             })
             .map(|record| (record.span.id, record))
             .collect();
@@ -51,15 +49,19 @@ impl LiveSpans {
 }
 
 /// Each hit span's covered byte extents in the query's coordinates, from
-/// the queried k-grams (a hit's `query_offset` is its k-gram's start).
+/// the queried k-grams (a hit's `query_offset` is its k-gram's start; a
+/// k-gram and the short-span runs starting at the same offset are told
+/// apart by their fingerprints).
 pub fn extents_by_span(
     hits: &[FingerprintHit],
     kgrams: &[KGram],
     keep: impl Fn(SpanId) -> bool,
 ) -> BTreeMap<SpanId, Vec<(u32, u32)>> {
-    let mut ends: HashMap<u32, u32> = HashMap::with_capacity(kgrams.len());
+    let mut ends: HashMap<(u32, Fingerprint), u32> = HashMap::with_capacity(kgrams.len());
     for kgram in kgrams {
-        let end = ends.entry(kgram.start).or_insert(kgram.end);
+        let end = ends
+            .entry((kgram.start, kgram.fingerprint))
+            .or_insert(kgram.end);
         *end = (*end).max(kgram.end);
     }
     let mut by_span: BTreeMap<SpanId, Vec<(u32, u32)>> = BTreeMap::new();
@@ -67,7 +69,7 @@ pub fn extents_by_span(
         if !keep(hit.span) {
             continue;
         }
-        if let Some(end) = ends.get(&hit.query_offset) {
+        if let Some(end) = ends.get(&(hit.query_offset, hit.fingerprint)) {
             by_span
                 .entry(hit.span)
                 .or_default()

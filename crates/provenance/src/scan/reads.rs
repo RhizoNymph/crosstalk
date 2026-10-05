@@ -8,6 +8,11 @@
 //! (wherever it appears in the request). Other parts of assistant messages
 //! replayed as inputs carry nothing.
 //!
+//! Each layer is looked up by its winnowed k-grams and by the short-span
+//! hashes of its normalized token runs (`provenance.match.short-span-exact`,
+//! [`crate::fingerprint::short`]), so a whole short value another agent
+//! wrote is found where it is read whole.
+//!
 //! Per origin span, one layer wins: one whose text holds the origin span's
 //! whole text (normalized) before one that does not, then the one covering
 //! most part bytes, then the shorter chain, so the kind names the chain that
@@ -33,8 +38,10 @@ use super::kind::{is_exact, match_kind};
 use super::messages::MessageSource;
 use super::{ScanError, Scanner, Session};
 use crate::decode::Step;
+use crate::fingerprint::short;
 use crate::segment::{PartKind, TextPart, text_parts, view};
 use crate::store::ProvenanceStore;
+use crate::text::normalize;
 use crate::text::normalize::normalized_string;
 
 /// The carrier a read in `part` of `message` has; `None` for parts that
@@ -144,7 +151,12 @@ impl Scanner {
         let mut found: BTreeMap<SpanId, Vec<Candidate>> = BTreeMap::new();
         for (index, layer) in layers.iter().enumerate() {
             let mapped = base.compose(layer.text.clone());
-            let kgrams = self.owned(self.winnowing().winnow(layer.text.text()));
+            let mut queries = self.winnowing().winnow(layer.text.text());
+            queries.extend(short::token_runs(
+                &normalize(layer.text.text()),
+                self.short_spans(),
+            ));
+            let kgrams = self.owned(queries);
             let hits = session.lookup(&kgrams).await?;
             let reader = session.reader;
             let live = &session.live;

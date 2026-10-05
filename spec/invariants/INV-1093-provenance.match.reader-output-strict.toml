@@ -1,0 +1,27 @@
+[invariant]
+id = "provenance.match.reader-output-strict"
+statement = "A ContentMatch with carrier ReaderOutput is made only for a relayed stretch of at least ReaderOutputRules::min_chars normalized characters (64 by default) with at least one supporting hit fingerprint observed in at most ReaderOutputRules::cutoff texts (5 by default); a stretch failing either rule stays Relayed from the span but yields no match, and matches with any other carrier keep the index cutoff and no length floor."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+Text a reader writes that another agent wrote, with no visible input
+holding it, is the only evidence of a hidden channel, but in practice it is
+mostly domain text both agents derive from the same task: SQL clauses,
+shell idioms, stock phrases (false positives: SALT 1,029, open-swe 2,070,
+lmcache 787). Per-world postings never reach the index cutoff of 50, so
+the index cannot tell such text from a transmission. A reader-output match
+therefore needs a longer stretch and a rarer fingerprint. The stretch is
+still classified Relayed from the origin span, so it is never indexed as
+the reader's (provenance.span.originated-absent-from-inputs); only the
+match is withheld. Tool results, user turns and system prompts are visible
+carriers whose reads are evidence on their own, and keep the index's rules.
+"""
+
+[evidence]
+unit = ["crosstalk_provenance::tests::match_quality::short_reader_output_yields_no_match_but_tool_results_do", "crosstalk_provenance::tests::match_quality::frequent_reader_output_yields_no_match_but_tool_results_do"]
+property = "crosstalk_provenance::props::unexplained_output_text_matches_as_reader_output"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+property = { agent = "true", human = "false" }

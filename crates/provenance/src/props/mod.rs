@@ -234,6 +234,12 @@ proptest! {
         after in sentence(0, 5),
         input in sentence(3, 8),
     ) {
+        // `provenance.match.reader-output-strict`: shorter text never
+        // yields a `ReaderOutput` match.
+        prop_assume!(
+            crate::text::normalize::normalized_string(&text).chars().count()
+                >= config().reader_output().min_chars()
+        );
         block_on(async {
             let mut world = World::new(config());
             let (a, b) = (world.agent(), world.agent());
@@ -691,4 +697,63 @@ fn trailing_escape_still_reports_the_full_chain() {
     let kind = block_on(encoded_read(text, &[Codec::Base64, Codec::UrlEncoding]));
     let expected = NonEmpty::from_vec(vec![Codec::UrlEncoding, Codec::Base64]).expect("two codecs");
     assert_eq!(kind, Some(MatchKind::Decoded(expected)));
+}
+
+proptest! {
+    #![proptest_config(cases(256))]
+
+    /// `provenance.index.remainder-around-relay-matchable`: in a run of an
+    /// originated remainder, a forwarded quote and another remainder, every
+    /// context k-gram is posted under the span holding more than half of
+    /// its characters, so a k-gram mostly over the quote never goes to an
+    /// originated span.
+    #[test]
+    fn context_kgrams_go_to_the_span_holding_most_of_them(
+        before in "[a-z]{1,6}( [a-z]{1,6}){0,3}",
+        quote in "[a-z]{1,6}( [a-z]{1,6}){1,6}",
+        after in "[a-z]{1,6}( [a-z]{1,6}){0,3}",
+    ) {
+        use crosstalk_spec::derived::provenance::span::{Span, SpanLocation};
+        use crosstalk_spec::ids::{AgentId, ExchangeId, SpanId};
+        use crosstalk_spec::observed::message::PartRef;
+        use crosstalk_testkit::build::message::message;
+
+        let text = format!("{before} {quote} {after}");
+        let output = message(assistant_text(&text));
+        let quote_start = before.len() as u32 + 1;
+        let quote_end = quote_start + quote.len() as u32;
+        let ranges = [
+            (0, before.len() as u32, SpanState::Originated),
+            (quote_start, quote_end, SpanState::Relayed { source: RelaySource::Input(output.hash) }),
+            (quote_end + 1, text.len() as u32, SpanState::Originated),
+        ];
+        let spans: Vec<Span> = ranges
+            .iter()
+            .enumerate()
+            .map(|(n, (start, end, state))| Span {
+                id: SpanId::from_ulid(n as u128 + 1),
+                location: SpanLocation {
+                    part: PartRef { message: output.hash, index: 0 },
+                    range: ByteRange::new(*start, *end).expect("a range"),
+                },
+                agent: AgentId::from_ulid(1),
+                exchange: ExchangeId::from_ulid(1),
+                state: state.clone(),
+            })
+            .collect();
+        let scanner = crate::scan::Scanner::new(&config());
+        let k = scanner.winnowing().k();
+        let context = scanner.context_kgrams(&crate::segment::text_parts(&output), &spans);
+        for (id, kgrams) in &context {
+            let span = spans.iter().find(|span| span.id == *id).expect("a posted span");
+            let range = span.location.range;
+            for kgram in kgrams {
+                // ASCII with single spaces: a normalized position is a byte.
+                let inside = (kgram.position..kgram.position + k)
+                    .filter(|at| (range.start() as usize..range.end() as usize).contains(at))
+                    .count();
+                prop_assert!(2 * inside > k, "a context k-gram posted under a minority span");
+            }
+        }
+    }
 }

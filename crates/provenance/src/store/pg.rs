@@ -1,5 +1,5 @@
 //! [`PgProvenanceStore`]: L4's records in the `provenance` schema
-//! (`migrations/0001_provenance.sql`).
+//! (`migrations/0001_provenance.sql`, `0002_forwarded_spans.sql`).
 //!
 //! Tables: `exchanges` (status, by id; by start time for pruning),
 //! `exchange_requests` (the request's hashes until pruned),
@@ -21,8 +21,8 @@ use sqlx::postgres::PgRow;
 use sqlx::{PgConnection, PgPool, Row};
 
 use super::{
-    Committed, ExchangeRecord, MessageScan, ProvenanceStore, ProvenanceStoreError, ScanCommit,
-    ScanFailure, ScanStatus, ScannedAs, SpanRecord, StoredMatch,
+    Committed, ExchangeRecord, Forwarding, MessageScan, ProvenanceStore, ProvenanceStoreError,
+    ScanCommit, ScanFailure, ScanStatus, ScannedAs, SpanRecord, StoredMatch,
 };
 use crate::pg::{
     Failure, OutOfRange, failure, hash_bytes, hash_from, horizon, id_bytes, id_from, time_from,
@@ -241,7 +241,8 @@ fn state_from(row: &PgRow) -> Result<SpanState, ProvenanceStoreError> {
 macro_rules! span_columns {
     () => {
         "span, agent, exchange, message, part, range_start, range_end, ordinal, state, \
-         relay_span, relay_message, indexed_at, first_hit_at, hits, expired_at, index_seq"
+         relay_span, relay_message, indexed_at, first_hit_at, hits, expired_at, index_seq, \
+         forward_indexed_at, forward_expired_at"
     };
 }
 
@@ -258,6 +259,19 @@ fn span_from(row: &PgRow) -> Result<SpanRecord, ProvenanceStoreError> {
     let range = ByteRange::new(u32_from(start, "a range")?, u32_from(end, "a range")?)
         .map_err(|_| corrupt("an empty range"))?;
     let part = u16::try_from(part).map_err(|_| corrupt("a part index"))?;
+    let state = state_from(row)?;
+    let forward_indexed_at: Option<i64> = row.try_get("forward_indexed_at")?;
+    let forward_expired_at: Option<i64> = row.try_get("forward_expired_at")?;
+    let forward = match (state.is_forwarded(), forward_indexed_at, forward_expired_at) {
+        (false, None, None) => None,
+        (true, None, None) => Some(Forwarding::Pending),
+        (true, Some(at), None) => Some(Forwarding::Indexed { at: time_from(at)? }),
+        (true, Some(indexed_at), Some(at)) => Some(Forwarding::Expired {
+            indexed_at: time_from(indexed_at)?,
+            at: time_from(at)?,
+        }),
+        _ => return Err(corrupt("forwarding columns")),
+    };
     Ok(SpanRecord {
         span: Span {
             id: id_from(&id)?,
@@ -270,10 +284,11 @@ fn span_from(row: &PgRow) -> Result<SpanRecord, ProvenanceStoreError> {
             },
             agent: id_from(&agent)?,
             exchange: id_from(&exchange)?,
-            state: state_from(row)?,
+            state,
         },
         ordinal: u32::try_from(ordinal).map_err(|_| corrupt("an ordinal"))?,
         index_seq: index_seq.and_then(|seq| u64::try_from(seq).ok()),
+        forward,
     })
 }
 
@@ -684,6 +699,8 @@ impl ProvenanceStore for PgProvenanceStore {
             .await
             {
                 Ok(_) => {}
+                // A forwarded origin stays `Relayed`: no hit is counted.
+                Err(ProvenanceStoreError::Transition(refused)) if refused.from.is_forwarded() => {}
                 Err(ProvenanceStoreError::Transition(refused)) => {
                     tracing::debug!(span = ?stored.content.origin(), refused = ?refused, "hit not recorded on the origin span");
                 }
@@ -725,15 +742,29 @@ impl ProvenanceStore for PgProvenanceStore {
             Some(ScanStatus::Scanned { .. }) => {}
             Some(_) => return Ok(()),
         }
-        let originated: Vec<Vec<u8>> = sqlx::query_scalar(
-            "SELECT span FROM provenance.spans WHERE exchange = $1 AND state = 'originated' \
-             ORDER BY ordinal",
+        let due = sqlx::query(
+            "SELECT span, state FROM provenance.spans WHERE exchange = $1 \
+             AND (state = 'originated' OR (state = 'relayed' AND relay_message IS NOT NULL \
+             AND forward_indexed_at IS NULL)) ORDER BY ordinal",
         )
         .bind(id_bytes(exchange))
         .fetch_all(&mut *tx)
         .await?;
-        for span in originated {
-            advance_span(&mut tx, id_from(&span)?, SpanEvent::Index { at }, true).await?;
+        for row in due {
+            let span: Vec<u8> = row.try_get("span")?;
+            let state: String = row.try_get("state")?;
+            if state == "originated" {
+                advance_span(&mut tx, id_from(&span)?, SpanEvent::Index { at }, true).await?;
+            } else {
+                sqlx::query(
+                    "UPDATE provenance.spans SET forward_indexed_at = $2, \
+                     index_seq = nextval('provenance.index_seq') WHERE span = $1",
+                )
+                .bind(span)
+                .bind(time_i64(at)?)
+                .execute(&mut *tx)
+                .await?;
+            }
         }
         sqlx::query(
             "UPDATE provenance.exchanges SET status = 'indexed', status_at = $2 \
@@ -789,8 +820,9 @@ impl ProvenanceStore for PgProvenanceStore {
     ) -> Result<Vec<SpanId>, ProvenanceStoreError> {
         let rows: Vec<Vec<u8>> = sqlx::query_scalar(
             "SELECT span FROM provenance.spans \
-             WHERE state IN ('indexed', 'propagated') AND indexed_at < $1 \
-             ORDER BY indexed_at, span LIMIT $2",
+             WHERE (state IN ('indexed', 'propagated') AND indexed_at < $1) \
+             OR (forward_indexed_at < $1 AND forward_expired_at IS NULL) \
+             ORDER BY coalesce(indexed_at, forward_indexed_at), span LIMIT $2",
         )
         .bind(horizon(now, retention_micros))
         .bind(i64::try_from(limit).unwrap_or(i64::MAX))
@@ -808,6 +840,17 @@ impl ProvenanceStore for PgProvenanceStore {
     ) -> Result<(), ProvenanceStoreError> {
         let mut tx = self.pool.begin().await?;
         for span in spans {
+            let forwarded = sqlx::query(
+                "UPDATE provenance.spans SET forward_expired_at = $2 WHERE span = $1 \
+                 AND forward_indexed_at IS NOT NULL AND forward_expired_at IS NULL",
+            )
+            .bind(id_bytes(*span))
+            .bind(time_i64(at)?)
+            .execute(&mut *tx)
+            .await?;
+            if forwarded.rows_affected() > 0 {
+                continue;
+            }
             match advance_span(&mut tx, *span, SpanEvent::Expire { at }, false).await {
                 Ok(_) => {}
                 Err(ProvenanceStoreError::Transition(refused)) => {

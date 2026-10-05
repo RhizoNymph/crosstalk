@@ -19,6 +19,7 @@
 //! bytes it covers.
 
 pub mod hash;
+pub mod short;
 
 use std::collections::VecDeque;
 
