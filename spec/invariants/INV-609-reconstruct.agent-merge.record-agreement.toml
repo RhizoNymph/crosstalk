@@ -16,8 +16,8 @@ unit = [
     "crosstalk_spec::tests::agents::random_merges_and_reverts_keep_the_invariants",
     "crosstalk_spec::tests::agents::reverting_out_of_order_returns_repointed_agents_to_the_source",
 ]
-property = "crosstalk_reconstruct::tests::merge_log_agrees_with_states"
+property = "crosstalk_reconstruct::tests::pg_agents::merge_log_agrees_with_states"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

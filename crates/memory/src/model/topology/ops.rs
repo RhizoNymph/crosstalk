@@ -6,6 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use proptest::prelude::*;
 
 use crosstalk_spec::aggregates::edge::{EdgeSelector, TopologyFilter, TopologyGraph};
+use crosstalk_spec::aggregates::node::CanonicalOriginKind;
 use crosstalk_spec::aggregates::node::GraphNode;
 use crosstalk_spec::aggregates::series::{
     SeriesGrid, SeriesGrouping, SeriesGroups, SeriesStep, TopologySeries,
@@ -13,21 +14,25 @@ use crosstalk_spec::aggregates::series::{
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::aggregates::watermark::{PipelineFrontier, Watermark, Watermarked};
 use crosstalk_spec::derived::flow::access::AccessKind;
+use crosstalk_spec::derived::flow::channel::confirmation::{Confirmation, Listing};
+use crosstalk_spec::derived::flow::channel::detection::DetectionKind;
+use crosstalk_spec::derived::flow::channel::policy::PolicyKind;
 use crosstalk_spec::derived::flow::transmission::{Classification, DelegationDirection, Route};
 use crosstalk_spec::derived::flow::verdict::{CurrentVerdict, Observed, Verdict};
 use crosstalk_spec::events::insight::ClassificationCause;
 use crosstalk_spec::ids::{AgentId, TopicId};
 use crosstalk_spec::interfaces::l7_topology::{
-    AccessContribution, EdgeContribution, EdgeQueryError, EdgeStore,
+    AccessContribution, ChannelFacts, EdgeContribution, EdgeQueryError, EdgeStore,
 };
 use crosstalk_spec::paging::{EdgeTransmissionList, PageRequest, PageSize};
-use crosstalk_spec::support::TimeWindow;
+use crosstalk_spec::support::{NonBlank, TimeWindow};
 
 use super::subject::{EdgeSubject, EdgeWorld, ReferenceEdges, catalog_ready};
 use super::{Ledger, check_graph, revision, weighting};
 use crate::model::analysis::harness_model;
 use crate::model::build::{
-    access, agent, bucket_width, channel, non_zero, raw, topic, transmission, ts, unit, window,
+    access, agent, bucket_width, channel, non_zero, raw, resource, topic, transmission, ts, unit,
+    window,
 };
 use crate::model::{Divergence, holds, same};
 use crate::topology::fold::{kind_index, route_key};
@@ -90,9 +95,17 @@ pub enum EdgeOp {
     Access {
         n: u64,
         agent: u64,
-        channel: u64,
+        resource: u64,
         write: bool,
         at: u64,
+    },
+    /// The world's facts: `resource` is held on `channel` (on none for
+    /// `None`), and that channel is listed as `listing` (0 a confirmed
+    /// channel, 1 an unconfirmed one, 2 a declaration, 3 hidden).
+    Hold {
+        resource: u64,
+        channel: Option<u64>,
+        listing: u8,
     },
     Merge {
         from: u64,
@@ -158,8 +171,10 @@ pub fn edge_op() -> impl Strategy<Value = EdgeOp> {
         1 => (0u32..5).prop_map(|version| EdgeOp::Drop { version }),
         2 => (0u64..12, 0u8..3, 1u32..4).prop_map(|(n, verdict, revision)| EdgeOp::Judge { n, verdict, revision }),
         2 => (0u64..300, prop::option::of(0u64..300)).prop_map(|(ticked, pending)| EdgeOp::Advance { ticked, pending }),
-        3 => (0u64..10, 0u64..5, 0u64..4, any::<bool>(), 0u64..250)
-            .prop_map(|(n, agent, channel, write, at)| EdgeOp::Access { n, agent, channel, write, at }),
+        3 => (0u64..10, 0u64..5, 0u64..5, any::<bool>(), 0u64..250)
+            .prop_map(|(n, agent, resource, write, at)| EdgeOp::Access { n, agent, resource, write, at }),
+        2 => (0u64..5, prop::option::of(0u64..4), 0u8..4)
+            .prop_map(|(resource, channel, listing)| EdgeOp::Hold { resource, channel, listing }),
         1 => (0u64..5, 0u64..5).prop_map(|(from, into)| EdgeOp::Merge { from, into }),
         1 => (0u64..5).prop_map(|agent| EdgeOp::Unmerge { agent }),
         1 => (0u64..4, 0u64..4).prop_map(|(channel, by)| EdgeOp::Supersede { channel, by }),
@@ -536,14 +551,14 @@ pub async fn play<S: EdgeSubject>(
         EdgeOp::Access {
             n,
             agent: a,
-            channel: c,
+            resource: r,
             write,
             at,
         } => {
             let one = AccessContribution {
                 access: access(*n),
                 agent: agent(*a),
-                channel: channel(*c),
+                resource: resource(*r),
                 op: if *write {
                     AccessKind::Write
                 } else {
@@ -568,6 +583,18 @@ pub async fn play<S: EdgeSubject>(
         }
         EdgeOp::Parent { agent: a, parent } => {
             outside.nodes.set_parent(agent(*a), parent.map(agent));
+        }
+        EdgeOp::Hold {
+            resource: r,
+            channel: c,
+            listing,
+        } => {
+            outside.nodes.set_resource(resource(*r), c.map(channel));
+            if let Some(c) = c {
+                outside
+                    .nodes
+                    .set_channel(channel(*c), channel_facts(*c, *listing));
+            }
         }
         EdgeOp::Graph {
             window: seed,
@@ -758,4 +785,40 @@ pub async fn play<S: EdgeSubject>(
     }
     let theirs = subject.watermark().await;
     same(step, "watermark", &theirs, &reference.watermark().await)
+}
+
+/// The facts of channel `n` listed as `listing` (0 a confirmed channel, 1
+/// an unconfirmed one, 2 a declaration, 3 hidden).
+fn channel_facts(n: u64, listing: u8) -> ChannelFacts {
+    let listing = match listing % 4 {
+        0 => Listing::Channel(Confirmation::Confirmed),
+        1 => Listing::Channel(Confirmation::Unconfirmed),
+        2 => Listing::Declaration,
+        _ => Listing::Hidden,
+    };
+    let origin = match listing {
+        Listing::Declaration => CanonicalOriginKind::DeclaredBeforeTraffic,
+        Listing::Channel(_) | Listing::Hidden => CanonicalOriginKind::Discovered,
+    };
+    let detection = match listing {
+        Listing::Declaration => DetectionKind::AwaitingTraffic,
+        Listing::Channel(_) | Listing::Hidden => DetectionKind::Active,
+    };
+    ChannelFacts {
+        label: None,
+        origin,
+        detection,
+        policy: PolicyKind::Unreviewed,
+        locator_summary: summary(n),
+        listing,
+    }
+}
+
+/// The text channel `n`'s node is summarized by.
+fn summary(n: u64) -> NonBlank {
+    // Provably infallible: the text starts with "resource", so it is never
+    // blank.
+    #[allow(clippy::expect_used)]
+    NonBlank::new(&format!("resource {n}"))
+        .expect("a summary starting with \"resource\" is never blank")
 }

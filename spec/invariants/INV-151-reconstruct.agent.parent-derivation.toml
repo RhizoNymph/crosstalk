@@ -16,11 +16,11 @@ main agent.
 
 [evidence]
 unit = [
-  "crosstalk_reconstruct::tests::parent_from_harness_parent_id_in_scope",
-  "crosstalk_reconstruct::tests::parent_id_from_other_scope_is_ignored",
-  "crosstalk_reconstruct::tests::subagent_parent_is_session_main_agent",
-  "crosstalk_reconstruct::tests::main_agent_has_no_parent",
+  "crosstalk_reconstruct::tests::consumer::parent_from_harness_parent_id_in_scope",
+  "crosstalk_reconstruct::tests::consumer::parent_id_from_other_scope_is_ignored",
+  "crosstalk_reconstruct::tests::consumer::subagent_parent_is_session_main_agent",
+  "crosstalk_reconstruct::tests::consumer::main_agent_has_no_parent",
 ]
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }

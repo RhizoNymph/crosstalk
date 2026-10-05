@@ -47,7 +47,7 @@ impl<S: SurfaceStores> Surface<S> {
         let Some(channel) = self.stores.channels().channel(id).await? else {
             return Ok(None);
         };
-        let routed = if channel.origin.supersession().is_none() {
+        let routed = if channel.channel().origin.supersession().is_none() {
             self.routed(counted).await?
         } else {
             Default::default()
@@ -85,7 +85,7 @@ impl<S: SurfaceStores> Surface<S> {
         let (channels, next) = listed.into_parts();
         let routed = if channels
             .iter()
-            .any(|channel| channel.origin.supersession().is_none())
+            .any(|channel| channel.channel().origin.supersession().is_none())
         {
             self.routed(counted).await?
         } else {
@@ -118,9 +118,10 @@ impl<S: SurfaceStores> Surface<S> {
                 if known.contains_key(&id) {
                     break;
                 }
-                let Some(channel) = self.stores.channels().channel(id).await? else {
+                let Some(read) = self.stores.channels().channel(id).await? else {
                     break;
                 };
+                let (channel, _) = read.into_parts();
                 let seed = self
                     .seed_resource(&channel, all_time)
                     .await?

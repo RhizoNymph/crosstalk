@@ -12,7 +12,7 @@ request, which extends the parent rather than forking it.
 """
 
 [evidence]
-property = "crosstalk_reconstruct::tests::fork_shared_prefix_within_bounds"
+property = "crosstalk_reconstruct::tests::thread_props::fork_shared_prefix_within_bounds"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

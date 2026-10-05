@@ -1,0 +1,26 @@
+[invariant]
+id = "provenance.span-index.spans-as-recorded"
+statement = "For every span id in the IdBatch SpanIndex::spans is given that SpanIndex::record recorded, the returned map holds IndexedSpan::of the span first recorded under that id (its exchange, its agent as author, its SpanLocation), whatever FingerprintIndex::evict or later record calls did since."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+A ContentMatch names only its origin span's id. The evidence page cuts the
+sender's excerpt from the stored body at the span's location, evaluation
+and the conversation view attribute spans to their authors, and the UI's
+world seed rebuilds both, all through this one batch read. A location read
+back differently from how it was recorded would quote the wrong bytes, or
+fail as a fault in the stored records. Spans are never deleted: eviction
+removes a span's fingerprints from matching, not the record that explains
+a match already made. Recording is idempotent, so a redelivered delta
+changes no record. The memory index is the reference; the Postgres index is
+checked against a real database.
+"""
+
+[evidence]
+unit = "crosstalk_memory::provenance::tests::spans_read_back_as_recorded_through_eviction"
+integration = "crosstalk_provenance::integration::span_index_reads_back_recorded_spans"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

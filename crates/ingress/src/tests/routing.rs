@@ -170,3 +170,38 @@ fn config_parses_and_refuses_unknown_fields() {
     );
     assert!(matches!(missing, Err(crate::BuildError::Secrets(_))));
 }
+
+/// `ingress.mode.never-replay`: the router answers only reverse-proxy
+/// routes, whatever path and query a request names; a replay is entered
+/// through the pipeline's ingest, never through the proxy.
+#[test]
+fn routes_never_resolve_to_a_replay() {
+    let mut nested = route("https://example.com/base/", anthropic_api());
+    nested.name.0 = "nested".to_owned();
+    nested.prefix = "/anthropic/team".to_owned();
+    let mut root = route("http://localhost:8000", anthropic_api());
+    root.name.0 = "root".to_owned();
+    root.prefix = "/".to_owned();
+    let routes = Routes::new(&[
+        route("https://api.anthropic.com", anthropic_api()),
+        nested,
+        root,
+    ])
+    .expect("routes");
+    for path in [
+        "/",
+        "/v1/messages",
+        "/anthropic/v1/messages",
+        "/anthropic/team/v1/messages",
+        "/replay/agentdojo/v1/messages",
+    ] {
+        for query in [None, Some("beta=true")] {
+            let resolved = routes.resolve(path, query).expect("the root route");
+            assert!(
+                matches!(resolved.mode, IngressMode::ReverseProxy { .. }),
+                "{path} {query:?} resolved to {:?}",
+                resolved.mode
+            );
+        }
+    }
+}

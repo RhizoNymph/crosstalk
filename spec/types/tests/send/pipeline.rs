@@ -25,7 +25,8 @@ use crate::interfaces::l3_reconstruction::{
     ClaimStore, IdentityResolver, Resolution, ResolveError, ThreadError, ThreadOutcome, Threader,
 };
 use crate::interfaces::l4_provenance::{
-    FingerprintIndex, IndexError, SemanticHit, SemanticMatcher,
+    FingerprintIndex, IndexError, IndexedSpan, SemanticHit, SemanticMatcher, SpanIndex,
+    SpanIndexError,
 };
 use crate::observed::agent::merge::{MergeRecord, Reversal};
 use crate::observed::agent::{AgentLabel, ClaimSet, IdentityEvidence, MergeRequest};
@@ -377,6 +378,23 @@ impl SemanticMatcher for Dummy {
     }
 }
 
+impl SpanIndex for Dummy {
+    async fn record(&mut self, _span: &OriginatedSpan) -> Result<(), SpanIndexError> {
+        match *self {}
+    }
+    async fn spans(
+        &self,
+        _ids: &IdBatch<SpanId>,
+    ) -> Result<BTreeMap<SpanId, IndexedSpan>, SpanIndexError> {
+        match *self {}
+    }
+}
+
+fn span_index<T: SpanIndex>(x: &mut T, never: &Dummy) {
+    assert_send(x.record(arg(never)));
+    assert_send(x.spans(arg(never)));
+}
+
 fn fingerprint_index<T: FingerprintIndex>(x: &mut T, never: &Dummy) {
     assert_send(x.insert(arg(never), arg(never), arg(never)));
     assert_send(x.lookup(arg(never), arg(never)));
@@ -417,5 +435,6 @@ fn l3_reconstruction_futures_are_send() {
 #[test]
 fn l4_provenance_futures_are_send() {
     let _ = fingerprint_index::<Dummy>;
+    let _ = span_index::<Dummy>;
     let _ = semantic_matcher::<Dummy>;
 }

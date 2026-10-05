@@ -6,6 +6,10 @@
 //! ct-eval run   --dataset ai-village [--mode window|claude-code] [--from DAY] [--to DAY] [--limit N] …
 //! ```
 //!
+//! `--dataset` is `salt`, `agentdojo`, `tau2` or `ai-village`. For AgentDojo, `--include
+//! pipeline=…`, `suite=…`, `attack=…` and `task=…` match a path component
+//! exactly, and `run` also prints how the injections arrived.
+//!
 //! `run` prints the table, writes `report.json` and `report.txt` to `--out`,
 //! and exits 2 when a gate fails. `truth` writes the labels as JSONL.
 
@@ -18,10 +22,12 @@ use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use crosstalk_eval::config::EvalConfig;
 use crosstalk_eval::corpus::{SourceError, TraceSource, World};
+use crosstalk_eval::datasets::agentdojo::{self, AgentDojoSource};
 use crosstalk_eval::datasets::ai_village::report::Unlabelled;
 use crosstalk_eval::datasets::ai_village::time::Day;
 use crosstalk_eval::datasets::ai_village::{self as ai_village, AiVillageSource};
 use crosstalk_eval::datasets::salt::{SaltSource, Selection};
+use crosstalk_eval::datasets::tau2::{self, Tau2Source};
 use crosstalk_eval::gateway::PipelineDetector;
 use crosstalk_eval::keys::DatasetId;
 use crosstalk_eval::pipeline::{Detector, ReferenceDetector, run};
@@ -49,6 +55,8 @@ enum Command {
 #[derive(Clone, Copy, ValueEnum)]
 enum Dataset {
     Salt,
+    Agentdojo,
+    Tau2,
     AiVillage,
 }
 
@@ -56,6 +64,8 @@ impl Dataset {
     fn name(self) -> &'static str {
         match self {
             Self::Salt => "salt",
+            Self::Agentdojo => "agentdojo",
+            Self::Tau2 => "tau2",
             Self::AiVillage => ai_village::DATASET,
         }
     }
@@ -69,6 +79,35 @@ enum VillageMode {
     /// The Claude Code agent's stream, one world per context (`--limit`
     /// caps the contexts).
     ClaudeCode,
+}
+
+/// Any dataset's source.
+enum AnySource {
+    Salt(SaltSource),
+    AgentDojo(AgentDojoSource),
+    Tau2(Tau2Source),
+    AiVillage(Box<AiVillageSource>),
+}
+
+impl TraceSource for AnySource {
+    fn id(&self) -> DatasetId {
+        match self {
+            Self::Salt(source) => source.id(),
+            Self::AgentDojo(source) => source.id(),
+            Self::Tau2(source) => source.id(),
+            Self::AiVillage(source) => source.id(),
+        }
+    }
+
+    fn worlds(&mut self) -> impl Iterator<Item = Result<World, SourceError>> + '_ {
+        let worlds: Box<dyn Iterator<Item = Result<World, SourceError>> + '_> = match self {
+            Self::Salt(source) => Box::new(source.worlds()),
+            Self::AgentDojo(source) => Box::new(source.worlds()),
+            Self::Tau2(source) => Box::new(source.worlds()),
+            Self::AiVillage(source) => Box::new(source.worlds()),
+        };
+        worlds
+    }
 }
 
 #[derive(Args)]
@@ -96,29 +135,6 @@ struct SourceArgs {
     /// AI Village window: the last village day, included.
     #[arg(long, default_value = ai_village::DEFAULT_TO)]
     to: String,
-}
-
-/// The dataset being read.
-enum Source {
-    Salt(SaltSource),
-    AiVillage(Box<AiVillageSource>),
-}
-
-impl TraceSource for Source {
-    fn id(&self) -> DatasetId {
-        match self {
-            Self::Salt(source) => source.id(),
-            Self::AiVillage(source) => source.id(),
-        }
-    }
-
-    fn worlds(&mut self) -> impl Iterator<Item = Result<World, SourceError>> + '_ {
-        let worlds: Box<dyn Iterator<Item = Result<World, SourceError>> + '_> = match self {
-            Self::Salt(source) => Box::new(source.worlds()),
-            Self::AiVillage(source) => Box::new(source.worlds()),
-        };
-        worlds
-    }
 }
 
 #[derive(Args)]
@@ -192,7 +208,7 @@ fn crate_file(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join(name)
 }
 
-fn open_source(args: &SourceArgs) -> Result<Source> {
+fn open_source(args: &SourceArgs) -> Result<AnySource> {
     let root = match &args.root {
         Some(root) => root.clone(),
         None => {
@@ -215,8 +231,26 @@ fn open_source(args: &SourceArgs) -> Result<Source> {
     };
     match args.dataset {
         Dataset::Salt => SaltSource::open(&root, &selection)
-            .map(Source::Salt)
+            .map(AnySource::Salt)
             .with_context(|| format!("opening SALT at {}", root.display())),
+        Dataset::Agentdojo => AgentDojoSource::open(
+            &root,
+            &agentdojo::Selection {
+                limit: selection.limit,
+                include: selection.include,
+            },
+        )
+        .map(AnySource::AgentDojo)
+        .with_context(|| format!("opening AgentDojo at {}", root.display())),
+        Dataset::Tau2 => Tau2Source::open(
+            &root,
+            &tau2::Selection {
+                limit: selection.limit,
+                include: selection.include,
+            },
+        )
+        .map(AnySource::Tau2)
+        .with_context(|| format!("opening τ²-bench at {}", root.display())),
         Dataset::AiVillage => {
             let mode = match args.mode {
                 VillageMode::ClaudeCode => ai_village::Mode::ClaudeCode { limit: args.limit },
@@ -226,7 +260,7 @@ fn open_source(args: &SourceArgs) -> Result<Source> {
                 },
             };
             AiVillageSource::open(&root, mode)
-                .map(|source| Source::AiVillage(Box::new(source)))
+                .map(|source| AnySource::AiVillage(Box::new(source)))
                 .with_context(|| format!("opening AI Village at {}", root.display()))
         }
     }
@@ -274,14 +308,18 @@ fn run_command(args: RunArgs) -> Result<ExitCode> {
         failures,
         summary.unscored,
     );
-    let table = render(&report);
+    let mut table = render(&report);
+    if let AnySource::AgentDojo(source) = &source {
+        table.push('\n');
+        table.push_str(&source.tally().to_string());
+    }
     print!("{table}");
     let village = match &source {
-        Source::AiVillage(source) => Some(serde_json::json!({
+        AnySource::AiVillage(source) => Some(serde_json::json!({
             "stats": source.stats(),
             "unlabelled_predictions": unlabelled,
         })),
-        Source::Salt(_) => None,
+        AnySource::Salt(_) | AnySource::AgentDojo(_) | AnySource::Tau2(_) => None,
     };
     if let Some(village) = &village {
         println!("{}", serde_json::to_string_pretty(village)?);

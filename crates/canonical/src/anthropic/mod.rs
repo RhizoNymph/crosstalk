@@ -12,11 +12,14 @@
 //! - [`response`]: the response to the outcome, through [`stream`] for an
 //!   event stream.
 //! - `blocks`: the content block mapping both share.
+//! - [`shape`]: a refused request body's top-level shape (keys, roles,
+//!   content kinds; never a value), for the gateway's debug log.
 //! - [`usage`](mod@usage): the token usage mapping.
 
 mod blocks;
 pub mod request;
 pub mod response;
+pub mod shape;
 pub mod stream;
 pub mod usage;
 
@@ -28,6 +31,7 @@ use crosstalk_spec::observed::exchange::WireProtocol;
 use crate::assemble::{self, MediaSink};
 
 pub use request::RequestError;
+pub use shape::RequestShape;
 
 /// The normalizer for [`WireProtocol::AnthropicMessages`].
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

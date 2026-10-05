@@ -1,13 +1,24 @@
 //! Channels: groups of resources that act as one communication medium.
 //!
-//! A channel has two independent axes:
-//! - [`detection`]: what the traffic shows.
+//! A channel has two independent stored axes:
+//! - [`detection`]: when its traffic flowed.
 //! - [`policy`]: what an operator or config says about it.
 //!
-//! A channel is declared (matched by a pattern) or discovered from traffic
-//! (seeded by its first resource). A declared channel was either declared
-//! before any traffic, or discovered and then promoted by an operator, which
-//! attached a pattern. Detection follows from that history:
+//! and one axis read at query time, [`confirmation`]: whether its traffic,
+//! once merged agents resolve, holds a confirmed transmission, only
+//! suspected ones, or none (then it is listed only as a declaration, or
+//! hidden).
+//!
+//! **A channel exists once a transmission between different agents goes
+//! through it.** Until then a resource is only a resource: its accesses
+//! are recorded on it, and it is in no channel list, graph or count and
+//! raises no `NewChannel`. A channel is declared (matched by a pattern,
+//! which is operator intent and exists before any traffic) or discovered,
+//! by the first cross-agent transmission through a resource on no channel
+//! (seeded by that resource and transmission, [`Seed`]; `l5_flow`,
+//! "Discovery"). A declared channel was either declared before any traffic,
+//! or discovered and then promoted by an operator, which attached a
+//! pattern. Detection follows from that history:
 //!
 //! | Origin | Detection |
 //! | --- | --- |
@@ -15,8 +26,10 @@
 //! | promoted | [`TrafficDetection`], carried over unchanged from discovery |
 //! | discovered | [`TrafficDetection`] |
 //!
-//! So "declared but never used" is representable, and "discovered but never
-//! accessed" and "promoted but never accessed" are not.
+//! So "declared but never used" is representable, and "discovered without
+//! cross-agent traffic" and "promoted without cross-agent traffic" are not
+//! (as stored: a merge can still leave one without it at read time, which
+//! hides a discovered channel, [`confirmation::Listing`]).
 //!
 //! **Promotion keeps the channel.** It keeps its id, resources and
 //! detection, gains a pattern so future matching resources join it instead
@@ -47,6 +60,7 @@
 //! A superseding channel is always a promoted one, which is declared and so
 //! never superseded itself: resolving a superseded id takes one step.
 
+pub mod confirmation;
 pub mod detection;
 pub mod policy;
 pub mod promotion;
@@ -54,7 +68,7 @@ pub mod promotion;
 use serde::{Deserialize, Serialize};
 
 use crate::derived::flow::resource::ResourcePattern;
-use crate::ids::{AccessId, ChannelId, ResourceId};
+use crate::ids::{ChannelId, ResourceId, TransmissionId};
 use crate::support::Timestamp;
 
 use detection::{DeclaredDetection, DetectionKind, TrafficDetection};
@@ -84,12 +98,18 @@ impl Channel {
     }
 }
 
-/// The resource and access a discovered channel was created from.
+/// What a discovered channel was created from: the resource on no channel
+/// that its first cross-agent transmission went through, and that
+/// transmission (opened by a co-access between two different agents).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct Seed {
     pub resource: ResourceId,
-    pub first_access: AccessId,
+    pub first_transmission: TransmissionId,
+    /// When `first_transmission` opened (`Transmission::opened_at`): when
+    /// the channel came to exist. Not the transmission id's ULID time,
+    /// which is when the id was minted.
+    pub opened_at: Timestamp,
 }
 
 /// A pattern and who attached it, when.
@@ -218,7 +238,7 @@ impl ChannelOrigin {
         }
     }
 
-    /// The resource and access the channel was discovered from. `None` only
+    /// The resource and transmission the channel was discovered from. `None` only
     /// for a channel declared before traffic.
     pub fn seed(&self) -> Option<Seed> {
         match self {
@@ -231,6 +251,25 @@ impl ChannelOrigin {
                 history: DeclaredHistory::BeforeTraffic(_),
                 ..
             } => None,
+        }
+    }
+
+    /// When the channel came to exist, what lists of channels sort by
+    /// (newest first): the declaration's time for a channel declared before
+    /// traffic, otherwise its seed's `opened_at`, the opening of the first
+    /// cross-agent transmission through it. A promotion keeps it (the
+    /// channel keeps its id and seed), and so does a supersession.
+    pub fn created_at(&self) -> Timestamp {
+        match self {
+            Self::Declared {
+                declaration,
+                history: DeclaredHistory::BeforeTraffic(_),
+            } => declaration.at,
+            Self::Declared {
+                history: DeclaredHistory::Promoted { from, .. },
+                ..
+            } => from.opened_at,
+            Self::Discovered { seed, .. } | Self::Superseded { seed, .. } => seed.opened_at,
         }
     }
 

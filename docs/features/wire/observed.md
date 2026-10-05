@@ -16,7 +16,9 @@ Every type below is a response or bus payload; none is a `WireRequest`
   `ResponseId`, `ModelName` and the string enums `WireProtocol`,
   `Transport`, `StopReason`.
 - `observed/client.rs`: `ClientContext` and everything it holds
-  (`IngressMode`, `Upstream`, `UpstreamKind`, `Vendor`, `InferenceServer`,
+  (`IngressMode`, with `Replay { corpus }` for recorded datasets entered
+  through the pipeline's ingest, `CorpusId` as its text, `Upstream`,
+  `UpstreamKind`, `Vendor`, `InferenceServer`,
   `CredentialRef`, `CredentialScheme`, `HarnessClaim`, `HarnessFamily`,
   `HarnessIds`, `RequestClass`, `PreviousDigests`, `RouteName`,
   `UpstreamId`).
@@ -36,7 +38,9 @@ Every type below is a response or bus payload; none is a `WireRequest`
   and `crates/canonical/tests/golden/`).
 - `derived/provenance/span.rs`: `SpanLocation`, `RelaySource`.
 - `derived/provenance/matching.rs`: `ContentMatch` (checked), `Carrier`,
-  `MatchKind`, `Codec`.
+  `MatchKind`, `Codec` (with `json_string` and `yaml_string`),
+  `CarrierKind` (`Carrier::kind`; snake_case strings). `IndexedSpan` (the
+  span index's record) and `SpanIndex` are in process only, not wire data.
 - `events/ingest.rs`: `IngestEvent` and `ConversationDelta`.
 
 ## Non-scope

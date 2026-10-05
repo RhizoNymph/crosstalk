@@ -106,6 +106,7 @@ impl World {
         );
 
         let mut channels = generated.plan.ids();
+        // Never stored: the scratch entry is a resource on no channel.
         channels.insert(ChannelKey::Scratch, generated.traffic.scratch);
         let cast = &generated.cast;
         Ok(Scenario {
@@ -139,8 +140,8 @@ async fn declare<S: WorldStores>(
     let mut declarations: Vec<_> = drafts(times)
         .into_iter()
         .filter_map(|draft| match draft.origin {
-            DraftOrigin::Declared { pattern, at } => Some((at, draft.key, pattern)),
-            DraftOrigin::Discovered => None,
+            DraftOrigin::Declared { pattern, at, .. } => Some((at, draft.key, pattern)),
+            DraftOrigin::Discovered { .. } => None,
         })
         .collect();
     declarations.sort_by_key(|(at, key, _)| (*at, *key));

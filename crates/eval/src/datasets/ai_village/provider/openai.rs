@@ -53,6 +53,7 @@ pub mod responses {
             name: ToolName(name.to_owned()),
             arguments: arguments(args),
             execution: ToolExecution::Client,
+            signature: None,
         })
     }
 
@@ -152,6 +153,7 @@ pub mod chat {
                 ),
                 arguments: arguments(function.get("arguments").unwrap_or(&Value::Null)),
                 execution: ToolExecution::Client,
+                signature: None,
             }));
         }
         let stop = stop_for(&parts, StopReason::EndTurn);

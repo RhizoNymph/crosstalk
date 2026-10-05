@@ -4,10 +4,7 @@
 use serde_json::{Value, json};
 
 use super::super::harness::{assert_golden, assert_rejected};
-use super::{
-    AREA, ULID_C, ULID_G, co_access, operator, page, scratch, transmission_id, wiki, wiki_locator,
-    write_access,
-};
+use super::{AREA, ULID_C, ULID_G, operator, page, scratch, transmission_id, wiki, wiki_locator};
 use crate::derived::flow::channel::detection::{
     DeclaredDetection, DetectionKind, TrafficDetection,
 };
@@ -19,7 +16,7 @@ use crate::derived::flow::channel::{
     Channel, ChannelOrigin, Declaration, DeclaredHistory, Seed, Supersession,
 };
 use crate::derived::flow::resource::{Host, Locator, Resource, ResourcePattern};
-use crate::ids::{AccessId, ChannelId, ResourceId};
+use crate::ids::{ChannelId, ResourceId, TransmissionId};
 use crate::support::Timestamp;
 use crate::tests::wire::{id, ts};
 
@@ -53,7 +50,8 @@ fn wiki_pattern() -> ResourcePattern {
 fn wiki_seed() -> Seed {
     Seed {
         resource: page(),
-        first_access: write_access().id,
+        first_transmission: transmission_id(),
+        opened_at: ts("2026-10-04T12:00:30.250000Z"),
     }
 }
 
@@ -64,7 +62,8 @@ fn notes() -> ResourceId {
 fn scratch_seed() -> Seed {
     Seed {
         resource: notes(),
-        first_access: id(AccessId::from_ulid_text, ULID_C),
+        first_transmission: id(TransmissionId::from_ulid_text, ULID_C),
+        opened_at: ts("2026-10-03T09:00:00.000000Z"),
     }
 }
 
@@ -135,9 +134,7 @@ fn every_channel() -> Vec<(&'static str, Channel)> {
                 id: wiki(),
                 origin: ChannelOrigin::Discovered {
                     seed: wiki_seed(),
-                    detection: TrafficDetection::Candidate {
-                        first_cross_access: co_access(),
-                    },
+                    detection: active(),
                 },
                 resources: Vec::new(),
                 policy: Policy::Unreviewed(None),
@@ -149,8 +146,9 @@ fn every_channel() -> Vec<(&'static str, Channel)> {
                 id: scratch(),
                 origin: ChannelOrigin::Superseded {
                     seed: scratch_seed(),
-                    detection: TrafficDetection::Observed {
-                        first_access: scratch_seed().first_access,
+                    detection: TrafficDetection::Dormant {
+                        since: ts("2026-10-03T21:00:00.000000Z"),
+                        last_transmission: scratch_seed().first_transmission,
                     },
                     supersession: Supersession {
                         by: wiki(),
@@ -178,19 +176,10 @@ fn channels_golden_in_every_origin() {
 fn detections_golden_in_every_state() {
     fn traffic(detection: TrafficDetection) -> TrafficDetection {
         match detection {
-            TrafficDetection::Observed { .. }
-            | TrafficDetection::Candidate { .. }
-            | TrafficDetection::Active { .. }
-            | TrafficDetection::Dormant { .. } => detection,
+            TrafficDetection::Active { .. } | TrafficDetection::Dormant { .. } => detection,
         }
     }
     let traffic_states = [
-        TrafficDetection::Observed {
-            first_access: write_access().id,
-        },
-        TrafficDetection::Candidate {
-            first_cross_access: co_access(),
-        },
         active(),
         TrafficDetection::Dormant {
             since: ts("2026-10-11T12:00:30.250000Z"),
@@ -221,8 +210,6 @@ fn detections_golden_in_every_state() {
         match kind {
             DetectionKind::AwaitingTraffic
             | DetectionKind::Unused
-            | DetectionKind::Observed
-            | DetectionKind::Candidate
             | DetectionKind::Active
             | DetectionKind::Dormant => kind,
         }
@@ -230,8 +217,6 @@ fn detections_golden_in_every_state() {
     let kinds = [
         DetectionKind::AwaitingTraffic,
         DetectionKind::Unused,
-        DetectionKind::Observed,
-        DetectionKind::Candidate,
         DetectionKind::Active,
         DetectionKind::Dormant,
     ]
@@ -326,8 +311,9 @@ fn coverage() -> PromotionCoverage {
         id: scratch(),
         origin: ChannelOrigin::Discovered {
             seed: scratch_seed(),
-            detection: TrafficDetection::Observed {
-                first_access: scratch_seed().first_access,
+            detection: TrafficDetection::Active {
+                since: scratch_seed().opened_at,
+                last_transmission: scratch_seed().first_transmission,
             },
         },
         resources: Vec::new(),

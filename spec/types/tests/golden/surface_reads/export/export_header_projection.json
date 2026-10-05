@@ -29,7 +29,8 @@
             "type": "pinned",
             "data": 4
           },
-          "false_detections": "include"
+          "false_detections": "include",
+          "unconfirmed_channels": "include"
         },
         "topic_version": 4,
         "params": {

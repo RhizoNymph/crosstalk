@@ -1,8 +1,6 @@
 [
   "awaiting_traffic",
   "unused",
-  "observed",
-  "candidate",
   "active",
   "dormant"
 ]

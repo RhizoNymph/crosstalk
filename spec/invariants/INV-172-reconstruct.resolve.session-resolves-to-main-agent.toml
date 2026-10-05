@@ -13,7 +13,7 @@ carries no agent id) a Conflict with its own sub-agents.
 """
 
 [evidence]
-property = "crosstalk_reconstruct::tests::session_id_resolves_to_main_agent_only"
+property = "crosstalk_reconstruct::tests::pg_props::session_id_resolves_to_main_agent_only"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

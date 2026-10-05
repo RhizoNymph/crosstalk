@@ -12,7 +12,7 @@ write would see an agent that has traffic but was never seen.
 """
 
 [evidence]
-unit = "crosstalk_reconstruct::tests::created_from_traffic_is_seen"
+unit = "crosstalk_reconstruct::tests::pg_agents::created_from_traffic_is_seen"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }

@@ -20,6 +20,7 @@ use crosstalk_spec::aggregates::filter::{
 use crosstalk_spec::aggregates::node::{AgentNode, ChannelNode, GraphNode};
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::derived::flow::access::AccessKind;
+use crosstalk_spec::derived::flow::channel::confirmation::{Confirmation, Listing};
 use crosstalk_spec::derived::flow::transmission::Route;
 use crosstalk_spec::derived::flow::verdict::CurrentVerdict;
 use crosstalk_spec::ids::{AgentId, ChannelId, TopicId, TransmissionId};
@@ -253,16 +254,34 @@ pub fn nodes<V: TopologyEnv>(
         }
     }
     let channels: BTreeSet<ChannelId> = channels.into_iter().collect();
+    // A confirmed transmission between two agents is routed through these,
+    // so they are confirmed whatever the facts say.
+    let routed: BTreeSet<ChannelId> = edges
+        .iter()
+        .filter_map(|edge| match edge.route {
+            Route::Channel(channel) => Some(channel),
+            Route::Delegation(_) | Route::Direct(_) | Route::Unobserved => None,
+        })
+        .collect();
     agents
         .into_values()
         .map(GraphNode::Agent)
         .chain(channels.into_iter().map(|channel| {
             let description = env.channel(channel);
+            let confirmation = if routed.contains(&channel) {
+                Confirmation::Confirmed
+            } else {
+                description
+                    .listing
+                    .confirmation()
+                    .unwrap_or(Confirmation::Confirmed)
+            };
             GraphNode::Channel(ChannelNode {
                 id: channel,
                 label: description.label,
                 origin_kind: description.origin,
                 detection_kind: description.detection,
+                confirmation,
                 policy_kind: description.policy,
                 locator_summary: description.locator_summary,
             })
@@ -271,8 +290,11 @@ pub fn nodes<V: TopologyEnv>(
 }
 
 /// The access edges of the channel-centred view: access buckets in
-/// `window`, agents and channels resolved, kept by `admits_access`, summed
-/// per (agent, channel, op), with shares over all of them.
+/// `window`, agents resolved and each resource resolved to the canonical
+/// channel holding it now, left out when that is no channel or one not
+/// listed as a channel (`Listing::Channel`), kept by `admits_access` with
+/// the channel's confirmation, summed per (agent, channel, op), with shares
+/// over all of them.
 pub(super) fn access_edges<V: TopologyEnv>(
     state: &EdgeState,
     env: &V,
@@ -288,7 +310,14 @@ pub(super) fn access_edges<V: TopologyEnv>(
             continue;
         }
         let agent = env.canonical_agent(access.agent);
-        let channel = env.canonical_channel(access.channel);
+        let Some(channel) = env.channel_of(access.resource) else {
+            continue;
+        };
+        let Some(Listing::Channel(confirmation)) =
+            env.known_channel(channel).map(|facts| facts.listing)
+        else {
+            continue;
+        };
         let channel_topics: Vec<TopicId> = topics
             .get(&channel)
             .map(|set| set.iter().copied().collect())
@@ -296,6 +325,7 @@ pub(super) fn access_edges<V: TopologyEnv>(
         let subject = AccessSubject {
             agent,
             channel,
+            confirmation,
             channel_topics: &channel_topics,
         };
         if filter.admits_access(&subject, aliases) {

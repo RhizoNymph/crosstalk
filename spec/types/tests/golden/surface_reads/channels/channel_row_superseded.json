@@ -6,7 +6,8 @@
       "data": {
         "seed": {
           "resource": "01J9Z3T9W0X1Y2Z3A4B5C6D7E8",
-          "first_access": "01J9Z3T9W0X1Y2Z3A4B5C6D7E8"
+          "first_transmission": "01J9Z3T9W0X1Y2Z3A4B5C6D7E8",
+          "opened_at": "2026-10-04T09:16:40.002513Z"
         },
         "detection": {
           "type": "active",

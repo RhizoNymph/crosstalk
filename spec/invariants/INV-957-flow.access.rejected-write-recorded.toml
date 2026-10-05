@@ -1,0 +1,24 @@
+[invariant]
+id = "flow.access.rejected-write-recorded"
+statement = "For every write ResourceExtractor::extract returns, the flow consumer records exactly one Access through ChannelTraffic::record_access whose AccessOp::Write outcome is the extracted WriteOutcome, WriteOutcome::Rejected included, and publishes one AccessRecorded for it."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+An attempted write is a security signal in itself: an agent trying to post
+a secret to a public channel, or to send a message a tool refused, did
+something an operator wants to see even though nothing was delivered.
+Dropping rejected writes (the earlier rule) hid exactly those attempts.
+So a rejected write is recorded like any other, with its outcome, counted
+as a write in resource use and access buckets, and visible to alerting;
+what keeps it from inventing communication is that it never pairs
+(flow.coaccess.write-not-rejected, flow.correlator.write-held-until-outcome).
+Exactly one record per write: the outcome is final when it is recorded,
+so a late result never records it a second time.
+"""
+
+[evidence]
+unit = "crosstalk_flow::tests::rejected_write_is_recorded_with_its_outcome"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

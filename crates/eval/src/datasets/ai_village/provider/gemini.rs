@@ -50,6 +50,7 @@ pub fn convert(raw: &Value, fallback_id: &str) -> Response {
                 ),
                 arguments: arguments(call.get("args").unwrap_or(&Value::Null)),
                 execution: ToolExecution::Client,
+                signature: None,
             }));
         } else if let Some(content) = part.get("text").and_then(Value::as_str) {
             if part.get("thought").and_then(Value::as_bool) == Some(true) {

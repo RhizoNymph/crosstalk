@@ -92,12 +92,22 @@ missing }` before anything is read. Then, by area:
   `series`, `watermark`) pass through to `EdgeStore`, which reads its
   watermark before its buckets; errors map by `QueryError::from`.
   `overview` takes `EdgeStore::totals` first, then the queues:
-  `QueueCounts::tally` over a full traversal of the open alerts and of the
-  unreviewed channels in force.
+  `QueueCounts::tally` over every open alert (which of them are shown,
+  `AlertSubject::shown`, read now), the rows (counted over all time) of
+  every channel a queue can count (the listed channels in force whose
+  policy is `Unreviewed`, and the channels listed as unconfirmed, two
+  narrowed traversals of `ChannelReads::channels`), and the filter's
+  `unconfirmed_channels`.
 - **Channel rows** (`channel`, `channels`): L7's watermark, then the
-  registry's channels, then per row (`query/channel_rows.rs`):
+  registry's channels with their cross-agent traffic
+  (`ChannelWithTraffic`; `channels` keeps what `ChannelFilter::keeps`
+  keeps, never a hidden channel, newest created first, ties by id
+  descending; `channel` answers a hidden one too), then per row
+  (`query/channel_rows.rs`):
   - superseded: `SupersededInto::of` the superseding channel's record;
-  - in force: `ChannelCounts::tally` of a full `resource_use` traversal over
+  - in force: `ChannelStanding::InForce { traffic, activity }`, the traffic
+    as the registry read it (so the row's listing and confirmation follow
+    from it), and `ChannelCounts::tally` of a full `resource_use` traversal over
     the window (all time when none: the epoch to the last bucket boundary
     before year 10000, which the stores can encode), transmissions from
     `ChannelCounts::routed` of one `EdgeStore::graph` per page under the
@@ -105,7 +115,9 @@ missing }` before anything is read. Then, by area:
     latest confirmation. No spec read returns a channel's latest access, so
     it is found exactly by bisection over `resource_use` windows `[t, end)`
     (at most 64 one-item reads); the latest confirmation is the detection's
-    `last_transmission`'s `Confirmed::at`;
+    `last_transmission`'s `Confirmed::at` when that transmission is
+    confirmed (the last one opened or confirmed; an opened one was opened
+    by a read, which the latest access counts);
   - the seed resource is found among the channel's all-time resources, or in
     the evidence records; `ChannelRow::new` checks the result.
 - **Channel names** read each asked channel and the channel it resolves to,
@@ -125,7 +137,24 @@ missing }` before anything is read. Then, by area:
   with the current verdict (judgeable states only) and the topic from the
   stored classification: no spec read returns a transmission's assignment
   under another version, so one stored under another version reads as
-  `Unassigned`.
+  `Unassigned`. A transmission that no longer crosses agents (its sender
+  and reader merged into one) is left out, as `TransmissionSummary::listed`
+  leaves it out; an unmerge lists it again.
+- **A channel's transmissions** (`channel_transmissions`,
+  `query/channel_traffic.rs`): the canonical channel through
+  `ChannelDirectory`; the first page resolves the version as a linked view
+  does; `ChannelReads::transmissions` pages the crossing transmissions,
+  newest opened first; each row is `ChannelTransmission::of` with the
+  current verdict and the topic from the stored classification, kept when
+  the filter matches it. The surface's cursor wraps the registry's with
+  the version (`hex(version ‖ request digest ‖ registry token) "_"
+  hex(MAC)`), bound to the canonical channel, the filter and the selector;
+  an unknown channel is `NotFound`.
+- **Alerts**: the alert store's page with the alerts readers do not show
+  removed (`AlertSubject::shown`: about a hidden channel, read through
+  `ChannelReads::channel`, or a transmission whose crossing is
+  `WithinOneAgent`); a page can be shorter than asked, and its cursor
+  continues the store's traversal. `alert` by id answers any stored alert.
 - **Search** embeds the text for `Semantic` and `Hybrid` only. The surface
   remembers which model each issued search cursor's traversal was embedded
   with (the newest 4096) and answers a later page under another model with
@@ -231,16 +260,27 @@ every row up front (the count must be known first):
 ```text
 events naming agents: Changed::Agent, AgentSeen, AgentRenamed, AgentMerged, AgentUnmerged,
                       ConversationDelta (claims change with every exchange, unannounced)
-events naming channels: Changed::Channel, ChannelDiscovered, DeclaredChannelUnused,
-                        ChannelPromoted (and every superseded channel), PolicyChanged
+events naming channels: Changed::Channel, ChannelDiscovered (and its seed resource),
+                        DeclaredChannelUnused, ChannelPromoted (and every superseded channel),
+                        PolicyChanged
+AccessRecorded { channel: Some(c) }: the access's resource is on c
+AgentMerged, AgentUnmerged: every listed channel re-read (a merge can hide a channel, an
+                            unmerge list it again, without naming it)
 NodeFeeder::apply ─ re-read each id ─▶ agent: canonical id; AgentReads::cluster → label and stored
                                         parent (the record), state kind, cluster claims; a merged
                                         id's entry removed
                                        channel: ChannelReads::channel; in force → origin, detection
-                                        and policy kinds, summary; superseded → removed, and its
-                                        superseding channel re-read
-NodeFeeder::rebuild ─ AgentReads::list and ChannelReads::channels (in force), swapped in whole
+                                        and policy kinds, listing (from its traffic), summary, and
+                                        the resources it holds (resource_use over all time, and its
+                                        seed); superseded → removed, and its superseding channel re-read
+NodeFeeder::rebuild ─ AgentReads::list and ChannelReads::channels (listed, in force), swapped in whole
 ```
+
+`NodeFacts::channel_of` answers from the resources each channel was read
+holding. A hidden channel is described with `Listing::Hidden` once an
+event names it and is absent after a rebuild or a merge (no listing read
+returns it); the edge store draws neither, and a resource of a hidden
+channel resolves to no channel after a rebuild, which draws the same.
 
 The summary is the pattern's text for a channel declared before traffic,
 otherwise the seed locator's text, plus ` (+n)` for the further accessed
@@ -277,7 +317,7 @@ relay and ends every stream with `ShuttingDown`.
 | `crates/surface/src/cursor.rs` | Surface-issued cursors; search models per cursor | `CursorKey`, `RequestDigest`, `SearchModels` |
 | `crates/surface/src/audit.rs` | Appending entries | (crate) `audit_append` |
 | `crates/surface/src/query/mod.rs` | `impl QueryApi`, one line per method | — |
-| `crates/surface/src/query/{channels,channel_rows,agents,alerts,topology,topics,content,evidence,projections,admin}.rs` | Per-area handlers | (crate) `*_query` |
+| `crates/surface/src/query/{channels,channel_rows,channel_traffic,agents,alerts,topology,topics,content,evidence,projections,admin}.rs` | Per-area handlers | (crate) `*_query` |
 | `crates/surface/src/actions/mod.rs` | `impl OperatorActions`, `Surface::request` | — |
 | `crates/surface/src/actions/apply.rs` | Each action's store call | — |
 | `crates/surface/src/actions/errors.rs` | `BusError` for actions | — |
@@ -317,14 +357,24 @@ relay and ends every stream with `ShuttingDown`.
   from `tokio::time::Instant`.
 - No lock is held across an `.await`: the id minter and the search-model
   book are short `std::sync::Mutex` sections, the node cache a `RwLock`.
+- Cross-agent semantics ([channel_semantics](channel_semantics.md)): no
+  list, count or graph the surface returns holds a hidden channel or a
+  transmission within one agent; `channel` still answers a hidden row, and
+  `alert` by id any stored alert. Listings are read, never cached by the
+  surface, except as node facts for the edge store.
 
 ## Testing
 
 `crates/surface/src/tests/world.rs` wires every memory store as a gateway
 would (one outbox, the directories, the node cache in the edge store) with
 seven configured operators, one per permission profile, and seeds through
-the spec's write traits. Unit tests (`tests::{permissions, actions,
-outcomes, alerts, reads, channels, content, export, live, nodes}`), property
+the spec's write traits. A channel is seeded as the flow consumer makes
+one: the resource stored on no channel, a write and a read by two agents
+recorded, and the channel discovered by the transmission that co-access
+opened (`Fixture::channel`, awaiting content, so listed unconfirmed; or
+`Fixture::discover` with any transmission). Unit tests (`tests::{permissions, actions,
+outcomes, alerts, reads, channels, listing, content, export, live,
+nodes}`), property
 tests (`tests::props::*`, `props`) and simulations (`dst::{live, actions,
 reads}`, `crosstalk_sim::sim_test!`) are the evidence of the surface
 invariants; `crates/api/src/tests.rs` runs the in-process surface end to

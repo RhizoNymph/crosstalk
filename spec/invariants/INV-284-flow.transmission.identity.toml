@@ -11,9 +11,9 @@ policy twice.
 """
 
 [evidence]
-property = "crosstalk_flow::correlator::tests::one_transmission_per_identity"
-dst = "crosstalk_flow::dst::redelivered_matches_keep_identity"
+property = "crosstalk_flow::correlate::tests::props::one_transmission_per_identity"
+dst = "crosstalk_flow::consumer::tests::dst::redelivered_matches_keep_identity"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
-dst = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }
+dst = { agent = "true", human = "false" }

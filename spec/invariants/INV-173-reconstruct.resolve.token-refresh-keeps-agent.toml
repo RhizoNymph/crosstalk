@@ -14,7 +14,7 @@ session and account evidence survive the refresh unchanged.
 """
 
 [evidence]
-property = "crosstalk_reconstruct::tests::token_refresh_keeps_agent"
+property = "crosstalk_reconstruct::tests::pg_props::token_refresh_keeps_agent"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

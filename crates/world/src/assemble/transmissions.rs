@@ -1,6 +1,7 @@
 //! Transmissions as the pipeline wrote them: each state the correlator
-//! reached, saved when it was reached; the channel's confirmation; the
-//! analyze consumer's indexing, assignment and classification; L7's
+//! reached, saved when it was reached (and, for a channel transmission,
+//! recorded as its channel's traffic); the analyze consumer's indexing,
+//! assignment and classification; L7's
 //! contribution; the two re-fits that re-classified every earlier
 //! transmission; the operators' verdicts; and the watermark.
 //!
@@ -130,15 +131,6 @@ fn lifecycle(
                     TransmissionState::Confirmed(confirmed.clone()),
                 )),
             );
-            if let Route::Channel(channel) = record.transmission.route {
-                script.push(
-                    at,
-                    Op::Confirm {
-                        channel,
-                        transmission: record.id(),
-                    },
-                );
-            }
             let Some(classification) = record.classification() else {
                 return Ok(());
             };
@@ -187,6 +179,8 @@ fn stored(
         topic,
         confirmed_at: confirmed.at(),
         matched_bytes: confirmed.matched_bytes(),
+        from: confirmed.from(),
+        to: record.transmission.to,
     })
 }
 

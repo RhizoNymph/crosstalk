@@ -11,7 +11,7 @@ relative write and an absolute read of one file meet on one resource.
 """
 
 [evidence]
-property = "crosstalk_flow::resource::tests::relative_path_resolves_against_stated_cwd"
+property = "crosstalk_flow::extract::resource::tests::relative_path_resolves_against_stated_cwd"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

@@ -70,6 +70,7 @@ pub fn block(raw: &Value) -> Option<AssistantPart> {
             } else {
                 ToolExecution::Server
             },
+            signature: None,
         })),
         kind if kind.ends_with("_tool_result") => {
             let content = raw.get("content").unwrap_or(&Value::Null).to_string();

@@ -4,10 +4,15 @@ use crosstalk_spec::aggregates::agents::AgentTraffic;
 use crosstalk_spec::aggregates::edge::{
     EdgeSelector, EdgeTotals, RouteKind, TopologyFilter, TopologyGraph, Weighting,
 };
-use crosstalk_spec::aggregates::filter::{FalseDetections, TopicVersionSelector};
-use crosstalk_spec::aggregates::node::{CanonicalStateKind, GraphNode};
+use crosstalk_spec::aggregates::filter::{
+    FalseDetections, TopicVersionSelector, UnconfirmedChannels,
+};
+use crosstalk_spec::aggregates::node::{CanonicalOriginKind, CanonicalStateKind, GraphNode};
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::derived::flow::access::AccessKind;
+use crosstalk_spec::derived::flow::channel::confirmation::{Confirmation, Listing};
+use crosstalk_spec::derived::flow::channel::detection::DetectionKind;
+use crosstalk_spec::derived::flow::channel::policy::PolicyKind;
 use crosstalk_spec::derived::flow::transmission::{DelegationDirection, DirectCarrier, Route};
 use crosstalk_spec::derived::flow::verdict::{Verdict, VerdictRevision};
 use crosstalk_spec::interfaces::l7_topology::{
@@ -16,8 +21,8 @@ use crosstalk_spec::interfaces::l7_topology::{
 use crosstalk_spec::paging::{EdgeTransmissionList, PageRequest, PageSize};
 use crosstalk_spec::support::TimeWindow;
 
-use super::support::{World, all, contribution, edge_counts, graph, plain, refit, world};
-use crate::model::build::{access, agent, channel, transmission, ts, window};
+use super::support::{World, all, contribution, edge_counts, graph, hold, plain, refit, world};
+use crate::model::build::{access, agent, channel, resource, transmission, ts, window};
 use crosstalk_spec::interfaces::l7_topology::AgentFacts as AgentDescription;
 
 fn first_page(size: u16) -> PageRequest<EdgeTransmissionList> {
@@ -680,13 +685,17 @@ async fn edge_transmission_pages_keep_version_across_activation() {
 
 #[tokio::test]
 async fn channel_topology_counts_unread_writes() {
-    // topology.bipartite.unread-writes-drawn, transmissions-match-graph and
-    // access.apply-idempotent
+    // topology.bipartite.listed-channels-only, transmissions-match-graph
+    // and access.apply-idempotent
     let mut world = world();
+    // Resource 1 is channel 1's, resource 2 channel 2's; channel 1 is
+    // listed as a confirmed channel.
+    hold(&world, 1, 1, Listing::Channel(Confirmation::Confirmed));
+    hold(&world, 2, 2, Listing::Channel(Confirmation::Unconfirmed));
     let write = AccessContribution {
         access: access(1),
         agent: agent(1),
-        channel: channel(1),
+        resource: resource(1),
         op: AccessKind::Write,
         at: ts(20),
     };
@@ -699,7 +708,7 @@ async fn channel_topology_counts_unread_writes() {
         .apply_access(&AccessContribution {
             access: access(2),
             agent: agent(9),
-            channel: channel(2),
+            resource: resource(2),
             ..write
         })
         .await
@@ -789,4 +798,116 @@ fn unaligned_windows_are_refused_by_every_graph_read() {
             Err(EdgeQueryError::UnalignedWindow)
         );
     });
+}
+
+#[tokio::test]
+async fn channel_topology_draws_listed_channels_only() {
+    // topology.bipartite.listed-channels-only: an access to a resource on no
+    // channel, to a hidden channel or to a declaration without traffic is
+    // not drawn; an unconfirmed channel is drawn marked, and left out under
+    // UnconfirmedChannels::Exclude.
+    let mut world = world();
+    hold(&world, 1, 1, Listing::Channel(Confirmation::Unconfirmed));
+    hold(&world, 2, 2, Listing::Hidden);
+    hold(&world, 3, 3, Listing::Declaration);
+    world.nodes.set_resource(resource(4), None);
+    for (n, r) in [(1, 1), (2, 2), (3, 3), (4, 4)] {
+        world
+            .store
+            .apply_access(&AccessContribution {
+                access: access(n),
+                agent: agent(1),
+                resource: resource(r),
+                op: AccessKind::Write,
+                at: ts(20),
+            })
+            .await
+            .unwrap();
+    }
+    let drawn = world
+        .store
+        .channel_topology(all(), Weighting::Transmissions, &TopologyFilter::default())
+        .await
+        .unwrap()
+        .value;
+    let channels: Vec<_> = drawn
+        .accesses()
+        .iter()
+        .map(|access| access.channel)
+        .collect();
+    assert_eq!(channels, vec![channel(1)]);
+    let confirmations: Vec<_> = drawn
+        .nodes()
+        .iter()
+        .filter_map(|node| match node {
+            GraphNode::Channel(node) => Some((node.id, node.confirmation)),
+            GraphNode::Agent(_) => None,
+        })
+        .collect();
+    assert_eq!(confirmations, vec![(channel(1), Confirmation::Unconfirmed)]);
+    let confirmed_only = TopologyFilter {
+        unconfirmed_channels: UnconfirmedChannels::Exclude,
+        ..TopologyFilter::default()
+    };
+    let none = world
+        .store
+        .channel_topology(all(), Weighting::Transmissions, &confirmed_only)
+        .await
+        .unwrap()
+        .value;
+    assert!(none.accesses().is_empty());
+    assert!(none.nodes().is_empty());
+}
+
+#[tokio::test]
+async fn an_unseen_channel_routed_by_an_edge_is_drawn_with_defaults() {
+    // topology.node-facts.unknown-channel-defaults: a channel node whose
+    // facts the cache has not seen is drawn discovered, active, unreviewed
+    // and confirmed, summarized by its id; an access to a resource the
+    // cache holds on no known channel is not drawn.
+    let mut world = world();
+    world.nodes.set_resource(resource(5), Some(channel(5)));
+    world
+        .store
+        .apply_access(&AccessContribution {
+            access: access(1),
+            agent: agent(1),
+            resource: resource(5),
+            op: AccessKind::Write,
+            at: ts(20),
+        })
+        .await
+        .unwrap();
+    world
+        .store
+        .apply(&plain(1, 1, 2, Route::Channel(channel(5)), 21, 4))
+        .await
+        .unwrap();
+    let drawn = world
+        .store
+        .channel_topology(all(), Weighting::Transmissions, &TopologyFilter::default())
+        .await
+        .unwrap()
+        .value;
+    assert!(drawn.accesses().is_empty());
+    let nodes: Vec<_> = drawn
+        .nodes()
+        .iter()
+        .filter_map(|node| match node {
+            GraphNode::Channel(node) => Some(node.clone()),
+            GraphNode::Agent(_) => None,
+        })
+        .collect();
+    assert_eq!(nodes.len(), 1);
+    assert_eq!(nodes[0].id, channel(5));
+    assert_eq!(nodes[0].origin_kind, CanonicalOriginKind::Discovered);
+    assert_eq!(nodes[0].detection_kind, DetectionKind::Active);
+    assert_eq!(nodes[0].policy_kind, PolicyKind::Unreviewed);
+    assert_eq!(nodes[0].confirmation, Confirmation::Confirmed);
+    assert!(
+        nodes[0]
+            .locator_summary
+            .as_str()
+            .contains(&channel(5).ulid_text())
+    );
 }

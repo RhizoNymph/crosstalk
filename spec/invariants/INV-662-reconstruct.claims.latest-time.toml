@@ -12,8 +12,8 @@ order-independent.
 
 [evidence]
 unit = "crosstalk_spec::tests::graph::observing_keeps_the_latest_time_in_any_order"
-property = "crosstalk_reconstruct::props::claim_observation_order_independent"
+property = "crosstalk_reconstruct::tests::pg_props::claim_observation_order_independent"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

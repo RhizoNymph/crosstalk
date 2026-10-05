@@ -1,0 +1,24 @@
+[invariant]
+id = "flow.access-store.accesses-as-recorded"
+statement = "For every access id in the IdBatch AccessStore::accesses is given that ChannelTraffic::record_access recorded, the returned map holds that Access as recorded, its AccessOp::Write outcome included, paired with the stored Resource whose id is the access's resource."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+The evidence page shows the accesses behind every co-access record, and
+AccessDetail::new refuses a resource that is not the access's
+(surface.evidence.follows-transmission), so the read hands back each access
+with its own resource in one call. A rejected write is an access like any
+other here (flow.access.rejected-write-recorded), and its outcome must come
+back as recorded, or the page would show an attempted write as delivered.
+The memory registry is the reference; the Postgres registry is checked
+against a real database.
+"""
+
+[evidence]
+unit = "crosstalk_memory::flow::registry::tests::accesses_read_back_in_batches_with_their_resources"
+integration = "crosstalk_flow::registry::integration::accesses_read_back_with_their_resources"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

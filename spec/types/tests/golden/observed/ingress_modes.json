@@ -10,5 +10,11 @@
     "data": {
       "host": "chatgpt.com"
     }
+  },
+  {
+    "type": "replay",
+    "data": {
+      "corpus": "agentdojo-v1.2"
+    }
   }
 ]

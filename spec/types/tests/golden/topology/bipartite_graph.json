@@ -57,6 +57,7 @@
           "label": null,
           "origin_kind": "discovered",
           "detection_kind": "active",
+          "confirmation": "confirmed",
           "policy_kind": "unreviewed",
           "locator_summary": "https://wiki.example/team/plan (+2)"
         }

@@ -1,0 +1,20 @@
+[invariant]
+id = "flow.resource.repo-file-clone-independent"
+statement = "A file path inside a directory the conversation knows as a clone of a repository normalizes to the repository's file locator (the repository's canonical id as host, the path inside it as path), whatever the clone's root."
+kind = "domain"
+property = "metamorphic"
+requires = ["property", "unit"]
+rationale = """
+Agents sharing a repository work in their own clones at different absolute
+paths. Keyed by absolute path, a write in one clone and a read in another
+would never meet; keyed by repository and path, they do, and so does the
+same file reached through the forge's URLs.
+"""
+
+[evidence]
+property = "crosstalk_flow::extract::resource::tests::repo_files_share_resource_id"
+unit = "crosstalk_flow::extract::tests::repos::clones_in_different_places_share_files"
+
+[evidence-review]
+property = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }
