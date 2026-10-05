@@ -624,6 +624,11 @@ store; the cluster stores (JetStream, Postgres or object storage) are P9.
 
 ## Gaps found
 
+- **`Live` never advances L7's watermark.** No frontier source exists over
+  the memory stores (the gateway's is Postgres-backed), so the topology
+  stage never calls `advance_watermark`: buckets stay open and confirmed
+  transmissions stay `Classified`, never `Aggregated`. Edges and series
+  read the open buckets. Known and accepted for now.
 - **No exchange store in the spec.** Nothing in `spec/types/interfaces`
   persists `Exchange`s or lists them; L8 reads exchanges only through
   L3 to L7's stores. The exchange log here is a stopgap. A spec trait

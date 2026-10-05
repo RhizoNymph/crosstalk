@@ -226,18 +226,19 @@ Then read through the UI, or through `crosstalk_e2e::read`.
 
 ## Gaps found (for the gateway's composition)
 
-- **The evidence test expects sentence-sized spans** (open). Its
-  assertions that every highlight lies inside `SENTENCE` and that every
-  match is carried by B's tool result do not hold for L4 as built:
-  - A's whole `Write` argument text is novel, so it is one originated
-    span, and the origin excerpt highlights all of it (the JSON
-    arguments, page and path);
-  - the read-side highlight is the matched k-gram run in B's tool
-    result, which spans line-number prefixes and the page's later lines;
-  - B's `Read` call arguments repeat A's file path, which B never saw:
-    a `ReaderOutput` match the correlator folds into the channel
-    transmission (an unobserved carrier), so not every match is a tool
-    result.
+- **The evidence test's assertions** (open; the owner decides). Since L4
+  cuts argument spans per string value (INV-1057), the origin excerpt of
+  B's tool-result match highlights A's page text (the `content` value,
+  shown JSON-escaped as the part stores it), which contains `SENTENCE` but
+  is not limited to it. Still failing, at `surface.rs` line 240
+  (`SENTENCE.contains(quoted.trim())`):
+  - the origin highlight is the whole page text;
+  - the read highlight is the matched run in B's tool result, which spans
+    the `Read` tool's line-number prefixes and the page's later lines;
+  - a second match is carried by `ReaderOutput`: B's `Read` call repeats
+    A's file path (42 characters, at least one k-gram, so it is its own
+    originated span), and that match's highlights are the path. Its
+    carrier assertion would fail next.
 - Resolved by `Live`: the evidence feeder fills `MemoryEvidence` from
   L4's span store and L5's `AccessStore`; the stores' outbox is forwarded
   onto the bus; the gateway runs a minimal L6 classifier.
