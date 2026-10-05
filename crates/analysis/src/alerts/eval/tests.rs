@@ -15,7 +15,7 @@ use crosstalk_spec::aggregates::alert::{
     RuleName, RuleQueryText, RuleStatus, SemanticQuery, TopicWatch, WatchedTopics,
 };
 use crosstalk_spec::aggregates::topic::{Embedding, EmbeddingModel, TopicModelVersion};
-use crosstalk_spec::derived::flow::access::{Access, AccessOp, Extraction};
+use crosstalk_spec::derived::flow::access::{Access, AccessOp, Extraction, WriteOutcome};
 use crosstalk_spec::derived::flow::channel::Seed;
 use crosstalk_spec::derived::flow::channel::policy::{Decision, Policy, PolicyAuthor};
 use crosstalk_spec::derived::flow::evidence::CoAccess;
@@ -153,6 +153,7 @@ fn suspected(n: u64, on: u64) -> BusEvent {
         AccessOp::Write {
             call: part(),
             spans: Vec::new(),
+            outcome: WriteOutcome::Delivered,
         },
         1,
     );
