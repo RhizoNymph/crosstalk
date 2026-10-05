@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { END_REASONS, endStep, parseEnd, UNREACHABLE_MESSAGE } from '../src/live/end.ts';
 import { lifecycleStep } from '../src/live/lifecycle.ts';
 import { parseNotice, parseWatch, watches } from '../src/live/watch.ts';
 
@@ -61,5 +62,31 @@ describe('page lifecycle', () => {
     expect(lifecycleStep('pageshow', true)).toBe('reopen');
     expect(lifecycleStep('pageshow', false)).toBe('none');
     expect(lifecycleStep('visibilitychange', true)).toBe('none');
+  });
+});
+
+describe('stream end', () => {
+  it('parses the reason /data/live sends', () => {
+    for (const reason of END_REASONS) {
+      expect(parseEnd(JSON.stringify({ reason }))).toEqual({ ok: true, value: reason });
+    }
+  });
+
+  it('refuses an end it cannot read', () => {
+    expect(parseEnd('nope').ok).toBe(false);
+    expect(parseEnd('{}').ok).toBe(false);
+    expect(parseEnd('{"reason":"gone"}').ok).toBe(false);
+    expect(parseEnd('{"reason":7}').ok).toBe(false);
+  });
+
+  it('stops and says the gateway is unreachable', () => {
+    expect(endStep('unreachable')).toEqual({ kind: 'stop', message: UNREACHABLE_MESSAGE });
+    expect(UNREACHABLE_MESSAGE).toContain('Live updates lost: gateway unreachable');
+  });
+
+  it('lets every other end reconnect and resume', () => {
+    for (const reason of ['lagged', 'session-ended', 'shutting-down'] as const) {
+      expect(endStep(reason)).toEqual({ kind: 'resume' });
+    }
   });
 });

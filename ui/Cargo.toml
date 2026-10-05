@@ -28,6 +28,8 @@ url = "=2.5.8"
 
 [dev-dependencies]
 crosstalk-conformance = { path = "../crates/conformance" }
+# The test proxy that cuts the gateway away (`testing::proxy`).
+tokio = { version = "=1.53.1", features = ["net", "io-util"] }
 
 [build-dependencies]
 topcoat = { version = "=0.9.0", default-features = false, features = ["tailwind"] }

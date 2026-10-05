@@ -1,6 +1,7 @@
 //! Test helpers: a router over the fixture backend and request shortcuts.
 
 pub mod http;
+pub mod proxy;
 
 use std::sync::{Arc, OnceLock};
 use topcoat::context::{AppContext, Cx};

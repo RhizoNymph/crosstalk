@@ -77,6 +77,11 @@ impl HttpWorld {
             .with_token(BearerToken::new(token).expect("token"))
     }
 
+    /// Where the server listens, for a proxy in front of it.
+    pub fn addr(&self) -> std::net::SocketAddr {
+        self.served.addr
+    }
+
     /// Who `token` is, as the http backend learns it at startup.
     pub async fn access(&self, token: &str) -> Result<Access, IdentityError> {
         resolve(&self.client(token)).await
