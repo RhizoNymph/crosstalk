@@ -58,10 +58,6 @@ pub struct GatewayWorld {
 
 /// L5's config for `timing`: one shard, so the correlator's order is the
 /// input order.
-///
-/// HOOK (fetch tools): `LiveSettings::fetch_tools` goes into this config
-/// once L5's fetch-tool key is merged; until then the gateway reads only
-/// its built-in HTTP tools as fetches.
 pub fn flow_config(timing: CorrelationTiming) -> Result<FlowConfig, BackendError> {
     let ms = |window: Duration| {
         u64::try_from(window.as_millis()).map_err(|_| BackendError::Build {

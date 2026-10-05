@@ -54,14 +54,6 @@ pub struct LiveSettings {
     pub timing: CorrelationTiming,
     /// Seeds the composition's envelope ids.
     pub seed: u64,
-    /// HOOK (fetch tools): tool names L5 should read as a fetch of their
-    /// `url` argument, beyond its built-in HTTP tools (AgentDojo's
-    /// `get_webpage`, [`crate::datasets::agentdojo::FETCH_TOOLS`]). The
-    /// gateway is making fetch tools configurable by name in L5, but its
-    /// `FlowConfig` key is not merged yet, so this is carried and not
-    /// applied: once the key lands, `gateway::flow_config` sets it from
-    /// here (search for `HOOK (fetch tools)`).
-    pub fetch_tools: &'static [&'static str],
 }
 
 impl LiveSettings {
@@ -75,20 +67,7 @@ impl LiveSettings {
             Duration::from_secs(60),
         )
         .map_err(LiveError::Timing)?;
-        Ok(Self {
-            timing,
-            seed,
-            fetch_tools: &[],
-        })
-    }
-
-    /// These settings with L5 reading `tools` as fetches (see
-    /// [`LiveSettings::fetch_tools`]).
-    pub fn with_fetch_tools(self, tools: &'static [&'static str]) -> Self {
-        Self {
-            fetch_tools: tools,
-            ..self
-        }
+        Ok(Self { timing, seed })
     }
 
     /// These settings with any of the three windows replaced.

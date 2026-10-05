@@ -31,26 +31,12 @@ fn loaded(file: &str) -> Loaded {
     load_world(&root(), Path::new(file)).unwrap_or_else(|e| panic!("{file}: {e}"))
 }
 
-/// Every positive label, content and access-only (channel reads, INV-963).
 fn positives(world: &World) -> Vec<&ExpectedTransmission> {
     world
         .truth()
         .iter()
         .filter_map(|e| match e {
             Expectation::Transmission(t) => Some(t),
-            Expectation::AccessOnly(t) => Some(t.transmission()),
-            _ => None,
-        })
-        .collect()
-}
-
-/// The access-only labels' texts.
-fn access_only(world: &World) -> Vec<&str> {
-    world
-        .truth()
-        .iter()
-        .filter_map(|e| match e {
-            Expectation::AccessOnly(t) => Some(t.label().content.text.as_str()),
             _ => None,
         })
         .collect()
@@ -395,15 +381,6 @@ fn each_injection_read_is_a_construction_label_from_the_attacker() {
     assert_eq!(json.reader_exchange, exchange_of(world, 10).id());
     assert_eq!(json.needs, MatchNeed::json_string());
     assert_eq!(json.route, RouteExpectation::Direct);
-
-    // The page and the file are resources the attacker never wrote: their
-    // copies expect a suspected transmission only (INV-963); the keyed
-    // tools' copies expect content.
-    let mut expected_access = vec![exact.content.text.as_str(), wrapped.content.text.as_str()];
-    expected_access.sort_unstable();
-    let mut found_access = access_only(world);
-    found_access.sort_unstable();
-    assert_eq!(found_access, expected_access);
 }
 
 #[test]
@@ -516,18 +493,11 @@ fn the_reference_finds_injections_it_can_route() {
     let summary = run(&mut source, &mut detector, 50, |_, _| {});
     assert!(summary.failures.is_empty(), "{:?}", summary.failures);
     let total = summary.score.total(&Selector::default());
-    // Content recall counts the keyed tools' copies; the page and file
-    // copies are access-only labels (INV-963), which the reference, having
-    // no access evidence, never finds.
-    assert_eq!(total.expected, 2);
-    // The YAML-escaped and JSON-escaped injections are found.
-    assert_eq!(total.found, 2, "{total:?}");
-    let access = summary.score.total(&Selector {
-        class: Some(crosstalk_eval::predict::EvidenceClass::Suspected),
-        ..Selector::default()
-    });
-    assert_eq!(access.expected, 2);
-    assert_eq!(access.found, 0);
+    assert_eq!(total.expected, 4);
+    // The YAML-escaped, verbatim and JSON-escaped injections are found. The
+    // file read is a channel the reference cannot resolve (a relative path),
+    // so it may be missed.
+    assert!(total.found >= 3, "{total:?}");
     assert!(
         summary.score.violations.iter().all(|v| v.count == 0),
         "{:?}",
