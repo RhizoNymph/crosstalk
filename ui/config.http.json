@@ -3,7 +3,9 @@
   "backend": {
     "http": {
       "url": "http://crosstalk:8081",
-      "token": {"env": "CROSSTALK_API_TOKEN"}
+      "token": {
+        "env": "CROSSTALK_API_TOKEN"
+      }
     }
   }
 }

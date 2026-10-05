@@ -10,6 +10,7 @@ mod components;
 mod config;
 mod data;
 mod error;
+mod identity;
 mod pages;
 #[cfg(test)]
 mod testing;
@@ -33,17 +34,22 @@ async fn main() -> anyhow::Result<()> {
     let config = Config::from_env()?;
     // The service (a replay ticker, the in-process surface's relay and
     // feed) runs for as long as the server does and is shut down after it.
-    let Started { backend, service } = backend::start(&config.backend).await?;
+    let Started {
+        backend,
+        service,
+        identity,
+    } = backend::start(&config.backend).await?;
+    let operator = identity.current().name().to_owned();
     let router = Router::builder()
         .discover()
-        .app_context(config.access.clone())
+        .app_context(identity)
         .app_context(backend)
         .assets(AssetBundle::load()?)
         .runtime()
         .build();
 
     let listener = tokio::net::TcpListener::bind(config.listen).await?;
-    tracing::info!(listen = %config.listen, operator = config.access.name(), "serving");
+    tracing::info!(listen = %config.listen, operator, "serving");
     // Returns once Ctrl+C or SIGTERM has drained the server.
     let served = topcoat::serve(listener, router).await;
     service.shutdown().await;

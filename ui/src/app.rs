@@ -7,20 +7,24 @@ use topcoat::context::{Cx, app_context, memoize};
 
 pub use crate::backend::AppBackend;
 use crate::config::Access;
+use crate::identity::Identity;
 
 pub fn backend(cx: &Cx) -> &AppBackend {
     app_context::<AppBackend>(cx)
 }
 
-/// The caller of this request, from the operator directory (trusted mode:
-/// the configured operator, with every permission). Shards and procedures
-/// call this themselves, since page guards do not run for their endpoints.
+/// The caller of this request: the configured trusted operator with every
+/// permission (the local backends), or the token's operator with the
+/// permissions the server gives it (the http backend). Shards and
+/// procedures call this themselves, since page guards do not run for their
+/// endpoints.
 pub fn caller(cx: &Cx) -> Caller {
     access(cx).caller()
 }
 
-pub fn access(cx: &Cx) -> &Access {
-    app_context::<Access>(cx)
+/// Who this request acts as ([`Identity::current`]).
+pub fn access(cx: &Cx) -> Access {
+    app_context::<Identity>(cx).current()
 }
 
 pub fn can(caller: &Caller, permission: Permission) -> bool {

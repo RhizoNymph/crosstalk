@@ -1,5 +1,7 @@
 //! Test helpers: a router over the fixture backend and request shortcuts.
 
+pub mod http;
+
 use std::sync::{Arc, OnceLock};
 use topcoat::context::{AppContext, Cx};
 use topcoat::router::request::Request;
@@ -74,9 +76,17 @@ pub fn router_over(backend: FixtureBackend) -> Router {
 
 /// The router over any configured backend (the world's, say).
 pub fn router_over_app(backend: crate::backend::AppBackend) -> Router {
+    router_with(backend, crate::identity::Identity::fixed(operator()))
+}
+
+/// The router over `backend`, acting as `identity`.
+pub fn router_with(
+    backend: crate::backend::AppBackend,
+    identity: crate::identity::Identity,
+) -> Router {
     Router::builder()
         .discover()
-        .app_context(operator())
+        .app_context(identity)
         .app_context(backend)
         .assets(assets())
         .runtime()
@@ -114,7 +124,7 @@ fn assets() -> AssetConfig {
 /// A request context over the fixture backend, for rendering components.
 pub fn cx() -> Cx {
     let mut app = AppContext::new();
-    app.insert(operator());
+    app.insert(crate::identity::Identity::fixed(operator()));
     app.insert(crate::backend::AppBackend::from(
         FixtureBackend::try_new(SEED).expect("fixture generates"),
     ));

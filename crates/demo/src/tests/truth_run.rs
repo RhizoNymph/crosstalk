@@ -176,6 +176,16 @@ struct Run {
 }
 
 async fn swarm(claude_code_shape: bool, seed: u64) -> Run {
+    let mix = TaskMix::new(
+        Fraction::new(0.3).expect("fraction"),
+        Fraction::new(0.65).expect("fraction"),
+    )
+    .expect("mix");
+    swarm_with(claude_code_shape, seed, mix).await
+}
+
+/// One swarm run against a fresh wiki with the given write/read mix.
+async fn swarm_with(claude_code_shape: bool, seed: u64, mix: TaskMix) -> Run {
     let recorder = Recorder::start().await;
     let pages = wiki().await;
     let truth = std::env::temp_dir().join(format!(
@@ -188,11 +198,7 @@ async fn swarm(claude_code_shape: bool, seed: u64) -> Run {
     config.agents_per_key = NonZeroU32::MIN.saturating_add(1);
     config.think_ms = Span::ordered(5, 20);
     config.turns = PositiveSpan::ordered(4, 6);
-    config.mix = TaskMix::new(
-        Fraction::new(0.3).expect("fraction"),
-        Fraction::new(0.65).expect("fraction"),
-    )
-    .expect("mix");
+    config.mix = mix;
     // One page: every read reads it, so self-reads and rereads happen.
     config.pages = NonZeroU32::MIN;
     config.duration = Duration::from_millis(4000);
@@ -484,6 +490,23 @@ async fn every_row_kind_appears() {
         let (kinds, _) = check(&swarm(seed % 2 == 0, seed).await);
         all.extend(kinds);
     }
+    // A miss needs a read to beat every write to the page, which the mixed
+    // runs only do by timing. A run that only reads, against its own fresh
+    // wiki, misses on every read whatever the scheduling.
+    let reads_only = swarm_with(
+        false,
+        9,
+        TaskMix::new(
+            Fraction::new(0.0).expect("fraction"),
+            Fraction::new(1.0).expect("fraction"),
+        )
+        .expect("mix"),
+    )
+    .await;
+    let (kinds, _) = check(&reads_only);
+    assert_eq!(kinds, BTreeSet::from(["miss".to_owned()]));
+    assert!(reads_only.report.wiki_misses > 0);
+    all.extend(kinds);
     let expected: BTreeSet<String> = ["miss", "reread", "self_read", "transmission"]
         .into_iter()
         .map(str::to_owned)

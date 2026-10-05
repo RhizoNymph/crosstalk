@@ -13,12 +13,14 @@
 //! - [`fixture::FixtureBackend`]: deterministic synthetic data, optionally
 //!   replaying its last hours (the default);
 //! - [`world::WorldBackend`]: the real surface (`crosstalk_api::InProcess`
-//!   over the memory stores), seeded with `crosstalk-world`;
-//! - `live::LiveBackend` (cargo feature `live`): the gateway's whole
-//!   composition, a stub until the gateway provides it.
+//!   over the memory stores), seeded with `crosstalk-world`, for
+//!   development and demos;
+//! - [`crosstalk_client::HttpClient`] ([`http`]): a gateway's surface over
+//!   HTTP, the only way real data reaches the UI.
 //!
 //! [`start`] builds it with the [`Service`] it runs beside the server (the
-//! replay ticker, or the in-process surface's relay and feed), which the
+//! replay ticker, the in-process surface's relay and feed, or the http
+//! identity refresher) and the [`Identity`] requests act as, which the
 //! binary keeps alive while serving and shuts down after. [`dispatch`]
 //! implements every trait on `AppBackend` by forwarding; its futures have
 //! concrete types, so their `Send`-ness, which Topcoat's multi-threaded
@@ -31,16 +33,18 @@
 
 pub mod dispatch;
 pub mod fixture;
-#[cfg(feature = "live")]
-pub mod live;
+pub mod http;
 pub mod world;
 
 use crosstalk_api::InProcess;
+use crosstalk_client::HttpClient;
 use crosstalk_spec::interfaces::l8_surface::QueryError;
 use tokio::task::JoinHandle;
 
 use crate::config::BackendConfig;
+use crate::identity::Identity;
 use fixture::{FixtureBackend, GenError};
+use http::identity::IdentityError;
 use world::{WorldBackend, WorldStartError};
 
 /// What the backends' reads return: the spec's `QueryError` on failure.
@@ -51,8 +55,7 @@ pub type Result<T> = std::result::Result<T, QueryError>;
 pub enum AppBackend {
     Fixture(Box<FixtureBackend>),
     World(WorldBackend),
-    #[cfg(feature = "live")]
-    Live(live::LiveBackend),
+    Http(HttpClient),
 }
 
 /// What a backend runs beside the server, kept alive while it serves.
@@ -63,6 +66,8 @@ pub enum Service {
     Replay(JoinHandle<()>),
     /// The in-process surface's relay task and live feed.
     World(Box<InProcess>),
+    /// The http backend's identity refresher.
+    Http(JoinHandle<()>),
 }
 
 impl Service {
@@ -72,14 +77,17 @@ impl Service {
             Self::Idle => {}
             Self::Replay(ticker) => ticker.abort(),
             Self::World(in_process) => in_process.shutdown().await,
+            Self::Http(refresh) => refresh.abort(),
         }
     }
 }
 
-/// A started backend and what it runs beside the server.
+/// A started backend, what it runs beside the server, and who requests
+/// act as.
 pub struct Started {
     pub backend: AppBackend,
     pub service: Service,
+    pub identity: Identity,
 }
 
 /// Why the configured backend did not start.
@@ -89,27 +97,27 @@ pub enum StartError {
     Fixture(#[from] GenError),
     #[error(transparent)]
     World(#[from] WorldStartError),
-    #[cfg(feature = "live")]
-    #[error(transparent)]
-    Live(#[from] live::LiveStartError),
-    #[cfg(not(feature = "live"))]
-    #[error("the live backend needs the `live` cargo feature, which this build lacks")]
-    LiveNotBuilt,
+    #[error("the http backend could not learn who its token is")]
+    Http(#[from] IdentityError),
 }
 
 /// Starts the backend `config` names. Needs a tokio runtime.
 pub async fn start(config: &BackendConfig) -> std::result::Result<Started, StartError> {
-    match *config {
-        BackendConfig::Fixture { seed, replay } => {
-            let backend = match replay {
-                None => FixtureBackend::try_live(seed)?,
+    match config {
+        BackendConfig::Fixture {
+            access,
+            seed,
+            replay,
+        } => {
+            let backend = match *replay {
+                None => FixtureBackend::try_live(*seed)?,
                 Some(replay) => {
                     tracing::info!(
                         window_minutes = replay.window_minutes,
                         speed = replay.speed,
                         "replaying the fixture's last stretch"
                     );
-                    FixtureBackend::try_replay(seed, replay)?
+                    FixtureBackend::try_replay(*seed, replay)?
                 }
             };
             let service = backend
@@ -118,24 +126,24 @@ pub async fn start(config: &BackendConfig) -> std::result::Result<Started, Start
             Ok(Started {
                 backend: AppBackend::Fixture(Box::new(backend)),
                 service,
+                identity: Identity::fixed(access.clone()),
             })
         }
-        BackendConfig::World { seed } => {
-            let (backend, in_process) = WorldBackend::start(seed).await?;
+        BackendConfig::World { access, seed } => {
+            let (backend, in_process) = WorldBackend::start(*seed).await?;
             Ok(Started {
                 backend: AppBackend::World(backend),
                 service: Service::World(Box::new(in_process)),
+                identity: Identity::fixed(access.clone()),
             })
         }
-        #[cfg(feature = "live")]
-        BackendConfig::Live(live) => {
-            let backend = live::LiveBackend::start(live)?;
+        BackendConfig::Http(config) => {
+            let started = http::start(config).await?;
             Ok(Started {
-                backend: AppBackend::Live(backend),
-                service: Service::Idle,
+                backend: AppBackend::Http(started.client),
+                service: Service::Http(started.refresh),
+                identity: started.identity,
             })
         }
-        #[cfg(not(feature = "live"))]
-        BackendConfig::Live(_) => Err(StartError::LiveNotBuilt),
     }
 }
