@@ -1,6 +1,5 @@
 [workspace]
-members = ["spec", "crates/*"]
-exclude = ["ui"]
+members = ["spec", "crates/*", "ui"]
 resolver = "3"
 
 [workspace.package]

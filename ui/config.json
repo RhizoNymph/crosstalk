@@ -1,0 +1,12 @@
+{
+  "listen": "127.0.0.1:3000",
+  "operator": {
+    "id": "01J9ZQ3W8D0000000000000001",
+    "name": "researcher"
+  },
+  "backend": {
+    "fixture": {
+      "seed": 7
+    }
+  }
+}

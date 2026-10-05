@@ -15,10 +15,12 @@
 //!    generator and demo swarm) under any dependency kind.
 //!
 //! `store` and `spec` are open to every crate. Only `gateway`, `api`,
-//! `client`, `eval` (the evaluation harness, `crates/eval`) and `e2e` (the
-//! end-to-end smoke harness, `crates/e2e`) compose layer crates. Tool
-//! crates are unrestricted in what they depend on (`demo` takes `testkit`
-//! as a normal dependency).
+//! `client`, `eval` (the evaluation harness, `crates/eval`), `e2e` (the
+//! end-to-end smoke harness, `crates/e2e`) and `ui` compose layer crates.
+//! `ui` (the operator UI, `crosstalk-ui`) is an application: it may depend
+//! on `surface`, `api`, `client`, the memory stores and the world seed; no
+//! layer crate may depend on it. Tool crates are unrestricted in what they
+//! depend on (`demo` takes `testkit` as a normal dependency).
 //!
 //! The rule is a pure function over a typed dependency graph, tested on
 //! hand-built graphs, and then applied to the real workspace.
@@ -70,7 +72,8 @@ impl Layer {
     }
 }
 
-/// The crates allowed to wire layer crates together.
+/// The crates allowed to wire layer crates together: the gateway, its
+/// HTTP server and client, the evaluation harness, and the operator UI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Composer {
     Api,
@@ -78,15 +81,17 @@ enum Composer {
     E2e,
     Eval,
     Gateway,
+    Ui,
 }
 
 impl Composer {
-    const ALL: [Composer; 5] = [
+    const ALL: [Composer; 6] = [
         Composer::Api,
         Composer::Client,
         Composer::E2e,
         Composer::Eval,
         Composer::Gateway,
+        Composer::Ui,
     ];
 
     fn dir(self) -> &'static str {
@@ -96,6 +101,7 @@ impl Composer {
             Composer::E2e => "e2e",
             Composer::Eval => "eval",
             Composer::Gateway => "gateway",
+            Composer::Ui => "ui",
         }
     }
 }
@@ -632,6 +638,25 @@ fn eval_composes_gateway_and_layers() {
                 check(&edge(layer.dir(), "eval", kind)),
                 Some(Violation::LayerOnComposer {
                     edge: edge(layer.dir(), "eval", kind)
+                })
+            );
+        }
+    }
+}
+
+#[test]
+fn ui_is_an_application_that_may_compose_layers() {
+    assert_eq!(Role::of("crosstalk-ui"), Role::Composer(Composer::Ui));
+    for kind in [DepKind::Normal, DepKind::Dev, DepKind::Build] {
+        assert_eq!(check(&edge("ui", "spec", kind)), None);
+        for to in ["surface", "api", "client"] {
+            assert_eq!(check(&edge("ui", to, kind)), None, "ui -> {to}");
+        }
+        for layer in Layer::ALL {
+            assert_eq!(
+                check(&edge(layer.dir(), "ui", kind)),
+                Some(Violation::LayerOnComposer {
+                    edge: edge(layer.dir(), "ui", kind)
                 })
             );
         }

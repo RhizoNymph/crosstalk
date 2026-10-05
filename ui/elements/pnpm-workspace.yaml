@@ -1,0 +1,14 @@
+# Settings for this standalone package (no workspace members).
+# Refuse any package version, direct or transitive, published less than a
+# week before install.
+minimumReleaseAge: 10080
+savePrefix: ""
+allowBuilds:
+  # The platform binary ships as an optional dependency; the postinstall
+  # check is not needed.
+  esbuild: false
+peerDependencyRules:
+  allowedVersions:
+    # regl-scatterplot pins gl-matrix ~3.4 while its camera dependency asks
+    # for ~3.3; the API it uses is unchanged.
+    camera-2d-simple>gl-matrix: "3.4"
