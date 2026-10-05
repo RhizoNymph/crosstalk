@@ -88,8 +88,18 @@ score guarantees require anyway.
 - Every write is one `SERIALIZABLE` transaction; changes to one rule or
   alert are compare-and-set on its revision; an exhausted counter is a
   store failure before anything changes.
+- Inside a transaction body a driver error (`StorageFailure::Query`, or
+  `OutboxError::Db` from the outbox append) goes back to
+  `retry_serializable` as `TxError::Db` (`StorageFailure::into_tx`), so a
+  serialization failure or deadlock re-runs the transaction. Only
+  non-driver failures (codec, invariant, revision exhaustion, spec
+  refusals) abort. A conflict that outlasts the retry budget is the spec
+  error's `Store { reason }`.
 - At most one active alert per (rule, stored subject), backed by a partial
-  unique index (concurrent triage retries as a serialization failure).
+  unique index. `open_alert` inserts `ON CONFLICT (rule, subject) WHERE
+  state IN ('open', 'acknowledged') DO NOTHING`, so a concurrent opener
+  whose row the snapshot cannot see raises a serialization failure (not a
+  unique violation) and the retry deduplicates into the winner's alert.
 - Events are published at least once and only after commit.
 - Rules list built-in rules first in `BuiltinRule::ALL` order, then user
   rules newest id first; rule ids are ULIDs minted at `at`, never in the

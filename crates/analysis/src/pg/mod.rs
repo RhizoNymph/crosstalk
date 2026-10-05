@@ -12,7 +12,7 @@ pub mod outbox;
 pub(crate) mod testing;
 
 use crosstalk_spec::ids::mint::UlidExhausted;
-use crosstalk_store::{Layer, Migrations, SerializableError, StoreError, migrate};
+use crosstalk_store::{Layer, Migrations, SerializableError, StoreError, TxError, migrate};
 use sqlx::PgPool;
 
 pub use codec::CodecError;
@@ -54,6 +54,18 @@ impl StorageFailure {
     /// The text a spec error's `Store { reason }` carries.
     pub fn reason(&self) -> String {
         self.to_string()
+    }
+
+    /// This failure as a `retry_serializable` body's error. A driver error
+    /// (from a query or the outbox append) goes back to the helper as
+    /// [`TxError::Db`], so a serialization failure or deadlock re-runs the
+    /// transaction and anything else maps through `StoreError`; any other
+    /// failure aborts with `abort(self)`.
+    pub(crate) fn into_tx<E>(self, abort: impl FnOnce(Self) -> E) -> TxError<E> {
+        match self {
+            Self::Query(error) | Self::Outbox(OutboxError::Db(error)) => TxError::Db(error),
+            other => TxError::Abort(abort(other)),
+        }
     }
 }
 
