@@ -1114,6 +1114,30 @@ Features Index:
       - crates/flow/src/consumer/apply.rs
     depends_on: [type_spec, channel_semantics, memory, sim, testkit, transport]
     doc: docs/features/flow_correlator.md
+  eval_swe_synthetic:
+    description: >
+      Background and synthetic corpora for crosstalk-eval (ct-eval --dataset
+      open-swe | lmcache | swe-splice | cipher). Open-SWE-Traces and LMCache
+      trajectories (Parquet, read with the parquet crate; Open-SWE tool
+      results paired with calls by position, LMCache responses taken from
+      the next request) are mixed into background worlds with only
+      Boilerplate/SharedSource negative controls. Seeded splices plant one
+      Channel/File transmission from A's file write to B's harness-format
+      read (exact, whitespace, JSON-string, base64). Seeded cipher pairs
+      deliver steganographic-evals payloads encoded: base64, hex, URL and
+      chains are in reach, while rotN, binary8 and substitution are
+      Tier::OutOfReach and reported as missed by design. Reports gain
+      out_of_reach and background (false positives per 1k exchanges, top
+      sources) summaries.
+    entry_points:
+      - crates/eval/src/datasets/background.rs
+      - crates/eval/src/datasets/open_swe/mod.rs
+      - crates/eval/src/datasets/lmcache/mod.rs
+      - crates/eval/src/datasets/swe_splice/mod.rs
+      - crates/eval/src/datasets/cipher/mod.rs
+      - crates/eval/src/score/sources.rs
+    depends_on: [eval, type_spec]
+    doc: docs/features/eval_swe_synthetic.md
   eval_ai_village:
     description: >
       The AI Village converter (crosstalk-eval datasets::ai_village, ct-eval

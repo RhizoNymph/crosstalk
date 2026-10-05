@@ -121,12 +121,13 @@ scoring, reports and gates.
 | `src/corpus/client.rs` | per-agent client context | `synthetic_client`, `vendor_of` |
 | `src/corpus/delta.rs` | new inputs of an exchange | `new_inputs` |
 | `src/truth/mod.rs` | labels | `Expectation`, `ExpectedTransmission`/`TransmissionLabel`, `NegativeControl`/`NegativeLabel`, `NegativeReason`, `AgentCluster`, `RouteExpectation`, `ExpectedContent`, `InvalidLabel` |
-| `src/truth/kinds.rs` | label dimensions the spec lacks, helpers over spec ones | `Tier`, `CarrierKind`, `MatchNeed` (with spec `Codec`s), `route_rank`/`cmp_route` (order for spec `RouteKind`), `locator_key` (a spec `Locator` as one string) |
+| `src/truth/kinds.rs` | label dimensions the spec lacks, helpers over spec ones | `Tier` (with `OutOfReach`), `CarrierKind` (the spec's, re-exported), `MatchNeed` (with spec `Codec`s, and `Undecodable` for out-of-reach labels), `route_rank`/`cmp_route` (order for spec `RouteKind`), `locator_key` (a spec `Locator` as one string) |
 | `src/truth/jsonl.rs` | truth as JSONL | `write`, `read` |
 | `src/predict/mod.rs` | predictions | `Prediction`, `PredictedRoute`, `Directory`, `WorldDirectory`, `from_transmission` |
 | `src/score/align.rs` | **the alignment rule** | `aligns`, `violates`, `specificity` |
 | `src/score/judge.rs` | judging one prediction | `Judge`, `Outcome` |
 | `src/score/mod.rs` | counts and breakdown | `Scorer`, `Score`, `RowKey`, `Counts`, `Selector`, `TransmissionRow` |
+| `src/score/sources.rs` | the shared texts negative-control violations fell on | `SourceTally`, `SourceCount`, `source_key`, `TOP_SOURCES` |
 | `src/score/quality.rs` | spec `DetectionQuality` from truth | `verdicts`, `detection_quality` |
 | `src/reference/mod.rs` | the reference matcher | `run`, `ReferenceConfig`, `ReferenceOutput`, `SpanRecord` |
 | `src/reference/fold.rs` | normalization with offset maps | `fold`, `Folded` |
@@ -136,7 +137,7 @@ scoring, reports and gates.
 | `src/reference/route.rs` | carrier and route | `find_call`, `extract_resource`, `parse_url`, `normalize_path` |
 | `src/pipeline.rs` | the run loop and the detector seam | `Detector`, `Detection`, `DetectionStatus`, `ReferenceDetector`, `run`, `predictions`, `RunSummary`, `Unscored`, `WorldError` |
 | `src/gateway.rs` | the gateway pipeline as a detector | `PipelineDetector`, `ingest_world`, `subscribe`, `capture_group`, `CorpusClock`, `Captured`, `PipelineError` |
-| `src/report/mod.rs`, `table.rs` | reports | `Report`, `Summary`, `ReportRow`, `table::render` |
+| `src/report/mod.rs`, `table.rs` | reports | `Report` (`overall` without out-of-reach rows, `out_of_reach`, `background`), `Summary`, `Background`, `ReportRow`, `table::render` |
 | `src/report/gates.rs` | regression gates | `Gates`, `Gate`, `Check`, `GateOutcome`, `GateStatus` |
 | `src/config.rs` | dataset locations | `EvalConfig`, `DatasetConfig`, `expand` |
 | `src/datasets/salt/mod.rs` | SALT as a `TraceSource` | `SaltSource`, `load_world`, `convert_trace`, `SaltError`, `DATASET` |
@@ -279,9 +280,8 @@ does not depend on them yet; when they land:
 | --- | --- |
 | `IngressMode::Replay { corpus: CorpusId }` | the fabricated `ClientContext` (`corpus/client.rs`: a reverse-proxy route named after the dataset); corpus-ingested exchanges must use `Replay` |
 | `SpanIndex::span` | the span directory (`Detection::spans`, `Directory::span`, `ReferenceOutput::spans`) the eval keeps to locate a match's origin |
-| `CarrierKind` | the eval's own `truth::CarrierKind` and its mapping from `Carrier` |
 | `WriteOutcome` (on `AccessOp::Write`), `ToolOutcome::Unknown` | the eval-only `NegativeReason::RejectedSend` label for failed `send_message` calls, which becomes a rejected write the detector itself sees |
-| `Codec::JsonString`, `Codec::YamlString` | the JSON/YAML escape class folded into `Normalized` (`MatchNeed::Normalized` for escaped deliveries, the reference matcher's escape unfolding) |
+| `Codec::JsonString`, `Codec::YamlString` | the JSON/YAML escape class folded into `Normalized` in the SALT and swarm labels and the reference matcher's escape unfolding (the splice and cipher corpora already label escapes `Decoded([JsonString])`) |
 | an access-by-id read | channel-route alignment's dependence on the detector reporting each channel's resources (`Directory::channel`) |
 
 ## How to add a converter
@@ -699,3 +699,21 @@ construction-tier `get_events` deliveries (0.999); the 2026-07-13..17 window
 gives 116,410 exchanges, 97,978 structural chat labels (recall 0.999) and 10
 heuristic repository labels. Numbers and the false-positive picture are in
 [eval_ai_village.md](eval_ai_village.md#reference-baselines).
+
+## SWE background, splices and cipher pairs
+
+`ct-eval run --dataset open-swe | lmcache | swe-splice | cipher` has its
+own page: [eval_swe_synthetic.md](eval_swe_synthetic.md). Open-SWE-Traces
+and LMCache trajectories are mixed into background worlds that hold only
+negative controls. The splice generator plants an exact Channel
+transmission through `Locator::File` between two real trajectories, in four
+variants. Cipher pairs deliver payloads encoded, and those whose encoding the
+spec's `Codec` cannot name are labelled `Tier::OutOfReach`. Every run's
+report now has an `out_of_reach` summary, kept out of `overall`, and a
+`background` summary for any run with negative controls: false positives
+per 1k exchanges and the top sources they fell on.
+
+Reference baselines: open-swe gives 330.7 false positives per 1k exchanges
+and lmcache 1,887.0. Splices are found 59/59 through an editor view and 0/15
+through a shell read, which the reference routes `Direct`. Cipher recall
+runs from 0.36 to 0.52 for the in-reach codecs, with 0/200 out of reach.
