@@ -1,7 +1,7 @@
 //! The `<ct-projection>` payload and its route.
 //!
 //! `GET /data/projection/{id}` answers with a stored projection
-//! (`QueryApi::projection`) in the binary format of [`format`], as
+//! (`QueryApi::projection`) in the binary format of [`format`](mod@format), as
 //! `application/octet-stream`. Needs `Content`. The spec's frame has no
 //! channel column, so the channels of the channel-routed points are read
 //! from their transmissions' rows (`transmissions_by_id`, routes resolved

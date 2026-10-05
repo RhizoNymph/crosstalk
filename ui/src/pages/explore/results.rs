@@ -2,7 +2,7 @@
 //! re-renders when the selection signal (or its page) changes.
 //!
 //! A point shows that transmission; a lasso is resolved against the stored
-//! projection ([`Polygon::transmissions`]) and lists the transmissions
+//! projection (`Polygon::transmissions`) and lists the transmissions
 //! inside it, paged, from `transmissions_by_id`. Rows are read under the
 //! projection's own topic version, since that is what its points were
 //! sampled under. The shard checks `View` and `Content` and validates every

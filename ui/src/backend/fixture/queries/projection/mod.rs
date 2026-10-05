@@ -4,7 +4,7 @@
 //! (errors as for one) and records a queued [`ProjectionInfo`] whose spec
 //! pins it. The fixture's fitter then runs the job at once, through the
 //! spec's transitions: started, then completed with its frame
-//! ([`sample::fit`]) or failed with a [`FitFailure`]. Each call records a
+//! ([`sample::fit`]) or failed with a `FitFailure`. Each call records a
 //! new job. The generated world also holds jobs in the other states
 //! ([`seed`]).
 //!

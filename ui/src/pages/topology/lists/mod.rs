@@ -85,7 +85,7 @@ fn claim_text(claim: &crosstalk_spec::observed::client::HarnessClaim) -> String 
 }
 
 /// The page's one binding that keeps the URL, the rows' `aria-pressed` and
-/// their scroll position in step with `sel` ([`SYNC_JS`]).
+/// their scroll position in step with `sel` (`SYNC_JS`).
 #[component]
 pub async fn selection_sync(sel: &Signal<String>) -> Result<impl View> {
     let sel = sel.clone();
