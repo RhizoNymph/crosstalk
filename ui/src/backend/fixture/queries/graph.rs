@@ -32,10 +32,31 @@ use crate::pending::channel_semantics::{ChannelGraph, TopologyFilter};
 use super::linked::{Counted, Linked};
 use super::{Ctx, alerts, channels, nodes, route_key};
 
+thread_local! {
+    /// A replay's watermark while a read runs on this thread
+    /// ([`with_watermark`]); `None` outside a replay.
+    static REPLAY_WATERMARK: std::cell::Cell<Option<crosstalk_spec::support::Timestamp>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// Runs `f` (a synchronous read) with every aggregate it builds reporting
+/// `at` as its watermark.
+pub fn with_watermark<T>(at: crosstalk_spec::support::Timestamp, f: impl FnOnce() -> T) -> T {
+    let previous = REPLAY_WATERMARK.with(|cell| cell.replace(Some(at)));
+    let out = f();
+    REPLAY_WATERMARK.with(|cell| cell.set(previous));
+    out
+}
+
 /// The watermark every aggregate reports: ten minutes before the end of
-/// the data, a bucket boundary.
+/// the data, a bucket boundary; under a replay, ten minutes before its
+/// present.
 pub fn watermark() -> Watermark {
-    Watermark(WATERMARK)
+    Watermark(
+        REPLAY_WATERMARK
+            .with(std::cell::Cell::get)
+            .unwrap_or(WATERMARK),
+    )
 }
 
 pub fn watermarked<T>(value: T) -> Watermarked<T> {

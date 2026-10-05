@@ -5,6 +5,9 @@
  * Inputs: `data-src` (a `/data/timeline?…` URL), `data-from` and `data-to`
  * (RFC 3339; the current window, drawn as the brush). Output: `value` =
  * `<from>/<to>`, snapped to bucket edges, set on pointer-up.
+ *
+ * With `data-live` (the feed URL), a `watermark` event refetches `data-src`
+ * and redraws the bars in place, keeping the brush and any drag in progress.
  */
 
 import { type TimelinePayload, timelinePayload } from '../payloads/timeline.ts';
@@ -12,6 +15,7 @@ import { mix, toCss, withAlpha } from '../shared/color.ts';
 import { PayloadElement } from '../shared/element.ts';
 import { type LoadError, loadJson } from '../shared/fetch.ts';
 import { formatBytes, formatCount, formatUtc } from '../shared/format.ts';
+import { LiveRefetch } from '../shared/live-refetch.ts';
 import type { Result } from '../shared/result.ts';
 import { encodeBrushSelection } from '../shared/selection.ts';
 import {
@@ -60,7 +64,7 @@ function el<K extends keyof SVGElementTagNameMap>(
 }
 
 export class TimebrushElement extends PayloadElement<TimelinePayload> {
-  static observedAttributes = ['data-src', 'data-from', 'data-to'];
+  static observedAttributes = ['data-src', 'data-from', 'data-to', 'data-live'];
 
   #payload: TimelinePayload | null = null;
   #axis: Axis | null = null;
@@ -71,6 +75,8 @@ export class TimebrushElement extends PayloadElement<TimelinePayload> {
   #drag: Drag | null = null;
   #hover: number | null = null;
   #size = { width: 0, height: 0 };
+  #refetch: AbortController | null = null;
+  readonly #live = new LiveRefetch(() => void this.#liveTick());
 
   constructor() {
     super(STYLES);
@@ -118,12 +124,55 @@ export class TimebrushElement extends PayloadElement<TimelinePayload> {
     this.#render();
   }
 
+  override connectedCallback(): void {
+    super.connectedCallback();
+    this.#live.start(this.dataset.live ?? '');
+  }
+
+  override disconnectedCallback(): void {
+    this.#live.stop();
+    this.#refetch?.abort();
+    this.#refetch = null;
+    super.disconnectedCallback();
+  }
+
+  async #liveTick(): Promise<void> {
+    const src = this.dataset.src?.trim() ?? '';
+    if (src === '') return;
+    this.#refetch?.abort();
+    const controller = new AbortController();
+    this.#refetch = controller;
+    const result = await this.load(src, controller.signal);
+    if (this.#refetch !== controller) return;
+    this.#refetch = null;
+    if ((this.dataset.src?.trim() ?? '') !== src) return;
+    if (!result.ok) {
+      if (result.error.kind !== 'aborted') {
+        console.warn('ct-timebrush: live refetch failed', { error: result.error.kind });
+      }
+      return;
+    }
+    if (this.emptyMessage(result.value) !== null) return;
+    if (this.#svg === null) {
+      this.hideStatus();
+      this.mount(result.value);
+      return;
+    }
+    // Same element and listeners: only the bars change.
+    this.#payload = result.value;
+    this.#render();
+  }
+
   protected unmount(): void {
     this.#teardown();
     this.#payload = null;
   }
 
-  protected inputChanged(): void {
+  protected inputChanged(name: string): void {
+    if (name === 'data-live') {
+      this.#live.start(this.dataset.live ?? '');
+      return;
+    }
     // The page caught up with (or overrode) our selection.
     this.#pending = null;
     this.#render();

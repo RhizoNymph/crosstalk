@@ -79,6 +79,18 @@ impl Present for FixtureBackend {
         require(caller, Permission::View)?;
         Ok(self.state.read().await.clock.now())
     }
+
+    /// The end of the data: a replay fills a default window in.
+    async fn view_end(&self, caller: &Caller) -> Result<Timestamp> {
+        require(caller, Permission::View)?;
+        let clock = self.state.read().await.clock;
+        Ok(match clock {
+            clock::Clock::Replay { .. } => {
+                clock::plus(clock.view_end(), clock::BUCKET.as_micros().get())
+            }
+            clock::Clock::Fixed | clock::Clock::Live { .. } => clock.now(),
+        })
+    }
 }
 
 impl ExportFormats for FixtureBackend {
@@ -95,7 +107,7 @@ impl QueryApi for FixtureBackend {
 
     async fn watermark(&self, caller: &Caller) -> Result<Watermark> {
         require(caller, Permission::View)?;
-        Ok(queries::graph::watermark())
+        Ok(Watermark(self.state.read().await.clock.watermark()))
     }
 
     /// The fixture's present: its clock, the bucket width and export
@@ -544,6 +556,7 @@ impl OperatorActions for FixtureBackend {
     ) -> std::result::Result<ActionOutcome, ActionError> {
         let mut state = self.state.write().await;
         let committed = actions::act(&self.world, &mut state, caller, action);
+        self.invalidate_replay().await;
         // Published before the lock is released: the log's order is the
         // commit order.
         self.feed.publish(committed.changed).await;

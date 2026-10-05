@@ -34,8 +34,25 @@ async fn main() -> anyhow::Result<()> {
 
     let config = Config::from_env()?;
     let backend = match config.backend {
-        BackendConfig::Fixture { seed } => FixtureBackend::try_live(seed)?,
+        BackendConfig::Fixture { seed, replay: None } => FixtureBackend::try_live(seed)?,
+        BackendConfig::Fixture {
+            seed,
+            replay: Some(replay),
+        } => FixtureBackend::try_replay(seed, replay)?,
     };
+    // Kept for the life of the server: publishes what the replay reveals.
+    let _ticker = backend.spawn_replay_ticker();
+    if let BackendConfig::Fixture {
+        replay: Some(replay),
+        ..
+    } = config.backend
+    {
+        tracing::info!(
+            window_minutes = replay.window_minutes,
+            speed = replay.speed,
+            "replaying the fixture's last stretch"
+        );
+    }
     let router = Router::builder()
         .discover()
         .app_context(config.access.clone())

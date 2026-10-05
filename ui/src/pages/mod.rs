@@ -9,6 +9,8 @@ pub mod explore;
 pub mod export;
 pub mod overview;
 pub mod pipeline;
+#[cfg(test)]
+mod replay_tests;
 pub mod topics;
 pub mod topology;
 pub mod transmission;

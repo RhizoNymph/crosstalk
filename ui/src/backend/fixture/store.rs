@@ -4,7 +4,7 @@
 
 use std::collections::BTreeMap;
 
-use crosstalk_spec::aggregates::alert::{Alert, AlertRuleSet, RuleStatus};
+use crosstalk_spec::aggregates::alert::{Alert, AlertRuleSet, AlertState, RuleStatus};
 use crosstalk_spec::aggregates::projection::{Projection, ProjectionInfo};
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::aggregates::topic_history::{TopicVersionHistory, TopicVersionInfo};
@@ -140,6 +140,43 @@ impl State {
             mint,
             clock: Clock::Fixed,
         }
+    }
+
+    /// The state as it stood at `cutoff`, for a replay: channels created,
+    /// alerts raised, verdicts recorded and audit entries made at or before
+    /// it, over transmissions `visible` keeps. An alert acknowledged or
+    /// resolved after `cutoff` shows open.
+    pub fn at(&self, cutoff: Timestamp, visible: impl Fn(TransmissionId) -> bool) -> State {
+        let mut state = self.clone();
+        state.channels.retain(|_, record| record.created <= cutoff);
+        state.alerts.retain(|alert| alert.raised_at <= cutoff);
+        for alert in &mut state.alerts {
+            let later = match &alert.state {
+                AlertState::Open => false,
+                AlertState::Acknowledged { at, .. }
+                | AlertState::Resolved { at, .. }
+                | AlertState::Suppressed { at, .. } => *at > cutoff,
+            };
+            if later {
+                alert.state = AlertState::Open;
+            }
+        }
+        state.verdicts = self
+            .verdicts
+            .iter()
+            .filter(|(id, _)| visible(**id))
+            .filter_map(|(id, log)| {
+                let mut kept = VerdictLog::new(*id);
+                for record in log.records().iter().filter(|r| r.at() <= cutoff) {
+                    if kept.record(record.clone()).is_err() {
+                        break;
+                    }
+                }
+                (!kept.records().is_empty()).then_some((*id, kept))
+            })
+            .collect();
+        state.audit = self.audit.until(cutoff);
+        state
     }
 
     /// The version graphs and series read, and views default to.

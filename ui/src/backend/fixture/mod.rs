@@ -23,6 +23,7 @@ mod identity;
 pub mod live;
 mod pending;
 mod queries;
+mod replay;
 mod rng;
 mod store;
 mod surface;
@@ -55,7 +56,9 @@ pub struct FixtureBackend {
     /// end.
     state: Arc<RwLock<State>>,
     export_limits: ExportLimits,
-    feed: live::Feed,
+    feed: Arc<live::Feed>,
+    /// Set in replay mode: what reads see and what the ticker reveals.
+    replay: Option<replay::Replay>,
 }
 
 impl FixtureBackend {
@@ -74,17 +77,41 @@ impl FixtureBackend {
         Self::build(seed, clock::Clock::live())
     }
 
+    /// The same world replaying its last stretch (`clock::Clock::Replay`):
+    /// reads see only what is stamped at or before the replay's present.
+    pub fn try_replay(
+        seed: u64,
+        config: crate::config::ReplayConfig,
+    ) -> std::result::Result<Self, GenError> {
+        Self::build(seed, clock::Clock::replay(config))
+    }
+
+    /// Starts the replay's ticker, which publishes what each tick reveals;
+    /// `None` without a replay.
+    pub fn spawn_replay_ticker(&self) -> Option<tokio::task::JoinHandle<()>> {
+        let replay = self.replay.as_ref()?;
+        let clock = self.state.try_read().ok()?.clock;
+        Some(replay.spawn_ticker(clock, Arc::clone(&self.feed)))
+    }
+
     fn build(seed: u64, clock: clock::Clock) -> std::result::Result<Self, GenError> {
         let (world, mut state) = world::generate(seed)?;
         queries::projection::seed::seed(&world, &mut state, world::OPERATOR_RESEARCHER)
             .map_err(|e| GenError::invalid("projection seed", e))?;
         // After seeding, so the seeded jobs keep their fixed times.
         state.clock = clock;
+        let replay = match clock {
+            clock::Clock::Replay { from, .. } => Some(replay::Replay::new(&world, &state, from)),
+            clock::Clock::Fixed | clock::Clock::Live { .. } => None,
+        };
         Ok(Self {
             world,
             state: Arc::new(RwLock::new(state)),
             export_limits: export::limits(),
-            feed: live::Feed::new(live::config().map_err(|e| GenError::invalid("live config", e))?),
+            feed: Arc::new(live::Feed::new(
+                live::config().map_err(|e| GenError::invalid("live config", e))?,
+            )),
+            replay,
         })
     }
 
@@ -94,7 +121,7 @@ impl FixtureBackend {
         mut self,
         config: crosstalk_spec::interfaces::l8_surface::live::LiveConfig,
     ) -> Self {
-        self.feed = live::Feed::new(config);
+        self.feed = Arc::new(live::Feed::new(config));
         self
     }
 
@@ -136,9 +163,52 @@ impl FixtureBackend {
         ids
     }
 
-    /// Runs a read under the state's read lock.
+    /// Runs a read under the state's read lock; in replay mode, over the
+    /// snapshot at the replay's present.
     async fn read<T>(&self, f: impl FnOnce(&Ctx) -> Result<T>) -> Result<T> {
         let state = self.state.read().await;
+        if let Some(replay) = &self.replay {
+            let snapshot = replay
+                .snapshot(&self.world, &state, state.clock.now())
+                .await;
+            drop(state);
+            return queries::graph::with_watermark(snapshot.watermark, || {
+                f(&Ctx::new(&snapshot.world, &snapshot.state))
+            });
+        }
         f(&Ctx::new(&self.world, &state))
+    }
+
+    /// Drops a replay's cached snapshot after a state change.
+    async fn invalidate_replay(&self) {
+        if let Some(replay) = &self.replay {
+            replay.invalidate().await;
+        }
+    }
+
+    /// A replay backend whose present is `at`, for tests.
+    #[cfg(test)]
+    pub fn try_replay_at(
+        seed: u64,
+        at: crosstalk_spec::support::Timestamp,
+    ) -> std::result::Result<Self, GenError> {
+        Self::build(
+            seed,
+            clock::Clock::Replay {
+                started: std::time::Instant::now(),
+                from: at,
+                speed: 1,
+            },
+        )
+    }
+
+    /// Moves a test replay's present to `at`.
+    #[cfg(test)]
+    pub async fn set_replay_at(&self, at: crosstalk_spec::support::Timestamp) {
+        self.state.write().await.clock = clock::Clock::Replay {
+            started: std::time::Instant::now(),
+            from: at,
+            speed: 1,
+        };
     }
 }

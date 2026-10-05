@@ -14,6 +14,7 @@ mod outcomes;
 mod projections;
 mod promotion;
 mod reads_support;
+mod replay;
 mod rules;
 mod scenarios;
 mod series;

@@ -10,6 +10,7 @@ use crosstalk_spec::aggregates::series::BucketWidth;
 use crosstalk_spec::support::{EmptyWindow, TimeWindow, Timestamp};
 
 use super::rng::Rng;
+use crate::config::ReplayConfig;
 
 /// 2026-10-03T00:00:00Z: the end of the generated data.
 pub const NOW: Timestamp = Timestamp::from_micros(1_790_985_600_000_000);
@@ -69,12 +70,29 @@ pub enum Clock {
     Fixed,
     /// [`NOW`] plus the real time since `started`.
     Live { started: std::time::Instant },
+    /// A replay of the data's last stretch: `from` plus the real time
+    /// since `started` times `speed`, stopping at [`NOW`] (it does not
+    /// loop). Everything stamped after it is invisible.
+    Replay {
+        started: std::time::Instant,
+        from: Timestamp,
+        speed: u32,
+    },
 }
 
 impl Clock {
     pub fn live() -> Self {
         Self::Live {
             started: std::time::Instant::now(),
+        }
+    }
+
+    /// A replay of `config` starting now.
+    pub fn replay(config: ReplayConfig) -> Self {
+        Self::Replay {
+            started: std::time::Instant::now(),
+            from: ago(config.window_minutes.saturating_mul(MINUTE).min(DAYS * DAY)),
+            speed: config.speed.max(1),
         }
     }
 
@@ -85,8 +103,55 @@ impl Clock {
                 let elapsed = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
                 plus(NOW, elapsed)
             }
+            Self::Replay {
+                started,
+                from,
+                speed,
+            } => {
+                let elapsed = u64::try_from(started.elapsed().as_micros()).unwrap_or(u64::MAX);
+                replay_at(*from, elapsed, *speed)
+            }
         }
     }
+
+    /// The replay's present: data stamped after it is invisible. `None`
+    /// when nothing is hidden.
+    pub fn cutoff(&self) -> Option<Timestamp> {
+        match self {
+            Self::Replay { .. } => Some(self.now()),
+            Self::Fixed | Self::Live { .. } => None,
+        }
+    }
+
+    /// The watermark: ten minutes before the replay's present on a bucket
+    /// boundary, or [`WATERMARK`] without a replay.
+    pub fn watermark(&self) -> Timestamp {
+        match self.cutoff() {
+            Some(now) => replay_watermark(now),
+            None => WATERMARK,
+        }
+    }
+
+    /// Where a default view ends: the end of the data, so a replay fills
+    /// the default window in.
+    pub fn view_end(&self) -> Timestamp {
+        match self {
+            Self::Replay { .. } => NOW,
+            Self::Fixed | Self::Live { .. } => self.now(),
+        }
+    }
+}
+
+/// `min(NOW, from + elapsed × speed)`.
+pub fn replay_at(from: Timestamp, elapsed_micros: u64, speed: u32) -> Timestamp {
+    plus(from, elapsed_micros.saturating_mul(u64::from(speed))).min(NOW)
+}
+
+/// Ten minutes before `now`, aligned down to a bucket boundary.
+pub fn replay_watermark(now: Timestamp) -> Timestamp {
+    let width = BUCKET.as_micros().get();
+    let at = now.as_micros().saturating_sub(10 * MINUTE);
+    Timestamp::from_micros(at - at % width)
 }
 
 /// Mints unique ULIDs: 48 bits of milliseconds, 56 random bits and a 24-bit
@@ -131,6 +196,32 @@ mod tests {
         let first = clock.now();
         assert!(first >= plus(NOW, MINUTE));
         assert!(clock.now() >= first);
+    }
+
+    #[test]
+    fn a_replay_runs_at_speed_from_the_window_start_and_stops_at_now() {
+        let from = ago(2 * HOUR);
+        assert_eq!(replay_at(from, 0, 10), from);
+        assert_eq!(replay_at(from, MINUTE, 10), plus(from, 10 * MINUTE));
+        assert_eq!(replay_at(from, 12 * MINUTE, 10), NOW);
+        assert_eq!(replay_at(from, DAY, 10), NOW);
+        let clock = Clock::replay(ReplayConfig {
+            window_minutes: 120,
+            speed: 10,
+        });
+        let now = clock.now();
+        assert!(now >= from && now < plus(from, MINUTE), "{now:?}");
+        assert_eq!(clock.cutoff().map(|c| c >= now), Some(true));
+        assert_eq!(clock.view_end(), NOW);
+        assert_eq!(Clock::Fixed.cutoff(), None);
+    }
+
+    #[test]
+    fn a_replay_watermark_trails_by_ten_minutes_on_a_bucket() {
+        let w = replay_watermark(plus(ago(HOUR), 3 * MINUTE));
+        assert_eq!(w, ago(HOUR + 10 * MINUTE));
+        assert!(BUCKET.is_boundary(w));
+        assert_eq!(replay_watermark(NOW), WATERMARK);
     }
 
     #[test]

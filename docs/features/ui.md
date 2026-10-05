@@ -846,9 +846,9 @@ Element inputs and outputs (`value`, announced with `change`):
 
 | Element | Inputs | `value` |
 | --- | --- | --- |
-| `<ct-topology>` | `data-src`, `data-highlight` (a topology value; a `channel:` value in agents mode lights the edges routed through the channel and their endpoints), `data-collapse` (`"true"`) | `edge:<fromUlid>:<toUlid>:<routeCode>` \| `agent:<ulid>` \| `channel:<ulid>` \| `` |
+| `<ct-topology>` | `data-src`, `data-highlight` (a topology value; a `channel:` value in agents mode lights the edges routed through the channel and their endpoints), `data-collapse` (`"true"`), `data-live` (the feed URL: merge refetches in place, see "Replay mode") | `edge:<fromUlid>:<toUlid>:<routeCode>` \| `agent:<ulid>` \| `channel:<ulid>` \| `` |
 | `<ct-projection>` | `data-src`, `data-color-by` (`topic` \| `sender` \| `reader` \| `route` \| `channel`), `data-highlight` (comma-separated transmission ULIDs) | `lasso:<x>,<y>;<x>,<y>;…` \| `point:<ulid>` \| `` |
-| `<ct-timebrush>` | `data-src`, `data-from`, `data-to` (RFC 3339) | `<fromRfc3339>/<toRfc3339>` |
+| `<ct-timebrush>` | `data-src`, `data-from`, `data-to` (RFC 3339), `data-live` (the feed URL: redraw bars in place) | `<fromRfc3339>/<toRfc3339>` |
 
 - The edge route code is everything after the third colon (tool names may
   contain colons). Clicking empty space clears (`""`). Clicking an access
@@ -944,9 +944,9 @@ checks a fixture export only.
 | `ui/elements/scripts/smoke.mjs` | Headless-Chrome smoke test of the demo over CDP, with screenshots in both colour schemes. |
 | `ui/elements/src/ct-*.ts` | Entry points: define `ct-topology`, `ct-projection`, `ct-timebrush`, `ct-live` (once; `ct-live` without the payload machinery, 6 KB). |
 | `ui/elements/src/live/` | `<ct-live>`: `watch` (event kinds, `parseNotice` for each event's data, `parseWatch` tokens, `watches`), `refresh` (`refreshRegions` through the page runtime, `isEditing`), `element` (`LiveElement`: `EventSource`, debounce, notice; `value` is the last event id). |
-| `ui/elements/src/shared/` | `element.ts` (`PayloadElement`: the element contract, fetch/abort, status panels), `fetch.ts` (typed `LoadError`), `selection.ts` (value grammar), `theme.ts` and `color.ts` (tokens, light/dark), `ulid.ts`, `route.ts`, `format.ts`, `hash.ts`, `webgl.ts`, `result.ts`. |
+| `ui/elements/src/shared/` | `element.ts` (`PayloadElement`: the element contract, fetch/abort, status panels), `live-refetch.ts` (`LiveRefetch`: an element's own `EventSource`, throttled `watermark` ticks, closed on `pagehide` and disconnect), `fetch.ts` (typed `LoadError`), `selection.ts` (value grammar), `theme.ts` and `color.ts` (tokens, light/dark), `ulid.ts`, `route.ts`, `format.ts`, `hash.ts`, `webgl.ts`, `result.ts`. |
 | `ui/elements/src/payloads/` | zod schemas mirroring `ui/src/data/` (`topology.ts`, `timeline.ts`), and the binary projection decoder (`projection.ts`). |
-| `ui/elements/src/topology/` | `model.ts` (payload → drawn graph, collapse, selection, highlight: a channel that is not a node lights the edges routed through it), `layout.ts` (seeded ForceAtlas2), `style.ts`, `tooltip.ts`, `diamond-program.ts` (sigma node program), `curvature.ts` (edges sharing a pair of nodes bend apart: reciprocal pairs to opposite sides, same-direction routes fanned out; lone edges stay straight; drawn with `@sigma/edge-curve`), `element.ts`. When sub-agents are collapsed, clicking a merged edge selects the heaviest edge it stands for. |
+| `ui/elements/src/topology/` | `model.ts` (payload → drawn graph, collapse, selection, highlight: a channel that is not a node lights the edges routed through it), `layout.ts` (seeded ForceAtlas2), `style.ts`, `tooltip.ts`, `diamond-program.ts` (sigma node program), `curvature.ts` (edges sharing a pair of nodes bend apart: reciprocal pairs to opposite sides, same-direction routes fanned out; lone edges stay straight; drawn with `@sigma/edge-curve`), `merge.ts` (`planMerge`: a refetched model against the drawn graph; kept nodes keep positions, new nodes go to their placed neighbours' centroid plus a hashed jitter, removed nodes and edges listed), `flash.ts` (`edgeCounts`, `risenEdges`, the `pulse` envelope, `Flashes`), `element.ts`. When sub-agents are collapsed, clicking a merged edge selects the heaviest edge it stands for. |
 | `ui/elements/src/projection/` | `transform.ts` (data ↔ normalised), `lasso.ts` (point-in-polygon, simplification, rounding), `colors.ts` (colour-by and legend), `element.ts`. |
 | `ui/elements/src/timebrush/` | `model.ts` (axis, snapping, bars, ticks; `labelledTicks` picks the finest round UTC step whose labels, measured in the element's font, keep 10 px apart, pinning edge labels inside the axis and labelling whole-day steps with the date only), `element.ts` (SVG). |
 | `ui/elements/test/` | vitest suites, and `fixtures/` (written by the Rust tests). |
@@ -1031,6 +1031,55 @@ checks a fixture export only.
 - Topcoat releases roughly weekly and expects breaking changes. Upgrades
   are deliberate, one version at a time, and only to releases at least a
   week old.
+
+## Replay mode (demo)
+
+`"backend": {"fixture": {"seed": 7, "replay": {"window_minutes": 240, "speed": 10}}}`
+(`ui/config.demo.json`) plays the data's last `window_minutes` out at
+`speed` times real time. Without `replay` nothing changes.
+
+- Clock: `Clock::Replay { started, from, speed }`, `from = NOW - window`,
+  `now = min(NOW, from + elapsed * speed)`. It stops at `NOW` and does not
+  loop; restart the process to replay again.
+- Visibility: `FixtureBackend::read` (which every `QueryApi` read except
+  projections, export and sinks goes through) builds its `Ctx` over a
+  `replay::Snapshot`: `World::at(cutoff)` keeps accesses and transmissions
+  (by `opened_at`) at or before the cutoff and rebuilds the indexes, and
+  `State::at(cutoff)` keeps channels by `created`, alerts by `raised_at`
+  (an alert acknowledged, resolved or suppressed later shows open),
+  verdict records and audit entries by time. The snapshot is cached per
+  10 s of data time and dropped after every action. Agents are all first
+  seen before the data starts, so none appear.
+- Watermark: ten minutes before the replay's present, on a bucket boundary
+  (`clock::replay_watermark`), reported by `QueryApi::watermark` and, via
+  a thread-local set around each snapshot read, by every `Watermarked`
+  result.
+- Default views: `Present::view_end` (default: `now`) is `NOW` + one
+  bucket under a replay, so a fresh page's 24-hour window holds the whole
+  replay range and fills in. `Present::now` still reports the replay clock.
+- Events: `main.rs` starts `replay::Replay::spawn_ticker`, which every 2 s
+  publishes `Watermark` plus `Alert`, `Channel` and `Agent` for every
+  alert raised, channel created and transmission opened (its channel and
+  agents) since the last tick. It goes quiet at `NOW`.
+- Pages: overview, channels, agents and alerts watch these kinds;
+  `<ct-live>` refreshes a page at most once every 4 s
+  (`live/throttle.ts`). Topology declares no watch tokens, so the page is
+  never swapped: `<ct-topology>` and `<ct-timebrush>` carry
+  `data-live="/data/live"` and, at most every 3.5 s after a `watermark`
+  event (`shared/live-refetch.ts`), refetch their `data-src`.
+  - The graph merges the payload into its graphology graph (`merge.ts`):
+    the sigma instance, camera, positions, selection and hover stay. New
+    nodes sit at their neighbours' centroid. Curvature is recomputed over
+    all drawn edges, so a new parallel edge bends its sibling.
+  - Edges whose transmission (or access) count rose, new edges included,
+    pulse amber and thicker for 1.2 s; new nodes pulse larger (reducers
+    plus a `requestAnimationFrame` loop that runs only while a pulse does).
+  - The graph rewrites the header's `[data-topology-stat]` spans (agents,
+    edges, transmissions in agents mode; the watermark always).
+  - The brush redraws its bars and keeps the brush and any drag.
+  - The lists and the drawer keep the page-load data until a reload.
+- Deployment: `deploy/ui.demo.Dockerfile` (context: repo root) bakes
+  `ui/config.demo.json` in as `/etc/crosstalk/ui.json`.
 
 ## What the UI uses from L8
 
