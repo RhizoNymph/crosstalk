@@ -39,6 +39,7 @@
     "correlation_window_ms": 600000,
     "evidence_window_ms": 10000,
     "suspected_ttl_ms": 60000,
+    "content_retention_ms": 2592000000,
     "shards": 1,
     "tick_ms": 1000
   }

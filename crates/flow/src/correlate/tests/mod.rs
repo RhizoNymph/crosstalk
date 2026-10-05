@@ -13,9 +13,11 @@ use super::medium::MatchKey;
 pub(crate) mod fixtures;
 
 mod channel;
+mod content_age;
 mod handoff;
 mod pairing;
 mod props;
+mod rereads;
 mod routes;
 mod shared_web;
 

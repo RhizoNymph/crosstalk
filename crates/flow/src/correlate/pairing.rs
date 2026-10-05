@@ -15,7 +15,11 @@
 //!   released as `Unknown`.
 //! - **Co-access**: [`co_access`] pairs a write and a later read of one
 //!   resource by another agent within the correlation window
-//!   (`CoAccess::new`), refusing a write that does not pair first.
+//!   (`CoAccess::new`), refusing a write that does not pair first. The
+//!   window bounds access-only pairing alone: [`content_co_access`] pairs a
+//!   write with a read whose tool result carries content the write
+//!   explains within the content retention, whatever the correlation window
+//!   (`flow.correlator.content-confirms-past-window`).
 //! - **Content**: a tool-result match is carried by a read when it sits
 //!   in the read's tool result part of the reader's exchange
 //!   ([`carried_by`]); it explains a write when its origin span is one of
@@ -33,6 +37,8 @@ use crosstalk_spec::derived::provenance::matching::{Carrier, ContentMatch};
 use crosstalk_spec::ids::SpanId;
 use crosstalk_spec::observed::message::PartRef;
 use crosstalk_spec::support::Timestamp;
+
+use super::retention::ContentRetention;
 
 /// The outcome of `access` when it is a write, `None` for a read.
 pub fn outcome(access: &Access) -> Option<WriteOutcome> {
@@ -81,6 +87,24 @@ pub fn co_access(
         return Err(NoPair::Rejected);
     }
     CoAccess::new(write, read, timing.correlation_window()).map_err(NoPair::Invalid)
+}
+
+/// The co-access of `write` and `read` backed by content: a tool-result
+/// match in `read` that `write` explains ([`carried_by`], [`links`]). The
+/// write's outcome must pair, and the lag is bounded by `retention` rather
+/// than the correlation window: content confirms a dead drop read long
+/// after it was written, as long as L4 still indexes the span.
+pub fn content_co_access(
+    write: &Access,
+    read: &Access,
+    retention: ContentRetention,
+) -> Result<CoAccess, NoPair> {
+    if let Some(outcome) = outcome(write)
+        && !outcome.pairs()
+    {
+        return Err(NoPair::Rejected);
+    }
+    CoAccess::new(write, read, retention.get()).map_err(NoPair::Invalid)
 }
 
 /// Whether `content` arrived in `read`'s tool result: a tool-result match

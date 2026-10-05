@@ -32,7 +32,8 @@ datasets with corpus timestamps.
   `TransmissionStore::save`), then publishing `ChannelCrossAccessed`,
   `TransmissionConfirmed` and `TransmissionSuspected`.
 - The consumer's config section (`FlowConfig`), with the settle window
-  (`CorrelationTiming::settle_after`) derived from it.
+  (`CorrelationTiming::settle_after`) derived from it, and the content
+  retention (`ContentRetention`) bounding content-confirmed pairing.
 
 ## Non-scope
 
@@ -94,6 +95,35 @@ their count, and the tool-result matches its reads carried.
   transmission of the read's exchange and the writer, or opens one:
   `OpenChannel { on: Channel(c) | Resource(r) }`, `opened_at` the read's
   time.
+- **The window bounds access-only pairing only**
+  (`flow.correlator.content-confirms-past-window`, INV-1120). A held
+  tool-result match explained by a write of its sender (`pairing::links`)
+  pairs that write with the read that carried it whatever the lag, up to
+  the content retention (`pairing::content_co_access`: `CoAccess::new`
+  with `ContentRetention` as its window; default 30 days, L4's span index
+  retention). Every settle first pairs each held match this way
+  (`decide::pair_content`), joining its identity's open transmission
+  (idempotently: same co-access set in any order) or opening one, then
+  decides: the transmission confirms when the read's window closes. A
+  dead-drop wiki read a day after it was written confirms; past the
+  retention, nothing opens; a write and a read with no such match still
+  pair only within the window.
+- **A reread refreshes, it does not retransmit**
+  (`flow.correlator.reread-refreshes-delivery`, INV-1122). Each medium
+  records, per (sender span, reader), the confirmed transmission that
+  first delivered it and the last read that carried it
+  (`Medium::delivered`). Transmissions are decided in read order
+  (`opened_at`, then slot), so a reread is decided after the read it
+  repeats whatever order the evidence arrived in. A held match whose span
+  another transmission already delivered to the reader refreshes that
+  delivery and is dropped (`decide::refresh_repeats`; before pairing,
+  `refresh_delivered` for a reread in another exchange); the reread's
+  transmission confirms or extends with new content only. A reread within
+  the window still opens on its co-access (opening is eager) and, with
+  nothing new, is suspected and discarded; a reread past the window opens
+  nothing. Only confirmed transmissions are exported, so a reread adds
+  none. Delivery records move with a handoff (the earlier transmission
+  wins) and are dropped `content_retention + keep` after their last read.
 - A tool-result match whose read is known is held in the read's medium;
   one whose read is not known yet waits (`uncarried`) until the read
   arrives or the window of its reader exchange closes.
@@ -217,15 +247,16 @@ TOML files use where they fit:
 | File | Role | Key exports |
 | --- | --- | --- |
 | `crates/flow/src/correlate/mod.rs` | Module map and diagram | re-exports |
-| `crates/flow/src/correlate/pairing.rs` | Every pairing rule | `WriteOutcome`, `outcome`, `write_op`, `write_settles_at`, `co_access`, `NoPair`, `carried_by`, `links` |
+| `crates/flow/src/correlate/pairing.rs` | Every pairing rule | `WriteOutcome`, `outcome`, `write_op`, `write_settles_at`, `co_access`, `content_co_access`, `NoPair`, `carried_by`, `links` |
+| `crates/flow/src/correlate/retention.rs` | How long content can still confirm a write | `ContentRetention` (`new`, `default_for`, `get`), `InvalidRetention`, `DEFAULT_CONTENT_RETENTION` |
 | `crates/flow/src/correlate/route.rs` | Route precedence | `choose`, `Carriage`, `RouteChoice`, `RouteKey` |
 | `crates/flow/src/correlate/kinship.rs` | Parent links for `Delegation` | `Kin`, `Kinship` |
 | `crates/flow/src/correlate/lifecycle.rs` | Which update may follow which | `Stage`, `UpdateKind`, `advance`, `Illegal` |
 | `crates/flow/src/correlate/key.rs` | Medium (shard) key | `MediumKey` |
 | `crates/flow/src/correlate/ids.rs` | Derived ids | `Derive`, `transmission_id` |
 | `crates/flow/src/correlate/medium.rs` | One medium's evidence | `Medium` |
-| `crates/flow/src/correlate/decide.rs` | Pairing, opening and deciding channel transmissions | `pair`, `settle` |
-| `crates/flow/src/correlate/windowed.rs` | The shard's correlator | `WindowedCorrelator`, `Decided`, `ReadPart`, `MediumEvidence`, `UNKNOWN_TOOL` |
+| `crates/flow/src/correlate/decide.rs` | Pairing (access and content), opening and deciding channel transmissions | `pair`, `settle` |
+| `crates/flow/src/correlate/windowed.rs` | The shard's correlator | `WindowedCorrelator` (`new`, `with_retention`), `Decided`, `ReadPart`, `MediumEvidence`, `UNKNOWN_TOOL` |
 | `crates/flow/src/consumer/mod.rs` | The consumer: steps, events, ticks, run loop | `FlowConsumer`, `FlowDeps`, `GROUP`, `group`, `SUBJECTS` |
 | `crates/flow/src/consumer/input.rs` | The local input | `Extracted`, `Observed`, `WriteCall`, `ReadResult` |
 | `crates/flow/src/consumer/held.rs` | Writes held until their outcome | `HeldWrites` |
@@ -233,15 +264,19 @@ TOML files use where they fit:
 | `crates/flow/src/consumer/resources.rs` | Resources and accesses | `resource_id` |
 | `crates/flow/src/consumer/apply.rs` | Decisions to stores and events | `discovered_channel_id` |
 | `crates/flow/src/consumer/publish.rs` | Envelopes on the injected clock | `Publisher`, `PublishError` |
-| `crates/flow/src/consumer/settings.rs` | Config | `FlowConfig`, `Settings`, `InvalidFlowConfig` |
+| `crates/flow/src/consumer/settings.rs` | Config | `FlowConfig`, `Settings` (`content_retention` among them), `InvalidFlowConfig` (`ContentRetention` among them) |
 | `crates/flow/src/consumer/error.rs` | Step failures | `StepError` (`is_permanent`) |
 | `crates/flow/src/correlate/tests/` | Unit and property tests; shared fixtures | — |
 | `crates/flow/src/consumer/tests/` | Wiki scenario, rules, simulations | — |
 
 `FlowConfig` (`flow` section, milliseconds, every field defaulted):
 `{"correlation_window_ms": 600000, "evidence_window_ms": 120000,
-"suspected_ttl_ms": 1800000, "shards": 1, "tick_ms": 1000}`; unknown
-fields are refused, zero durations and zero shards rejected.
+"suspected_ttl_ms": 1800000, "content_retention_ms": 2592000000,
+"shards": 1, "tick_ms": 1000}`; unknown fields are refused, zero durations
+and zero shards rejected, and a `content_retention_ms` shorter than
+`correlation_window_ms` rejected (`InvalidFlowConfig::ContentRetention`).
+`LiveConfig::flow` and the gateway config's `flow` section carry it
+unchanged.
 
 ## Invariants and constraints
 
@@ -254,6 +289,15 @@ fields are refused, zero durations and zero shards rejected.
   (INV-740, unit), `flow.registry.at-most-one-channel-per-resource`
   (INV-852, dst), `flow.channel.resource-only-until-cross-agent`
   (INV-853, dst).
+- `flow.correlator.content-confirms-past-window` (INV-1120): content
+  confirms within the retention whatever the correlation window; the
+  window bounds access-only pairing (`correlate::tests::content_age`,
+  `consumer::tests::wiki::a_dead_drop_read_a_day_later_confirms`,
+  `consumer::tests::rules::content_retention_is_configured`).
+- `flow.correlator.reread-refreshes-delivery` (INV-1122):
+  `correlate::tests::rereads`.
+  `flow.coaccess.within-window` (INV-250) holds for both: a co-access's
+  lag never exceeds the window it was built with.
 - New (INV-X): `flow.consumer.stored-transmission-never-regresses`,
   `flow.correlator.settles-on-the-injected-clock`,
   `flow.consumer.resource-evidence-follows-its-channel`.
@@ -261,8 +305,13 @@ fields are refused, zero durations and zero shards rejected.
   store, no channel in `correlate/`); its lint does not exist yet, so its
   evidence is not flipped.
 - Retention: a shard drops evidence older than `settle_after +
-  correlation_window` before its last tick. A match for an exchange whose
-  start never arrives waits indefinitely.
+  correlation_window` (`keep`) before its last tick, except a write that
+  carries spans, which it keeps per medium until `content_retention +
+  keep` before it, so a read still within `keep` finds every write it may
+  pair with by content. A write without spans can explain no content. So
+  memory grows with the writes holding spans in the retention, not with
+  reads or matches. A match for an exchange whose start never arrives
+  waits indefinitely.
 - A transient store or bus failure stalls the queue at that step until the
   next input or tick retries it; a permanent one is logged at error and
   dropped. Events are published at least once.
@@ -270,7 +319,13 @@ fields are refused, zero durations and zero shards rejected.
 ## Tests
 
 - `correlate::tests::{channel, routes, pairing, handoff}`: unit tests per
-  rule; `correlate::tests::props`: generated evidence (three agents, two
+  rule; `correlate::tests::content_age`: content an hour, a day and 29
+  days after the write confirms (with hourly ticks collecting garbage in
+  between), 31 days does not, a configured retention bounds it,
+  access-only pairing keeps the window, every delivery order agrees;
+  `correlate::tests::rereads`: two reads of one page version by B give
+  one confirmed transmission in every order, a reread a day later opens
+  nothing, a reread with new content confirms the new content alone; `correlate::tests::props`: generated evidence (three agents, two
   resources, every carrier, an optional parent link) in shuffled orders
   with interleaved ticks: order insensitivity, forward-only lifecycles,
   routes, identity, one sender per transmission, the settle bound, shared
@@ -278,7 +333,8 @@ fields are refused, zero durations and zero shards rejected.
 - `consumer::tests::wiki`: the M2 shape (A writes a wiki page, B reads it,
   the match confirms; one discovered channel and one confirmed transmission
   in the memory stores; events in commit order), the same replayed from
-  2019 on a replay clock, and a later reader meeting the earlier write.
+  2019 on a replay clock, a later reader meeting the earlier write, and a
+  dead drop read a day later confirmed.
 - `consumer::tests::rules`: held and rejected writes, a declared channel,
   late confirmation after a promotion, delegation from `AgentReads`, retries
   in order, stale updates, config.

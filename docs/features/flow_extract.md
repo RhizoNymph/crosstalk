@@ -44,6 +44,10 @@ so locator equality is resource identity.
   reads kept only for a delivered result.
 - Fetch tools configured by name (`fetch_tools`): a tool whose `url`
   argument names the page it reads, such as AgentDojo's `get_webpage`.
+- A fetch or HTTP tool's `url` with no scheme: a bare
+  `host[:port][/path…]` whose host is a domain (`www.informations.com`)
+  reads as `https://`; a lone file name (`README.md`) or words stay an
+  `Arguments` error (`flow.extract.bare-host-url-is-https`, INV-1121).
 - The spans a write carries, from L4's spans (originated, forwarded from
   an input, and the writer's own relayed sources), and the stored
   `AccessOp`.
@@ -100,8 +104,8 @@ extract_classified                                                     │
   Args::parse(arguments)          ─▶ ExtractError::Arguments           │
   family ─▶ candidates (kind, locator, via)                            │
      file::candidates      path arg ─▶ resource::file_locator          │
-     fetch::candidates     url ─▶ url_locator ─▶ http::candidates (GET)│
-     http::tool_candidates method ─▶ op; url ─▶ url_locator ─▶ site?   │
+     fetch::candidates     url ─▶ tool_url_locator ─▶ http::candidates │
+     http::tool_candidates method ─▶ op; url ─▶ tool_url_locator ─▶ site?
      bash::run             lex::Script::lex ─▶ commands::Shell::run    │
                              redirects, cat/tee/sed, net (curl/wget ─▶ │
                              HttpRequest ─▶ http::candidates),         │
@@ -240,6 +244,14 @@ A call of a configured HTTP tool whose arguments carry `url` and `method`:
   or file instead only when its op agrees with the method's: a MediaWiki
   API `POST` with `action=edit&title=X` in the body (form-encoded string or
   JSON object) writes page X, and a later `GET` of X's article reads it.
+- A `url` that does not parse but is a bare `host[:port][/path…]` (no
+  scheme or whitespace, a domain host with a dot and an alphabetic
+  top-level label of two or more characters, an optional numeric port)
+  is read as `https://` (`resource::tool_url_locator`, the same for fetch
+  tools). Text that is only a name ending in a common file extension
+  (`README.md`, `main.rs`), with no `www.`, port or path, is a file name,
+  not a host; the cost is that a bare `docs.rs` is not read
+  (`docs.rs/serde` is).
 - Without `method` (or `url`), a name that is also a fetch tool
   (`web_fetch`) is that fetch tool (a read); any other is
   `ExtractError::Arguments`. `WebFetch` is not an HTTP tool and stays
@@ -290,7 +302,7 @@ it goes (`git clone … && cat repo/README.md` reads the repository file).
 | `extract/mcp/mod.rs` | configured MCP tools | `candidates` |
 | `extract/mcp/config.rs` | the configuration | `ExtractConfig` (`from_json`, `new`, `with_http_tools`, `with_fetch_tools`, `with_sites`, `rule`, `http_tools`, `fetch_tools`), `McpServerConfig`, `McpToolRule`, `McpAccessRule`, `McpResource`, `RuleOp`, `RefusalMarker`, `ConfigError` (`HttpAndFetch` among them), `DEFAULT_HTTP_TOOLS` |
 | `extract/resource/path.rs` | paths | `AbsolutePath`, `WrittenPath`, `FileScope`, `file_locator`, `absolute_locator`, `PathError` |
-| `extract/resource/url.rs` | URLs | `url_locator`, `url_text`, `scan_urls`, `UrlError` |
+| `extract/resource/url.rs` | URLs | `url_locator`, `tool_url_locator` (a bare host as `https://`), `url_text`, `scan_urls`, `UrlError` |
 | `extract/resource/key.rs` | MCP keys | `KeyCanon`, `KeyError` |
 | `extract/resource/repo.rs` | repositories and their threads | `RepoId` (`parse`, `forge`, `locator`, `forge_parts`, `file`), `ForgeRepo` (`thread`, `collection`), `ForgeStyle`, `ThreadKind`, `RepoBindings` |
 | `extract/sites/mod.rs` | site rules | `SitesConfig`, `MediaWikiSite`, `HostPattern`, `SitePath`, `SiteAccess` |
@@ -401,6 +413,8 @@ JSON, in the spec's conventions (snake_case keys, enums tagged
   amended to match).
 - `flow.extract.fetch-tools-configured` (INV-1113):
   `extract::tests::fetch_config`.
+- `flow.extract.bare-host-url-is-https` (INV-1121):
+  `extract::tests::bare_url`.
 - New (INV-X): `flow.extract.http-method-op`,
   `flow.resource.http-url-tool-independent`,
   `flow.resource.wiki-page-spelling-independent`,

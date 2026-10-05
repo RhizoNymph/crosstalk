@@ -72,9 +72,10 @@ L5's correlation timing, every key defaulted:
 
 | `flow` key | Default | Meaning |
 |---|---|---|
-| `correlation_window_ms` | 600 000 | The longest write-to-read lag that pairs |
+| `correlation_window_ms` | 600 000 | The longest write-to-read lag that pairs on access alone (no content) |
 | `evidence_window_ms` | 120 000 | How long after a read a channel transmission waits for its content match |
 | `suspected_ttl_ms` | 1 800 000 | How long a suspected transmission waits for a late match |
+| `content_retention_ms` | 2 592 000 000 | The longest write-to-read lag a content match still confirms (L4's 30-day span index retention); at least `correlation_window_ms` |
 | `shards` | 1 | Correlator shards |
 | `tick_ms` | 1 000 | How often the live process ticks (windows close, the watermark advances) |
 

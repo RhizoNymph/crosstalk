@@ -17,6 +17,13 @@
 //!   once confirmed, further matches extend it (`Extend`). A match
 //!   explained by a write after its transmission was discarded opens a new
 //!   one.
+//! - **Content past the window.** A held match a write of its sender
+//!   explains pairs that write with the read carrying it within the content
+//!   retention, whatever the correlation window
+//!   (`flow.correlator.content-confirms-past-window`): the co-access joins
+//!   or opens the transmission, which confirms when the read's window
+//!   closes. The window bounds access-only pairing alone, so a write with
+//!   spans is kept for the retention; one without is kept for the window.
 //! - **Not a channel.** A user-turn, system-prompt or reader-output match, a
 //!   match between parent and child, and a tool-result match whose call
 //!   yielded no read by the window's close (`window_closes_at` of its
@@ -54,6 +61,7 @@ use super::key::MediumKey;
 use super::kinship::{Kin, Kinship};
 use super::medium::{Held, MatchKey, Medium, Phase};
 use super::pairing::{self, WriteOutcome};
+use super::retention::ContentRetention;
 use super::route::{self, Carriage, RouteChoice, RouteKey};
 
 /// The tool name a `Direct(ToolResult)` transmission carries when the
@@ -139,6 +147,7 @@ pub struct MediumEvidence {
 #[derive(Debug, Clone)]
 pub struct WindowedCorrelator {
     timing: CorrelationTiming,
+    retention: ContentRetention,
     media: BTreeMap<MediumKey, Medium>,
     /// Every read's part, to find the read carrying a tool-result match.
     reads: BTreeMap<ReadPart, (MediumKey, Timestamp)>,
@@ -156,9 +165,18 @@ pub struct WindowedCorrelator {
 }
 
 impl WindowedCorrelator {
+    /// A correlator remembering writes for content for the default
+    /// retention ([`ContentRetention::default_for`]).
     pub fn new(timing: CorrelationTiming) -> Self {
+        Self::with_retention(timing, ContentRetention::default_for(timing))
+    }
+
+    /// A correlator whose content-confirmed pairing reaches back
+    /// `retention` (`flow.correlator.content-confirms-past-window`).
+    pub fn with_retention(timing: CorrelationTiming, retention: ContentRetention) -> Self {
         Self {
             timing,
+            retention,
             media: BTreeMap::new(),
             reads: BTreeMap::new(),
             uncarried: BTreeMap::new(),
@@ -175,6 +193,10 @@ impl WindowedCorrelator {
 
     pub fn timing(&self) -> CorrelationTiming {
         self.timing
+    }
+
+    pub fn retention(&self) -> ContentRetention {
+        self.retention
     }
 
     /// The last tick processed: L7 reads it as `PipelineFrontier::ticked_through`.
@@ -403,6 +425,13 @@ impl WindowedCorrelator {
             *entry = (entry.0.max(count), entry.1.max(at));
         }
         target.held.extend(incoming.held);
+        for (delivery, delivered) in incoming.delivered {
+            // Two media delivered the span apart: the earlier transmission
+            // (ids are time-ordered by their read) keeps it.
+            let entry = target.delivered.entry(delivery).or_insert(delivered);
+            entry.transmission = entry.transmission.min(delivered.transmission);
+            entry.last = entry.last.max(delivered.last);
+        }
         for (key, read_at) in carried {
             if let Some(content) = self.uncarried.remove(&key) {
                 target.held.insert(key, Held { content, read_at });
@@ -581,9 +610,9 @@ impl WindowedCorrelator {
     }
 
     fn settle_medium(&mut self, key: MediumKey, now: Timestamp, out: &mut Vec<Decided>) {
-        let timing = self.timing;
+        let (timing, retention) = (self.timing, self.retention);
         if let Some(medium) = self.media.get_mut(&key) {
-            settle(medium, key, timing, now, out);
+            settle(medium, key, timing, retention, now, out);
         }
     }
 
@@ -593,14 +622,23 @@ impl WindowedCorrelator {
             .settle_after()
             .saturating_add(self.timing.correlation_window());
         let horizon = before(now, keep);
+        // A write holding spans is kept for content past the window: a read
+        // still within `keep` of `now` can pair with it by content for up
+        // to the retention. One without spans can never explain content.
+        let content_horizon = before(now, self.retention.get().saturating_add(keep));
         for medium in self.media.values_mut() {
-            medium.writes.retain(|_, write| write.at >= horizon);
+            medium.writes.retain(|_, write| {
+                write.at >= horizon || (write.at >= content_horizon && holds_spans(write))
+            });
             medium.reads.retain(|_, read| read.at >= horizon);
             medium.held.retain(|_, held| held.read_at >= horizon);
             medium.open.retain(|_, tx| {
                 !(matches!(tx.phase, Phase::Confirmed(_)) && tx.opened_at < horizon)
             });
             medium.retired.retain(|_, (_, at)| *at >= horizon);
+            medium
+                .delivered
+                .retain(|_, delivered| delivered.last >= content_horizon);
         }
         self.media.retain(|_, medium| !medium.is_empty());
         self.reads.retain(|_, (_, at)| *at >= horizon);
@@ -644,6 +682,11 @@ impl Correlator for WindowedCorrelator {
 
 fn updates(decided: Vec<Decided>) -> Vec<TransmissionUpdate> {
     decided.into_iter().map(|decided| decided.update).collect()
+}
+
+/// Whether `write` carried spans content could match.
+fn holds_spans(write: &Access) -> bool {
+    matches!(&write.op, AccessOp::Write { spans, .. } if !spans.is_empty())
 }
 
 /// `at - by`, saturating at the epoch.

@@ -186,3 +186,46 @@ async fn a_later_reader_meets_the_earlier_write() {
     );
     let _ = (Duration::ZERO, timing());
 }
+
+/// A dead drop read a day after it was written, far past the correlation
+/// window, with the writer's span in the reader's tool result: the
+/// consumer discovers the channel and stores the transmission confirmed,
+/// on a clock that ticked through the day
+/// (`flow.correlator.content-confirms-past-window`).
+#[tokio::test]
+async fn a_dead_drop_read_a_day_later_confirms() {
+    let mut scene = Scene::new(92);
+    let mut stores = Stores::new();
+    let a = stores.agent(&mut scene, None).await;
+    let b = stores.agent(&mut scene, None).await;
+    let page = wiki_page("Dead_Drop");
+    let span = scene.span();
+    let start = crosstalk_testkit::time::T0;
+    let bus = RecordingBus::default();
+    let mut flow = consumer(&stores, bus.clone(), Arc::new(ManualClock::at(start)), 4);
+    flow.handle_extracted(Extracted::Write {
+        write: write(&mut scene, a, &page, start, vec![span]),
+        outcome: Some(WriteOutcome::Delivered),
+    })
+    .await;
+    let day = 24 * 3_600;
+    for hour in 1..24 {
+        flow.tick(after(start, hour * 3_600)).await;
+    }
+    let fetch = read(&mut scene, b, &page, after(start, day));
+    let content = found_in(&mut scene, &fetch, a, span);
+    flow.handle_extracted(Extracted::Read(fetch)).await;
+    flow.handle_event(&matched(&content)).await;
+    flow.tick(after(start, day + 200)).await;
+    let Some(channel) = stores.only_channel().await else {
+        panic!("no channel discovered");
+    };
+    let routed = stores.transmissions_of(channel.id).await;
+    assert_eq!(routed.len(), 1, "{routed:?}");
+    assert_eq!(routed[0].to, b);
+    assert!(
+        matches!(routed[0].state, TransmissionState::Confirmed(_)),
+        "{routed:?}"
+    );
+    assert_eq!(confirmations(&bus.events()).len(), 1);
+}
