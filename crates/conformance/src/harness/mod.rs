@@ -8,22 +8,22 @@
 //! its whole generated week), so the suite asserts what the facts imply and
 //! relations between reads, never totals of a particular world.
 //!
-//! Besides worlds, a harness answers what the L8 traits cannot yet say
-//! (the bucket width, the present, the export digest's hasher) and names
-//! the operators callers are built for.
+//! Besides worlds, a harness names the operators callers act as and the
+//! export digest's hasher. The bucket width and the present come from the
+//! backend itself (`QueryApi::present`).
 
 mod callers;
 
-use crosstalk_spec::aggregates::series::BucketWidth;
 use crosstalk_spec::ids::OperatorId;
+use crosstalk_spec::interfaces::l8_surface::PermissionSet;
 use crosstalk_spec::interfaces::l8_surface::export::{ExportLimits, RowHasher};
 use crosstalk_spec::interfaces::l8_surface::live::{LiveConfig, LiveFeed};
 use crosstalk_spec::interfaces::l8_surface::{OperatorActions, QueryApi};
-use crosstalk_spec::support::{TimeWindow, Timestamp};
+use crosstalk_spec::support::TimeWindow;
 
 use crate::scenario::{Bindings, Scenario};
 
-pub use callers::{CallerError, Callers};
+pub use callers::{CallerError, caller};
 
 /// An implementation of the L8 surface under test.
 ///
@@ -55,17 +55,14 @@ pub trait Harness {
         request: Provision<'_>,
     ) -> Result<Provisioned<Self::Backend>, ProvisionError>;
 
-    /// Two distinct operators the backend's directory defines; the suite
-    /// builds every caller for one of them ([`Callers`]).
-    fn operators(&self) -> Operators;
-
-    /// The edge store's bucket width (`EdgeStore::bucket_width`), which
-    /// `QueryApi` does not expose.
-    fn bucket_width(&self) -> BucketWidth;
-
-    /// The backend's present: the time an action it accepted now would be
-    /// stamped with. Monotone; a fixed clock may return one instant.
-    async fn now(&self, backend: &Self::Backend) -> Timestamp;
+    /// The operator a test caller holding exactly `holds` acts as;
+    /// `PermissionSet::ALL` is the lead operator, whose actions tests
+    /// compare authors with. A backend that checks only the caller's
+    /// permissions (the fixture) may map every other set to one operator;
+    /// one that authenticates each request (the HTTP client) needs an
+    /// operator its directory defines with exactly that set, since the
+    /// caller is derived from the credential, not sent.
+    fn operator(&self, holds: PermissionSet) -> OperatorId;
 
     /// A window on bucket boundaries covering every fact provisioned into
     /// `backend`, ending at or after its watermark.
@@ -122,12 +119,4 @@ pub enum ProvisionError {
         scenario: &'static str,
         reason: String,
     },
-}
-
-/// The two operators callers are built for: `lead` for actions whose
-/// author tests compare, `other` for a second operator.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Operators {
-    pub lead: OperatorId,
-    pub other: OperatorId,
 }

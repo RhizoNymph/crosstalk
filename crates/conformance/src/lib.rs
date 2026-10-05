@@ -4,8 +4,8 @@
 //!
 //! - [`harness`]: the [`Harness`] trait an implementation provides: it
 //!   provisions a [`Scenario`] into a fresh backend and binds the
-//!   scenario's roles to ids, and answers what the traits cannot (bucket
-//!   width, present, export hasher).
+//!   scenario's roles to ids, and names the operator each test caller acts
+//!   as and the export hasher.
 //! - [`scenario`]: worlds as facts over typed roles ("agent A writes
 //!   resource R, agent B reads it and the text matches"), and the named
 //!   scenarios the tests run against.
@@ -28,6 +28,6 @@ mod suite;
 pub mod support;
 pub mod tests;
 
-pub use harness::{Harness, Knobs, Operators, Provision, ProvisionError, Provisioned};
+pub use harness::{Harness, Knobs, Provision, ProvisionError, Provisioned};
 pub use scenario::{Bindings, Scenario};
 pub use suite::{RunError, run};
