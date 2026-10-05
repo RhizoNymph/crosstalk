@@ -2,6 +2,7 @@
 //!
 //! ```text
 //! ct-eval run   --dataset salt [--root DIR] [--limit N] [--include TEXT]… [--out DIR] [--gates FILE]
+//!               [--detector reference|pipeline|live] [--seed N]
 //! ct-eval truth --dataset salt [--root DIR] [--limit N] [--include TEXT]… [--out FILE]
 //! ```
 //!
@@ -11,6 +12,9 @@
 //!
 //! `run` prints the table, writes `report.json` and `report.txt` to `--out`,
 //! and exits 2 when a gate fails. `truth` writes the labels as JSONL.
+//! `--detector live` scores the gateway's live composition through
+//! `detect::live`; until `crosstalk_gateway::live::Live` is in the build it
+//! reports "live backend unavailable" and exits 1.
 
 use std::fs::{self, File};
 use std::io::{BufWriter, Write};
@@ -24,6 +28,7 @@ use crosstalk_eval::corpus::{SourceError, TraceSource, World};
 use crosstalk_eval::datasets::agentdojo::{self, AgentDojoSource};
 use crosstalk_eval::datasets::salt::{SaltSource, Selection};
 use crosstalk_eval::datasets::tau2::{self, Tau2Source};
+use crosstalk_eval::detect::live::{LiveDetector, LiveSettings, gateway_backend};
 use crosstalk_eval::gateway::PipelineDetector;
 use crosstalk_eval::keys::DatasetId;
 use crosstalk_eval::pipeline::{Detector, ReferenceDetector, run};
@@ -125,7 +130,7 @@ struct RunArgs {
     /// Which detector to run.
     #[arg(long, value_enum, default_value_t = DetectorChoice::Reference)]
     detector: DetectorChoice,
-    /// Seeds the gateway pipeline's envelope ids (`--detector pipeline`).
+    /// Seeds the gateway's envelope ids (`--detector pipeline` or `live`).
     #[arg(long, default_value_t = 0)]
     seed: u64,
     #[command(flatten)]
@@ -139,6 +144,9 @@ enum DetectorChoice {
     /// The gateway pipeline (`Pipeline::ingest`); unscored until the
     /// detection layers consume the bus.
     Pipeline,
+    /// The gateway's live composition (L3–L7) through `LiveBackend`;
+    /// unavailable until `crosstalk_gateway::live::Live` is in the build.
+    Live,
 }
 
 /// Reference matcher parameters (defaults: `ReferenceConfig::default`).
@@ -248,6 +256,12 @@ fn run_command(args: RunArgs) -> Result<ExitCode> {
         }
         DetectorChoice::Pipeline => {
             let mut detector = PipelineDetector::new(args.seed)?;
+            let summary = run(&mut source, &mut detector, args.examples, |_, _| {});
+            (detector.name().to_owned(), summary)
+        }
+        DetectorChoice::Live => {
+            let backend = gateway_backend()?;
+            let mut detector = LiveDetector::new(backend, LiveSettings::short(args.seed)?)?;
             let summary = run(&mut source, &mut detector, args.examples, |_, _| {});
             (detector.name().to_owned(), summary)
         }

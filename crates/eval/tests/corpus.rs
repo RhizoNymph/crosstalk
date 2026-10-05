@@ -4,7 +4,7 @@
 mod common;
 
 use common::{calls, dataset, draft, result, says, system, tick, user};
-use crosstalk_eval::corpus::client::{synthetic_client, vendor_of};
+use crosstalk_eval::corpus::client::{corpus_id, synthetic_client, vendor_of};
 use crosstalk_eval::corpus::delta::new_inputs;
 use crosstalk_eval::corpus::exchange::normalized;
 use crosstalk_eval::corpus::{
@@ -14,7 +14,7 @@ use crosstalk_eval::corpus::{CorpusExchange, Fidelity};
 use crosstalk_eval::keys::{AgentKey, SourceRef, WorldKey};
 use crosstalk_eval::truth::Tier;
 use crosstalk_spec::interfaces::l1_canonical::InvalidNormalizedExchange;
-use crosstalk_spec::observed::client::{CredentialScheme, Vendor};
+use crosstalk_spec::observed::client::{CorpusId, CredentialScheme, IngressMode, Vendor};
 use crosstalk_spec::observed::exchange::{
     Continuation, Exchange, ExchangeMeta, ExchangeOutcome, ModelName, StopReason, Transport,
     WireProtocol,
@@ -194,6 +194,24 @@ fn clock_orders_components_and_bounds_them() {
         clock::ordinal(1).unwrap_or_else(|e| panic!("{e}"))
             < clock::ordinal(2).unwrap_or_else(|e| panic!("{e}"))
     );
+}
+
+#[test]
+fn corpus_exchanges_are_replayed_under_their_dataset() {
+    let alice = AgentKey::new(WorldKey::new("w1"), "alice");
+    let other_world = AgentKey::new(WorldKey::new("w2"), "alice");
+    let client = synthetic_client(&dataset(), &alice, "m");
+    assert_eq!(
+        client.ingress,
+        IngressMode::Replay {
+            corpus: corpus_id(&dataset())
+        }
+    );
+    assert_eq!(corpus_id(&dataset()), CorpusId("eval-synthetic".into()));
+    // One corpus per dataset, whatever the world; credentials stay per agent.
+    let elsewhere = synthetic_client(&dataset(), &other_world, "m");
+    assert_eq!(client.ingress, elsewhere.ingress);
+    assert_ne!(client.credential, elsewhere.credential);
 }
 
 #[test]

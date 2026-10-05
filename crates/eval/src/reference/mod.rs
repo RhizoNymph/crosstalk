@@ -13,14 +13,18 @@
 //!    input or earlier output, at least `min_span` folded bytes long. Their
 //!    shingles are indexed.
 //!
-//! A hit is classified `Exact` when the reader's matched bytes occur
-//! verbatim in the span, else `Normalized` (equal after [folding](mod@fold): escape
-//! unfolding, case and whitespace). Candidate tokens are also decoded
+//! Matching compares under [folding](mod@fold): string-escape unfolding,
+//! case and whitespace. A hit is then [classified](classify::classify)
+//! `Exact` when the reader's matched bytes occur verbatim in the span,
+//! `Normalized` when case and whitespace folding alone make them equal, and
+//! `Decoded([JsonString])` or `Decoded([YamlString])` when one side's
+//! string escapes had to be undone. Candidate tokens are also decoded
 //! (base64, hex, URL encoding) and matched as `Decoded`. Opaque blobs
 //! ([`opaque`]) are cut out before spans, matching and decoding. Hits are
 //! grouped into one confirmed spec `Transmission` per (reader exchange,
 //! sender, route), with the route from where the hit sits ([`route`]).
 
+pub mod classify;
 pub mod decode;
 pub mod fold;
 pub mod opaque;
@@ -35,7 +39,7 @@ use crosstalk_spec::derived::flow::transmission::{
 };
 use crosstalk_spec::derived::provenance::matching::{Carrier, ContentMatch, MatchKind};
 use crosstalk_spec::derived::provenance::span::SpanLocation;
-use crosstalk_spec::ids::{ChannelId, ExchangeId, SpanId};
+use crosstalk_spec::ids::{AgentId, ChannelId, ExchangeId, SpanId};
 use crosstalk_spec::observed::message::{Message, MessageBody, ToolName};
 use crosstalk_spec::support::NonEmpty;
 
@@ -85,11 +89,13 @@ pub struct ReferenceOutput {
     pub matches: usize,
 }
 
-/// An indexed span: whose output it is in and where.
+/// An indexed span: whose output it is in, who wrote it and where (the
+/// spec's `IndexedSpan`, by id).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SpanRecord {
     pub id: SpanId,
     pub exchange: ExchangeId,
+    pub author: AgentId,
     pub location: SpanLocation,
 }
 
@@ -107,6 +113,8 @@ struct IndexedSpan {
     id: SpanId,
     agent: usize,
     raw: String,
+    /// `raw` under case and whitespace folding alone.
+    plain: String,
 }
 
 /// A hit before grouping: who sent it, how it travelled, the match.
@@ -244,10 +252,17 @@ impl Matcher<'_> {
                         ),
                     );
                     let span = self.spans.len();
-                    self.spans.push(IndexedSpan { id, agent, raw });
+                    let plain = fold::fold_plain(&raw);
+                    self.spans.push(IndexedSpan {
+                        id,
+                        agent,
+                        raw,
+                        plain,
+                    });
                     self.records.push(SpanRecord {
                         id,
                         exchange: exchange.id(),
+                        author: self.world.agents()[agent].id,
                         location,
                     });
                     for &(hash, offset) in &windows {
@@ -295,11 +310,8 @@ impl Matcher<'_> {
                     let read = text
                         .get(raw_start as usize..raw_end as usize)
                         .unwrap_or_default();
-                    let kind = if self.spans[span].raw.contains(read) {
-                        MatchKind::Exact
-                    } else {
-                        MatchKind::Normalized
-                    };
+                    let indexed = &self.spans[span];
+                    let kind = classify::classify(&indexed.raw, &indexed.plain, read);
                     found.entry((span, raw_start, raw_end)).or_insert(kind);
                 }
             }

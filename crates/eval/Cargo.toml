@@ -33,3 +33,4 @@ tracing-subscriber = { workspace = true, features = ["env-filter", "fmt", "std"]
 crosstalk-testkit = { path = "../testkit" }
 crosstalk-sim = { path = "../sim" }
 tokio = { workspace = true, features = ["macros", "rt", "sync", "test-util", "time"] }
+crosstalk-memory = { path = "../memory" }

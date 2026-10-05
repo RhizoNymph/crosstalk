@@ -3,14 +3,16 @@
 
 mod common;
 
-use std::collections::BTreeMap;
 use std::num::NonZeroU32;
 
 use common::{dataset, draft, says, system, tick, user};
 use crosstalk_eval::corpus::{Coverage, Driven, World, WorldBuilder};
 use crosstalk_eval::keys::{AgentKey, SourceRef, WorldKey};
 use crosstalk_eval::location::{self, SpanLocationExt};
-use crosstalk_eval::predict::{PredictedRoute, Prediction, WorldDirectory, from_transmission};
+use crosstalk_eval::predict::reads::Resolved;
+use crosstalk_eval::predict::{
+    AgentMap, EvidenceClass, PredictedRoute, Prediction, WorldDirectory, from_transmission,
+};
 use crosstalk_eval::score::align::aligns;
 use crosstalk_eval::score::quality::detection_quality;
 use crosstalk_eval::score::{Scorer, Selector};
@@ -159,7 +161,11 @@ fn prediction(scene: &Scene, transmission: u128) -> Prediction {
         reader_exchange: scene.reads,
         route: PredictedRoute::Direct,
         carrier: CarrierKind::UserTurn,
-        class: MatchClass::Exact,
+        class: EvidenceClass::Exact,
+        quality: QualityMatch::Content {
+            class: MatchClass::Exact,
+            carrier: CarrierKind::UserTurn,
+        },
         read_at: scene.content,
         origin_at: None,
     }
@@ -210,7 +216,7 @@ fn sender_reader_and_exchange_must_agree() {
 fn class_and_carrier_do_not_decide_alignment() {
     let scene = scene(complete(), false);
     let mut p = prediction(&scene, 0);
-    p.class = MatchClass::Semantic;
+    p.class = EvidenceClass::Semantic;
     p.carrier = CarrierKind::ToolResult;
     p.route = PredictedRoute::Unobserved;
     assert!(aligns(&p, positive(&scene)));
@@ -286,7 +292,7 @@ fn a_label_with_no_prediction_is_missed() {
 fn rows_break_down_by_route_carrier_class_and_tier() {
     let scene = scene(complete(), false);
     let mut normalized = prediction(&scene, 1);
-    normalized.class = MatchClass::Normalized;
+    normalized.class = EvidenceClass::Normalized;
     let mut scorer = Scorer::new(10);
     scorer.add_world(&scene.world, &[normalized]);
     let score = scorer.finish();
@@ -294,13 +300,13 @@ fn rows_break_down_by_route_carrier_class_and_tier() {
         dataset: Some(dataset()),
         route: Some(RouteKind::Direct),
         carrier: Some(CarrierKind::UserTurn),
-        class: Some(MatchClass::Exact),
+        class: Some(EvidenceClass::Exact),
         tier: Some(Tier::Construction),
     };
     let found = score.total(&label_row);
     assert_eq!((found.expected, found.found, found.predicted), (1, 1, 0));
     let prediction_row = Selector {
-        class: Some(MatchClass::Normalized),
+        class: Some(EvidenceClass::Normalized),
         ..label_row
     };
     let predicted = score.total(&prediction_row);
@@ -397,7 +403,8 @@ fn spec_transmissions_become_one_prediction_per_match() {
         scene.content,
         &[MatchKind::Exact, MatchKind::Normalized],
     );
-    let directory = WorldDirectory::new(&scene.world, BTreeMap::new());
+    let (agents, resolved) = (AgentMap::of_world(&scene.world), Resolved::default());
+    let directory = WorldDirectory::new(&scene.world, &agents, &resolved);
     let predictions =
         from_transmission(&transmission, &directory).unwrap_or_else(|e| panic!("{e}"));
     assert_eq!(predictions.len(), 2);
@@ -406,7 +413,7 @@ fn spec_transmissions_become_one_prediction_per_match() {
             .iter()
             .all(|p| p.from == scene.bob && p.to == scene.alice)
     );
-    assert_eq!(predictions[1].class, MatchClass::Normalized);
+    assert_eq!(predictions[1].class, EvidenceClass::Normalized);
     assert!(predictions.iter().all(|p| aligns(p, positive(&scene))));
 }
 
@@ -428,7 +435,8 @@ fn scorer_and_detection_quality_agree_on_what_the_detector_opened() {
             &[MatchKind::Normalized],
         ),
     ];
-    let directory = WorldDirectory::new(&scene.world, BTreeMap::new());
+    let (agents, resolved) = (AgentMap::of_world(&scene.world), Resolved::default());
+    let directory = WorldDirectory::new(&scene.world, &agents, &resolved);
     let predictions: Vec<Prediction> = transmissions
         .iter()
         .flat_map(|t| from_transmission(t, &directory).unwrap_or_default())
@@ -440,36 +448,33 @@ fn scorer_and_detection_quality_agree_on_what_the_detector_opened() {
     let window = TimeWindow::new(tick(0), tick(100)).unwrap_or_else(|_| panic!("window"));
     let quality = detection_quality(window, &scene.world, &transmissions, &directory)
         .unwrap_or_else(|e| panic!("{e}"));
-    let mut from_quality: Vec<(RouteKind, MatchClass, u64, u64, u64)> = quality
+    let mut from_quality: Vec<(RouteKind, QualityMatch, u64, u64, u64)> = quality
         .rows()
         .iter()
         .map(|row| {
-            let QualityMatch::Content { class, .. } = row.match_kind else {
-                panic!("only confirmed transmissions here");
-            };
             (
                 row.route_kind,
-                class,
+                row.match_kind,
                 row.genuine,
                 row.false_detection,
                 row.unlabeled,
             )
         })
         .collect();
-    let mut from_scorer: Vec<(RouteKind, MatchClass, u64, u64, u64)> = score
+    let mut from_scorer: Vec<(RouteKind, QualityMatch, u64, u64, u64)> = score
         .transmissions
         .iter()
         .map(|row| {
             (
                 row.key.route,
-                row.key.class,
+                row.key.quality,
                 row.counts.genuine,
                 row.counts.false_detection,
                 row.counts.unlabeled,
             )
         })
         .collect();
-    let order = |row: &(RouteKind, MatchClass, u64, u64, u64)| {
+    let order = |row: &(RouteKind, QualityMatch, u64, u64, u64)| {
         (route_rank(row.0), row.1, row.2, row.3, row.4)
     };
     from_quality.sort_by_key(order);
@@ -478,8 +483,26 @@ fn scorer_and_detection_quality_agree_on_what_the_detector_opened() {
     assert_eq!(
         from_quality,
         vec![
-            (RouteKind::Direct, MatchClass::Exact, 1, 1, 0),
-            (RouteKind::Direct, MatchClass::Normalized, 0, 1, 0),
+            (
+                RouteKind::Direct,
+                QualityMatch::Content {
+                    class: MatchClass::Exact,
+                    carrier: CarrierKind::UserTurn
+                },
+                1,
+                1,
+                0
+            ),
+            (
+                RouteKind::Direct,
+                QualityMatch::Content {
+                    class: MatchClass::Normalized,
+                    carrier: CarrierKind::UserTurn
+                },
+                0,
+                1,
+                0
+            ),
         ]
     );
 }
@@ -487,7 +510,8 @@ fn scorer_and_detection_quality_agree_on_what_the_detector_opened() {
 #[test]
 fn detection_quality_cannot_see_a_total_miss_but_the_scorer_does() {
     let scene = scene(complete(), false);
-    let directory = WorldDirectory::new(&scene.world, BTreeMap::new());
+    let (agents, resolved) = (AgentMap::of_world(&scene.world), Resolved::default());
+    let directory = WorldDirectory::new(&scene.world, &agents, &resolved);
     let window = TimeWindow::new(tick(0), tick(100)).unwrap_or_else(|_| panic!("window"));
     let quality =
         detection_quality(window, &scene.world, &[], &directory).unwrap_or_else(|e| panic!("{e}"));

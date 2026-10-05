@@ -458,6 +458,7 @@ dependencies = [
  "blake3",
  "clap",
  "crosstalk-gateway",
+ "crosstalk-memory",
  "crosstalk-sim",
  "crosstalk-spec",
  "crosstalk-testkit",

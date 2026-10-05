@@ -1,7 +1,8 @@
 //! Regression gates: per-dataset, per-row minimums a run must meet.
 //!
 //! A gate selects rows (any of dataset, route, carrier, class, tier; unset
-//! means any), sums them, and checks one metric:
+//! means any, except that an unset class means any content class), sums
+//! them, and checks one metric:
 //!
 //! ```toml
 //! [[gate]]
@@ -21,9 +22,9 @@
 use serde::{Deserialize, Serialize};
 
 use crate::keys::DatasetId;
+use crate::predict::EvidenceClass;
 use crate::score::{Score, Selector};
 use crosstalk_spec::aggregates::edge::RouteKind;
-use crosstalk_spec::aggregates::quality::MatchClass;
 
 use crate::truth::{CarrierKind, NegativeReason, Tier};
 
@@ -53,7 +54,7 @@ pub struct Gate {
     #[serde(default)]
     pub carrier: Option<CarrierKind>,
     #[serde(default)]
-    pub class: Option<MatchClass>,
+    pub class: Option<EvidenceClass>,
     #[serde(default)]
     pub tier: Option<Tier>,
     #[serde(flatten)]
