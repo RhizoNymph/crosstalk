@@ -20,8 +20,11 @@ unit = [
     "crosstalk_spec::tests::wire::http::routes::query_routes_need_the_permission_their_method_documents",
     "crosstalk_spec::tests::wire::http::routes::action_routes_need_the_action_permission",
 ]
-integration = "crosstalk_api::integration::every_route_refuses_a_caller_without_its_permission"
+integration = [
+    "crosstalk_api::http::integration::routes::every_route_refuses_a_caller_without_its_permission",
+    "crosstalk_api::http::integration::actions::every_action_refuses_a_caller_without_its_permission",
+]
 
 [evidence-review]
 unit = { agent = "true", human = "false" }
-integration = { agent = "false", human = "false" }
+integration = { agent = "true", human = "false" }

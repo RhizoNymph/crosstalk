@@ -13,10 +13,18 @@ crosstalk-spec = { path = "../../spec" }
 crosstalk-memory = { path = "../memory" }
 crosstalk-surface = { path = "../surface" }
 crosstalk-transport = { path = "../transport" }
+axum = { workspace = true, features = ["http1", "tokio", "tracing"] }
+bytes.workspace = true
+form_urlencoded.workspace = true
+futures-util = { workspace = true, features = ["std"] }
+serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
+tokio = { workspace = true, features = ["macros", "net", "rt", "sync", "time"] }
 tracing.workspace = true
 
 [dev-dependencies]
 crosstalk-testkit = { path = "../testkit" }
-tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
+http-body-util.workspace = true
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
+tower = { workspace = true, features = ["util"] }

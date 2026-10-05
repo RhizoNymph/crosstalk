@@ -12,8 +12,8 @@ The binding is checked spec, not only prose. The route table, the request
 encoder and decoder, the status mapping, authentication, SSE framing,
 frame caching and export headers are Rust in
 `spec/types/interfaces/l8_surface/http/`. The server (`crosstalk-api`,
-roadmap P7.1) and the client (`crosstalk-client`, P7.2) are both built and
-tested against them.
+roadmap P7.1, [http_server.md](http_server.md)) and the client
+(`crosstalk-client`, P7.2) are both built and tested against them.
 
 ## Scope
 
