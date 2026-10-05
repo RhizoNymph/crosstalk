@@ -3,6 +3,7 @@
 //! ```text
 //! ct-eval run   --dataset salt [--root DIR] [--limit N] [--include TEXT]… [--out DIR] [--gates FILE]
 //! ct-eval truth --dataset salt [--root DIR] [--limit N] [--include TEXT]… [--out FILE]
+//! ct-eval run   --dataset ai-village [--mode window|claude-code] [--from DAY] [--to DAY] [--limit N] …
 //! ```
 //!
 //! `run` prints the table, writes `report.json` and `report.txt` to `--out`,
@@ -16,9 +17,13 @@ use std::process::ExitCode;
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use crosstalk_eval::config::EvalConfig;
-use crosstalk_eval::corpus::TraceSource;
+use crosstalk_eval::corpus::{SourceError, TraceSource, World};
+use crosstalk_eval::datasets::ai_village::report::Unlabelled;
+use crosstalk_eval::datasets::ai_village::time::Day;
+use crosstalk_eval::datasets::ai_village::{self as ai_village, AiVillageSource};
 use crosstalk_eval::datasets::salt::{SaltSource, Selection};
 use crosstalk_eval::gateway::PipelineDetector;
+use crosstalk_eval::keys::DatasetId;
 use crosstalk_eval::pipeline::{Detector, ReferenceDetector, run};
 use crosstalk_eval::reference::ReferenceConfig;
 use crosstalk_eval::report::table::render;
@@ -44,14 +49,26 @@ enum Command {
 #[derive(Clone, Copy, ValueEnum)]
 enum Dataset {
     Salt,
+    AiVillage,
 }
 
 impl Dataset {
     fn name(self) -> &'static str {
         match self {
             Self::Salt => "salt",
+            Self::AiVillage => ai_village::DATASET,
         }
     }
+}
+
+/// Which part of AI Village to convert.
+#[derive(Clone, Copy, ValueEnum)]
+enum VillageMode {
+    /// Every agent over `--from`..=`--to`, one world per village day.
+    Window,
+    /// The Claude Code agent's stream, one world per context (`--limit`
+    /// caps the contexts).
+    ClaudeCode,
 }
 
 #[derive(Args)]
@@ -70,6 +87,38 @@ struct SourceArgs {
     /// Keep only files whose path contains this (repeatable).
     #[arg(long)]
     include: Vec<String>,
+    /// AI Village: which part to convert.
+    #[arg(long, value_enum, default_value_t = VillageMode::Window)]
+    mode: VillageMode,
+    /// AI Village window: the first village day (YYYY-MM-DD).
+    #[arg(long, default_value = ai_village::DEFAULT_FROM)]
+    from: String,
+    /// AI Village window: the last village day, included.
+    #[arg(long, default_value = ai_village::DEFAULT_TO)]
+    to: String,
+}
+
+/// The dataset being read.
+enum Source {
+    Salt(SaltSource),
+    AiVillage(Box<AiVillageSource>),
+}
+
+impl TraceSource for Source {
+    fn id(&self) -> DatasetId {
+        match self {
+            Self::Salt(source) => source.id(),
+            Self::AiVillage(source) => source.id(),
+        }
+    }
+
+    fn worlds(&mut self) -> impl Iterator<Item = Result<World, SourceError>> + '_ {
+        let worlds: Box<dyn Iterator<Item = Result<World, SourceError>> + '_> = match self {
+            Self::Salt(source) => Box::new(source.worlds()),
+            Self::AiVillage(source) => Box::new(source.worlds()),
+        };
+        worlds
+    }
 }
 
 #[derive(Args)]
@@ -143,7 +192,7 @@ fn crate_file(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join(name)
 }
 
-fn open_source(args: &SourceArgs) -> Result<SaltSource> {
+fn open_source(args: &SourceArgs) -> Result<Source> {
     let root = match &args.root {
         Some(root) => root.clone(),
         None => {
@@ -166,7 +215,20 @@ fn open_source(args: &SourceArgs) -> Result<SaltSource> {
     };
     match args.dataset {
         Dataset::Salt => SaltSource::open(&root, &selection)
+            .map(Source::Salt)
             .with_context(|| format!("opening SALT at {}", root.display())),
+        Dataset::AiVillage => {
+            let mode = match args.mode {
+                VillageMode::ClaudeCode => ai_village::Mode::ClaudeCode { limit: args.limit },
+                VillageMode::Window => ai_village::Mode::Window {
+                    from: Day::parse(&args.from)?,
+                    to: Day::parse(&args.to)?,
+                },
+            };
+            AiVillageSource::open(&root, mode)
+                .map(|source| Source::AiVillage(Box::new(source)))
+                .with_context(|| format!("opening AI Village at {}", root.display()))
+        }
     }
 }
 
@@ -182,17 +244,23 @@ fn run_command(args: RunArgs) -> Result<ExitCode> {
         Gates::default()
     };
     let dataset = source.id();
+    let mut unlabelled = Unlabelled::default();
+    let observe = |world: &World, predicted: &[_]| {
+        if matches!(args.source.dataset, Dataset::AiVillage) {
+            unlabelled.observe(world, predicted);
+        }
+    };
     let (name, summary) = match args.detector {
         DetectorChoice::Reference => {
             let mut detector = ReferenceDetector {
                 config: args.matcher.config(),
             };
-            let summary = run(&mut source, &mut detector, args.examples, |_, _| {});
+            let summary = run(&mut source, &mut detector, args.examples, observe);
             (detector.name().to_owned(), summary)
         }
         DetectorChoice::Pipeline => {
             let mut detector = PipelineDetector::new(args.seed)?;
-            let summary = run(&mut source, &mut detector, args.examples, |_, _| {});
+            let summary = run(&mut source, &mut detector, args.examples, observe);
             (detector.name().to_owned(), summary)
         }
     };
@@ -208,11 +276,27 @@ fn run_command(args: RunArgs) -> Result<ExitCode> {
     );
     let table = render(&report);
     print!("{table}");
+    let village = match &source {
+        Source::AiVillage(source) => Some(serde_json::json!({
+            "stats": source.stats(),
+            "unlabelled_predictions": unlabelled,
+        })),
+        Source::Salt(_) => None,
+    };
+    if let Some(village) = &village {
+        println!("{}", serde_json::to_string_pretty(village)?);
+    }
     if let Some(out) = &args.out {
         fs::create_dir_all(out).with_context(|| format!("creating {}", out.display()))?;
         let json = serde_json::to_string_pretty(&report)?;
         fs::write(out.join("report.json"), json + "\n")?;
         fs::write(out.join("report.txt"), &table)?;
+        if let Some(village) = &village {
+            fs::write(
+                out.join("ai-village.json"),
+                serde_json::to_string_pretty(village)? + "\n",
+            )?;
+        }
     }
     Ok(if report.gates_failed() {
         ExitCode::from(2)

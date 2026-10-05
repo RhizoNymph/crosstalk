@@ -343,3 +343,12 @@ Where the reference loses:
   mostly its `get_log` raw log. They are coincidental shared phrasing: the
   same task prompt rotates between agents across episodes, and both agents
   write the same pytest boilerplate and SQL idioms.
+
+## AI Village
+
+The AI Village converter (`src/datasets/ai_village/`, `ct-eval run
+--dataset ai-village [--mode window|claude-code] [--from DAY --to DAY]`)
+has its own page: [eval_ai_village.md](eval_ai_village.md). It adds
+`SourceError::AiVillage`, the CLI's `Source` enum over datasets, and an
+`ai-village.json` (source stats and unlabelled predictions by reader source)
+next to the report.

@@ -2,3 +2,6 @@ root = "~/Data/ai/agents"
 
 [datasets.salt]
 path = "salt-nlp"
+
+[datasets.ai-village]
+path = "ai-village"

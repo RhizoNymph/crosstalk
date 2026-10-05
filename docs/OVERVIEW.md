@@ -886,4 +886,24 @@ Features Index:
       - crates/eval/src/bin/ct-eval/main.rs
     depends_on: [type_spec, gateway, transport, sim, testkit]
     doc: docs/features/eval.md
+  eval_ai_village:
+    description: >
+      The AI Village converter (crosstalk-eval datasets::ai_village, ct-eval
+      --dataset ai-village). Claude Code mode: the Claude Agent SDK agent's
+      exact calls, one world per context, with construction-tier labels for
+      every chat message it read through the village MCP server's
+      get_events (keyed by event id; Direct/ToolResult). Window mode
+      (default 2026-07-13..17): every standard agent, one world per village
+      day, requests rebuilt from responses (system prompt from goals and
+      memory, session history, chat since the previous call), structural
+      chat labels, heuristic repository-channel labels from bash accesses
+      on canonical repository URLs, GUI edits counted. Its streaming table
+      passes, resource normalizer and bash access tagger are reusable.
+    entry_points:
+      - crates/eval/src/datasets/ai_village/mod.rs
+      - crates/eval/src/datasets/ai_village/tables.rs
+      - crates/eval/src/datasets/ai_village/resource.rs
+      - crates/eval/src/datasets/ai_village/access/mod.rs
+    depends_on: [eval]
+    doc: docs/features/eval_ai_village.md
 ```

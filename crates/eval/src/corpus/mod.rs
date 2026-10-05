@@ -126,6 +126,8 @@ pub enum SourceError {
     Salt(#[from] crate::datasets::salt::SaltError),
     #[error(transparent)]
     Corpus(#[from] CorpusError),
+    #[error(transparent)]
+    AiVillage(#[from] crate::datasets::ai_village::AiVillageError),
 }
 
 /// A dataset as a stream of worlds.
