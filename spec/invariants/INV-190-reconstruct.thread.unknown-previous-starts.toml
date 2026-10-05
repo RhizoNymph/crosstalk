@@ -1,6 +1,6 @@
 [invariant]
 id = "reconstruct.thread.unknown-previous-starts"
-statement = "An Increment exchange whose previous response is not stored is threaded as Starts with new_inputs equal to the messages of its increment."
+statement = "An Increment exchange whose previous response is not stored is threaded as Starts with new_inputs equal to the non-system messages of its increment less those reconstruct.delta.excludes-seen-elsewhere withholds."
 kind = "domain"
 property = "postcondition"
 requires = ["unit"]

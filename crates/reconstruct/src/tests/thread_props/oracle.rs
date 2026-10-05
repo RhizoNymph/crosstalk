@@ -1,7 +1,10 @@
 //! The threading oracle: after every step of a script, the outcome is
 //! checked against the conversations stored before it, by the rules the
 //! L3 invariants state, and the stored history against the concatenation
-//! of the deltas.
+//! of the request suffixes the deltas were cut from (each delta's
+//! `new_inputs` is its suffix less the messages another of the cluster's
+//! conversations holds, `reconstruct.delta.excludes-seen-elsewhere`; the
+//! scripts' clocks stay far inside the retention).
 
 use std::collections::BTreeMap;
 
@@ -148,6 +151,21 @@ impl Oracle {
             .filter(|k| *k > 0 && request.has_assistant(*k, &outputs))
             .max();
         let fresh = !before.contains_key(&conversation);
+        // delta.excludes-seen-elsewhere: what another of the cluster's
+        // conversations holds is withheld from new_inputs.
+        let unseen = |suffix: &[MessageHash]| -> Vec<MessageHash> {
+            suffix
+                .iter()
+                .copied()
+                .filter(|message| {
+                    !ours.iter().any(|(id, stored)| {
+                        **id != conversation && stored.messages.contains(message)
+                    })
+                })
+                .collect()
+        };
+        // The request messages the conversation stores after its base.
+        let mut suffix: Vec<MessageHash> = Vec::new();
         match outcome {
             ThreadOutcome::Extends { .. } => {
                 let stored = before
@@ -165,7 +183,8 @@ impl Oracle {
                     at(&format!("not the longest prefix ({longest_prefix:?})"))
                 })?;
                 // delta.new-inputs-are-request-suffix
-                check(delta.new_inputs == r[stored.messages.len()..], || {
+                suffix = r[stored.messages.len()..].to_vec();
+                check(delta.new_inputs == unseen(&suffix), || {
                     at("new inputs are not the suffix")
                 })?;
                 // delta.new-system-when-changed
@@ -206,7 +225,9 @@ impl Oracle {
                             .copied()
                             .filter(|message| !stored.messages.contains(message))
                             .collect();
-                        check(delta.new_inputs == expected, || at("compaction new inputs"))?;
+                        check(delta.new_inputs == unseen(&expected), || {
+                            at("compaction new inputs")
+                        })?;
                     }
                     ThreadOutcome::Forks {
                         parent,
@@ -232,10 +253,16 @@ impl Oracle {
                         check(Some(k) == best_fork, || {
                             at(&format!("parent not maximal ({best_fork:?})"))
                         })?;
-                        check(delta.new_inputs == r[k..], || at("fork new inputs"))?;
+                        suffix = r[k..].to_vec();
+                        check(delta.new_inputs == unseen(&suffix), || {
+                            at("fork new inputs")
+                        })?;
                     }
                     ThreadOutcome::Starts { .. } => {
-                        check(delta.new_inputs == *r, || at("start new inputs"))?;
+                        suffix = r.clone();
+                        check(delta.new_inputs == unseen(&suffix), || {
+                            at("start new inputs")
+                        })?;
                         // thread.fork-or-start
                         check(best_fork.is_none(), || {
                             at(&format!(
@@ -275,7 +302,7 @@ impl Oracle {
             // non-system messages in request order, carried-over included.
             history = r.clone();
         } else {
-            history.extend(delta.new_inputs.iter().copied());
+            history.extend(suffix.iter().copied());
         }
         history.extend(delta.output);
         let stored = store

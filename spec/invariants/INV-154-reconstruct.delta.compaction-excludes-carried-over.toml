@@ -1,6 +1,6 @@
 [invariant]
 id = "reconstruct.delta.compaction-excludes-carried-over"
-statement = "A Compacts delta, the first delta of its Compaction conversation, has as new_inputs the request's non-system messages in request order without the carried-over ones, those whose hash is in the predecessor's stored history."
+statement = "A Compacts delta, the first delta of its Compaction conversation, has as new_inputs the request's non-system messages in request order without the carried-over ones, those whose hash is in the predecessor's stored history, and without those reconstruct.delta.excludes-seen-elsewhere withholds."
 kind = "domain"
 property = "postcondition"
 requires = ["property"]

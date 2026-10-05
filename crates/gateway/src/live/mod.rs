@@ -47,6 +47,7 @@ use crosstalk_api::{Backbone, InProcess, InProcessError, InProcessOptions};
 use crosstalk_flow::consumer::{FlowConfig, InvalidFlowConfig, Settings as FlowSettings};
 use crosstalk_memory::support::Outbox;
 use crosstalk_provenance::config::ProvenanceConfig;
+use crosstalk_reconstruct::thread::ThreadConfig;
 use crosstalk_spec::events::Subject;
 use crosstalk_spec::ids::SeededRandom;
 use crosstalk_spec::interfaces::l0_ingress::RawExchange;
@@ -109,6 +110,9 @@ pub struct LiveConfig {
     pub flow: FlowConfig,
     /// L4's winnowing, decoding and index settings.
     pub provenance: ProvenanceConfig,
+    /// L3's threading settings: how long a seen message is withheld from a
+    /// later conversation's new inputs.
+    pub threading: ThreadConfig,
     pub ticking: Ticking,
     /// Seeds every id generator (envelope, agent, conversation ids), so two
     /// runs over the same input mint the same ids.
@@ -207,6 +211,7 @@ impl Live {
             pipeline,
             flow,
             provenance,
+            threading,
             ticking,
             seed,
             capture,
@@ -240,7 +245,7 @@ impl Live {
         let activity = Activity::default();
         let context = StageContext {
             stores: backend.stores.clone(),
-            layers: LayerStores::default(),
+            layers: LayerStores::new(threading),
             publisher: publisher.clone(),
             clock: reader,
             flow,

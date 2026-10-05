@@ -21,7 +21,9 @@ crate: it depends on `crosstalk-spec` and `crosstalk-store` only;
 - Threading (`Threader`): `ConversationThreader` over a
   `ConversationStore` (`MemoryConversations`, `PgConversations`): prefix
   matching, forks and retries, compaction, WebSocket increment resolution,
-  system turns anywhere in a request, rethreading idempotence.
+  system turns anywhere in a request, rethreading idempotence, and the
+  per-agent seen-message set that keeps replayed history out of a delta's
+  new inputs (`ThreadConfig`).
   `MemoryConversations` also implements the spec's `ExchangePlacements`
   (an exchange's agent and conversation, as its recorded outcome placed
   it; `reconstruct.placement.as-threaded`), which `Live` exposes for
@@ -137,12 +139,53 @@ The decision (`thread::plan`), inside the store's atomic step:
    holds an assistant message.
 6. Otherwise `Starts`.
 
+Whatever the outcome, the delta's new inputs then leave out every message
+an agent of the cluster saw in another conversation within the seen-message
+retention (`reconstruct.delta.excludes-seen-elsewhere`, INV-1100), in
+order. This is what keeps a restarted episode carrying its earlier
+transcript (SALT's `main` and `memory_length` conditions; eval finding 6),
+a fork's unchanged tail after a rewritten message, a re-run opening turn
+and the agent's own earlier outputs pasted back as history from being
+scanned by L4 as freshly received. Within one conversation the rule stays
+positional: a message repeated there is new again. The delta's output is
+never withheld.
+
+### The seen-message set
+
+- What counts as seen in a conversation: every non-system message a write
+  stores there from the request, and the output. For a new conversation
+  that is its whole request (a fork's base included: the request carried
+  it); for an extension, the appended messages. It is recorded under the
+  attributed agent with the exchange's start (`ThreadInput::at`), keeping
+  the latest time per (agent, message, conversation); a lookup covers every
+  member of the cluster (`ThreadReads::seen_elsewhere`), so merged agents
+  share the set and different agents never do. Under replay each agent
+  belongs to one corpus (INV-973), so the set is per corpus as well.
+- Retention (`ThreadConfig::seen_retention`, a checked `SeenRetention`,
+  30 days by default, L4's index retention; JSON
+  `{"seen_retention_secs": 2592000}`): a sighting counts while it is no
+  older than the retention before the exchange's start. The time is when
+  the message was stored in that conversation; later turns re-sending it as
+  history do not refresh it (that would cost an upsert per history message
+  per call).
+- Bounding: `MemoryConversations` forgets, after each write, every sighting
+  older than the retention behind the newest exchange it has threaded (an
+  ordered index makes this a pop from the front). `PgConversations`
+  deletes the threaded cluster's expired rows in the threading transaction
+  and offers `forget_seen(now)` to sweep agents that stopped calling. A
+  store may therefore forget a sighting an exchange arriving more than the
+  retention out of order would still have counted.
+- Configuration: `MemoryConversations::with_config`,
+  `PgConversations::with_config`; the gateway's `LiveConfig::threading`.
+
 The store then records the conversation (`Write`): new conversations,
 fork bases copied from the parent's transcript through the shared prefix,
-appended entries with ordinals, the outcome per exchange, and the
-response for later increments. `MemoryConversations` does this under one
+appended entries with ordinals, the outcome per exchange, the response
+for later increments, and the write's seen messages. `MemoryConversations` does this under one
 `tokio::sync::Mutex`; `PgConversations` in one `SERIALIZABLE` transaction
-(`migrations/0002_conversations.sql`).
+(`migrations/0002_conversations.sql`; the seen set in
+`migrations/0003_seen_messages.sql`, table `seen_messages` keyed by agent,
+message and conversation, indexed by agent and time).
 
 ### Replay isolation
 
@@ -170,11 +213,12 @@ stable per-corpus API key.
 | `src/agents/table.rs` | Merge-log decisions and read models over loaded rows | `Table`, `Diff`, `Applied` (crate) |
 | `src/agents/{load,writes,resolve,reads,cache,codec}.rs` | Snapshot loading; writes and outbox; `resolve`; `AgentReads`; directory cache; column codecs | — |
 | `src/thread/mod.rs` | The threader | `ConversationThreader`, `ClusterMembers`, `ReadsMembers`, `outcome_kind` |
-| `src/thread/{history,plan,store}.rs` | Chain hashes and request analysis; the decision; the store trait and its input | `Entry`, `ChainHash`, `ConversationStore`, `ThreadInput`, `RequestKind`, `ResponseKey`, `TranscriptEntry` |
-| `src/thread/{memory,pg}.rs` | Conversation stores | `MemoryConversations`, `PgConversations` |
+| `src/thread/{history,plan,store}.rs` | Chain hashes and request analysis; the decision (including the seen-elsewhere filter); the store trait and its input | `Entry`, `ChainHash`, `ConversationStore`, `ThreadInput` (with `at`), `RequestKind`, `ResponseKey`, `TranscriptEntry` |
+| `src/thread/config.rs` | Typed threading configuration | `ThreadConfig`, `SeenRetention`, `ThreadConfigError`, `DEFAULT_SEEN_RETENTION` |
+| `src/thread/{memory,pg}.rs` | Conversation stores, each with its seen-message set | `MemoryConversations` (`new`, `with_config`), `PgConversations` (`new`, `with_retry`, `with_config`, `forget_seen`) |
 | `src/thread/messages.rs` | Message bodies and facts | `MessageReader`, `Facts`, `DEFAULT_SUMMARY_PREAMBLES` |
 | `src/consumer/{mod,attribute}.rs` | The bus consumer | `ReconstructConsumer`, `ConsumerParts`, `Handled`, `ConsumeError`, `run`, `group`, `subjects`, `GROUP`, `attribute`, `derive_parent`, `corroborated` |
-| `crates/reconstruct/migrations/000{1,2}_*.sql` | Schema `reconstruct` | — |
+| `crates/reconstruct/migrations/000{1,2,3}_*.sql` | Schema `reconstruct`: agents, conversations, seen messages | — |
 | `src/tests/` | Tests by area (paths below) | — |
 
 ## Tests
@@ -183,6 +227,10 @@ stable per-corpus API key.
   evidence, system turns, and the fixture regressions (interleaved re-runs,
   a rewritten early tool result forking at the rewrite, a resumed session
   and a compact boundary).
+- `tests::seen`: the seen-message set on both stores (Postgres gated):
+  a restart replaying earlier history, a later replayed message, separate
+  agents, a repeat inside one conversation, a replayed own output, a merged
+  cluster, expiry and the Postgres sweep, and the config's checks.
 - `tests::thread_props`: generated harness scripts (continuations,
   retries, branches, rewrites, system changes and mid-array system turns,
   failures, compactions, a two-agent cluster) with an oracle checking every
@@ -214,6 +262,11 @@ stable per-corpus API key.
 - Harness claims and labels are never read by `resolve`.
 - One threading call is atomic; a second call for an exchange returns the
   first outcome.
+- A delta's new inputs never list a message the cluster saw in another
+  conversation within the retention; its output is never withheld
+  (INV-1100). The stored history keeps every request message in place, so
+  a conversation's history is its deltas' request suffixes, not their
+  new inputs alone (INV-152, 390).
 - Evidence paths: `crosstalk_reconstruct::tests::<area>::<fn>`.
 - Not yet evidenced (still `agent = "false"`): the store-level `dst`
   invariants INV-141, 144, 161, 508, 540, 608, 612.

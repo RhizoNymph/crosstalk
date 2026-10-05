@@ -17,6 +17,7 @@ crosstalk-gateway = { path = "../gateway" }
 crosstalk-ingress = { path = "../ingress" }
 crosstalk-memory = { path = "../memory" }
 crosstalk-provenance = { path = "../provenance" }
+crosstalk-reconstruct = { path = "../reconstruct" }
 crosstalk-surface = { path = "../surface" }
 crosstalk-transport = { path = "../transport" }
 serde_json.workspace = true

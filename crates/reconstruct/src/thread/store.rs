@@ -21,6 +21,7 @@ use crosstalk_spec::observed::client::UpstreamId;
 use crosstalk_spec::observed::conversation::Conversation;
 use crosstalk_spec::observed::exchange::ResponseId;
 use crosstalk_spec::observed::message::Role;
+use crosstalk_spec::support::Timestamp;
 use serde::{Deserialize, Serialize};
 
 pub use super::history::Entry;
@@ -49,6 +50,8 @@ pub enum RequestKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ThreadInput {
     pub exchange: ExchangeId,
+    /// When the exchange started: the time its messages are seen at.
+    pub at: Timestamp,
     /// The agent the exchange was attributed to.
     pub agent: AgentId,
     /// Every agent of the attributed agent's cluster (its canonical agent
