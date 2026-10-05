@@ -10,12 +10,10 @@ workspace = true
 
 [dependencies]
 anyhow = "=1.0.104"
-crosstalk-api = { path = "../crates/api" }
+crosstalk-api = { path = "../crates/api", features = ["world"] }
 crosstalk-client = { path = "../crates/client" }
-crosstalk-memory = { path = "../crates/memory" }
 crosstalk-spec = { path = "../spec" }
 crosstalk-surface = { path = "../crates/surface" }
-crosstalk-transport = { path = "../crates/transport" }
 crosstalk-world = { path = "../crates/world" }
 futures-core = { version = "=0.3.34", default-features = false }
 jiff = "=0.2.37"

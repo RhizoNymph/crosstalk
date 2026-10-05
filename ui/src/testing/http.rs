@@ -1,36 +1,31 @@
-//! A real HTTP server in this process for the http backend's tests: the
-//! world's surface (`crosstalk_api::InProcess` over the memory stores,
-//! seeded by `crosstalk-world`, as the world backend runs it) served by
-//! `crosstalk_api::http` on an ephemeral port, with a fixed bearer token
-//! per world operator, and the UI's router over a `crosstalk_client`
-//! client of it.
+//! A real HTTP server in this process for the http backend's tests:
+//! `crosstalk_api::world` seeds the world into the in-process surface (as
+//! the world backend does) and serves it on `127.0.0.1:0` with a fixed
+//! bearer token per world operator; the UI's router reads it through a
+//! `crosstalk_client` client.
 //!
 //! ```text
-//! UI router ─▶ AppBackend::Http(HttpClient) ──HTTP──▶ HttpApi (Auth: StaticTokens) ─▶ Surface<MemoryStores>
+//! UI router ─▶ AppBackend::Http(HttpClient) ──HTTP──▶ serve_world (StaticTokens) ─▶ Surface<MemoryStores>
 //! ```
 
 use std::sync::Arc;
 
-use crosstalk_api::InProcess;
-use crosstalk_api::http::{
-    Auth, BearerToken as ServerToken, HttpApi, HttpConfig, StaticTokens, bind, serve,
-};
+use crosstalk_api::http::BearerToken as ServerToken;
+use crosstalk_api::world::{self, seed_world, serve_world};
 use crosstalk_client::{BaseUrl, BearerToken, ClientConfig, HttpClient};
 use crosstalk_spec::ids::{ConfigHash, OperatorId};
 use crosstalk_spec::interfaces::l8_surface::operators::{
-    AccessConfig, OperatorConfig, OperatorDirectory, OperatorStore, RequestIdentity,
+    AccessConfig, OperatorStore, RequestIdentity,
 };
 use crosstalk_spec::interfaces::l8_surface::{Caller, QueryApi};
 use crosstalk_spec::support::Blake3;
 use crosstalk_world::config::{OPERATOR_ONCALL, OPERATOR_RESEARCHER};
-use tokio::sync::oneshot;
-use tokio::task::JoinHandle;
 use topcoat::router::Router;
 
 use super::SEED;
 use crate::backend::AppBackend;
 use crate::backend::http::identity::{IdentityError, resolve};
-use crate::backend::world::{WorldBackend, WorldSurface};
+use crate::backend::world::{WorldSurface, options};
 use crate::config::{Access, OperatorPick};
 use crate::identity::Identity;
 use crate::url::ulid::UlidId;
@@ -46,37 +41,17 @@ pub const UNKNOWN_TOKEN: &str = "ui-http-test-unknown-0123456789";
 pub struct HttpWorld {
     pub base: BaseUrl,
     pub surface: Arc<WorldSurface>,
-    in_process: InProcess,
-    stop: oneshot::Sender<()>,
-    server: JoinHandle<()>,
+    served: world::HttpWorld,
 }
 
 impl HttpWorld {
-    /// Seeds the world into an in-process surface and serves it over HTTP
-    /// on `127.0.0.1:0`.
+    /// Seeds the world and serves it over HTTP on `127.0.0.1:0`.
     pub async fn start() -> Self {
-        let (world, in_process) = WorldBackend::start(SEED).await.expect("world starts");
-        let researcher = in_process
-            .caller(RequestIdentity::Verified(OPERATOR_RESEARCHER))
+        let seeded = seed_world(options(SEED).expect("world options"))
             .await
-            .expect("the researcher's caller");
-        let surface = Arc::clone(&in_process.surface);
-        // The server authenticates against the surface's own directory.
-        let current = surface
-            .operators(&researcher)
-            .await
-            .expect("operators")
-            .into_iter()
-            .filter(|o| !o.permissions.is_empty())
-            .map(|o| OperatorConfig {
-                id: o.id,
-                name: o.name,
-                permissions: o.permissions,
-            })
-            .collect();
-        let (directory, _) = OperatorDirectory::load(None, &AccessConfig::Authenticated(current))
-            .expect("directory");
-        let tokens = StaticTokens::new([
+            .expect("world seeds");
+        let surface = Arc::clone(&seeded.in_process.surface);
+        let tokens = vec![
             (
                 ServerToken::new(RESEARCHER_TOKEN).expect("token"),
                 OPERATOR_RESEARCHER,
@@ -85,33 +60,12 @@ impl HttpWorld {
                 ServerToken::new(ONCALL_TOKEN).expect("token"),
                 OPERATOR_ONCALL,
             ),
-        ]);
-        let present = surface.present(&researcher).await.expect("present");
-        let api = HttpApi::new(
-            Arc::clone(&surface),
-            Auth::fixed(directory, tokens),
-            HttpConfig {
-                frame_retention: present.frame_retention_micros,
-                clock: world.clock(),
-            },
-        );
-        let listener = bind(([127, 0, 0, 1], 0).into()).await.expect("bind");
-        let addr = listener.local_addr().expect("local addr");
-        let (stop, stopped) = oneshot::channel::<()>();
-        let server = tokio::spawn(async move {
-            let shutdown = async move {
-                let _ = stopped.await;
-            };
-            serve(listener, api.router(), shutdown)
-                .await
-                .expect("the api serves");
-        });
+        ];
+        let served = serve_world(seeded, tokens).await.expect("the api serves");
         Self {
-            base: BaseUrl::parse(&format!("http://{addr}")).expect("base url"),
+            base: BaseUrl::parse(&served.base_url()).expect("base url"),
             surface,
-            in_process,
-            stop,
-            server,
+            served,
         }
     }
 
@@ -137,7 +91,9 @@ impl HttpWorld {
     /// The researcher's caller on the surface itself, for arranging state
     /// behind the server's back.
     pub async fn researcher(&self) -> Caller {
-        self.in_process
+        self.served
+            .world
+            .in_process
             .caller(RequestIdentity::Verified(OPERATOR_RESEARCHER))
             .await
             .expect("caller")
@@ -152,7 +108,7 @@ impl HttpWorld {
             .await
             .expect("present")
             .now;
-        let mut operators = self.in_process.stores.operators.clone();
+        let mut operators = self.served.world.in_process.stores.operators.clone();
         OperatorStore::load(
             &mut operators,
             config,
@@ -165,9 +121,7 @@ impl HttpWorld {
 
     /// Stops the server, then the surface.
     pub async fn stop(self) {
-        let _ = self.stop.send(());
-        let _ = self.server.await;
-        self.in_process.shutdown().await;
+        self.served.shutdown().await;
     }
 }
 
