@@ -4,8 +4,9 @@
 //! ```text
 //! {"kind":"header","version":2,"world":"swarm-<run>",…}          first line, once
 //! {"kind":"transmission",…}   another agent's page version reached the reader
-//! {"kind":"self_read",…}      the same fields; writer == reader
-//! {"kind":"reread",…}         the same fields; the reader had read this version before
+//! {"kind":"self_read",…}      the same fields; writer == reader (always, even on a repeat read)
+//! {"kind":"reread",…}         the same fields; another agent's version the reader already
+//!                             read earlier in the same session
 //! {"kind":"miss",…}           a read that found no page
 //! {"kind":"agent_cluster",…}  the agents sharing one API key
 //! ```
@@ -19,6 +20,12 @@
 //! - `writer_turn` is the request whose response held the `PUT`
 //!   `http_request` tool use; `reader_turn` is the reader's first request
 //!   carrying the `GET`'s tool result.
+//! - Names are opaque (`agent-NNN`, `<topic>-<n>` today); nothing parses
+//!   them. `run` is a ULID; `at_unix_ms` is `started_at_unix_ms + at_ms`;
+//!   `written_at_unix_ms` is when the `PUT`'s response reached the writer.
+//! - No row is written for a read whose write event never arrived (the
+//!   swarm counts these as `unattributed_reads`), a read whose follow-up
+//!   request was never sent, or a failed `PUT`.
 //! - `content.blake3` and `content.sha256` hash the page body's bytes,
 //!   which are exactly the tool result's content; `content.at` indexes the
 //!   wire `messages` array of the reader's request.

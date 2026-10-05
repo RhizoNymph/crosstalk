@@ -532,3 +532,170 @@ fn only_a_self_read_control_names_one_agent_twice() {
         Err(InvalidLabel::SelfTransmission(key("a001")))
     );
 }
+
+/// Lines from a real local swarm run (synthetic swarm output), verbatim.
+const SAMPLE: &str = r#"{"kind":"header","version":2,"world":"swarm-01M45MWNEKJ1H4M3F2A2QECGDQ","run":"01M45MWNEKJ1H4M3F2A2QECGDQ","seed":7,"agents":4,"keys":2,"agents_per_key":3,"claude_code_shape":false,"started_at_unix_ms":1791191045587,"gateway_url":"http://127.0.0.1:18070","wiki_url":"http://127.0.0.1:18091"}
+{"kind":"agent_cluster","world":"swarm-01M45MWNEKJ1H4M3F2A2QECGDQ","key_group":0,"agents":["agent-000","agent-001","agent-002"]}
+{"kind":"transmission","world":"swarm-01M45MWNEKJ1H4M3F2A2QECGDQ","writer":"agent-000","reader":"agent-002","page":"rate-limiting-0","version":2,"writer_key_group":0,"reader_key_group":0,"writer_session":"9c0870f8-0dc3-49b1-8a44-2f50eccb87fd","writer_turn":0,"writer_tool_use_id":"toolu_01udn93Yxd0Sio7QLxy2g6vM","reader_session":"7367f467-b421-4961-848f-15dd3e5a1061","reader_turn":1,"reader_tool_use_id":"toolu_01VF5dXLfUFzgmMPG8AaCWKl","route":{"kind":"channel","url":"http://127.0.0.1:18091/pages/rate-limiting-0"},"carrier":"tool_result","read_tool":{"name":"http_request","input":{"method":"GET","url":"http://127.0.0.1:18091/pages/rate-limiting-0"}},"content":{"blake3":"3a8e56e9893d2d4abfcc57cd8bfb0394702a760ec24c998dfe3b33a3a1081873","sha256":"8f1953d2eb28b723a1e75bbc807e3cb6747de2f93d93ce49897ab6c5e4196803","excerpt":"revisit per-tenant quota after the next release. We measured leaky bucket on the","at":{"message":2,"block":0,"tool_use_id":"toolu_01VF5dXLfUFzgmMPG8AaCWKl"}},"at_ms":308,"at_unix_ms":1791191045895,"written_at_unix_ms":1791191045859,"read_at_unix_ms":1791191045895}
+"#;
+
+#[test]
+fn a_real_swarm_run_parses_exactly() {
+    use crosstalk_eval::datasets::swarm_truth::schema::{TruthCarrier, TruthRoute};
+    let truth = truth_file::read(Cursor::new(SAMPLE)).expect("the sample parses");
+    let header = &truth.header;
+    assert_eq!(header.version, 2);
+    assert_eq!(header.world, "swarm-01M45MWNEKJ1H4M3F2A2QECGDQ");
+    assert_eq!(header.run, "01M45MWNEKJ1H4M3F2A2QECGDQ");
+    assert_eq!(
+        (
+            header.seed,
+            header.agents,
+            header.keys,
+            header.agents_per_key
+        ),
+        (7, 4, 2, 3)
+    );
+    assert!(!header.claude_code_shape);
+    assert_eq!(header.started_at_unix_ms, 1_791_191_045_587);
+    assert_eq!(header.gateway_url, "http://127.0.0.1:18070");
+    assert_eq!(header.wiki_url, "http://127.0.0.1:18091");
+    assert_eq!(truth.rows.len(), 2);
+    let Row::Cluster(cluster) = &truth.rows[0].row else {
+        panic!("line 2 is a key group");
+    };
+    assert_eq!(cluster.key_group, 0);
+    assert_eq!(cluster.agents, ["agent-000", "agent-001", "agent-002"]);
+    let Row::Delivery { kind, row } = &truth.rows[1].row else {
+        panic!("line 3 is a delivery");
+    };
+    assert_eq!(*kind, truth_file::DeliveryKind::Transmission);
+    assert_eq!(truth.rows[1].line, 3);
+    assert_eq!(
+        (row.writer.as_str(), row.reader.as_str()),
+        ("agent-000", "agent-002")
+    );
+    assert_eq!((row.page.as_str(), row.version), ("rate-limiting-0", 2));
+    assert_eq!((row.writer_key_group, row.reader_key_group), (0, 0));
+    assert_eq!(row.writer_session, "9c0870f8-0dc3-49b1-8a44-2f50eccb87fd");
+    assert_eq!(
+        (row.writer_turn, row.writer_tool_use_id.as_str()),
+        (0, "toolu_01udn93Yxd0Sio7QLxy2g6vM")
+    );
+    assert_eq!(row.reader_session, "7367f467-b421-4961-848f-15dd3e5a1061");
+    assert_eq!(
+        (row.reader_turn, row.reader_tool_use_id.as_str()),
+        (1, "toolu_01VF5dXLfUFzgmMPG8AaCWKl")
+    );
+    assert_eq!(
+        row.route,
+        TruthRoute::Channel {
+            url: "http://127.0.0.1:18091/pages/rate-limiting-0".to_owned()
+        }
+    );
+    assert_eq!(row.carrier, TruthCarrier::ToolResult);
+    assert_eq!(row.read_tool.name, "http_request");
+    assert_eq!(
+        row.read_tool.input,
+        json!({"method": "GET", "url": "http://127.0.0.1:18091/pages/rate-limiting-0"})
+    );
+    assert_eq!(
+        row.content.blake3.to_string(),
+        "3a8e56e9893d2d4abfcc57cd8bfb0394702a760ec24c998dfe3b33a3a1081873"
+    );
+    assert_eq!(
+        row.content.sha256.to_string(),
+        "8f1953d2eb28b723a1e75bbc807e3cb6747de2f93d93ce49897ab6c5e4196803"
+    );
+    assert_eq!(
+        row.content.excerpt,
+        "revisit per-tenant quota after the next release. We measured leaky bucket on the"
+    );
+    assert_eq!(
+        (
+            row.content.at.message,
+            row.content.at.block,
+            row.content.at.tool_use_id.as_str()
+        ),
+        (2, 0, "toolu_01VF5dXLfUFzgmMPG8AaCWKl")
+    );
+    assert_eq!(row.at_ms, 308);
+    assert_eq!(row.at_unix_ms, header.started_at_unix_ms + row.at_ms);
+    assert_eq!(row.written_at_unix_ms, 1_791_191_045_859);
+    assert_eq!(row.read_at_unix_ms, 1_791_191_045_895);
+    // Re-encoding gives back the same values, key for key.
+    for (line, original) in SAMPLE.lines().enumerate() {
+        let parsed: crosstalk_eval::datasets::swarm_truth::schema::TruthLine =
+            serde_json::from_str(original).expect("a line");
+        let again: serde_json::Value = serde_json::to_value(&parsed).expect("encode");
+        let original: serde_json::Value = serde_json::from_str(original).expect("json");
+        assert_eq!(again, original, "line {}", line + 1);
+    }
+}
+
+/// The key sets crates/demo pins for `self_read`, `reread` and `miss`
+/// (`tests/truth.rs`, `rows_have_exactly_the_v2_keys`) decode.
+#[test]
+fn every_v2_kind_decodes_with_the_pinned_keys() {
+    let rows = fixture::truth_rows();
+    let self_read = rows[3].clone();
+    let reread = rows[4].clone();
+    let miss = rows[5].clone();
+    let delivered = [
+        "kind",
+        "world",
+        "writer",
+        "reader",
+        "page",
+        "version",
+        "writer_key_group",
+        "reader_key_group",
+        "writer_session",
+        "writer_turn",
+        "writer_tool_use_id",
+        "reader_session",
+        "reader_turn",
+        "reader_tool_use_id",
+        "route",
+        "carrier",
+        "read_tool",
+        "content",
+        "at_ms",
+        "at_unix_ms",
+        "written_at_unix_ms",
+        "read_at_unix_ms",
+    ];
+    let miss_keys = [
+        "kind",
+        "world",
+        "reader",
+        "reader_key_group",
+        "page",
+        "reader_session",
+        "reader_turn",
+        "reader_tool_use_id",
+        "read_tool",
+        "at_ms",
+        "at_unix_ms",
+    ];
+    let keys = |value: &serde_json::Value| {
+        let mut keys: Vec<String> = value
+            .as_object()
+            .expect("an object")
+            .keys()
+            .cloned()
+            .collect();
+        keys.sort();
+        keys
+    };
+    let sorted = |names: &[&str]| {
+        let mut names: Vec<String> = names.iter().map(|name| (*name).to_owned()).collect();
+        names.sort();
+        names
+    };
+    assert_eq!(keys(&self_read), sorted(&delivered));
+    assert_eq!(keys(&reread), sorted(&delivered));
+    assert_eq!(keys(&miss), sorted(&miss_keys));
+    let truth = read_rows(&[fixture::header(), self_read, reread, miss]).expect("decodes");
+    assert_eq!(truth.rows.len(), 3);
+}
