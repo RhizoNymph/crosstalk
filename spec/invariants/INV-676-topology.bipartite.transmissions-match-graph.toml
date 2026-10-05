@@ -12,7 +12,7 @@ whenever routing chose Delegation or Direct over Channel.
 """
 
 [evidence]
-property = "crosstalk_topology::props::channel_topology_transmissions_match_graph"
+property = "crosstalk_topology::props::graph::channel_topology_transmissions_match_graph"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

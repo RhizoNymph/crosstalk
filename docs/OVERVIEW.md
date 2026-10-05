@@ -34,7 +34,9 @@ Overview:
     ContentMatched, the fingerprint index and L4's records on Postgres) is
     implemented but not yet wired into the gateway (provenance). L5 flow
     has its extractors, correlator and consumer (flow_extract,
-    flow_correlator); L6 and L7 are partial. The L8 surface service
+    flow_correlator) and its Postgres stores (flow_store); L7 has its
+    Postgres edge store and bus consumer (topology_store); L6 is partial.
+    The L8 surface service
     (crosstalk-surface: QueryApi, OperatorActions, LiveFeed, export and
     the graphs' node facts, generic over the spec's store traits) is
     implemented and runs in process over the reference stores through
@@ -594,6 +596,34 @@ Features Index:
       - crates/flow/migrations/0001_flow_store.sql
     depends_on: [store, memory, channel_semantics]
     doc: docs/features/flow_store.md
+  topology_store:
+    description: >
+      crosstalk-topology (roadmap P6.1): the spec's EdgeStore on plain
+      Postgres (decision D3) as PgEdgeStore, and the topology bus consumer.
+      Edge buckets per topic version and access buckets per resource live in
+      range-partitioned tables (partitions made on demand); one row per
+      applied contribution and access makes applies idempotent and backs
+      the drill-down and FalseDetections::Exclude. Writes lock one state
+      row (FOR SHARE for applies, FOR UPDATE for activation, retention and
+      the watermark), so no bucket the exposed watermark finalizes changes;
+      reads run in one REPEATABLE READ snapshot and resolve agents,
+      channels, node facts and the topic version (spec TopicCatalog) at
+      query time, folding in Rust. Events the store decides go to a
+      transactional outbox, relayed after commit; traffic rows coalesce
+      into one window per drain for Changed::Traffic (a marked hook until
+      the follow-mode spec lands). consumer::run (group "topology") applies
+      TransmissionClassified, AccessRecorded, VerdictSet and the version
+      events to any EdgeStore, publishes EdgeUpdated before acking, and
+      recomputes the watermark every bucket width. Model-tested against
+      crosstalk-memory's InMemoryEdgeStore.
+    entry_points:
+      - crates/topology/src/lib.rs
+      - crates/topology/src/store/mod.rs
+      - crates/topology/src/consumer.rs
+      - crates/topology/src/outbox.rs
+      - crates/topology/migrations/0001_topology.sql
+    depends_on: [type_spec, store, memory, transport, channel_semantics]
+    doc: docs/features/topology_store.md
   sim:
     description: >
       crosstalk-sim, the deterministic simulation kit for every dst

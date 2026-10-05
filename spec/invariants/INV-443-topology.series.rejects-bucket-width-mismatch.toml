@@ -15,4 +15,4 @@ that do not line up with its buckets.
 unit = "crosstalk_topology::tests::series_rejects_grid_for_other_bucket_width"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }

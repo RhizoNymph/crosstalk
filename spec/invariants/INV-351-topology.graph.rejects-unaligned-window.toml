@@ -15,8 +15,8 @@ requested range to bucket boundaries before asking.
 
 [evidence]
 unit = "crosstalk_topology::tests::graph_rejects_window_cutting_a_bucket"
-property = "crosstalk_topology::props::graph_accepts_exactly_aligned_windows"
+property = "crosstalk_topology::props::graph::graph_accepts_exactly_aligned_windows"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
-property = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }
+property = { agent = "true", human = "false" }

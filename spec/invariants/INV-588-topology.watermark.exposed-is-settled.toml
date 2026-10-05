@@ -12,7 +12,7 @@ an advance that a restart would forget.
 """
 
 [evidence]
-property = "crosstalk_topology::props::advance_watermark_exposes_settled"
+property = "crosstalk_topology::props::graph::advance_watermark_exposes_settled"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

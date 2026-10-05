@@ -13,7 +13,7 @@ the total, so every remaining share renormalizes.
 """
 
 [evidence]
-property = "crosstalk_topology::props::merge_rekeys_sums_and_drops_edges"
+property = "crosstalk_topology::props::graph::merge_rekeys_sums_and_drops_edges"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

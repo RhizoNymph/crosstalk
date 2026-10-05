@@ -15,4 +15,4 @@ see what was late.
 unit = "crosstalk_topology::tests::apply_into_final_bucket_is_late"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }

@@ -667,7 +667,16 @@ dependencies = [
 name = "crosstalk-topology"
 version = "0.1.0"
 dependencies = [
+ "crosstalk-memory",
  "crosstalk-spec",
+ "crosstalk-store",
+ "crosstalk-transport",
+ "proptest",
+ "serde_json",
+ "sqlx",
+ "thiserror",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
