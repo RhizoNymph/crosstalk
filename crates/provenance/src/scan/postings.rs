@@ -35,8 +35,10 @@ fn usize_of(offset: u32) -> usize {
     usize::try_from(offset).unwrap_or(usize::MAX)
 }
 
-/// Whether a span is posted: originated (not yet indexed when the writes
-/// are computed) or forwarded.
+/// Whether a span takes part in a run: originated (not yet indexed when the
+/// writes are computed) or forwarded. A forwarded span is a member even
+/// with forwarding off, so the remainders around it are winnowed with it;
+/// the k-grams it holds are then posted nowhere.
 fn posted(span: &Span) -> bool {
     span.state == SpanState::Originated || span.state.is_forwarded()
 }

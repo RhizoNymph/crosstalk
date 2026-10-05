@@ -1192,12 +1192,13 @@ Features Index:
       decode layer of the exchange's inputs (relayed) and leaves the rest
       originated; the scanner, which looks up new inputs, the new system
       prompt and the output (k-grams, plus exact hashes of short token
-      runs for whole values of 16 to 46 characters), resolves originated
+      runs for whole values of 24 to 46 characters), resolves originated
       text against the index (hidden relays become ReaderOutput matches
       under stricter length and frequency rules, boilerplate Common) and
       picks carrier, kind, read range and matched bytes; the index holds
-      originated spans and forwarded ones (relayed from the agent's own
-      input, indexed under the forwarder, state left Relayed), with the
+      originated spans and, with forwarding on (off by default), forwarded
+      ones (relayed from the agent's own input, indexed under the
+      forwarder, state left Relayed), with the
       k-grams an originated remainder mostly covers next to a forward
       posted under it; the engine, which
       records exchanges from ExchangeCaptured and scans each

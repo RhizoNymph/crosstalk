@@ -11,7 +11,7 @@ use crosstalk_testkit::build::message::{
 };
 
 use super::fixtures::{RETENTION, Turn, World, at, brief_matches, brief_spans, config};
-use crate::config::{IndexSettings, ProvenanceConfig, ReaderOutputRules, ShortSpans};
+use crate::config::{IndexSettings, ProvenanceConfig, ShortSpans};
 use crate::store::{Forwarding, ProvenanceStore, SpanRecord};
 
 /// The default shingles with the test retention and `cutoff`.
@@ -33,7 +33,8 @@ fn text_of(output: &str, record: &SpanRecord) -> String {
     output[range.start() as usize..range.end() as usize].to_owned()
 }
 
-/// `provenance.index.remainder-around-relay-matchable`: Bob's reply quotes
+/// `provenance.index.remainder-around-relay-matchable` (forwarding off, the
+/// default): Bob's reply quotes
 /// a phrase of Alice's message in its middle (SALT exchange
 /// `01KDVDNA0C9RCBYW8FYCB7ZR3N`). The quote is forwarded, the remainder
 /// after it is shorter than a shingle, and Alice reading the whole reply
@@ -84,16 +85,17 @@ async fn originated_remainder_around_a_relayed_middle_matches() {
         .unwrap_or_else(|| panic!("no match on the remainder: {}", brief_matches(&matches)));
     assert_eq!(on_remainder.content.origin_agent(), bob);
     assert_eq!(on_remainder.content.carrier(), &Carrier::UserTurn);
+    // Forwarding is off by default: the quote itself is not indexed.
     assert!(
         matches
             .iter()
-            .any(|stored| stored.content.origin() == forwarded.span.id),
-        "the forwarded quote is matched too: {}",
+            .all(|stored| stored.content.origin() != forwarded.span.id),
+        "{}",
         brief_matches(&matches)
     );
 }
 
-/// `provenance.match.short-span-exact`: a whole text part of 16 to 46
+/// `provenance.match.short-span-exact`: a whole text part of 24 to 46
 /// characters is matched by its exact hash where it is read whole, as
 /// `Exact` verbatim and `Normalized` with other case or spacing.
 #[tokio::test]
@@ -183,7 +185,7 @@ async fn short_floor_is_respected_and_configurable() {
     let mut world = World::new(real(50));
     let (a, b) = (world.agent(), world.agent());
     let tiny = "see you at noon";
-    assert!(tiny.len() < 16);
+    assert!(tiny.len() < 24);
     let wrote = world
         .run(Turn::new(a, at(1)).output(assistant_text(tiny)))
         .await;
@@ -265,46 +267,39 @@ async fn short_reader_output_yields_no_match_but_tool_results_do() {
     assert_eq!(matches[0].content.origin(), origin.span.id);
 }
 
-/// `provenance.match.reader-output-strict`, frequency: text observed in
-/// more texts than the reader-output cutoff (5) but fewer than the index
-/// cutoff (50) yields no `ReaderOutput` match; a tool result still does.
-/// Lowering the rules restores the match.
+/// `provenance.match.cross-agent-spread` with
+/// `provenance.match.reader-output-strict`, a broadcast: one agent
+/// originates a distinctive message of 64 characters or more; five agents
+/// later (beyond the spread window) reproduce it with no observed read.
+/// Each copy yields a `ReaderOutput` match to the first writer.
 #[tokio::test]
-async fn frequent_reader_output_yields_no_match_but_tool_results_do() {
-    let text = super::fixtures::sentence("saffron");
-    let run = |rules: ReaderOutputRules| {
-        let text = text.clone();
-        async move {
-            let mut world = World::new(config().with_reader_output(rules));
-            let (a, b, c) = (world.agent(), world.agent(), world.agent());
-            let origin = super::scenarios::originate(&mut world, a, &text, 1).await;
-            for n in 0..6 {
-                let reader = world.agent();
-                world
-                    .run(Turn::new(reader, at(2)).input(user_text(&format!("note {n}: {text}"))))
-                    .await;
-            }
-            let wrote = world
-                .run(Turn::new(b, at(3)).output(assistant_text(&text)))
-                .await;
-            let output = world.matches_of(wrote.exchange);
-            let read = world
-                .run(Turn::new(c, at(4)).input(tool_result("call_1", &text)))
-                .await;
-            let tool = world.matches_of(read.exchange);
-            assert!(
-                tool.iter()
-                    .any(|stored| stored.content.origin() == origin.span.id),
-                "{}",
-                brief_matches(&tool)
-            );
-            output
+async fn broadcast_copies_match_the_first_writer() {
+    let mut world = World::new(real(50));
+    let first = world.agent();
+    let message =
+        "Meet at the old boathouse at dusk; bring the ledger and the brass key, tell no one else.";
+    assert!(message.len() >= 64);
+    let origin = super::scenarios::originate(&mut world, first, message, 1).await;
+    for n in 0..5u64 {
+        let copier = world.agent();
+        let wrote = world
+            .run(
+                Turn::new(copier, at(120 + 60 * n))
+                    .input(user_text("carry on with your task"))
+                    .output(assistant_text(message)),
+            )
+            .await;
+        let matches = world.matches_of(wrote.exchange);
+        assert!(
+            matches
                 .iter()
-                .any(|stored| stored.content.carrier() == &Carrier::ReaderOutput)
-        }
-    };
-    assert!(!run(ReaderOutputRules::default()).await);
-    assert!(run(ReaderOutputRules::new(8, 50)).await);
+                .any(|stored| stored.content.origin() == origin.span.id
+                    && stored.content.carrier() == &Carrier::ReaderOutput
+                    && stored.content.origin_agent() == first),
+            "copy {n}: {}",
+            brief_matches(&matches)
+        );
+    }
 }
 
 /// `provenance.index.forwarded-indexed`: an agent copies a document from
@@ -314,7 +309,7 @@ async fn frequent_reader_output_yields_no_match_but_tool_results_do() {
 /// evicted like an originated span, and still read back.
 #[tokio::test]
 async fn forwarded_text_is_indexed_under_the_forwarder() {
-    let mut world = World::new(real(50));
+    let mut world = World::new(real(50).with_forwarding(true));
     let (a, b) = (world.agent(), world.agent());
     let document =
         "Quarterly figures: revenue rose eleven percent while support tickets fell by a third.";
@@ -417,4 +412,164 @@ async fn span_relays_are_not_indexed() {
             .expect("read")
             .is_empty()
     );
+}
+
+/// Forwarding off (the default): a forwarded span is neither indexed nor
+/// returned by `SpanIndex::spans`, and a peer's read of it matches nothing.
+#[tokio::test]
+async fn forwarded_text_is_not_indexed_when_forwarding_is_off() {
+    let mut world = World::new(real(50));
+    let (a, b) = (world.agent(), world.agent());
+    let document =
+        "Quarterly figures: revenue rose eleven percent while support tickets fell by a third.";
+    let forwarded = world
+        .run(
+            Turn::new(a, at(1))
+                .input(tool_result("call_1", document))
+                .output(assistant_text(&format!("Forwarding this: {document}"))),
+        )
+        .await;
+    let spans = spans_of(&world, forwarded.exchange).await;
+    let span = spans
+        .iter()
+        .find(|record| record.span.state.is_forwarded())
+        .unwrap_or_else(|| panic!("a forwarded span: {}", brief_spans(&spans)))
+        .clone();
+    assert_eq!(span.forward, None);
+    assert_eq!(span.index_seq, None);
+    let read = world
+        .run(Turn::new(b, at(2)).input(user_text(document)))
+        .await;
+    assert!(
+        world
+            .matches_of(read.exchange)
+            .iter()
+            .all(|stored| stored.content.origin() != span.span.id)
+    );
+    let batch = IdBatch::new([span.span.id]).expect("one id");
+    assert!(
+        SpanIndex::spans(&world.store, &batch)
+            .await
+            .expect("read")
+            .is_empty()
+    );
+}
+
+/// `provenance.match.reader-output-strict`, shaped like the node0 bench's
+/// 749 false positives: unrelated agents' outputs sharing three phrase
+/// fragments of 34 to 46 bytes give no `ReaderOutput` match.
+#[tokio::test]
+async fn shared_phrase_fragments_give_no_reader_output_match() {
+    let mut world = World::new(real(50));
+    let (a, b) = (world.agent(), world.agent());
+    let fragments = [
+        "start by exploring the repository structure",
+        "run the full test suite before committing",
+        "check the configuration file for typos now",
+    ];
+    for fragment in fragments {
+        assert!((34..=46).contains(&fragment.len()), "{fragment}");
+    }
+    let first = format!(
+        "Plan for the ledger fix: {}. Then patch the parser; {}, and finally {}.",
+        fragments[0], fragments[1], fragments[2]
+    );
+    let second = format!(
+        "Onboarding notes for the wiki: {}; afterwards draft the summary. Also {}. Lastly {}!",
+        fragments[0], fragments[1], fragments[2]
+    );
+    world
+        .run(Turn::new(a, at(1)).output(assistant_text(&first)))
+        .await;
+    let wrote = world
+        .run(Turn::new(b, at(2)).output(assistant_text(&second)))
+        .await;
+    let matches = world.matches_of(wrote.exchange);
+    assert!(
+        matches
+            .iter()
+            .all(|stored| stored.content.carrier() != &Carrier::ReaderOutput),
+        "{}",
+        brief_matches(&matches)
+    );
+}
+
+/// `provenance.match.cross-agent-spread`, boilerplate: five agents
+/// originate the same template within the spread window (no clear first
+/// writer), and a reader of it gets no match. The same template written by
+/// one agent and copied by others later, beyond the window, still matches
+/// its first writer.
+#[tokio::test]
+async fn template_originated_together_is_not_matched_but_a_broadcast_is() {
+    let template = "Please review the plan now!";
+    let mut world = World::new(real(50));
+    for n in 0..5u64 {
+        let agent = world.agent();
+        world
+            .run(Turn::new(agent, at(1 + n)).output(assistant_text(template)))
+            .await;
+    }
+    let reader = world.agent();
+    let read = world
+        .run(Turn::new(reader, at(10)).input(user_text(template)))
+        .await;
+    let matches = world.matches_of(read.exchange);
+    assert!(matches.is_empty(), "{}", brief_matches(&matches));
+
+    let mut world = World::new(real(50));
+    let first = world.agent();
+    world
+        .run(Turn::new(first, at(1)).output(assistant_text(template)))
+        .await;
+    for n in 0..5u64 {
+        let agent = world.agent();
+        world
+            .run(Turn::new(agent, at(200 + n)).output(assistant_text(template)))
+            .await;
+    }
+    let reader = world.agent();
+    let read = world
+        .run(Turn::new(reader, at(300)).input(user_text(template)))
+        .await;
+    let matches = world.matches_of(read.exchange);
+    assert!(
+        matches
+            .iter()
+            .any(|stored| stored.content.origin_agent() == first),
+        "{}",
+        brief_matches(&matches)
+    );
+}
+
+/// The node0 bench's shape: short template fragments (34 to 46 bytes) that
+/// several unrelated agents write within the window give no match of any
+/// carrier to a reader holding them.
+#[tokio::test]
+async fn short_template_fragments_from_unrelated_agents_give_no_match() {
+    let fragments = [
+        "start by exploring the repository structure",
+        "run the full test suite before committing",
+        "check the configuration file for typos now",
+    ];
+    let mut world = World::new(real(50));
+    for n in 0..4u64 {
+        let agent = world.agent();
+        for (m, fragment) in fragments.iter().enumerate() {
+            world
+                .run(Turn::new(agent, at(1 + n * 3 + m as u64)).output(assistant_text(fragment)))
+                .await;
+        }
+    }
+    let reader = world.agent();
+    for fragment in fragments {
+        let read = world
+            .run(Turn::new(reader, at(30)).input(user_text(fragment)))
+            .await;
+        let matches = world.matches_of(read.exchange);
+        assert!(
+            matches.is_empty(),
+            "{fragment}: {}",
+            brief_matches(&matches)
+        );
+    }
 }

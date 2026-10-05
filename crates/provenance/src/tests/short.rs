@@ -3,7 +3,7 @@
 
 use proptest::prelude::*;
 
-use crate::config::{ConfigError, ProvenanceConfig, ReaderOutputRules, ShortSpans};
+use crate::config::{ConfigError, ProvenanceConfig, ReaderOutputRules, ShortSpans, SpreadRule};
 use crate::fingerprint::hash::{self, Prefix};
 use crate::fingerprint::short::{token_runs, whole};
 use crate::text::normalize;
@@ -40,8 +40,8 @@ fn short_hash_is_pinned_and_never_a_kgram_fingerprint() {
 #[test]
 fn whole_values_outside_the_range_have_no_hash() {
     let spans = ShortSpans::default();
-    assert!(whole(&normalize("fifteen chars!!"), spans).is_none());
-    assert!(whole(&normalize("sixteen chars!!!"), spans).is_some());
+    assert!(whole(&normalize("twenty-three characters"), spans).is_none());
+    assert!(whole(&normalize("twenty-four characters!!"), spans).is_some());
     assert!(whole(&normalize(&"x".repeat(46)), spans).is_some());
     assert!(whole(&normalize(&"x".repeat(47)), spans).is_none());
     assert!(whole(&normalize("   "), spans).is_none());
@@ -68,19 +68,39 @@ fn token_runs_start_and_end_on_boundaries() {
 fn short_config_decodes_and_refuses_bad_ranges() {
     let config: ProvenanceConfig = serde_json::from_str(
         r#"{"short_spans": {"min_chars": 20, "max_chars": 40},
-            "reader_output": {"min_chars": 80, "cutoff": 3}}"#,
+            "reader_output": {"min_chars": 80},
+            "spread": {"agents": 5, "window_secs": 30, "distinctive_chars": 90}}"#,
     )
     .expect("decodes");
     assert_eq!(
         config.short_spans(),
         ShortSpans::new(20, 40).expect("range")
     );
-    assert_eq!(config.reader_output(), ReaderOutputRules::new(80, 3));
+    assert_eq!(config.reader_output(), ReaderOutputRules::new(80));
+    assert_eq!(
+        config.spread(),
+        SpreadRule::new(5, std::time::Duration::from_secs(30), 90).expect("a rule")
+    );
     let defaults = ProvenanceConfig::default();
-    assert_eq!(defaults.short_spans().min_chars(), 16);
+    assert_eq!(defaults.short_spans().min_chars(), 24);
     assert_eq!(defaults.short_spans().max_chars(), 46);
     assert_eq!(defaults.reader_output().min_chars(), 64);
-    assert_eq!(defaults.reader_output().cutoff(), 5);
+    assert!(!defaults.forwarding(), "forwarding is off by default");
+    let on: ProvenanceConfig = serde_json::from_str(r#"{"forwarding": true}"#).expect("decodes");
+    assert!(on.forwarding());
+    assert_eq!(defaults.spread().agents(), 4);
+    assert_eq!(defaults.spread().window().as_secs(), 60);
+    assert_eq!(defaults.spread().distinctive_chars(), 64);
+    for agents in [0, 1] {
+        assert_eq!(
+            SpreadRule::new(agents, std::time::Duration::from_secs(60), 64),
+            Err(ConfigError::SpreadAgents { agents })
+        );
+    }
+    assert!(serde_json::from_str::<ProvenanceConfig>(r#"{"spread": {"agents": 1}}"#).is_err());
+    assert!(
+        serde_json::from_str::<ProvenanceConfig>(r#"{"reader_output": {"cutoff": 5}}"#).is_err()
+    );
     assert_eq!(
         ShortSpans::new(3, 40),
         Err(ConfigError::ShortSpanRange { min: 3, max: 40 })

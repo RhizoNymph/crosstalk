@@ -1,6 +1,6 @@
 [invariant]
 id = "provenance.match.reader-output-strict"
-statement = "A ContentMatch with carrier ReaderOutput is made only for a relayed stretch of at least ReaderOutputRules::min_chars normalized characters (64 by default) with at least one supporting hit fingerprint observed in at most ReaderOutputRules::cutoff texts (5 by default); a stretch failing either rule stays Relayed from the span but yields no match, and matches with any other carrier keep the index cutoff and no length floor."
+statement = "A ContentMatch with carrier ReaderOutput is made only for a relayed stretch of at least ReaderOutputRules::min_chars normalized characters (64 by default) with at least one supporting hit fingerprint that is not boilerplate by the spread rule (provenance.match.cross-agent-spread); a stretch failing either rule stays Relayed from the span but yields no match, and matches with any other carrier keep no length floor."
 kind = "domain"
 property = "postcondition"
 requires = ["unit", "property"]
@@ -11,7 +11,12 @@ mostly domain text both agents derive from the same task: SQL clauses,
 shell idioms, stock phrases (false positives: SALT 1,029, open-swe 2,070,
 lmcache 787). Per-world postings never reach the index cutoff of 50, so
 the index cannot tell such text from a transmission. A reader-output match
-therefore needs a longer stretch and a rarer fingerprint. The stretch is
+therefore needs a longer stretch, and a fingerprint with a clear first
+writer: not one several agents originated together within the spread
+window. A text-count cutoff would be wrong here: when one agent broadcasts
+a distinctive message through a channel the gateway cannot see and others
+copy it later, every copy must still match the first writer, however many
+copies there are. The stretch is
 still classified Relayed from the origin span, so it is never indexed as
 the reader's (provenance.span.originated-absent-from-inputs); only the
 match is withheld. Tool results, user turns and system prompts are visible
@@ -19,7 +24,7 @@ carriers whose reads are evidence on their own, and keep the index's rules.
 """
 
 [evidence]
-unit = ["crosstalk_provenance::tests::match_quality::short_reader_output_yields_no_match_but_tool_results_do", "crosstalk_provenance::tests::match_quality::frequent_reader_output_yields_no_match_but_tool_results_do"]
+unit = ["crosstalk_provenance::tests::match_quality::short_reader_output_yields_no_match_but_tool_results_do", "crosstalk_provenance::tests::match_quality::shared_phrase_fragments_give_no_reader_output_match", "crosstalk_provenance::tests::match_quality::broadcast_copies_match_the_first_writer"]
 property = "crosstalk_provenance::props::unexplained_output_text_matches_as_reader_output"
 
 [evidence-review]

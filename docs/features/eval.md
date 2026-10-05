@@ -1424,7 +1424,9 @@ Reading it:
 `fix/l4-match-quality` implements the decided L4 changes: context k-grams
 for originated text around a forwarded run (INV-1091), the short-span exact
 path (INV-1092), stricter `ReaderOutput` rules (INV-1093) and forwarded
-spans indexed under the forwarder (INV-1090). SALT `--limit 53`, live,
+spans indexed under the forwarder (INV-1090, behind
+`ProvenanceConfig::forwarding`, off by default for the precision cost
+below). SALT `--limit 53`, live,
 release build, run beside the base commit on one machine:
 
 | build | recall | precision | predictions | FP / 1k exchanges | user-turn gate | time |

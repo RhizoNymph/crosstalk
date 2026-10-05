@@ -123,16 +123,17 @@ pub struct SpanRecord {
     /// Set when the span became `Indexed` (or, forwarded, its forwarding
     /// `Indexed`): increasing in indexing order.
     pub index_seq: Option<u64>,
-    /// For a forwarded span (`SpanState::is_forwarded`), its indexing;
-    /// `None` for every other span.
+    /// For a forwarded span (`SpanState::is_forwarded`) committed with
+    /// forwarding on, its indexing; `None` for every other span.
     pub forward: Option<Forwarding>,
 }
 
 impl SpanRecord {
     /// The record `commit_scan` writes for `span`, not indexed yet: a
-    /// forwarded span's forwarding is pending.
-    pub fn committed(span: Span, ordinal: u32) -> Self {
-        let forward = span.state.is_forwarded().then_some(Forwarding::Pending);
+    /// forwarded span's forwarding is pending when `forwarding` is on, and
+    /// absent (the span is never indexed) when it is off.
+    pub fn committed(span: Span, ordinal: u32, forwarding: bool) -> Self {
+        let forward = (forwarding && span.state.is_forwarded()).then_some(Forwarding::Pending);
         Self {
             span,
             ordinal,
@@ -153,6 +154,17 @@ impl SpanRecord {
             _ => None,
         }
     }
+}
+
+/// A copy of an indexed span in another output: a span classified
+/// `Relayed(RelaySource::Span(source))`, the agent whose output holds it,
+/// and its exchange's start. The spread rule counts copies as
+/// originations (`provenance.match.cross-agent-spread`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Relay {
+    pub source: SpanId,
+    pub agent: AgentId,
+    pub at: Timestamp,
 }
 
 /// A stored content match. Its id is its envelope's.
@@ -179,6 +191,9 @@ pub struct ScanCommit {
     pub matches: Vec<StoredMatch>,
     /// Every message the delta listed and how it was scanned.
     pub messages: Vec<(MessageHash, ScannedAs)>,
+    /// Whether forwarded spans are indexed (`ProvenanceConfig::forwarding`):
+    /// their forwarding is recorded pending only then.
+    pub forwarding: bool,
 }
 
 /// What a commit did.
@@ -233,6 +248,14 @@ pub trait ProvenanceStore {
         &self,
         ids: &[SpanId],
     ) -> impl Future<Output = Result<Vec<SpanRecord>, ProvenanceStoreError>> + Send;
+
+    /// Every stored span relayed from one of `sources`
+    /// (`Relayed(RelaySource::Span(s))`), with its agent and its
+    /// exchange's start, by source then time.
+    fn relays(
+        &self,
+        sources: &[SpanId],
+    ) -> impl Future<Output = Result<Vec<Relay>, ProvenanceStoreError>> + Send;
 
     /// One stored span: its exchange, message, part and range.
     fn span(

@@ -13,12 +13,14 @@
 //!  "index": {"cutoff": 50, "retention_secs": 2592000, "shards": 1, "owned": [0]},
 //!  "eviction_interval_secs": 3600, "semantic_threshold": 0.85,
 //!  "locator_keys": ["file_path", "path", "notebook_path", "url", "uri"],
-//!  "short_spans": {"min_chars": 16, "max_chars": 46},
-//!  "reader_output": {"min_chars": 64, "cutoff": 5}}
+//!  "short_spans": {"min_chars": 24, "max_chars": 46},
+//!  "reader_output": {"min_chars": 64},
+//!  "spread": {"agents": 4, "window_secs": 60, "distinctive_chars": 64},
+//!  "forwarding": false}
 //! ```
 
 use std::collections::BTreeSet;
-use std::num::NonZeroU16;
+use std::num::{NonZeroU16, NonZeroU32};
 use std::time::Duration;
 
 use crosstalk_spec::derived::provenance::fingerprint::{Fingerprint, WinnowParams};
@@ -63,6 +65,8 @@ pub enum ConfigError {
     Threshold,
     #[error("a locator argument key must be non-empty")]
     EmptyLocatorKey,
+    #[error("the spread rule needs at least 2 agents, got {agents}")]
+    SpreadAgents { agents: u32 },
     #[error("short spans need {MIN_SHORT_CHARS} <= min_chars <= max_chars, got {min}..={max}")]
     ShortSpanRange { min: u16, max: u16 },
 }
@@ -120,7 +124,10 @@ impl ShortSpans {
 }
 
 impl Default for ShortSpans {
-    /// 16 to 46 characters: the defaults' `k + w - 2` is the longest value
+    /// 24 to 46 characters. 46 is the defaults' `k + w - 2`, the longest
+    /// value winnowing does not guarantee. 24, not 16: on SALT a floor of
+    /// 16 cost the user-turn precision gate (0.816 against 0.830) while 24
+    /// keeps it (0.856) and most of the recall; the longest value
     /// winnowing does not guarantee.
     fn default() -> Self {
         Self {
@@ -130,46 +137,104 @@ impl Default for ShortSpans {
     }
 }
 
-pub const DEFAULT_SHORT_MIN: u16 = 16;
+pub const DEFAULT_SHORT_MIN: u16 = 24;
 pub const DEFAULT_SHORT_MAX: u16 = 46;
 
 /// The stricter rules a `ReaderOutput` match must pass
 /// (`provenance.match.reader-output-strict`): text a reader writes that
 /// another agent wrote, with no visible input holding it, is often domain
-/// text both derived from the same task (SQL, shell idioms, stock phrases),
-/// and per-world postings never reach the index cutoff. The relayed stretch
-/// must have at least `min_chars` normalized characters, and at least one
-/// of the hit fingerprints in it must be observed in at most `cutoff`
-/// texts. Other carriers keep the index's cutoff and no length floor.
+/// text both derived from the same task (SQL, shell idioms, stock phrases).
+/// The relayed stretch must have at least `min_chars` normalized
+/// characters, and at least one of the hit fingerprints in it must not be
+/// boilerplate by the spread rule ([`SpreadRule`]). Other carriers keep no
+/// length floor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReaderOutputRules {
     min_chars: u32,
-    cutoff: u64,
 }
 
 impl ReaderOutputRules {
-    pub fn new(min_chars: u32, cutoff: u64) -> Self {
-        Self { min_chars, cutoff }
+    pub fn new(min_chars: u32) -> Self {
+        Self { min_chars }
     }
 
     /// The fewest normalized characters a `ReaderOutput` match covers.
     pub fn min_chars(&self) -> usize {
         usize::try_from(self.min_chars).unwrap_or(usize::MAX)
     }
-
-    /// The most texts a fingerprint supporting a `ReaderOutput` match may
-    /// have been observed in.
-    pub fn cutoff(&self) -> u64 {
-        self.cutoff
-    }
 }
 
 impl Default for ReaderOutputRules {
-    /// 64 characters, 5 texts.
+    /// 64 characters.
+    fn default() -> Self {
+        Self { min_chars: 64 }
+    }
+}
+
+/// The cross-agent spread rule (`provenance.match.cross-agent-spread`),
+/// which tells a template from a broadcast by time order.
+///
+/// For a fingerprint (or short-span hash), the earliest origination is the
+/// earliest indexing time among its live postings' spans. It is
+/// boilerplate for matching when at least `agents` distinct agents
+/// originated it within `window` of that earliest origination: there is no
+/// clear first writer. Copies made after a single first writer, beyond the
+/// window, are a broadcast: not boilerplate, and they match the first
+/// writer. The rule applies only to short or low-information fragments:
+/// short-span hashes, and fingerprints whose supporting run is shorter than
+/// `distinctive_chars` normalized characters; a longer run is never
+/// suppressed by spread (the index's text cutoff still applies). The index
+/// cutoff counts texts, which a world of a few agents never reaches.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct SpreadRule {
+    agents: NonZeroU32,
+    window: Duration,
+    distinctive_chars: u32,
+}
+
+impl SpreadRule {
+    pub fn new(agents: u32, window: Duration, distinctive_chars: u32) -> Result<Self, ConfigError> {
+        let agents = NonZeroU32::new(agents)
+            .filter(|agents| agents.get() >= 2)
+            .ok_or(ConfigError::SpreadAgents { agents })?;
+        Ok(Self {
+            agents,
+            window,
+            distinctive_chars,
+        })
+    }
+
+    /// How many distinct agents within the window make a fragment
+    /// boilerplate.
+    pub fn agents(&self) -> usize {
+        usize::try_from(self.agents.get()).unwrap_or(usize::MAX)
+    }
+
+    /// How long after the earliest origination an origination counts as
+    /// simultaneous.
+    pub fn window(&self) -> Duration {
+        self.window
+    }
+
+    /// The window in microseconds, saturating.
+    pub fn window_micros(&self) -> u64 {
+        u64::try_from(self.window.as_micros()).unwrap_or(u64::MAX)
+    }
+
+    /// The run length (normalized characters) from which a match is
+    /// distinctive and exempt from the rule.
+    pub fn distinctive_chars(&self) -> usize {
+        usize::try_from(self.distinctive_chars).unwrap_or(usize::MAX)
+    }
+}
+
+impl Default for SpreadRule {
+    /// 4 agents within 60 s; runs of 64 characters are exempt.
     fn default() -> Self {
         Self {
-            min_chars: 64,
-            cutoff: 5,
+            agents: NonZeroU32::new(4).unwrap_or(NonZeroU32::MIN),
+            window: Duration::from_secs(60),
+            distinctive_chars: 64,
         }
     }
 }
@@ -382,6 +447,8 @@ pub struct ProvenanceConfig {
     locator_keys: LocatorKeys,
     short_spans: ShortSpans,
     reader_output: ReaderOutputRules,
+    forwarding: bool,
+    spread: SpreadRule,
 }
 
 impl ProvenanceConfig {
@@ -405,7 +472,36 @@ impl ProvenanceConfig {
             locator_keys: LocatorKeys::default(),
             short_spans: ShortSpans::default(),
             reader_output: ReaderOutputRules::default(),
+            forwarding: false,
+            spread: SpreadRule::default(),
         })
+    }
+
+    /// The cross-agent spread rule (`provenance.match.cross-agent-spread`).
+    pub fn spread(&self) -> SpreadRule {
+        self.spread
+    }
+
+    /// This configuration with another spread rule.
+    pub fn with_spread(mut self, spread: SpreadRule) -> Self {
+        self.spread = spread;
+        self
+    }
+
+    /// Whether forwarded spans (text an agent copies from its own input and
+    /// passes on, `Relayed` from that input) are indexed under the
+    /// forwarding agent (`provenance.index.forwarded-indexed`). Off by
+    /// default: on SALT it finds every escaped delivery but costs most of
+    /// the precision (agents forward their own tool output, and every peer
+    /// reading the same upstream matches it).
+    pub fn forwarding(&self) -> bool {
+        self.forwarding
+    }
+
+    /// This configuration with forwarding on or off.
+    pub fn with_forwarding(mut self, forwarding: bool) -> Self {
+        self.forwarding = forwarding;
+        self
     }
 
     /// The short-span exact path and the floor for originated text.
@@ -494,6 +590,8 @@ impl Default for ProvenanceConfig {
             locator_keys: LocatorKeys::default(),
             short_spans: ShortSpans::default(),
             reader_output: ReaderOutputRules::default(),
+            forwarding: false,
+            spread: SpreadRule::default(),
             // Infallible: 0.85 is within Similarity's 0..=1.
             semantic_threshold: Similarity::new(DEFAULT_THRESHOLD)
                 .expect("the default threshold is a similarity"),
@@ -622,6 +720,43 @@ struct RawConfig {
     short_spans: RawShortSpans,
     #[serde(default)]
     reader_output: RawReaderOutput,
+    #[serde(default)]
+    forwarding: bool,
+    #[serde(default)]
+    spread: RawSpread,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RawSpread {
+    #[serde(default = "default_spread_agents")]
+    agents: u32,
+    #[serde(default = "default_spread_window")]
+    window_secs: u64,
+    #[serde(default = "default_distinctive")]
+    distinctive_chars: u32,
+}
+
+fn default_spread_agents() -> u32 {
+    4
+}
+
+fn default_spread_window() -> u64 {
+    60
+}
+
+fn default_distinctive() -> u32 {
+    64
+}
+
+impl Default for RawSpread {
+    fn default() -> Self {
+        Self {
+            agents: default_spread_agents(),
+            window_secs: default_spread_window(),
+            distinctive_chars: default_distinctive(),
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -655,23 +790,16 @@ impl Default for RawShortSpans {
 struct RawReaderOutput {
     #[serde(default = "default_reader_output_chars")]
     min_chars: u32,
-    #[serde(default = "default_reader_output_cutoff")]
-    cutoff: u64,
 }
 
 fn default_reader_output_chars() -> u32 {
     ReaderOutputRules::default().min_chars
 }
 
-fn default_reader_output_cutoff() -> u64 {
-    ReaderOutputRules::default().cutoff
-}
-
 impl Default for RawReaderOutput {
     fn default() -> Self {
         Self {
             min_chars: default_reader_output_chars(),
-            cutoff: default_reader_output_cutoff(),
         }
     }
 }
@@ -712,8 +840,12 @@ impl TryFrom<RawConfig> for ProvenanceConfig {
             Similarity::new(raw.semantic_threshold).map_err(|_| ConfigError::Threshold)?;
         let locator_keys = LocatorKeys::new(raw.locator_keys)?;
         let short_spans = ShortSpans::new(raw.short_spans.min_chars, raw.short_spans.max_chars)?;
-        let reader_output =
-            ReaderOutputRules::new(raw.reader_output.min_chars, raw.reader_output.cutoff);
+        let reader_output = ReaderOutputRules::new(raw.reader_output.min_chars);
+        let spread = SpreadRule::new(
+            raw.spread.agents,
+            Duration::from_secs(raw.spread.window_secs),
+            raw.spread.distinctive_chars,
+        )?;
         Self::new(
             winnow,
             decode,
@@ -726,6 +858,8 @@ impl TryFrom<RawConfig> for ProvenanceConfig {
                 .with_locator_keys(locator_keys)
                 .with_short_spans(short_spans)
                 .with_reader_output(reader_output)
+                .with_forwarding(raw.forwarding)
+                .with_spread(spread)
         })
     }
 }

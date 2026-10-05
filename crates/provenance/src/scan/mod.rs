@@ -53,7 +53,7 @@ use crosstalk_spec::support::{Similarity, Timestamp};
 use self::cache::KGramCache;
 use self::hits::LiveSpans;
 use self::messages::{LoadError, MessageSource};
-use crate::config::{IndexSettings, ProvenanceConfig, ReaderOutputRules, ShortSpans};
+use crate::config::{IndexSettings, ProvenanceConfig, ReaderOutputRules, ShortSpans, SpreadRule};
 use crate::decode::DecodePipeline;
 use crate::fingerprint::{KGram, Winnowing, positioned};
 use crate::segment::{Coverage, NovelRunSegmenter, PartKind, message_kgrams, text_parts, view};
@@ -138,6 +138,8 @@ pub struct Scanner {
     settings: IndexSettings,
     threshold: Similarity,
     reader_output: ReaderOutputRules,
+    forwarding: bool,
+    spread: SpreadRule,
     /// Input messages' k-grams. Locked only for a lookup or an insert, never
     /// across an await.
     cache: Mutex<KGramCache>,
@@ -176,8 +178,9 @@ where
             return Ok(());
         }
         let records = self.env.store.spans(&missing).await?;
-        self.live
-            .extend(LiveSpans::new(records, self.watermark, self.now));
+        let mut live = LiveSpans::new(records, self.watermark, self.now);
+        live.add_relays(self.env.store.relays(&missing).await?, self.now);
+        self.live.extend(live);
         Ok(())
     }
 
@@ -245,6 +248,8 @@ impl Scanner {
             settings: config.index().clone(),
             threshold: config.semantic_threshold(),
             reader_output: config.reader_output(),
+            forwarding: config.forwarding(),
+            spread: config.spread(),
             cache: Mutex::new(KGramCache::new(cache::DEFAULT_BUDGET)),
         }
     }
@@ -301,6 +306,11 @@ impl Scanner {
 
     pub fn reader_output(&self) -> ReaderOutputRules {
         self.reader_output
+    }
+
+    /// The cross-agent spread rule (`provenance.match.cross-agent-spread`).
+    pub fn spread(&self) -> SpreadRule {
+        self.spread
     }
 
     /// `kgrams` on this node's shards.
@@ -375,6 +385,7 @@ impl Scanner {
             spans,
             matches,
             messages,
+            forwarding: self.forwarding,
         })
     }
 
@@ -413,7 +424,8 @@ impl Scanner {
     /// - An originated span that is a whole short value also observes its
     ///   short-span hash, as a text of its own: a short value's frequency
     ///   is how many texts were that whole value.
-    /// - Each originated or forwarded span is posted: its own fingerprints,
+    /// - Each originated span, and each forwarded one when forwarding is on,
+    ///   is posted: its own fingerprints,
     ///   the k-grams it mostly covers in its run of adjacent indexed spans
     ///   (`Scanner::context_kgrams`), and its short-span hash.
     /// - Each scanned input part observes its layers' fingerprints, and,
@@ -434,7 +446,8 @@ impl Scanner {
                 if let Some(short) = short {
                     work.observations.push(vec![short.fingerprint]);
                 }
-                if span.state != SpanState::Originated && !span.state.is_forwarded() {
+                let forwarded = self.forwarding && span.state.is_forwarded();
+                if span.state != SpanState::Originated && !forwarded {
                     continue;
                 }
                 let Some(indexed) = OriginatedSpan::new(span.clone()) else {

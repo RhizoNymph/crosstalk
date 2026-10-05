@@ -7,12 +7,13 @@
 //! (its index sequence at most the watermark read at the start,
 //! `provenance.match.indexed-before-read`).
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use crosstalk_spec::derived::provenance::fingerprint::{Fingerprint, FingerprintHit};
-use crosstalk_spec::ids::SpanId;
+use crosstalk_spec::ids::{AgentId, SpanId};
 use crosstalk_spec::support::Timestamp;
 
+use crate::config::SpreadRule;
 use crate::fingerprint::KGram;
 use crate::store::SpanRecord;
 
@@ -20,6 +21,8 @@ use crate::store::SpanRecord;
 #[derive(Debug, Clone, Default)]
 pub struct LiveSpans {
     records: HashMap<SpanId, SpanRecord>,
+    /// Copies of the live spans in other outputs: (exchange start, agent).
+    relays: HashMap<SpanId, Vec<(Timestamp, AgentId)>>,
 }
 
 impl LiveSpans {
@@ -36,7 +39,36 @@ impl LiveSpans {
             })
             .map(|record| (record.span.id, record))
             .collect();
-        Self { records }
+        Self {
+            records,
+            relays: HashMap::new(),
+        }
+    }
+
+    /// Add the copies (`Relay`s) of live spans made at or before `now`.
+    pub fn add_relays(&mut self, relays: Vec<crate::store::Relay>, now: Timestamp) {
+        for relay in relays {
+            if relay.at <= now && self.records.contains_key(&relay.source) {
+                self.relays
+                    .entry(relay.source)
+                    .or_default()
+                    .push((relay.at, relay.agent));
+            }
+        }
+    }
+
+    /// Where and by whom `span` was originated or copied: its own indexing,
+    /// then its copies.
+    pub fn originations(&self, span: SpanId) -> Vec<(Timestamp, AgentId)> {
+        let Some(record) = self.records.get(&span) else {
+            return Vec::new();
+        };
+        record
+            .indexed_at()
+            .map(|at| (at, record.span.agent))
+            .into_iter()
+            .chain(self.relays.get(&span).into_iter().flatten().copied())
+            .collect()
     }
 
     pub fn get(&self, span: SpanId) -> Option<&SpanRecord> {
@@ -45,6 +77,9 @@ impl LiveSpans {
 
     pub fn extend(&mut self, other: LiveSpans) {
         self.records.extend(other.records);
+        for (span, relays) in other.relays {
+            self.relays.entry(span).or_default().extend(relays);
+        }
     }
 }
 
@@ -77,6 +112,45 @@ pub fn extents_by_span(
         }
     }
     by_span
+}
+
+/// The fingerprints among `hits` that are boilerplate by the spread rule
+/// (`provenance.match.cross-agent-spread`): at least `rule.agents()`
+/// distinct agents originated them within `rule.window()` of their
+/// earliest origination, so there is no clear first writer. A lookup
+/// returns every posting of each queried fingerprint, so the indexing
+/// times and agents of its live hit spans, and of their copies in other
+/// outputs (spans relayed from them), are its originations within
+/// retention. Copies a single first writer's text gets later, beyond the
+/// window, are a broadcast and stay matchable.
+pub fn spread_boilerplate(
+    hits: &[FingerprintHit],
+    live: &LiveSpans,
+    rule: SpreadRule,
+) -> BTreeSet<Fingerprint> {
+    let mut originations: BTreeMap<Fingerprint, Vec<(Timestamp, AgentId)>> = BTreeMap::new();
+    for hit in hits {
+        originations
+            .entry(hit.fingerprint)
+            .or_default()
+            .extend(live.originations(hit.span));
+    }
+    originations
+        .into_iter()
+        .filter(|(_, found)| {
+            let Some(earliest) = found.iter().map(|(at, _)| at.as_micros()).min() else {
+                return false;
+            };
+            let horizon = earliest.saturating_add(rule.window_micros());
+            let agents: BTreeSet<AgentId> = found
+                .iter()
+                .filter(|(at, _)| at.as_micros() <= horizon)
+                .map(|(_, agent)| *agent)
+                .collect();
+            agents.len() >= rule.agents()
+        })
+        .map(|(fingerprint, _)| fingerprint)
+        .collect()
 }
 
 /// `extents` merged into disjoint sorted intervals.

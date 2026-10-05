@@ -18,7 +18,10 @@ use crate::tests::scenarios::originate;
 type PgWorld = World<PgFingerprintIndex, DisabledSemanticMatcher, PgProvenanceStore>;
 
 fn pg_world(db: &TestDb) -> PgWorld {
-    let config = config();
+    pg_world_with(db, config())
+}
+
+fn pg_world_with(db: &TestDb, config: crate::config::ProvenanceConfig) -> PgWorld {
     let index = PgFingerprintIndex::new(lazy_pool(db), config.index().clone());
     let store = PgProvenanceStore::new(lazy_pool(db));
     World::over(config, index, DisabledSemanticMatcher, store)
@@ -326,13 +329,13 @@ pub async fn forwarded_spans_index_and_expire() {
     let Some(db) = database("pg_forwarded_spans_index_and_expire").await else {
         return;
     };
-    let mut memory = World::new(config());
+    let mut memory = World::new(config().with_forwarding(true));
     let expected = forwarding(&mut memory).await;
     assert!(
         expected.iter().any(|line| line.contains("Some(Expired")),
         "{expected:?}"
     );
-    let mut pg = pg_world(&db);
+    let mut pg = pg_world_with(&db, config().with_forwarding(true));
     let got = forwarding(&mut pg).await;
     assert_eq!(got, expected);
     db.close().await.expect("close");

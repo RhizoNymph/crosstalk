@@ -6,14 +6,16 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, MutexGuard};
 
 use crosstalk_spec::batch::IdBatch;
-use crosstalk_spec::derived::provenance::span::{Origin, OriginatedSpan, SpanEvent, SpanState};
+use crosstalk_spec::derived::provenance::span::{
+    Origin, OriginatedSpan, RelaySource, SpanEvent, SpanState,
+};
 use crosstalk_spec::ids::{ExchangeId, MessageHash, SpanId};
 use crosstalk_spec::interfaces::l4_provenance::{IndexedSpan, SpanIndex, SpanIndexError};
 use crosstalk_spec::support::Timestamp;
 
 use super::{
     Committed, ExchangeRecord, Forwarding, MessageScan, ProvenanceStore, ProvenanceStoreError,
-    ScanCommit, ScanFailure, ScanStatus, ScannedAs, SpanRecord, StoredMatch,
+    Relay, ScanCommit, ScanFailure, ScanStatus, ScannedAs, SpanRecord, StoredMatch,
 };
 
 #[derive(Debug, Default)]
@@ -25,6 +27,8 @@ struct Tables {
     matches: Vec<StoredMatch>,
     scanned: BTreeSet<(MessageHash, ExchangeId, ScannedAs)>,
     sequence: u64,
+    /// The spans relayed from each span.
+    relayed_from: BTreeMap<SpanId, Vec<SpanId>>,
 }
 
 /// L4's records in memory.
@@ -72,8 +76,8 @@ fn advance(record: &mut SpanRecord, event: SpanEvent) -> Result<(), ProvenanceSt
 /// already wrote every classified span, so `record` adds nothing (it is
 /// idempotent by construction), and `spans` reads back the indexed ones as
 /// recorded: the originated ones (`Originated`, `Indexed`, `Propagated` or
-/// `Expired`) and the forwarded ones (`Relayed` from an input,
-/// `provenance.index.forwarded-indexed`). Spans relayed from another span,
+/// `Expired`) and the forwarded ones committed with forwarding on
+/// (`Relayed` from an input, `provenance.index.forwarded-indexed`). Spans relayed from another span,
 /// common spans and unknown ids are absent.
 impl SpanIndex for MemoryProvenanceStore {
     async fn record(&mut self, _span: &OriginatedSpan) -> Result<(), SpanIndexError> {
@@ -90,8 +94,7 @@ impl SpanIndex for MemoryProvenanceStore {
             .iter()
             .filter_map(|id| tables.spans.get(id))
             .filter(|record| {
-                record.span.state.origin() == Some(Origin::Originated)
-                    || record.span.state.is_forwarded()
+                record.span.state.origin() == Some(Origin::Originated) || record.forward.is_some()
             })
             .map(|record| {
                 (
@@ -132,6 +135,31 @@ impl ProvenanceStore for MemoryProvenanceStore {
             .iter()
             .filter_map(|id| tables.spans.get(id).cloned())
             .collect())
+    }
+
+    async fn relays(&self, sources: &[SpanId]) -> Result<Vec<Relay>, ProvenanceStoreError> {
+        let tables = self.lock();
+        let mut relays: Vec<Relay> = sources
+            .iter()
+            .flat_map(|source| {
+                tables
+                    .relayed_from
+                    .get(source)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|id| {
+                        let record = tables.spans.get(id)?;
+                        let (exchange, _) = tables.exchanges.get(&record.span.exchange)?;
+                        Some(Relay {
+                            source: *source,
+                            agent: record.span.agent,
+                            at: exchange.started_at,
+                        })
+                    })
+            })
+            .collect();
+        relays.sort_by_key(|relay| (relay.source, relay.at, relay.agent));
+        Ok(relays)
     }
 
     async fn span(&self, id: SpanId) -> Result<Option<SpanRecord>, ProvenanceStoreError> {
@@ -238,9 +266,19 @@ impl ProvenanceStore for MemoryProvenanceStore {
         let mut ids = Vec::with_capacity(commit.spans.len());
         for (ordinal, span) in commit.spans.iter().enumerate() {
             ids.push(span.id);
+            if let SpanState::Relayed {
+                source: RelaySource::Span(source),
+            } = span.state
+            {
+                tables.relayed_from.entry(source).or_default().push(span.id);
+            }
             tables.spans.insert(
                 span.id,
-                SpanRecord::committed(span.clone(), u32::try_from(ordinal).unwrap_or(u32::MAX)),
+                SpanRecord::committed(
+                    span.clone(),
+                    u32::try_from(ordinal).unwrap_or(u32::MAX),
+                    commit.forwarding,
+                ),
             );
         }
         tables.by_exchange.insert(commit.exchange, ids);

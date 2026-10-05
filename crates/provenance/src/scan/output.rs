@@ -36,7 +36,7 @@ use crosstalk_spec::interfaces::l4_provenance::{FingerprintIndex, SemanticMatche
 use crosstalk_spec::observed::message::{Message, PartRef};
 use crosstalk_spec::support::ByteRange;
 
-use super::hits::{extents_by_span, merge};
+use super::hits::{extents_by_span, merge, spread_boilerplate};
 use super::kind::{is_exact, match_kind};
 use super::messages::MessageSource;
 use super::{Loaded, ScanError, Scanner, Session};
@@ -184,8 +184,10 @@ impl Scanner {
                 }
                 at = at.max(run_end);
                 // The hit fingerprints inside the run that name its source.
+                let spread = spread_boilerplate(&hits, &session.live, self.spread());
                 let support: Vec<_> = hits
                     .iter()
+                    .filter(|hit| !spread.contains(&hit.fingerprint))
                     .filter(|hit| hit.span == source)
                     .filter(|hit| {
                         owned.iter().any(|kgram| {
@@ -341,19 +343,11 @@ impl Scanner {
             tracing::debug!(exchange = ?session.exchange, chars, min_chars = rules.min_chars(), "reader-output match below the length floor");
             return Ok(false);
         }
-        for fingerprint in support {
-            let frequency = session
-                .env
-                .index
-                .frequency(*fingerprint, session.now)
-                .await
-                .map_err(ScanError::Index)?;
-            if frequency <= rules.cutoff() {
-                return Ok(true);
-            }
+        if support.is_empty() {
+            tracing::debug!(exchange = ?session.exchange, chars, "reader-output match on spread boilerplate only");
+            return Ok(false);
         }
-        tracing::debug!(exchange = ?session.exchange, chars, cutoff = rules.cutoff(), "reader-output match on frequent text only");
-        Ok(false)
+        Ok(true)
     }
 
     /// The piece `[start, end)` relayed from `source`, with a `ReaderOutput`

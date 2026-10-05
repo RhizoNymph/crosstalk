@@ -5,8 +5,9 @@ implements the spec's L4 interfaces (`crosstalk_spec::interfaces::l4_provenance`
 
 - it cuts each agent's output into spans and classifies them as
   originated, relayed or common;
-- it indexes the originated spans' fingerprints, and the forwarded spans'
-  (text relayed from the agent's own input, indexed under that agent);
+- it indexes the originated spans' fingerprints, and, when `forwarding`
+  is on (off by default), the forwarded spans' (text relayed from the
+  agent's own input, indexed under that agent);
 - it scans every new input for other agents' spans, through decoders
   (base64, hex, URL, Unicode, JSON/YAML string escapes);
 - it publishes `SpanOriginated`, `SpanRelayed` and `ContentMatched`.
@@ -24,7 +25,7 @@ only. `crosstalk-memory`, `crosstalk-sim`, `crosstalk-testkit` and
   `YamlStringDecoder`. The `DecodePipeline` runs them depth-bounded, and
   every decoded byte keeps a map back to the part text.
 - `NovelRunSegmenter` (`Segmenter`).
-- The short-span exact path: whole values of 16 to 46 normalized
+- The short-span exact path: whole values of 24 to 46 normalized
   characters matched by an exact hash against a read's token runs.
 - Forwarded spans indexed under the forwarding agent, and context k-grams
   that keep an originated remainder next to a forward matchable.
@@ -127,7 +128,7 @@ only. `crosstalk-memory`, `crosstalk-sim`, `crosstalk-testkit` and
    span. Server tool results are scanned as reads.
 6. What is left is trimmed of surrounding whitespace. It becomes an
    `Originated` candidate when it has a k-gram, or at least
-   `short_spans.min_chars` (16) normalized characters: a short whole value
+   `short_spans.min_chars` (24) normalized characters: a short whole value
    is matched by its exact hash, a short remainder next to a forward by
    its context k-grams (below). Shorter text is never matched.
 
@@ -142,7 +143,7 @@ watermark.
      winnowed and looked up. That covers each `new_inputs` message, the
      `new_system` message, and the output's server tool results. Each
      layer is also looked up by the short-span hashes of its normalized
-     token runs of 16 to 46 characters (`fingerprint::short`): a run starts
+     token runs of 24 to 46 characters (`fingerprint::short`): a run starts
      and ends at a boundary (the text's ends, a space, or a change between
      word and non-word characters), so a short value is never found inside
      a longer word. A hit is told apart from a k-gram at the same offset by
@@ -152,6 +153,20 @@ watermark.
      before the reader's time and before this scan began
      (index sequence at most the watermark). Hits on the reader's own spans
      are skipped.
+  2b. **The spread rule** (INV-1094, `SpreadRule`). For each hit
+     fingerprint, the originations are its live postings' spans (their
+     agent and indexing time) and their copies in other outputs (spans
+     relayed from them, `ProvenanceStore::relays`: agent and exchange
+     start). The fingerprint is boilerplate when at least `spread.agents`
+     (4) distinct agents originated it within `spread.window` (60 s) of the
+     earliest origination: there is no clear first writer, so it is a
+     template. Later copies of one first writer's text, beyond the window,
+     are a broadcast and stay matchable. The rule applies only to short or
+     low-information runs: a match whose merged run on an origin span in
+     the layer holds `spread.distinctive_chars` (64) normalized characters
+     keeps all its hits; a shorter one drops the hits on boilerplate
+     fingerprints. The index cutoff counts texts, which a world of a few
+     agents never reaches.
   3. For each origin span, one layer wins. A layer whose text holds the
      whole origin text (normalized) beats one that does not; then the one
      covering the most part bytes wins, then the shorter chain. That way
@@ -182,10 +197,11 @@ watermark.
   - When `s` is another agent's span, a `ReaderOutput` match covers the
     same bytes, if the stretch passes the stricter reader-output rules
     (INV-1093): at least `reader_output.min_chars` (64) normalized
-    characters, and one of the hit fingerprints inside it naming `s`
-    observed in at most `reader_output.cutoff` (5) texts. Otherwise the
-    stretch is still `Relayed(Span(s))` and no match is made. Other
-    carriers keep the index cutoff and no length floor.
+    characters, and one of the hit fingerprints inside it naming `s` not
+    boilerplate by the spread rule (below). Otherwise the stretch is still
+    `Relayed(Span(s))` and no match is made. Other carriers keep no length
+    floor. A broadcast (one first writer, copies later) keeps matching the
+    first writer however many copies there are.
   - The rest is resolved again.
   - A candidate without hits is `Common` when every fingerprint is above
     the cutoff, else `Originated`. A whole short value's short-span hash
@@ -200,11 +216,13 @@ watermark.
 and the delta's messages, so a replay after a crash redoes the same
 writes.
 
-- **Postings.** Every originated span, and every forwarded span
-  (`Relayed(Input)`, INV-1090), is inserted under its own agent with:
+- **Postings.** Every originated span, and, when `forwarding` is on, every
+  forwarded span (`Relayed(Input)`, INV-1090), is inserted under its own
+  agent with:
   1. its own winnowed fingerprints (through its view);
-  2. its context k-grams (`scan::postings`, INV-1091): the posted spans of
-     one part that sit next to each other with only whitespace between
+  2. its context k-grams (`scan::postings`, INV-1091): the originated and
+     forwarded spans of one part (forwarded ones even with forwarding off;
+     the k-grams they hold are then posted nowhere) that sit next to each other with only whitespace between
      them form a run; the run's view is winnowed as one text, and each
      selected k-gram goes to the span holding more than half of its
      normalized characters. A reader holding the whole run selects the
@@ -223,7 +241,9 @@ writes.
   frequency is therefore the number of texts that were that whole value:
   a stock phrase many agents send whole becomes `Common`.
 
-**Forwarded spans** keep the state `Relayed { source: Input(m) }`; they
+**Forwarded spans** (only with `forwarding` on; with it off, the default,
+they are the pre-forwarding `Relayed` spans: never indexed, not returned
+by `SpanIndex::spans`) keep the state `Relayed { source: Input(m) }`; they
 are published as `SpanRelayed`. The store records their indexing beside the
 state (`store::Forwarding`: `Pending`, then `Indexed { at }` with an index
 sequence, then `Expired`), hits on them count no `Propagated` state, and
@@ -334,9 +354,10 @@ and changes span states only through `SpanState::advance`.
 | `index.shards`, `index.owned` | 1, [0] |
 | `eviction_interval_secs` | 3600 |
 | `semantic_threshold` | 0.85 |
-| `short_spans.min_chars`, `short_spans.max_chars` | 16, 46: whole values of this many normalized characters take the short-span exact path; `min_chars` is also the floor for originated text without a k-gram |
+| `short_spans.min_chars`, `short_spans.max_chars` | 24, 46: whole values of this many normalized characters take the short-span exact path; `min_chars` is also the floor for originated text without a k-gram |
 | `reader_output.min_chars` | 64 normalized characters |
-| `reader_output.cutoff` | 5 texts |
+| `spread.agents`, `spread.window_secs`, `spread.distinctive_chars` | 4, 60, 64: four agents originating a fragment within 60 s of its earliest origination make it boilerplate for runs under 64 characters |
+| `forwarding` | false: forwarded spans are not indexed (INV-1090) |
 
 Every value is checked: `k` at least 4, depth 1 to 8, a non-zero retention,
 owned shards that exist, `4 <= short_spans.min_chars <= max_chars`.
@@ -394,7 +415,7 @@ feeder reads through it. `PgProvenanceStore` does not yet.
 | File | Role | Key exports |
 | --- | --- | --- |
 | `src/lib.rs` | Crate doc, modules | — |
-| `src/config.rs` | Typed config | `ProvenanceConfig`, `IndexSettings`, `DecodeLimits`, `ShortSpans`, `ReaderOutputRules`, `winnow_params`, `ConfigError` |
+| `src/config.rs` | Typed config | `ProvenanceConfig`, `IndexSettings`, `DecodeLimits`, `ShortSpans`, `ReaderOutputRules`, `SpreadRule`, `winnow_params`, `ConfigError` |
 | `src/text/{mod,normalize,mapped}.rs` | Normalization with source ranges; decoded text with byte maps | `normalize`, `trimmed_len`, `NormChar`, `MappedText`, `MappedBuilder`, `trim_range` |
 | `src/fingerprint/{mod,hash}.rs` | Winnowing, the stable hash, prefix window hashes | `Winnowing`, `KGram`, `positioned`, `hash::rolling`, `hash::Prefix`, `hash::short` |
 | `src/fingerprint/short.rs` | The short-span exact path: a whole value's hash, a read's token runs | `whole`, `token_runs` |
@@ -405,12 +426,12 @@ feeder reads through it. `PgProvenanceStore` does not yet.
 | `src/engine.rs` | Processing, replay, eviction | `Provenance`, `Processed`, `EngineError`, `envelopes`, `exchange_record` |
 | `src/consumer.rs` | The bus consumer | `GROUP`, `SUBJECTS`, `subscribe`, `run`, `ConsumerSettings`, `ConsumerStats` |
 | `src/span.rs` | Deterministic ids | `span_id`, `span_event_id`, `match_id` |
-| `src/store/{mod,memory,pg}.rs` | L4's records | `ProvenanceStore`, `MemoryProvenanceStore`, `PgProvenanceStore`, `ExchangeRecord`, `ScanStatus`, `ScanFailure`, `SpanRecord` (`committed`, `indexed_at`), `Forwarding`, `StoredMatch`, `ScanCommit`, `MessageScan`, `MIGRATIONS`, `migrate` |
+| `src/store/{mod,memory,pg}.rs` | L4's records | `ProvenanceStore`, `MemoryProvenanceStore`, `PgProvenanceStore`, `ExchangeRecord`, `ScanStatus`, `ScanFailure`, `SpanRecord` (`committed`, `indexed_at`), `Forwarding`, `Relay`, `StoredMatch`, `ScanCommit`, `MessageScan`, `MIGRATIONS`, `migrate` |
 | `src/index/{mod,pg}.rs` | The Postgres fingerprint index | `PgFingerprintIndex` |
 | `src/semantic.rs` | The semantic stub | `DisabledSemanticMatcher` |
 | `src/pg.rs` | Shared Postgres conversions | — |
 | `migrations/0001_provenance.sql` | The schema | — |
-| `migrations/0002_forwarded_spans.sql` | A forwarded span's indexing columns | — |
+| `migrations/0002_forwarded_spans.sql` | A forwarded span's indexing columns; spans by relay source (the spread rule's copies) | — |
 | `src/tests/` | Unit tests, scenarios, fixtures, AgentDojo | evidence `crosstalk_provenance::tests::*` |
 | `src/props/` | Property tests and the scenario generator | evidence `crosstalk_provenance::props::*` |
 | `src/dst.rs` | Simulations of the consumer | evidence `crosstalk_provenance::dst::*` |
@@ -426,7 +447,7 @@ feeder reads through it. `PgProvenanceStore` does not yet.
   - `integration` for INV-206 and INV-225: they name a semantic store that
     awaits P6.2;
   - the lint for INV-227.
-- New invariants:
+- New invariants (also INV-1094 `provenance.match.cross-agent-spread`):
   - `provenance.decode.utf8-lossless`;
   - `provenance.scan.status-terminal`;
   - INV-1090 `provenance.index.forwarded-indexed`;
@@ -451,12 +472,16 @@ feeder reads through it. `PgProvenanceStore` does not yet.
 
 ## Gaps and decisions
 
-- **Forwarding (decided after the first live evaluation).** Text an agent
-  copies from its own input and passes on is indexed under it. This also
-  indexes text copied from a system prompt or an orchestrator's user turn:
-  a peer with the same prompt then matches the copier with carrier
-  `SystemPrompt` or `UserTurn`, which INV-963 does not cover (it concerns
-  tool results with an access). L5's `write_spans` still carries only
+- **Forwarding is off by default.** On SALT (`--limit 53`, live) turning it
+  on raised recall from 0.792 to 0.957 but dropped precision from 0.703 to
+  0.310 (90,213 predictions against 6,763; 51,881 `ToolResult` decoded
+  false positives): agents paste their own `inspect_database` output, and
+  every peer's own read of the same schema matches the forward through a
+  tool result that records no access, which INV-963 does not hold back.
+  Prerequisites for turning it on: a shared-upstream rule for forwards read
+  through such tool results, and for `SystemPrompt` and `UserTurn` reads of
+  text forwarded from a shared prompt or an orchestrator's turn (a peer
+  with the same prompt matches the copier). L5's `write_spans` still carries only
   originated spans and self-relays, so a forward through a file write
   carries no forwarded span (a forward through a message tool's result is
   matched directly); whether writes should carry forwards is L5's call.
@@ -469,7 +494,9 @@ feeder reads through it. `PgProvenanceStore` does not yet.
   splice transmission itself needs a day's correlation window (eval
   finding 9); `splice_worlds_are_confirmed_and_scored` and the splice run
   of `two_live_runs_give_byte_identical_reports` fail under the 60 s
-  window until the test uses one.
+  window. They are expected to pass once fix/l5-content-age (content-
+  confirmed channel transmissions not bounded by the correlation window)
+  is merged; the tests stay unchanged.
 
 - **Increments.** The segmenter's inputs are the exchange's `request` (the
   full history for `FullHistory`; for a WebSocket increment, only the

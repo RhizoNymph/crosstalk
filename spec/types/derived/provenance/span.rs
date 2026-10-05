@@ -187,7 +187,8 @@ impl SpanState {
 ///
 /// - A span classified as originated and not yet expired (`Originated`,
 ///   `Indexed` or `Propagated`).
-/// - A forwarded span: `Relayed { source: RelaySource::Input(_) }`, text the
+/// - A forwarded span, when the provenance configuration turns forwarding
+///   on: `Relayed { source: RelaySource::Input(_) }`, text the
 ///   agent copied from one of its own inputs (a tool result, a user turn)
 ///   and passed on. It is indexed under the forwarding agent, so a peer's
 ///   later read of the forwarded text matches it, and its state stays

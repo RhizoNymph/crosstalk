@@ -22,7 +22,7 @@ use sqlx::{PgConnection, PgPool, Row};
 
 use super::{
     Committed, ExchangeRecord, Forwarding, MessageScan, ProvenanceStore, ProvenanceStoreError,
-    ScanCommit, ScanFailure, ScanStatus, ScannedAs, SpanRecord, StoredMatch,
+    Relay, ScanCommit, ScanFailure, ScanStatus, ScannedAs, SpanRecord, StoredMatch,
 };
 use crate::pg::{
     Failure, OutOfRange, failure, hash_bytes, hash_from, horizon, id_bytes, id_from, time_from,
@@ -242,7 +242,7 @@ macro_rules! span_columns {
     () => {
         "span, agent, exchange, message, part, range_start, range_end, ordinal, state, \
          relay_span, relay_message, indexed_at, first_hit_at, hits, expired_at, index_seq, \
-         forward_indexed_at, forward_expired_at"
+         forwarded, forward_indexed_at, forward_expired_at"
     };
 }
 
@@ -262,7 +262,8 @@ fn span_from(row: &PgRow) -> Result<SpanRecord, ProvenanceStoreError> {
     let state = state_from(row)?;
     let forward_indexed_at: Option<i64> = row.try_get("forward_indexed_at")?;
     let forward_expired_at: Option<i64> = row.try_get("forward_expired_at")?;
-    let forward = match (state.is_forwarded(), forward_indexed_at, forward_expired_at) {
+    let forwarded: bool = row.try_get("forwarded")?;
+    let forward = match (forwarded, forward_indexed_at, forward_expired_at) {
         (false, None, None) => None,
         (true, None, None) => Some(Forwarding::Pending),
         (true, Some(at), None) => Some(Forwarding::Indexed { at: time_from(at)? }),
@@ -353,13 +354,14 @@ async fn insert_span(
     conn: &mut PgConnection,
     span: &Span,
     ordinal: usize,
+    forwarding: bool,
 ) -> Result<(), ProvenanceStoreError> {
     let columns = state_columns(&span.state, None)?;
     sqlx::query(
         "INSERT INTO provenance.spans (span, agent, exchange, message, part, range_start, \
          range_end, ordinal, state, relay_span, relay_message, indexed_at, first_hit_at, hits, \
-         expired_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15) \
-         ON CONFLICT (span) DO NOTHING",
+         expired_at, forwarded) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, \
+         $14, $15, $16) ON CONFLICT (span) DO NOTHING",
     )
     .bind(id_bytes(span.id))
     .bind(id_bytes(span.agent))
@@ -376,6 +378,7 @@ async fn insert_span(
     .bind(columns.first_hit_at)
     .bind(columns.hits)
     .bind(columns.expired_at)
+    .bind(forwarding && span.state.is_forwarded())
     .execute(&mut *conn)
     .await?;
     Ok(())
@@ -559,6 +562,31 @@ impl ProvenanceStore for PgProvenanceStore {
         Ok(ids.iter().filter_map(|id| found.get(id).cloned()).collect())
     }
 
+    async fn relays(&self, sources: &[SpanId]) -> Result<Vec<Relay>, ProvenanceStoreError> {
+        let keys: Vec<Vec<u8>> = sources.iter().copied().map(id_bytes).collect();
+        let rows = sqlx::query(
+            "SELECT s.relay_span, s.agent, e.started_at FROM provenance.spans s \
+             JOIN provenance.exchanges e ON e.exchange = s.exchange \
+             WHERE s.relay_span = ANY($1::bytea[]) \
+             ORDER BY s.relay_span, e.started_at, s.agent",
+        )
+        .bind(keys)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(|row| {
+                let source: Vec<u8> = row.try_get("relay_span")?;
+                let agent: Vec<u8> = row.try_get("agent")?;
+                let at: i64 = row.try_get("started_at")?;
+                Ok(Relay {
+                    source: id_from(&source)?,
+                    agent: id_from(&agent)?,
+                    at: time_from(at)?,
+                })
+            })
+            .collect()
+    }
+
     async fn span(&self, id: SpanId) -> Result<Option<SpanRecord>, ProvenanceStoreError> {
         let query = concat!(
             "SELECT ",
@@ -687,7 +715,7 @@ impl ProvenanceStore for PgProvenanceStore {
             Some(_) => return Ok(Committed::AlreadyScanned),
         }
         for (ordinal, span) in commit.spans.iter().enumerate() {
-            insert_span(&mut tx, span, ordinal).await?;
+            insert_span(&mut tx, span, ordinal, commit.forwarding).await?;
         }
         for stored in &commit.matches {
             match advance_span(
@@ -744,8 +772,8 @@ impl ProvenanceStore for PgProvenanceStore {
         }
         let due = sqlx::query(
             "SELECT span, state FROM provenance.spans WHERE exchange = $1 \
-             AND (state = 'originated' OR (state = 'relayed' AND relay_message IS NOT NULL \
-             AND forward_indexed_at IS NULL)) ORDER BY ordinal",
+             AND (state = 'originated' OR (forwarded AND forward_indexed_at IS NULL)) \
+             ORDER BY ordinal",
         )
         .bind(id_bytes(exchange))
         .fetch_all(&mut *tx)

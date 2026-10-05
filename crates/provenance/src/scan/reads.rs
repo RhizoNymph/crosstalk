@@ -33,7 +33,7 @@ use crosstalk_spec::interfaces::l4_provenance::{FingerprintIndex, SemanticMatche
 use crosstalk_spec::observed::message::{AssistantPart, Message, MessageBody, PartRef};
 use crosstalk_spec::support::ByteRange;
 
-use super::hits::{covered, extents_by_span, merge};
+use super::hits::{covered, extents_by_span, merge, spread_boilerplate};
 use super::kind::{is_exact, match_kind};
 use super::messages::MessageSource;
 use super::{ScanError, Scanner, Session};
@@ -133,6 +133,22 @@ impl Scanner {
         Ok(matches)
     }
 
+    /// Whether a span's hit extents in a layer (layer byte offsets) hold a
+    /// run of at least `SpreadRule::distinctive_chars` normalized
+    /// characters: such a run is never suppressed by the spread rule.
+    fn distinctive(&self, layer: &str, extents: &[(u32, u32)]) -> bool {
+        merge(extents.to_vec()).iter().any(|(start, end)| {
+            let slice = layer
+                .get(
+                    usize::try_from(*start).unwrap_or(usize::MAX)
+                        ..usize::try_from(*end).unwrap_or(usize::MAX),
+                )
+                .unwrap_or_default();
+            crate::text::normalize::trimmed_len(&normalize(slice))
+                >= self.spread().distinctive_chars()
+        })
+    }
+
     async fn read_part<I, S, M, L>(
         &self,
         session: &mut Session<'_, I, S, M, L>,
@@ -160,11 +176,34 @@ impl Scanner {
             let hits = session.lookup(&kgrams).await?;
             let reader = session.reader;
             let live = &session.live;
-            let by_span = extents_by_span(&hits, &kgrams, |span| {
+            let keep = |span| {
                 live.get(span)
-                    .is_some_and(|record| record.span.agent != reader)
-            });
+                    .is_some_and(|record: &crate::store::SpanRecord| record.span.agent != reader)
+            };
+            let by_span = extents_by_span(&hits, &kgrams, keep);
+            // The spread rule: hits on boilerplate fragments count only
+            // inside a distinctive run (`provenance.match.cross-agent-spread`).
+            let spread = spread_boilerplate(&hits, live, self.spread());
+            let narrow = if spread.is_empty() {
+                None
+            } else {
+                let kept: Vec<_> = hits
+                    .iter()
+                    .filter(|hit| !spread.contains(&hit.fingerprint))
+                    .cloned()
+                    .collect();
+                Some(extents_by_span(&kept, &kgrams, keep))
+            };
             for (span, extents) in by_span {
+                let extents = match &narrow {
+                    Some(narrow) if !self.distinctive(layer.text.text(), &extents) => {
+                        match narrow.get(&span) {
+                            Some(kept) => kept.clone(),
+                            None => continue,
+                        }
+                    }
+                    _ => extents,
+                };
                 let merged = merge(
                     extents
                         .into_iter()
