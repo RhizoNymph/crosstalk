@@ -174,3 +174,13 @@ fn an_fp_rate_gate_needs_a_max() {
     let text = "[[gate]]\nname = \"x\"\nmetric = \"fp_per_1k\"\nmin = 1.0\n";
     assert!(Gates::parse(text, "fixture").is_err());
 }
+
+#[test]
+fn the_swarms_header_line_decodes_in_its_key_order() {
+    // As crates/demo writes it: `scenario` right after `version`.
+    let line = r#"{"kind":"header","version":2,"scenario":"boilerplate","world":"swarm-01J0000000000000000000000A","run":"01J0000000000000000000000A","seed":7,"agents":5,"keys":3,"agents_per_key":2,"claude_code_shape":true,"started_at_unix_ms":1000,"gateway_url":"http://crosstalk:8080/anthropic","wiki_url":"http://wiki:8090"}"#;
+    let header: serde_json::Value = serde_json::from_str(line).expect("json");
+    let truth = read_rows(&[header]).expect("decodes");
+    assert_eq!(truth.header.scenario(), Scenario::Boilerplate);
+    assert_eq!(truth.header.agents, 5);
+}
