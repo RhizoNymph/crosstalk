@@ -1511,12 +1511,11 @@ Features Index:
       time order, and read back only through QueryApi (agents by session,
       the A to B channel edge, the confirmed transmission, its evidence,
       and the channel the cross-agent transmission created, dated by its
-      opening, listed and confirmed). The composition is shaped like
-      crosstalk_gateway::live::Live and is wired today from InProcess plus
-      a pipeline over its blob store and bus; the assertions needing L3 to
-      L7 are ignored until Live composes them. The scenario and readers are
-      a library, so a UI demo can feed the same traffic into a running
-      Live.
+      opening, listed and confirmed). The composition is a
+      crosstalk_gateway::live::Live process with every layer consuming the
+      bus, and every assertion runs against it: the first end-to-end proof
+      of detection. The scenario and readers are a library, so a UI demo
+      can feed the same traffic into a running Live.
     entry_points:
       - crates/e2e/src/lib.rs
       - crates/e2e/src/scenario/mod.rs

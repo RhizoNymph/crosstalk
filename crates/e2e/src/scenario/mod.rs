@@ -106,7 +106,7 @@ impl Scenario {
 
     /// The wiki relay where nothing crosses: A writes the page as before,
     /// but by the time B reads it the page holds only a placeholder
-    /// ([`tools::withheld_as_read`]), and B's answer says so. B's read of
+    /// (`tools::withheld_as_read`), and B's answer says so. B's read of
     /// A's page is a co-access with no content match: the correlator opens
     /// a channel transmission, suspects it when its evidence window closes
     /// and discards it when its suspicion expires.

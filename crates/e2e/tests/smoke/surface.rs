@@ -1,11 +1,10 @@
 //! The scenario through the surface, the API the UI reads.
 //!
-//! The pipeline publishes `ExchangeCaptured`; everything below needs the
-//! detection consumers (L3 identity and threading, L4 provenance, L5
-//! extraction and correlation, L6 classification, L7 edges) subscribed to
-//! that bus and writing the stores the surface reads. Each such test is
-//! ignored with the stages it waits for; once `Live::start` composes them
-//! (`crosstalk_e2e::compose`), run them with `--include-ignored`.
+//! `crosstalk_e2e::compose` runs `Live`: the pipeline publishes
+//! `ExchangeCaptured`, and the detection consumers (L3 identity and
+//! threading, L4 provenance, L5 extraction and correlation, L6
+//! classification, L7 edges) take it from the bus to the stores the surface
+//! reads. Every test here reads the outcome through `QueryApi` alone.
 //!
 //! Detection runs on consumer tasks, so every read polls until it sees
 //! what it expects or [`PATIENCE`] runs out.
@@ -14,8 +13,9 @@ use std::future::Future;
 use std::time::Duration;
 
 use crosstalk_e2e::read::{self, Agents};
-use crosstalk_e2e::scenario::{Scenario, WIKI_PAGE};
+use crosstalk_e2e::scenario::{SENTENCE, Scenario, WIKI_PAGE};
 use crosstalk_e2e::{Composition, compose, feed, options};
+use crosstalk_provenance::config::ProvenanceConfig;
 use crosstalk_spec::aggregates::edge::WeightedEdge;
 use crosstalk_spec::derived::flow::channel::ChannelOrigin;
 use crosstalk_spec::derived::flow::channel::confirmation::{Confirmation, Listing};
@@ -120,7 +120,21 @@ async fn the_transmission(
     Ok((agents, channel, only.transmission))
 }
 
-/// Runs today: the composition takes the scenario and the surface answers
+/// The highlighted text of an excerpt; a dropped body is a failure here.
+fn highlighted(excerpt: &Excerpted) -> Result<&str, Failure> {
+    let Excerpted::Shown(excerpt) = excerpt else {
+        return Err(unexpected("a body was dropped"));
+    };
+    let highlight = excerpt.highlight();
+    let start = usize::try_from(highlight.start)?;
+    let end = usize::try_from(highlight.end)?;
+    excerpt
+        .text()
+        .get(start..end)
+        .ok_or_else(|| unexpected("the highlight is outside the excerpt"))
+}
+
+/// The composition takes the scenario and the surface answers
 /// every query the smoke makes about its window.
 #[tokio::test]
 async fn the_surface_answers_for_the_scenario_window() -> Result<(), Failure> {
@@ -135,7 +149,6 @@ async fn the_surface_answers_for_the_scenario_window() -> Result<(), Failure> {
 }
 
 #[tokio::test]
-#[ignore = "waits for L3 (identity) consuming the pipeline's bus in Live"]
 async fn l3_resolves_the_two_sessions_to_two_agents() -> Result<(), Failure> {
     let (scenario, composition, window) = ingested().await?;
     let agents = agents_of(&scenario, &composition, window).await?;
@@ -154,7 +167,6 @@ async fn l3_resolves_the_two_sessions_to_two_agents() -> Result<(), Failure> {
 }
 
 #[tokio::test]
-#[ignore = "waits for L3, L4 (ContentMatched), L5 (correlator), L6 (classification) and L7 (edges) in Live"]
 async fn topology_has_an_edge_from_a_to_b_through_the_channel() -> Result<(), Failure> {
     let (scenario, composition, window) = ingested().await?;
     let agents = agents_of(&scenario, &composition, window).await?;
@@ -172,7 +184,6 @@ async fn topology_has_an_edge_from_a_to_b_through_the_channel() -> Result<(), Fa
 }
 
 #[tokio::test]
-#[ignore = "waits for L3, L4, L5, L6 and L7 in Live"]
 async fn the_transmission_is_confirmed_through_the_channel() -> Result<(), Failure> {
     let (scenario, composition, window) = ingested().await?;
     let (agents, channel, id) = the_transmission(&scenario, &composition, window).await?;
@@ -202,7 +213,6 @@ async fn the_transmission_is_confirmed_through_the_channel() -> Result<(), Failu
 }
 
 #[tokio::test]
-#[ignore = "waits for L4 and L5 in Live, with the evidence page reading their spans and accesses"]
 async fn the_evidence_has_the_content_match_in_the_read_result() -> Result<(), Failure> {
     let (scenario, composition, window) = ingested().await?;
     let (agents, _channel, id) = the_transmission(&scenario, &composition, window).await?;
@@ -216,6 +226,14 @@ async fn the_evidence_has_the_content_match_in_the_read_result() -> Result<(), F
         .ok_or_else(|| unexpected("no b2-repeat"))?;
     let (read_id, _, _) = crosstalk_e2e::scenario::read_call();
     assert!(!evidence.matches().is_empty(), "no content match");
+    // Winnowing selects a fingerprint in every window of `w` k-grams, so a
+    // matched run loses at most `w - 1` characters at either end: the read
+    // side must cover the sentence without them.
+    let w = usize::from(ProvenanceConfig::default().winnow().w.get());
+    let core = SENTENCE
+        .get(w - 1..SENTENCE.len() - (w - 1))
+        .ok_or_else(|| unexpected("the sentence is shorter than two windows"))?;
+    let mut carries_the_sentence = false;
     for evidence in evidence.matches() {
         let found = evidence.content_match();
         assert_eq!(found.origin_agent(), agents.a);
@@ -226,23 +244,22 @@ async fn the_evidence_has_the_content_match_in_the_read_result() -> Result<(), F
             "carried by {:?}",
             found.carrier()
         );
-        for excerpt in [evidence.origin(), evidence.read()] {
-            let Excerpted::Shown(excerpt) = excerpt else {
-                return Err(unexpected("a body was dropped"));
-            };
-            let highlight = excerpt.highlight();
-            let start = usize::try_from(highlight.start)?;
-            let end = usize::try_from(highlight.end)?;
-            let quoted = excerpt
-                .text()
-                .get(start..end)
-                .ok_or_else(|| unexpected("the highlight is outside the excerpt"))?;
-            assert!(
-                crosstalk_e2e::scenario::SENTENCE.contains(quoted.trim()),
-                "highlighted {quoted:?}, not part of the sentence"
-            );
+        let origin = highlighted(evidence.origin())?;
+        let read = highlighted(evidence.read())?;
+        // A's originated span holds the whole sentence; B's read result
+        // holds it but for the winnowing margins.
+        if origin.contains(SENTENCE)
+            && read.contains(core)
+            && usize::try_from(found.matched_bytes().get())? >= core.len()
+        {
+            carries_the_sentence = true;
         }
     }
+    assert!(
+        carries_the_sentence,
+        "no match shows the sentence on both sides: {:?}",
+        evidence.matches()
+    );
     composition.shutdown().await;
     Ok(())
 }
@@ -254,7 +271,6 @@ async fn the_evidence_has_the_content_match_in_the_read_result() -> Result<(), F
 /// active since that opening, and confirmed once the transmission is
 /// (INV-857, INV-1031).
 #[tokio::test]
-#[ignore = "waits for L3, L4, L6 and L7 in Live (L5 is merged), so the transmission is confirmed and on an edge"]
 async fn the_channel_is_created_by_the_cross_agent_transmission_and_confirmed()
 -> Result<(), Failure> {
     let (scenario, composition, window) = ingested().await?;
