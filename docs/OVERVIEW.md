@@ -190,7 +190,10 @@ Overview:
       tier against regression gates.
       The swarm benchmark (ct-eval swarm) instead scores the live gateway:
       it joins the demo swarm's ground truth to the gateway's exchange log
-      and blobs, and scores a saved L8 transmissions export and its evidence.
+      and blobs, and scores a saved L8 transmissions export and its evidence,
+      suspected and discarded transmissions as access-only predictions
+      from their evidence's accesses (reported as access-only recall,
+      apart from overall).
     e2e: >
       Crate crosstalk-e2e (a composer): the end-to-end smoke harness. A
       scripted two-agent Claude Code scenario as wire traffic, captured
@@ -1289,14 +1292,19 @@ Features Index:
       kind, match or access class and tier, negative-control violations
       and a DetectionQuality bridge keyed by QualityMatch; a Detector seam
       with the naive reference matcher (escape-aware matching classed as
-      Exact, Normalized or Decoded([JsonString | YamlString]), decoding,
-      opaque-blob exclusion, an L4-style boilerplate cutoff on shingle
-      postings), the gateway pipeline (Pipeline::ingest under
+      Exact, Normalized or Decoded([JsonString | YamlString]) through one
+      classifier, with hits only two string levels explain out of reach
+      and unreported, decoding, opaque-blob exclusion, a boilerplate cutoff
+      on shingle postings at L4's default of 50), the gateway pipeline (Pipeline::ingest under
       the corpus clock or a sim clock, reported as unscored), and
       LiveDetector over the LiveBackend seam (a fresh composition per
       world: ingest, settle, list transmissions, read spans, accesses,
       channel resources and L3 attribution), whose real Live adapter is a
-      stub until Live merges; reports and regression gates.
+      stub until Live merges; reports (overall, out of reach, access-only
+      recall, background) and regression gates, found through --gates,
+      CT_EVAL_GATES, the bench image's installed file or the crate's own,
+      else none. Every converter labels escaped text with the spec's
+      string codecs, never Normalized.
     entry_points:
       - crates/eval/src/lib.rs
       - crates/eval/src/pipeline.rs
@@ -1311,6 +1319,8 @@ Features Index:
       - crates/eval/src/datasets/swarm_truth/mod.rs
       - crates/eval/src/predict/reads.rs
       - crates/eval/src/detect/live/mod.rs
+      - crates/eval/src/reference/classify.rs
+      - crates/eval/src/report/gates.rs
     depends_on: [type_spec, gateway, transport, flow_extract, export, http_api, eval_gaps, sim, testkit, memory]
     doc: docs/features/eval.md
   e2e_smoke:
@@ -1433,9 +1443,11 @@ Features Index:
       read (exact, whitespace, JSON-string, base64). Seeded cipher pairs
       deliver steganographic-evals payloads encoded: base64, hex, URL and
       chains are in reach, while rotN, binary8 and substitution are
-      Tier::OutOfReach and reported as missed by design. Reports gain
-      out_of_reach and background (false positives per 1k exchanges, top
-      sources) summaries.
+      Tier::OutOfReach and reported as missed by design, as is a JSON-string
+      splice read through a shell (two string levels). crosstalk-flow's
+      real extractors resolve the shell cat -n read and the editor view to
+      the same Locator::File read. Reports gain out_of_reach and background
+      (false positives per 1k exchanges, top sources) summaries.
     entry_points:
       - crates/eval/src/datasets/background.rs
       - crates/eval/src/datasets/open_swe/mod.rs
@@ -1443,7 +1455,7 @@ Features Index:
       - crates/eval/src/datasets/swe_splice/mod.rs
       - crates/eval/src/datasets/cipher/mod.rs
       - crates/eval/src/score/sources.rs
-    depends_on: [eval, type_spec]
+    depends_on: [eval, type_spec, flow_extract]
     doc: docs/features/eval_swe_synthetic.md
   eval_ai_village:
     description: >

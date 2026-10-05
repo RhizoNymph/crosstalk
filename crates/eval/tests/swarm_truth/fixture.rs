@@ -597,3 +597,46 @@ pub fn unattributed(reader: (&str, &str, u32, &str), page: &str, text: &str) -> 
             "at": {"message": 3, "block": 0, "tool_use_id": reader_call}},
         "at_ms": 1000, "at_unix_ms": 1_790_812_801_000_u64})
 }
+
+/// Appends to the fixture's evidence file one access-only transmission
+/// a001 → a003 over p2 (the delivery the gateway's content matching
+/// missed): `discarded` or else suspected. Such a transmission has no row
+/// in the transmissions export, which holds confirmed ones only, so it
+/// reaches the benchmark through its evidence alone.
+pub fn append_access_only(written: &Written, discarded: bool) {
+    let mut ids = Ids::seeded(23);
+    let (writer, reader) = (ids.agent(), ids.agent());
+    let p2 = ResourceBuilder::new(&mut ids)
+        .url("http", "wiki:8090", "/pages/p2", None)
+        .build();
+    let builder = TransmissionBuilder::new(&mut ids)
+        .between(writer, reader)
+        .opened_at(after(T0, Duration::from_secs(400)))
+        .accesses(|cross| {
+            cross
+                .resource(p2.id)
+                .write_access(|access| {
+                    access.in_exchange(written.a001[1].id).part(PartRef {
+                        message: written.a001[1].response,
+                        index: 0,
+                    })
+                })
+                .read_access(|access| {
+                    access.in_exchange(written.a003[1].id).part(PartRef {
+                        message: written.a003[1].last_tool.expect("a tool result"),
+                        index: 0,
+                    })
+                })
+        });
+    let builder = if discarded {
+        builder.discarded()
+    } else {
+        builder.suspected()
+    };
+    let parts = builder.build_parts().expect("an access-only transmission");
+    let evidence = evidence_of(&parts, &p2);
+    let mut text = std::fs::read_to_string(&written.evidence).expect("read the evidence");
+    text.push_str(&serde_json::to_string(&evidence).expect("encode evidence"));
+    text.push('\n');
+    std::fs::write(&written.evidence, text).expect("write the evidence");
+}

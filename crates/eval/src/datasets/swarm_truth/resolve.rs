@@ -280,14 +280,11 @@ pub fn resolve<B: Bodies>(
     })
 }
 
-/// `Normalized` when the page holds a character JSON escapes (the writer's
-/// `PUT` carries it escaped inside its arguments), `Exact` otherwise.
+/// `Decoded([JsonString])` when the page holds a character JSON escapes
+/// (the writer's `PUT` carries it escaped inside its arguments, and the
+/// reader gets it raw), `Exact` otherwise.
 pub fn needs(text: &str) -> MatchNeed {
-    if text.chars().any(|c| c == '"' || c == '\\' || c < ' ') {
-        MatchNeed::Normalized
-    } else {
-        MatchNeed::Exact
-    }
+    MatchNeed::through_json_string(text)
 }
 
 impl<B: Bodies> Resolver<'_, B> {

@@ -19,16 +19,27 @@
 //! content match's `reader_exchange` names the transmission's reader, and
 //! each access's `exchange` names its agent. A channel's resources are the
 //! locators of the accesses behind its transmissions.
+//!
+//! **Co-access.** A suspected or discarded transmission has no content
+//! match, only co-access records. Its predictions come from the accesses
+//! its evidence lists ([`AccessDetail`]: the access, its resource and its
+//! canonical agent): the write's agent to the read's agent, at the read's
+//! exchange, located at the whole tool result the read returned
+//! (`AccessOp::Read::result`), with the write's whole tool call as origin.
+//! Those parts' texts come from the gateway's blobs. They are access-only
+//! predictions: counted in their own rows, never finding a label.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::BufRead;
 
 use crosstalk_spec::derived::flow::access::Access;
+use crosstalk_spec::derived::flow::access::AccessOp;
 use crosstalk_spec::derived::flow::resource::{Locator, Resource};
-use crosstalk_spec::derived::flow::transmission::Route;
+use crosstalk_spec::derived::flow::transmission::{Route, TransmissionState};
 use crosstalk_spec::derived::provenance::span::SpanLocation;
 use crosstalk_spec::ids::{AccessId, AgentId, ChannelId, ExchangeId, SpanId, TransmissionId};
 use crosstalk_spec::interfaces::l4_provenance::IndexedSpan;
+use crosstalk_spec::interfaces::l8_surface::evidence::AccessDetail;
 use crosstalk_spec::interfaces::l8_surface::evidence::TransmissionEvidence;
 use crosstalk_spec::interfaces::l8_surface::export::digest::{ROW_DIGEST_CONTEXT, RowHasher};
 use crosstalk_spec::interfaces::l8_surface::export::framing::{JsonlExport, read_jsonl};
@@ -36,9 +47,11 @@ use crosstalk_spec::interfaces::l8_surface::export::rows::ExportRow;
 use crosstalk_spec::observed::message::PartRef;
 use crosstalk_spec::support::Blake3;
 
+use super::bodies::{Bodies, Cached};
 use super::diagnostics::{Diagnostic, Diagnostics, Effect, JoinFailure, Side};
 use super::resolve::AgentIndex;
 use crate::keys::AgentKey;
+use crate::location::whole_part;
 use crate::predict::{Directory, PredictError, Prediction, from_transmission};
 
 /// The export's row digest: BLAKE3 in key-derivation mode under
@@ -142,18 +155,26 @@ pub fn read_evidence<R: BufRead>(input: R) -> Result<Vec<TransmissionEvidence>, 
 pub struct SwarmDirectory {
     agents: BTreeMap<AgentId, AgentKey>,
     channels: BTreeMap<ChannelId, Vec<Locator>>,
+    /// The accesses the evidence lists, with their resources.
+    accesses: BTreeMap<AccessId, (Access, Resource)>,
+    /// The whole text of each part an access names (a read's tool result,
+    /// a write's tool call), by its exchange and part.
+    parts: HashMap<(ExchangeId, PartRef), SpanLocation>,
 }
 
 impl SwarmDirectory {
-    /// Learns from `evidence` through `index`; conflicts go to
-    /// `diagnostics`.
-    pub fn learn(
+    /// Learns from `evidence` through `index`, reading the parts its
+    /// accesses name from `bodies`; conflicts go to `diagnostics`.
+    pub fn learn<B: Bodies>(
         evidence: &[&TransmissionEvidence],
         index: &AgentIndex,
+        bodies: &mut Cached<B>,
         diagnostics: &mut Diagnostics,
     ) -> Self {
         let mut seen: BTreeMap<AgentId, BTreeSet<AgentKey>> = BTreeMap::new();
         let mut channels: BTreeMap<ChannelId, Vec<Locator>> = BTreeMap::new();
+        let mut accesses: BTreeMap<AccessId, (Access, Resource)> = BTreeMap::new();
+        let mut parts: HashMap<(ExchangeId, PartRef), SpanLocation> = HashMap::new();
         for item in evidence {
             let transmission = item.transmission();
             if let Some(confirmed) = transmission.state.confirmed() {
@@ -164,6 +185,7 @@ impl SwarmDirectory {
                 }
             }
             for detail in item.accesses() {
+                learn_access(detail, bodies, &mut accesses, &mut parts);
                 let access = detail.access();
                 if let Some(key) = index.exchange(access.exchange) {
                     for id in [access.agent, detail.agent()] {
@@ -197,7 +219,40 @@ impl SwarmDirectory {
                 agents.insert(id, first);
             }
         }
-        Self { agents, channels }
+        Self {
+            agents,
+            channels,
+            accesses,
+            parts,
+        }
+    }
+}
+
+/// Keeps `detail`'s access and resource, and the whole text of the part it
+/// names when the blobs hold that message and the part has text. A part
+/// left unknown makes the co-access unlocated, which `predictions` reports.
+fn learn_access<B: Bodies>(
+    detail: &AccessDetail,
+    bodies: &mut Cached<B>,
+    accesses: &mut BTreeMap<AccessId, (Access, Resource)>,
+    parts: &mut HashMap<(ExchangeId, PartRef), SpanLocation>,
+) {
+    let access = detail.access();
+    accesses
+        .entry(access.id)
+        .or_insert_with(|| (access.clone(), detail.resource().clone()));
+    let part = match &access.op {
+        AccessOp::Read { result } => *result,
+        AccessOp::Write { call, .. } => *call,
+    };
+    if parts.contains_key(&(access.exchange, part)) {
+        return;
+    }
+    let Ok(message) = bodies.get(part.message) else {
+        return;
+    };
+    if let Ok(location) = whole_part(message, part.index) {
+        parts.insert((access.exchange, part), location);
     }
 }
 
@@ -210,28 +265,33 @@ impl Directory for SwarmDirectory {
         self.channels.get(&id).map(Vec::as_slice)
     }
 
-    // The saved export carries no span records, accesses or part texts:
-    // predictions from it fall back to what the evidence pages give.
+    // The saved export carries no span records (`SpanIndex::span` is not on
+    // the API), so origins of content matches stay unknown.
     fn span(&self, _id: SpanId) -> Option<IndexedSpan> {
         None
     }
 
-    fn access(&self, _id: AccessId) -> Option<&(Access, Resource)> {
-        None
+    fn access(&self, id: AccessId) -> Option<&(Access, Resource)> {
+        self.accesses.get(&id)
     }
 
-    fn whole_part(&self, _exchange: ExchangeId, _part: PartRef) -> Option<SpanLocation> {
-        None
+    fn whole_part(&self, exchange: ExchangeId, part: PartRef) -> Option<SpanLocation> {
+        self.parts.get(&(exchange, part)).copied()
     }
 }
 
-/// The predictions of the exported transmissions, sorted. An exported
-/// transmission without evidence, or with an agent no exchange ties to a
-/// truth agent, is reported and yields none.
-pub fn predictions(
+/// The predictions of the exported transmissions and of every suspected or
+/// discarded transmission the evidence holds, sorted. The transmissions
+/// export holds confirmed transmissions only (its rows need
+/// `Confirmed::at`), so access-only transmissions are scored from their
+/// evidence lines alone. An exported transmission without evidence, or
+/// with an agent no exchange ties to a truth agent, is reported and yields
+/// none. The parts co-access records name are read from `bodies`.
+pub fn predictions<B: Bodies>(
     exported: &Exported,
     evidence: &[TransmissionEvidence],
     index: &AgentIndex,
+    bodies: &mut Cached<B>,
     diagnostics: &mut Diagnostics,
 ) -> Vec<Prediction> {
     let by_id: BTreeMap<TransmissionId, &TransmissionEvidence> = evidence
@@ -239,6 +299,7 @@ pub fn predictions(
         .map(|item| (item.transmission().id, item))
         .collect();
     let mut chosen = Vec::with_capacity(exported.transmissions.len());
+    let in_export: BTreeSet<TransmissionId> = exported.transmissions.iter().copied().collect();
     for id in &exported.transmissions {
         match by_id.get(id) {
             Some(item) => chosen.push(*item),
@@ -251,7 +312,13 @@ pub fn predictions(
             }),
         }
     }
-    let directory = SwarmDirectory::learn(&chosen, index, diagnostics);
+    chosen.extend(
+        by_id
+            .iter()
+            .filter(|(id, item)| !in_export.contains(id) && access_only(item))
+            .map(|(_, item)| *item),
+    );
+    let directory = SwarmDirectory::learn(&chosen, index, bodies, diagnostics);
     let mut out = Vec::new();
     for item in chosen {
         let transmission = item.transmission();
@@ -281,4 +348,13 @@ pub fn predictions(
     }
     out.sort_by(|a, b| a.sort_key().cmp(&b.sort_key()));
     out
+}
+
+/// Whether `evidence` is of a suspected or discarded transmission: one the
+/// export cannot hold, whose only evidence is co-access.
+fn access_only(evidence: &TransmissionEvidence) -> bool {
+    matches!(
+        evidence.transmission().state,
+        TransmissionState::Suspected { .. } | TransmissionState::Discarded { .. }
+    )
 }

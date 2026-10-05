@@ -59,6 +59,7 @@ use crosstalk_eval::gateway::PipelineDetector;
 use crosstalk_eval::keys::DatasetId;
 use crosstalk_eval::pipeline::{Detector, ReferenceDetector, run};
 use crosstalk_eval::reference::ReferenceConfig;
+use crosstalk_eval::report::gates::{GATES_ENV, GateSearch, GatesFrom};
 use crosstalk_eval::report::table::render;
 use crosstalk_eval::report::{Gates, Report};
 use crosstalk_eval::truth::jsonl;
@@ -237,7 +238,9 @@ struct RunArgs {
     /// Write report.json and report.txt here.
     #[arg(long)]
     out: Option<PathBuf>,
-    /// Regression gates (default: the crate's `gates.toml`).
+    /// Regression gates (default: `CT_EVAL_GATES`, then
+    /// `/usr/local/share/crosstalk-eval/gates.toml`, then the crate's
+    /// `gates.toml`, then none).
     #[arg(long)]
     gates: Option<PathBuf>,
     /// How many misses and false positives to keep as examples.
@@ -307,6 +310,28 @@ struct TruthArgs {
 
 fn crate_file(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join(name)
+}
+
+/// The run's gates: `--gates`, else `CT_EVAL_GATES`, else the bench image's
+/// installed file, else the crate's own in a source checkout, else none.
+/// Says which on stderr. Only a missing `--gates` file is an error.
+fn load_gates(flag: Option<PathBuf>) -> Result<Gates> {
+    let search = GateSearch::from_env(flag, crate_file("gates.toml"));
+    let (gates, location) = search.load()?;
+    match location {
+        Some(location) => eprintln!(
+            "gates: {} ({})",
+            location.path.display(),
+            match location.from {
+                GatesFrom::Flag => "--gates",
+                GatesFrom::Env => GATES_ENV,
+                GatesFrom::Installed => "installed",
+                GatesFrom::Crate => "crate",
+            }
+        ),
+        None => eprintln!("no gates"),
+    }
+    Ok(gates)
 }
 
 fn open_source(args: &SourceArgs) -> Result<AnySource> {
@@ -422,15 +447,7 @@ fn run_command(args: RunArgs) -> Result<ExitCode> {
         _ => args.examples,
     };
     let mut source = open_source(&args.source)?;
-    let gates_path = args
-        .gates
-        .clone()
-        .unwrap_or_else(|| crate_file("gates.toml"));
-    let gates = if gates_path.exists() {
-        Gates::load(&gates_path)?
-    } else {
-        Gates::default()
-    };
+    let gates = load_gates(args.gates.clone())?;
     let dataset = source.id();
     let mut unlabelled = Unlabelled::default();
     let observe = |world: &World, predicted: &[_]| {

@@ -116,8 +116,15 @@ ai-village/*.jsonl.gz ──▶ stream::Table::scan (flate2, line by line; creat
   bytes occur verbatim in the author's response (its chat tool's JSON
   arguments escape the same way); `Decoded([Codec::JsonString])` when one
   level of JSON string unescaping gives text that occurs verbatim (the
-  author wrote the message as plain text); else `Normalized` after
-  folding; else `Semantic`.
+  author wrote the message as plain text); `Normalized` when case and
+  whitespace folding alone make them equal; `Decoded([JsonString])` when
+  one string level undone on either side, then folded, does; out of reach
+  (`MatchNeed::two_string_levels()`, `Tier::OutOfReach`) when exactly two
+  levels undone on one side do, since a decoded chain holds at most one
+  string codec (spec #58); `Decoded([JsonString])` when only the matching
+  fold does; else `Semantic`. The label's tier is
+  `needs.tier(…)`, so the same rule holds for window chat and repository
+  labels.
 - **Originating exchanges.** The author's response is the `AGENT_TALK`
   event's `data.output` (provider-shaped; for Claude models often a bare
   array of Anthropic content blocks), as an exchange at the event's
@@ -351,8 +358,14 @@ three full passes over the 2.4 GB turns and memories tables dominate).
 | route | carrier | class | tier | expected | found | recall |
 | --- | --- | --- | --- | ---: | ---: | ---: |
 | direct | user_turn | exact | structural | 61860 | 61788 | 0.999 |
-| direct | user_turn | normalized | structural | 36118 | 36118 | 1.000 |
-| channel | tool_result | exact / normalized | heuristic | 10 | 0 | 0.000 |
+| direct | user_turn | normalized | structural | 48 | 48 | 1.000 |
+| direct | user_turn | decoded | structural | 36070 | 36070 | 1.000 |
+| channel | tool_result | exact / decoded | heuristic | 10 | 0 | 0.000 |
+
+The 36,070 `decoded` labels were `normalized` before the string level
+rule (they need one JSON string level undone, `Decoded([JsonString])`);
+48 need whitespace or case only, and none is two levels deep, so no
+window label is out of reach. Claude Code mode's labels did not move.
 
 - **Accesses.** 21,668 (14,934 reads, 6,734 writes: 4,891 delivered, 48
   rejected, 1,795 unknown) on 2,397 resources; 15,480 have an

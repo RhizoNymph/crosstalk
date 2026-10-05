@@ -310,6 +310,7 @@ impl Labels<'_> {
                     delivery.end,
                 )?;
                 let needs = need(sender_call.message.message(), content);
+                let tier = needs.tier(Tier::Structural);
                 stats.count_need(&needs);
                 stats.chat_labels += 1;
                 builder.expect(Expectation::Transmission(ExpectedTransmission::new(
@@ -325,7 +326,7 @@ impl Labels<'_> {
                             at,
                         },
                         needs,
-                        tier: Tier::Structural,
+                        tier,
                         source: SourceRef::new(
                             Table::ChatMessages.file_name(),
                             format!("/{message}#reader={}", to.name),
@@ -403,6 +404,7 @@ impl Labels<'_> {
             };
             let at = location::in_message(result.message(), 0, start, end)?;
             let needs = need(writer_call.message.message(), &line);
+            let tier = needs.tier(Tier::Heuristic);
             stats.count_need(&needs);
             stats.repo_labels += 1;
             if write.access.http_visible() && read.access.http_visible() {
@@ -426,7 +428,7 @@ impl Labels<'_> {
                     carrier: CarrierKind::ToolResult,
                     content: ExpectedContent { text: line, at },
                     needs,
-                    tier: Tier::Heuristic,
+                    tier,
                     source: SourceRef::new(
                         Table::ComputerUseTurns.file_name(),
                         format!(

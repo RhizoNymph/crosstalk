@@ -71,6 +71,38 @@ impl MatchNeed {
         }
     }
 
+    /// Text a writer put inside a JSON string (tool-call arguments) and a
+    /// reader received raw: `Decoded([JsonString])` when writing it as a
+    /// JSON string changes it (it holds a quote, a backslash or a control
+    /// character), `Exact` otherwise. Undoing escapes is decoding, never
+    /// normalization (spec #58).
+    pub fn through_json_string(text: &str) -> Self {
+        if json_escapes(text) {
+            Self::json_string()
+        } else {
+            Self::Exact
+        }
+    }
+
+    /// Text that arrives only after two string levels are undone: out of
+    /// reach, since a decoded chain holds at most one string codec
+    /// (`provenance.decode.one-string-level`).
+    pub fn two_string_levels() -> Self {
+        Self::Undecodable {
+            codec: TWO_STRING_LEVELS.to_owned(),
+        }
+    }
+
+    /// The tier a label with this need gets: `OutOfReach` when it is
+    /// undecodable, `in_reach` otherwise (`ExpectedTransmission::new`
+    /// refuses any other pairing).
+    pub fn tier(&self, in_reach: Tier) -> Tier {
+        match self {
+            Self::Undecodable { .. } => Tier::OutOfReach,
+            _ => in_reach,
+        }
+    }
+
     pub fn class(&self) -> MatchClass {
         match self {
             Self::Exact => MatchClass::Exact,
@@ -79,6 +111,16 @@ impl MatchNeed {
             Self::Semantic => MatchClass::Semantic,
         }
     }
+}
+
+/// The `Undecodable` codec name of text escaped two string levels deep.
+pub const TWO_STRING_LEVELS: &str = "json_string+json_string";
+
+/// Whether writing `text` as a JSON string's contents changes it: it holds
+/// a quote, a backslash or a control character.
+pub fn json_escapes(text: &str) -> bool {
+    text.chars()
+        .any(|ch| matches!(ch, '"' | '\\' | '\u{0}'..='\u{1f}'))
 }
 
 /// A rank for the spec's `RouteKind`, which has no order of its own: the

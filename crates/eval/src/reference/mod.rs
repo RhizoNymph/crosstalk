@@ -17,8 +17,12 @@
 //! case and whitespace. A hit is then [classified](classify::classify)
 //! `Exact` when the reader's matched bytes occur verbatim in the span,
 //! `Normalized` when case and whitespace folding alone make them equal, and
-//! `Decoded([JsonString])` or `Decoded([YamlString])` when one side's
-//! string escapes had to be undone. Candidate tokens are also decoded
+//! `Decoded([JsonString])` or `Decoded([YamlString])` when one level of
+//! string escapes had to be undone. A hit that only two string levels
+//! undone explain is out of the spec's reach
+//! (`provenance.decode.one-string-level`): it is counted
+//! ([`ReferenceOutput::out_of_reach`]) and reported as no match. Candidate
+//! tokens are also decoded
 //! (base64, hex, URL encoding) and matched as `Decoded`. Opaque blobs
 //! ([`opaque`]) are cut out before spans, matching and decoding. Hits are
 //! grouped into one confirmed spec `Transmission` per (reader exchange,
@@ -26,7 +30,8 @@
 //!
 //! **Boilerplate.** A shingle held by more than `max_postings` distinct
 //! originated spans is boilerplate, as L4's frequency cutoff makes it
-//! (`interfaces::l4_provenance`): its postings are dropped and it is ignored
+//! (`interfaces::l4_provenance`; the default, [`MAX_POSTINGS`], is L4's
+//! `IndexSettings::cutoff` default): its postings are dropped and it is ignored
 //! on lookup from then on. Text many agents originate independently (a
 //! wiki's new-page template, a URL every agent's task names) is a shared
 //! source, not evidence of who a reader got it from; without the cutoff each
@@ -77,9 +82,16 @@ pub struct ReferenceConfig {
     /// of mostly JSON syntax (`"}]","reasoning":"the `) never counts.
     pub min_word_chars: usize,
     /// The most distinct originated spans a shingle may be posted for; one
-    /// more makes it boilerplate (never indexed or looked up again).
+    /// more makes it boilerplate (never indexed or looked up again). The
+    /// default is [`MAX_POSTINGS`].
     pub max_postings: usize,
 }
+
+/// The default boilerplate cutoff: L4's `IndexSettings::cutoff` default
+/// (`crates/provenance`: a fingerprint observed in more live texts than
+/// this is boilerplate), so the reference and L4 call the same text
+/// boilerplate.
+pub const MAX_POSTINGS: usize = 50;
 
 impl Default for ReferenceConfig {
     fn default() -> Self {
@@ -88,7 +100,7 @@ impl Default for ReferenceConfig {
             min_span: 24,
             min_decoded: 16,
             min_word_chars: 20,
-            max_postings: 16,
+            max_postings: MAX_POSTINGS,
         }
     }
 }
@@ -102,6 +114,9 @@ pub struct ReferenceOutput {
     /// Every originated span the matcher indexed, in index order.
     pub spans: Vec<SpanRecord>,
     pub matches: usize,
+    /// Hits the matching fold found that only two string levels undone
+    /// explain: out of the spec's reach, so reported as no match.
+    pub out_of_reach: usize,
 }
 
 /// An indexed span: whose output it is in, who wrote it and where (the
@@ -162,6 +177,9 @@ struct IndexedSpan {
     raw: String,
     /// `raw` under case and whitespace folding alone.
     plain: String,
+    /// `raw` with one string level undone, then folded like `plain`; only
+    /// when `raw` holds a backslash.
+    unescaped: Option<String>,
 }
 
 /// A hit before grouping: who sent it, how it travelled, the match.
@@ -181,6 +199,7 @@ struct Matcher<'w> {
     seen: Vec<HashSet<u64>>,
     channels: BTreeMap<ChannelId, Vec<Locator>>,
     matches: usize,
+    out_of_reach: usize,
 }
 
 /// Runs the reference matcher over one world.
@@ -198,6 +217,7 @@ pub fn run(world: &World, config: ReferenceConfig) -> Result<ReferenceOutput, Re
         seen: vec![HashSet::new(); world.agents().len()],
         channels: BTreeMap::new(),
         matches: 0,
+        out_of_reach: 0,
     };
     let mut previous: Vec<Option<&CorpusExchange>> = vec![None; world.agents().len()];
     let mut transmissions = Vec::new();
@@ -227,6 +247,7 @@ pub fn run(world: &World, config: ReferenceConfig) -> Result<ReferenceOutput, Re
         world = %world.key(),
         spans = matcher.spans.len(),
         matches = matcher.matches,
+        out_of_reach = matcher.out_of_reach,
         transmissions = transmissions.len(),
         "reference matcher finished world"
     );
@@ -235,6 +256,7 @@ pub fn run(world: &World, config: ReferenceConfig) -> Result<ReferenceOutput, Re
         channels: matcher.channels,
         spans: matcher.records,
         matches: matcher.matches,
+        out_of_reach: matcher.out_of_reach,
     })
 }
 
@@ -300,11 +322,13 @@ impl Matcher<'_> {
                     );
                     let span = self.spans.len();
                     let plain = fold::fold_plain(&raw);
+                    let unescaped = classify::unescaped_plain(&raw);
                     self.spans.push(IndexedSpan {
                         id,
                         agent,
                         raw,
                         plain,
+                        unescaped,
                     });
                     self.records.push(SpanRecord {
                         id,
@@ -340,7 +364,9 @@ impl Matcher<'_> {
             return Ok(Vec::new());
         };
         let k = self.config.k;
-        let mut found: BTreeMap<(usize, u32, u32), MatchKind> = BTreeMap::new();
+        // `None`: a hit only two string levels explain, unless another
+        // reading of the same range is in reach.
+        let mut found: BTreeMap<(usize, u32, u32), Option<MatchKind>> = BTreeMap::new();
         for (offset, piece) in segments(&text) {
             let folded = fold(piece, offset);
             let windows = shingles(folded.text.as_bytes(), k);
@@ -358,8 +384,19 @@ impl Matcher<'_> {
                         .get(raw_start as usize..raw_end as usize)
                         .unwrap_or_default();
                     let indexed = &self.spans[span];
-                    let kind = classify::classify(&indexed.raw, &indexed.plain, read);
-                    found.entry((span, raw_start, raw_end)).or_insert(kind);
+                    let forms = classify::SpanForms {
+                        raw: &indexed.raw,
+                        plain: &indexed.plain,
+                        unescaped: indexed.unescaped.as_deref(),
+                    };
+                    let kind = match classify::classify_forms(forms, read) {
+                        classify::Classified::Match(kind) => Some(kind),
+                        classify::Classified::TwoStringLevels => None,
+                    };
+                    let slot = found.entry((span, raw_start, raw_end)).or_insert(None);
+                    if slot.is_none() {
+                        *slot = kind;
+                    }
                 }
             }
             self.seen[reader].extend(windows.iter().map(|&(hash, _)| hash));
@@ -380,14 +417,19 @@ impl Matcher<'_> {
                     else {
                         continue;
                     };
-                    found
-                        .entry((span, start, end))
-                        .or_insert(MatchKind::Decoded(NonEmpty::new(decoded.codec)));
+                    let slot = found.entry((span, start, end)).or_insert(None);
+                    if slot.is_none() {
+                        *slot = Some(MatchKind::Decoded(NonEmpty::new(decoded.codec)));
+                    }
                 }
             }
         }
         let mut hits = Vec::with_capacity(found.len());
         for ((span, start, end), kind) in found {
+            let Some(kind) = kind else {
+                self.out_of_reach += 1;
+                continue;
+            };
             let Ok(location) = location::location(message.hash, part, start, end) else {
                 continue;
             };

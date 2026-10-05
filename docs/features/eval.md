@@ -33,8 +33,10 @@ as dev-dependencies.
   (`Pipeline::ingest`, unscored: it has no detection consumers), and the
   `LiveBackend` seam that scores the gateway's live composition
   (`crosstalk_gateway::live::Live`, L3–L7) once it merges.
-- **Reports and gates.** A table, a JSON report, and regression gates in
-  `gates.toml`.
+- **Reports and gates.** A table, a JSON report (with `overall`, an
+  `out_of_reach` summary and an `access_only` recall kept apart from
+  it), and regression gates in `gates.toml`, found by `GateSearch`
+  (below).
 - **The SALT converter.**
 - **The AgentDojo and τ²-bench converters** (see their sections below).
 - **The demo swarm benchmark** (`ct-eval swarm`): the live gateway scored
@@ -238,7 +240,7 @@ unmerged API. Its `AGREED` markers name what it expects that
 | `src/corpus/client.rs` | per-agent client context, replayed | `synthetic_client`, `corpus_id`, `vendor_of` |
 | `src/corpus/delta.rs` | new inputs of an exchange | `new_inputs` |
 | `src/truth/mod.rs` | labels | `Expectation`, `ExpectedTransmission`/`TransmissionLabel`, `NegativeControl`/`NegativeLabel`, `NegativeReason`, `Exemption`/`ExemptionReason`, `AgentCluster`, `RouteExpectation`, `ExpectedContent`, `InvalidLabel` |
-| `src/truth/kinds.rs` | label dimensions the spec lacks, helpers over spec ones | `Tier` (with `OutOfReach`), `CarrierKind` (the spec's, re-exported), `MatchNeed` (with spec `Codec`s; `json_string`, `yaml_string`; and `Undecodable` for out-of-reach labels), `route_rank`/`cmp_route` (order for spec `RouteKind`), `locator_key` (a spec `Locator` as one string) |
+| `src/truth/kinds.rs` | label dimensions the spec lacks, helpers over spec ones | `Tier` (with `OutOfReach`), `CarrierKind` (the spec's, re-exported), `MatchNeed` (with spec `Codec`s; `json_string`, `yaml_string`, `through_json_string`, `two_string_levels`, `tier`; and `Undecodable` for out-of-reach labels), `json_escapes`, `TWO_STRING_LEVELS`, `route_rank`/`cmp_route` (order for spec `RouteKind`), `locator_key` (a spec `Locator` as one string) |
 | `src/truth/jsonl.rs` | truth as JSONL | `write`, `read` |
 | `src/predict/mod.rs` | predictions | `Prediction`, `PredictedRoute`, `EvidenceClass`, `AgentMap`, `AgentMapError`, `Directory`, `WorldDirectory`, `from_transmission`, `PredictError` |
 | `src/predict/reads.rs` | the read seam: the spec's read traits, batched | `ChannelResources`, `RegistryResources`, `Reads`, `Resolved` (`gather`), `ReadError`, `ready` |
@@ -248,9 +250,9 @@ unmerged API. Its `AGREED` markers name what it expects that
 | `src/score/mod.rs` | counts and breakdown | `Scorer`, `Score`, `RowKey`, `Counts`, `Selector`, `TransmissionKey` (by spec `QualityMatch`), `TransmissionRow` |
 | `src/score/sources.rs` | the shared texts negative-control violations fell on | `SourceTally`, `SourceCount`, `source_key`, `TOP_SOURCES` |
 | `src/score/quality.rs` | spec `DetectionQuality` from truth | `verdicts`, `detection_quality` |
-| `src/reference/mod.rs` | the reference matcher (with the boilerplate cutoff) | `run`, `ReferenceConfig` (`max_postings`), `ReferenceOutput`, `SpanRecord` |
-| `src/reference/fold.rs` | folding with offset maps | `fold`, `Folded`, `fold_plain`, `string_codec` |
-| `src/reference/classify.rs` | a hit's match class | `classify` |
+| `src/reference/mod.rs` | the reference matcher (with the boilerplate cutoff) | `run`, `ReferenceConfig` (`max_postings`), `MAX_POSTINGS` (50, L4's), `ReferenceOutput` (`out_of_reach` hits), `SpanRecord` |
+| `src/reference/fold.rs` | folding with offset maps | `fold`, `Folded`, `fold_plain`, `string_codec`, `unescape_once` |
+| `src/reference/classify.rs` | a hit's match class, or out of reach | `classify`, `classify_forms`, `Classified` (`Match`, `TwoStringLevels`), `SpanForms`, `unescaped_plain` |
 | `src/reference/opaque.rs` | opaque blobs | `opaque_ranges`, `segments` |
 | `src/reference/decode.rs` | base64, hex, URL decoding | `decode_candidates` |
 | `src/reference/shingle.rs` | k-gram rolling hashes | `shingles`, `covered` |
@@ -259,8 +261,8 @@ unmerged API. Its `AGREED` markers name what it expects that
 | `src/gateway.rs` | the gateway pipeline as a detector | `PipelineDetector`, `ingest_world`, `subscribe`, `capture_group`, `CorpusClock`, `Captured`, `PipelineError` |
 | `src/detect/live/mod.rs` | the live seam | `LiveBackend`, `LiveWorld`, `LiveDetector`, `LiveSettings`, `Attribution`, `BackendError`, `LiveError`, `LiveRead`, `Unavailable`, `gateway_backend`, `all_time` |
 | `src/detect/live/gateway.rs.in` | the `Live` adapter, out of the build until `Live` merges | `GatewayBackend`, `GatewayWorld` |
-| `src/report/mod.rs`, `table.rs` | reports | `Report` (`overall` without out-of-reach rows, `out_of_reach`, `background`), `Summary`, `Background`, `ReportRow`, `table::render` |
-| `src/report/gates.rs` | regression gates | `Gates`, `Gate`, `Check`, `GateOutcome`, `GateStatus` |
+| `src/report/mod.rs`, `table.rs` | reports | `Report` (`overall` without out-of-reach rows, `out_of_reach`, `access_only`, `background`), `Summary`, `AccessOnly`, `Background`, `ReportRow`, `table::render` |
+| `src/report/gates.rs` | regression gates and where they are found | `Gates`, `Gate`, `Check`, `GateOutcome`, `GateStatus`, `GateSearch` (`new`, `from_env`, `locate`, `load`), `GatesLocation`, `GatesFrom`, `GATES_ENV`, `INSTALLED_GATES`, `GateError` (`Missing`) |
 | `src/config.rs` | dataset locations | `EvalConfig`, `DatasetConfig`, `expand` |
 | `src/datasets/salt/mod.rs` | SALT as a `TraceSource` | `SaltSource`, `load_world`, `convert_trace`, `SaltError`, `DATASET` |
 | `src/datasets/salt/files.rs` | trace discovery | `discover`, `Selection`, `world_name` |
@@ -273,7 +275,7 @@ unmerged API. Its `AGREED` markers name what it expects that
 | `src/bin/ct-eval/main.rs` | CLI | `run`, `truth` |
 | `datasets.toml` | dataset root and paths | |
 | `gates.toml` | regression gates | |
-| `tests/` | integration tests (`pipeline.rs` is the sim smoke test of `Pipeline::ingest`; `live.rs` drives `LiveDetector` over a scripted backend on crosstalk-memory's stores, with transmissions in every state); `tests/fixtures/salt/` holds synthetic SALT-shaped traces | |
+| `tests/` | integration tests (`gates_search.rs` is the gates file lookup; `pipeline.rs` is the sim smoke test of `Pipeline::ingest`; `live.rs` drives `LiveDetector` over a scripted backend on crosstalk-memory's stores, with transmissions in every state); `tests/fixtures/salt/` holds synthetic SALT-shaped traces | |
 
 ## Invariants and constraints
 
@@ -296,6 +298,13 @@ its own row (class `suspected` or `discarded`), but a label it aligns with
 that no content prediction does stays `missed` and is also counted
 `suspected`. Selectors, gates and the overall summary read content rows
 unless they name an access class.
+
+**Access-only recall** (`Report::access_only`, `AccessOnly`) is those
+labels over every in-reach label: `overall.suspected / overall.expected`.
+It is reported on its own line ("access-only recall (suspected or
+discarded only, not in overall)") and in `report.json`, never added to
+`overall`, and the line is left out of the table when no label is
+access-only.
 
 - A label is found when any prediction aligns with it. Several predictions
   aligned with one label are each correct.
@@ -375,9 +384,13 @@ The SALT converter maps signatures and encrypted reasoning to
 `Reasoning::Opaque`, which has no part text.
 
 **Boilerplate cutoff.** A shingle posted for more than
-`ReferenceConfig::max_postings` (default 16, `--max-postings`) distinct
-originated spans is boilerplate, as L4's frequency cutoff makes it
-(`interfaces::l4_provenance`). Its postings are dropped, and it is never
+`ReferenceConfig::max_postings` (default `MAX_POSTINGS` = 50,
+`--max-postings`) distinct originated spans is boilerplate, as L4's
+frequency cutoff makes it (`interfaces::l4_provenance`). 50 is L4's own
+default, `IndexSettings::default().cutoff()` in `crates/provenance`
+("a fingerprint observed in more live texts than this is boilerplate"),
+so the reference and L4 call the same text boilerplate; the default was
+16 before. Its postings are dropped, and it is never
 indexed or looked up again in that world (`reference::Postings`, a
 `Spans | Boilerplate` enum). Text that many agents originate independently
 is a shared source, not evidence of who a reader got it from. Examples are a
@@ -385,10 +398,10 @@ wiki's new-page template, or a URL every agent's task names. Without the
 cutoff, each occurrence in a read matches every originating span, so matches
 grow as reads × occurrences × originators. Before the cutoff, collusion-wiki's
 largest world (2,553 agents) held 22.6M content matches and passed 8 GB. With
-it, the whole export takes 2.2 GB (see below). The reference counts only
+it, the whole export takes 2.1 GB at a cutoff of 16 and 6.2 GB at 50 (see below). The reference counts only
 originated spans toward the frequency, while L4 also counts scanned inputs.
-It has no retention window, because a world is one replay. SALT, AgentDojo
-and τ²-bench reports are unchanged by it.
+It has no retention window, because a world is one replay. How 16 and 50
+compare on each corpus is under "Boilerplate cutoff: 16 and 50" below.
 
 **Escapes.** Matching folds (`reference/fold.rs`) JSON and YAML string
 escapes at any nesting depth:
@@ -399,16 +412,48 @@ escapes at any nesting depth:
 
 It then folds case and collapses whitespace. Content one agent writes
 inside JSON tool arguments therefore matches the same content delivered
-raw. Undoing escapes is decoding, not normalization (spec #58), so a hit
-is then classified (`reference/classify.rs`): `Exact` when the span holds
-the read bytes, `Normalized` when case and whitespace folding alone make
-them equal (`fold_plain`), and otherwise `Decoded([JsonString])` or
-`Decoded([YamlString])`, by the escapes the text holds (`string_codec`:
-an escaped line break or space, `\x`, `\0`, `\a`, `\e`, `\v`, `\N`,
-`\_`, `\L`, `\P` or `\U` is YAML's). A SALT label needs
-`Decoded([JsonString])` exactly when its content holds a character JSON
-escapes; AgentDojo's `JsonString` and `YamlString` arrivals need
-`Decoded([JsonString])` and `Decoded([YamlString])`.
+raw. The fold finds candidates; it decides nothing. Undoing escapes is
+decoding, not normalization (spec #58), and the spec undoes at most one
+string level (`provenance.decode.one-string-level`), so every hit is then
+classified in one place, `reference/classify.rs`:
+
+1. `Exact` when the span holds the read bytes;
+2. `Normalized` when case and whitespace folding alone make them equal
+   (`fold_plain`);
+3. `Decoded([JsonString])` or `Decoded([YamlString])` when they are equal
+   once one string level is undone (`unescape_once`) on the read side, on
+   the span side (a span written inside JSON tool arguments, delivered
+   raw), or on both, then folded; the codec is the one whose escapes the
+   undone text holds (`string_codec`: an escaped line break or space,
+   `\x`, `\0`, `\a`, `\e`, `\v`, `\N`, `\_`, `\L`, `\P` or `\U` is
+   YAML's); a YAML single-quoted `''` undone to `'` is
+   `Decoded([YamlString])`;
+4. `Classified::TwoStringLevels` when undoing exactly two string levels
+   on one side makes them equal. No spec decoder does that, so the matcher
+   reports no match for the hit and counts it in
+   `ReferenceOutput::out_of_reach` (logged per world);
+5. otherwise the range bridged a character neither side shares (a hit's
+   range is the union of adjacent matching shingle windows, so it can
+   span a one-character difference); it is classed by its escapes as one
+   string level, as before.
+
+Out of reach takes positive evidence (two levels undone actually
+match), so a bridged range is never dropped as two levels.
+
+Levels are relative: a raw log that holds a JSON-escaped send (two levels
+from the raw text) is one level from the span inside the sender's tool
+arguments, and matches as `Decoded([JsonString])`. Labels follow the same rule.
+Text a writer put inside JSON tool arguments and a reader got raw needs
+`MatchNeed::through_json_string`: `Decoded([JsonString])` exactly when it
+holds a character JSON escapes, `Exact` otherwise (SALT deliveries, wiki
+channel labels, swarm-truth transmissions). AgentDojo's `JsonString` and
+`YamlString` arrivals need `Decoded([JsonString])` and
+`Decoded([YamlString])`. A label whose text only arrives two string
+levels deep needs `MatchNeed::two_string_levels()`
+(`Undecodable { codec: "json_string+json_string" }`) and is
+`Tier::OutOfReach` (`MatchNeed::tier`): the splice generator's JSON
+string file read through a shell, and AI Village text that two string
+levels undone tie to its sender.
 
 **The virtual clock.** `compose(major, minor, sub)` gives
 `EPOCH + major·1000 s + minor·1 ms + sub·1 µs`, with bounded components, so
@@ -457,6 +502,46 @@ gone:
 | `CarrierKind` | score rows and `DetectionQuality` use the spec's (`Carrier::kind`); `QualityMatch::Content { class, carrier }` keys the scorer's transmission rows |
 | `WriteOutcome` (on `AccessOp::Write`) | SALT keeps its `RejectedSend` truth label; a failed send's result is `ToolOutcome::Error`, and the eval builds rejected sends as `WriteOutcome::Rejected` accesses |
 | `Codec::JsonString`, `Codec::YamlString` | escaped text is `Decoded([JsonString])` or `Decoded([YamlString])` in labels and in the reference matcher; `Normalized` is whitespace and case only |
+| one string level (`provenance.decode.one-string-level`) | the matcher classifies every hit through `reference/classify.rs` and reports no match for one only two string levels explain (`ReferenceOutput::out_of_reach`); a label whose text arrives two levels deep is `Undecodable { "json_string+json_string" }`, `Tier::OutOfReach` |
+
+Every converter is on these types:
+
+| Converter | Ingress | Carrier | Escaped text |
+| --- | --- | --- | --- |
+| SALT | `Replay { corpus: eval-salt }` | `UserTurn` | `through_json_string` |
+| AgentDojo | `Replay { corpus: eval-agentdojo }` | `ToolResult` | `JsonString` / `YamlString` arrivals |
+| τ²-bench | `Replay { corpus: eval-tau2 }` | `UserTurn` | none (labels are exact turns) |
+| collusion-wiki | `Replay { corpus: eval-collusion-wiki }` | `ToolResult`, `ReaderOutput` (relays) | `through_json_string` (was `Normalized`) |
+| swarm-traces | `Replay { corpus: eval-swarm-traces }` | `ToolResult` | base64 / hex / URL chains only |
+| demo swarm (swarm-truth) | the gateway's own captures | `ToolResult` | `through_json_string` (was `Normalized`) |
+| open-swe, lmcache | `Replay { corpus: eval-open_swe / eval-lmcache }` | none (negative controls only) | none |
+| swe-splice | `Replay { corpus: eval-swe_splice }` | `ToolResult` | `JsonString`; two levels out of reach |
+| cipher | `Replay { corpus: eval-cipher }` | `UserTurn`, `ToolResult` | base64 / hex / URL chains; ciphers the spec cannot name out of reach |
+| AI Village | `Replay { corpus: eval-ai-village }` | `UserTurn`, `ToolResult` | `JsonString` one level; two levels out of reach (was `Normalized`) |
+
+Ingress and the credential come from `WorldBuilder` (`corpus::client`) for
+every converter but the swarm benchmark, whose exchanges are the
+gateway's own.
+
+## Gates file
+
+`ct-eval run` and `ct-eval swarm` look for their gates in this order
+(`report::gates::GateSearch`):
+
+1. `--gates PATH`;
+2. `CT_EVAL_GATES` (empty is unset);
+3. `/usr/local/share/crosstalk-eval/gates.toml` (`INSTALLED_GATES`), where
+   the bench image installs it;
+4. the crate's `gates.toml` (`CARGO_MANIFEST_DIR`), which exists only in a
+   source checkout (in the runtime image the compiled-in path is
+   `/src/crates/eval/gates.toml`, which is absent there);
+5. none: the run has no gates.
+
+The CLI prints which one it used (`gates: PATH (--gates | CT_EVAL_GATES |
+installed | crate)`) or `no gates` on stderr. A missing default (2–4) is
+never an error, and falls through to the next; only an explicit
+`--gates` that does not exist is (`GateError::Missing`). There are no
+demo-swarm gates yet: they wait for a calibrated first live run.
 
 ## How to add a converter
 
@@ -497,10 +582,10 @@ ct-eval run --dataset salt --limit 53
 | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | direct | user_turn | exact | construction | 2806 | 2722 | 0.970 | 7046 | 7024 | 22 | 0.997 |
 | direct | user_turn | normalized | construction | 0 | 0 | - | 347 | 347 | 0 | 1.000 |
-| direct | user_turn | decoded | construction | 1044 | 842 | 0.807 | 1668 | 1668 | 0 | 1.000 |
+| direct | user_turn | decoded | construction | 1044 | 840 | 0.805 | 1665 | 1665 | 0 | 1.000 |
 | direct | tool_result | exact | construction | 0 | 0 | - | 1678 | 0 | 1678 | 0.000 |
 | direct | tool_result | normalized | construction | 0 | 0 | - | 457 | 0 | 457 | 0.000 |
-| direct | tool_result | decoded | construction | 0 | 0 | - | 2575 | 0 | 2575 | 0.000 |
+| direct | tool_result | decoded | construction | 0 | 0 | - | 2322 | 0 | 2322 | 0.000 |
 | direct | user_turn | exact / normalized | structural | 0 | 0 | - | 89 | 0 | 89 | 0.000 |
 | direct | tool_result | decoded | structural | 0 | 0 | - | 12 | 0 | 12 | 0.000 |
 
@@ -511,7 +596,15 @@ ct-eval run --dataset salt --limit 53
   predictions it called `normalized`, 1,668 needed a JSON string decoded
   and 347 only whitespace or case (pieces of an escaped delivery between
   its escapes). Totals, violations and gates are unchanged.
-- Overall recall is 0.926; overall precision is 0.652 (0.988 on user
+- With one string level (`provenance.decode.one-string-level`), 253
+  tool-result hits and 3 user-turn hits that only two levels undone
+  explain are no longer reported (2575 to 2322 and 1668 to 1665
+  predictions), and two escaped deliveries are no longer found (842 to
+  840). Both were content holding a literal `\n` that the any-depth fold
+  paired with real whitespace in a different chunk of the same sender
+  (`2/29 \n    if not …` against `3/29         if not …`): the pairing
+  was an over-reach.
+- Overall recall is 0.925; overall precision is 0.664 (0.988 on user
   turns).
 - Violations: `rejected_send` 171, `boilerplate` 89, `shared_source` 12,
   `no_sender_exchange` 0.
@@ -675,12 +768,15 @@ ct-eval run --dataset agentdojo --include pipeline=gpt-4o-2024-05-13 \
 | channel | tool_result | normalized | construction | 359 | 87 | 0.242 | 87 | 87 | 0 | 1.000 |
 | direct | tool_result | exact | construction | 0 | 0 | - | 328 | 142 | 186 | 0.433 |
 | direct | tool_result | normalized | construction | 294 | 294 | 1.000 | 1736 | 1289 | 447 | 0.743 |
-| direct | tool_result | decoded | construction | 2030 | 2030 | 1.000 | 1813 | 1741 | 72 | 0.960 |
+| direct | tool_result | decoded | construction | 2030 | 2030 | 1.000 | 1803 | 1741 | 62 | 0.966 |
 | direct | user_turn | exact / normalized | structural | 0 | 0 | - | 45 | 0 | 45 | 0.000 |
 
-Overall recall is 0.899 and precision 0.813. Before the string codecs the
+Overall recall is 0.899 and precision 0.815. Before the string codecs the
 two direct `normalized` and `decoded` rows were one `normalized` row
-(2,324 labels, 3,549 predictions); the totals are unchanged.
+(2,324 labels, 3,549 predictions); the totals are unchanged. Classifying
+by string level drops 10 false hits only two levels explain (1,813 to
+1,803 predictions); recall is unchanged. A YAML single-quoted `''` is
+`Decoded([YamlString])`.
 
 Arrival classes:
 
@@ -739,6 +835,31 @@ under `shared_source` controls.
 - **False positives.** Coincidental phrasing shared between one side's
   turns and the other side's tool output or policy.
 
+## Boilerplate cutoff: 16 and 50
+
+The default `max_postings` is L4's `IndexSettings` cutoff, 50 (it was 16).
+Same machine, release build, one string level, `--max-postings 16` against
+the default (2026-10-05):
+
+| corpus | time 16 → 50 | peak RSS 16 → 50 | recall 16 → 50 | predictions 16 → 50 | FP per 1k 16 → 50 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| SALT (53 traces) | 43 s → 37 s | 268 MB → 269 MB | 0.925 → 0.925 | 13,616 → 13,616 | 388.3 → 388.3 |
+| AgentDojo (3 pipelines) | 3.1 s → 9.2 s | 13 MB → 13 MB | 0.899 → 0.899 | 3,999 → 3,999 | 65.9 → 65.9 |
+| τ²-bench | 102 s → 91 s | 171 MB → 171 MB | 0.998 → 0.998 | 241,794 → 241,794 | 2.1 → 2.1 |
+| wiki `--demo` | 0.2 s → 0.6 s | 85 MB → 84 MB | 0.975 → 0.975 | 458 → 458 | - |
+| wiki (whole export) | 20 s → 45 s | 2.1 GB → 6.2 GB | 0.938 → 0.941 | 1,844,139 → 6,057,952 | - |
+| open-swe (`--count 16`) | 36 s → 37 s | 3.7 GB → 3.7 GB | - | 4,722 → 4,722 | 330.0 → 330.0 |
+| lmcache (`--count 16`) | 7 s → 18 s | 2.7 GB → 2.7 GB | - | 4,742 → 4,742 | 1,887.0 → 1,887.0 |
+
+Every report but the whole wiki export is identical at both cutoffs: no
+shingle in them is posted for 17 to 50 distinct originated spans. Their
+time differences are run-to-run noise (page cache, other load). The whole
+wiki export finds 140 more labels (0.938 to 0.941) for 3.3 times the
+predictions, 2.3 times the time and 3 times the memory, since text 17 to
+50 identities originate is no longer boilerplate. AI Village (window and
+Claude Code) keeps its recall; its window run holds 0.1% more unjudged
+predictions. No gate reads a row that moved, so `gates.toml` is unchanged.
+
 ## Swarm benchmark
 
 `src/datasets/swarm_truth/` scores the **live gateway** on traffic from the
@@ -748,8 +869,10 @@ ids; the eval only labels them and scores what the gateway exported. The
 dataset id is `demo-swarm`; one run is one world (`header.world`).
 
 **Scope.** Reading truth v2, joining it to the gateway's exchange log and
-blobs, scoring a saved transmissions export with its evidence, a typed
-join-diagnostics table, and fetching the export over the L8 API.
+blobs, scoring a saved transmissions export with its evidence (and the
+evidence of suspected and discarded transmissions, as access-only
+predictions), a typed join-diagnostics table, and fetching the export over
+the L8 API.
 **Non-scope.** Driving the swarm or the gateway, identity scoring (key
 groups are kept but not labelled, see below), and Parquet exports.
 
@@ -813,7 +936,7 @@ times) and `miss` (the reader side only).
 
 | Row | Becomes |
 | --- | --- |
-| `transmission` | `ExpectedTransmission`: Channel route with `Locator::Url` of the canonical URL (L5's `url_locator`), `ToolResult` carrier, `Construction` tier, `needs` `Normalized` when the page holds a character JSON escapes (the writer's `PUT` carries it escaped) and `Exact` otherwise |
+| `transmission` | `ExpectedTransmission`: Channel route with `Locator::Url` of the canonical URL (L5's `url_locator`), `ToolResult` carrier, `Construction` tier, `needs` `Decoded([JsonString])` when the page holds a character JSON escapes (the writer's `PUT` carries it escaped, the reader gets it raw) and `Exact` otherwise |
 | `self_read` | `NegativeControl` `SelfRead`, writer → itself, at the read (the one control whose sender and reader are one agent: it catches a detector that splits one agent in two) |
 | `reread` | `NegativeControl` `Reread`, writer → reader, at the later read |
 | `miss` | `NegativeControl` `Miss` from every other agent of the world, at the read |
@@ -836,6 +959,27 @@ are its accesses' locators. Predictions are then `predict::from_transmission`
 as for any detector, and the scorer, alignment rule and gates are the
 eval's own. Origin span locations are unknown (`SpanIndex::span` is not on
 the API), so no swarm control names an origin.
+
+**Co-access** (`SwarmDirectory::access`, `whole_part`). Every
+`AccessDetail` the evidence lists (the stored `Access`, its `Resource`
+and its canonical agent) is kept by access id, and the whole text of the
+part it names (a read's `AccessOp::Read::result`, a write's
+`AccessOp::Write::call`) is read from the gateway's blobs. A suspected or
+discarded transmission therefore predicts as for any detector: the
+write's agent to the read's agent, at the read's exchange, located at the
+whole tool result, with the write's whole tool call as origin, class
+`suspected` or `discarded`. These are access-only predictions: their own
+rows, never finding a label, out of `overall`, counted in access-only
+recall. A part whose body the blobs lack leaves the co-access unlocated,
+reported as `unpredictable`.
+
+The transmissions export holds confirmed transmissions only (its rows need
+`Confirmed::at`), so suspected and discarded transmissions have no export
+row. Scoring takes every one whose evidence line is in `evidence.jsonl`,
+besides the exported ones. `swarm-fetch` still fetches evidence for
+exported rows only; listing unconfirmed transmissions needs
+`GET /channels` and `GET /channels/{id}/transmissions` with
+`{"confirmation":"unconfirmed"}`, which it does not do yet.
 
 Reported, never silent: an exported transmission with no evidence
 (`missing_evidence`), a gateway agent no exchange ties to a truth agent
@@ -948,9 +1092,9 @@ any reader's read of it.
 - **Channel transmission** (`ToolResult` carrier): from each earlier distinct
   author whose inserted lines are still present in the body a reader read, at
   the read exchange, located in the read's tool result, routed through the
-  page's public `Locator::Url`. `Exact`, or `Normalized` when the surviving
-  text holds a character JSON escapes (it sits escaped inside the writer's tool
-  arguments).
+  page's public `Locator::Url`. `Exact`, or `Decoded([JsonString])` when the
+  surviving text holds a character JSON escapes (it sits escaped inside the
+  writer's tool arguments; `MatchNeed::through_json_string`).
 - **Relay** (`ReaderOutput` carrier): when a reader's own edit re-inserts an
   earlier author's line verbatim (and the line needs no JSON escaping, so it
   sits byte-identical in the write's canonical arguments). The reference
@@ -987,17 +1131,20 @@ Heuristic tier: 40,394 Channel/`ToolResult` and 808 relays (`ReaderOutput`).
 
 Reference matcher, channel route:
 
-| scope | labels | recall | exact | normalized | relay | correct / predicted | time | peak RSS |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| whole export | 41,202 | 0.938 | 0.919 | 0.967 | 0 / 808 | 408,745 / 1,844,405 | 29 s | 2.2 GB |
-| `--wiki dse` | 40,160 | 0.938 | 0.920 | 0.968 | 0 / 800 | 403,554 / 1,787,253 | 31 s | 2.1 GB |
-| `--wiki fractal` | 126 | 0.944 | 1.000 | 0.931 | 0 / 1 | 2,197 / 12,544 | 0.5 s | 85 MB |
-| `--demo` | 197 | 0.975 | 1.000 | 0.970 | none | 247 / 458 | 0.25 s | 85 MB |
+| scope | cutoff | labels | recall | exact | decoded (escaped) | relay | correct / predicted | time | peak RSS |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| whole export | 50 (default) | 41,202 | 0.941 | 0.922 | 0.971 | 0 / 808 | 713,792 / 6,057,952 | 45 s | 6.2 GB |
+| whole export | 16 | 41,202 | 0.938 | 0.919 | 0.967 | 0 / 808 | 408,698 / 1,844,139 | 20 s | 2.1 GB |
+| `--demo` | 50 or 16 | 197 | 0.975 | 1.000 | 0.970 | none | 247 / 458 | 0.2 s | 80 MB |
 
-Precision is 1.000 wherever it is judged; the rest is unjudged under
-`Partial`. Relays are never found, by design. `--max-postings` trades memory
-for little recall on dse: 4 gives 0.929 at 0.9 GB, 16 gives 0.938 at 2.1 GB,
-and 64 gives 0.942 at 8.1 GB.
+(`--wiki dse` and `--wiki fractal` were 0.938 and 0.944 at the old cutoff
+of 16.) The escaped labels were the `normalized` column before spec #58's
+string codecs reached this converter; the same labels are found. Precision
+is 1.000 wherever it is judged; the rest is unjudged under `Partial`.
+Relays are never found, by design. `--max-postings` trades memory for
+little recall: on dse, 4 gave 0.929 at 0.9 GB and 64 gave 0.942 at 8.1 GB;
+the whole export needs 6.2 GB at L4's 50, so `--max-postings 16` is the
+setting for a small machine.
 
 **The out-of-memory failure, and its fix.** Conversion was never the cost.
 The largest world converts in 1.7 s at 200 MB, and its biggest revision body
@@ -1026,9 +1173,9 @@ read-before-edit assumption supplies the reads.
 The converter's output is a valid input to `Pipeline::ingest` (the M2 path:
 converter → ingest → L3–L5 → a discovered wiki channel and confirmed
 transmissions). Ingest uses eval core's synthetic `ClientContext`
-(`corpus/client.rs`), as every converter does. It moves to
-`IngressMode::Replay { corpus }` when eval core does (see the shortcuts
-table). The agreed L5 `HttpTool` shape, emitted from one place
+(`corpus/client.rs`), as every converter does: `IngressMode::Replay
+{ corpus: eval-collusion-wiki }` with a corpus-scoped credential per
+identity. The agreed L5 `HttpTool` shape, emitted from one place
 (`wiki::tools`, tested by `reads_and_writes_take_the_http_tool_shape` and
 `channel_labels_sit_in_the_read_tool_result`):
 
