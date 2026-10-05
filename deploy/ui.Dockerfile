@@ -20,7 +20,7 @@ ENV RUSTUP_TOOLCHAIN=${RUST_TOOLCHAIN}
 RUN rustup toolchain install "${RUST_TOOLCHAIN}" --profile minimal
 # The Topcoat CLI writes the asset bundle (elements, stylesheet) the binary
 # serves.
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
+RUN --mount=type=cache,sharing=locked,target=/usr/local/cargo/registry \
     cargo install topcoat-cli --version =0.9.0 --locked --root /tools
 WORKDIR /src
 COPY . .
@@ -29,8 +29,8 @@ COPY --from=elements /elements/dist ./ui/elements/dist
 # Tailwind (checksum-pinned on linux-x64). `topcoat asset bundle` reuses the
 # release build and writes the bundle beside the binary, in
 # target/release/assets; both leave the cached target/ for /out.
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/src/target \
+RUN --mount=type=cache,sharing=locked,target=/usr/local/cargo/registry \
+    --mount=type=cache,sharing=locked,target=/src/target \
     cargo build -p crosstalk-ui --release --locked \
     && /tools/bin/topcoat asset bundle -p crosstalk-ui --release \
     && install -D target/release/crosstalk-ui /out/crosstalk-ui \
