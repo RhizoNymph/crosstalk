@@ -18,6 +18,8 @@
 mod actions;
 mod audit;
 mod clock;
+#[cfg(test)]
+mod conformance;
 pub mod export;
 mod identity;
 pub mod live;

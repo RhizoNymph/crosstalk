@@ -1072,6 +1072,30 @@ Features Index:
       - deploy/run.sh
     depends_on: [testkit, deploy, gateway, workspace]
     doc: docs/features/demo.md
+  conformance:
+    description: >
+      crosstalk-conformance (crates/conformance, TestSupport): the L8
+      conformance suite, tests generic over any implementation of the L8
+      traits (QueryApi, OperatorActions, LiveFeed, export). A harness
+      provisions worlds from scenarios (facts over typed roles: agents,
+      resources, channels, transmissions with their evidence, merges,
+      promotions, policies, verdicts, topic history, dead letters), the
+      suite checks every fact of a scenario through L8 before relying on
+      it, and assertions are relations the spec defines and what the facts
+      imply, citing spec/invariants ids, never totals of one world.
+      suite!(harness) instantiates every test; the UI fixture runs it
+      (ui/src/backend/fixture/conformance, binding the named scenarios to
+      its generated week). Next: a harness over crosstalk-surface and the
+      memory stores seeded by crosstalk-world, then scenarios seeded
+      through the write traits.
+    entry_points:
+      - crates/conformance/src/lib.rs
+      - crates/conformance/src/harness/mod.rs
+      - crates/conformance/src/scenario/mod.rs
+      - crates/conformance/src/suite.rs
+      - ui/src/backend/fixture/conformance/mod.rs
+    depends_on: [query_surface, read_models, export, channel_semantics, type_spec]
+    doc: docs/features/conformance.md
   world:
     description: >
       crosstalk-world (crates/world, TestSupport): the UI fixture's

@@ -148,7 +148,7 @@ impl<'a> ScopeFilter<'a> {
     }
 }
 
-/// The rows of every transmission `b`'s world holds in the scope (opened in
+/// The rows of every listed transmission `b`'s world holds in the scope (opened in
 /// its window, matching its filter as [`ScopeFilter`] reads it), newest id
 /// first, read from the world directly.
 pub async fn rows_in(b: &FixtureBackend, scope: &Scope) -> Vec<TransmissionSummary> {
@@ -160,7 +160,7 @@ pub async fn rows_in(b: &FixtureBackend, scope: &Scope) -> Vec<TransmissionSumma
         .transmissions
         .iter()
         .filter(|record| filter.keeps(record))
-        .map(|record| transmissions::summary(&ctx, record, filter.version))
+        .filter_map(|record| transmissions::listed(&ctx, record, filter.version))
         .collect();
     rows.sort_by_key(|row| std::cmp::Reverse(row.id));
     rows
