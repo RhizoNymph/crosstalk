@@ -24,6 +24,7 @@
 //!
 //! Failures render as the pages' error states and are logged ([`log`]).
 
+pub mod failure;
 pub mod identity;
 pub mod log;
 
