@@ -16,4 +16,4 @@ undone before lookup. String codecs undo one level of serialisation only
 property = "crosstalk_provenance::props::encoded_span_text_still_matches"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

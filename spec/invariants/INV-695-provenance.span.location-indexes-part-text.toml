@@ -15,4 +15,4 @@ stored records.
 property = "crosstalk_provenance::props::locations_index_part_text"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

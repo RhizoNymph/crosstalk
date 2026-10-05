@@ -18,5 +18,5 @@ property = "crosstalk_provenance::props::decode_depth_never_exceeds_max"
 fuzz = "crosstalk_provenance::fuzz::decode_pipeline_arbitrary_input"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }
 fuzz = { agent = "false", human = "false" }

@@ -15,4 +15,4 @@ Changing the hash is a migration, and the golden vectors make it explicit.
 unit = "crosstalk_provenance::tests::fingerprints_match_golden_vectors"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }

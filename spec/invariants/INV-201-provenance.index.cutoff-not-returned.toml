@@ -16,5 +16,5 @@ unit = "crosstalk_provenance::tests::lookup_ignores_fingerprints_that_crossed_cu
 integration = "crosstalk_provenance::integration::pg_lookup_ignores_fingerprints_above_cutoff"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
-integration = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }
+integration = { agent = "true", human = "false" }

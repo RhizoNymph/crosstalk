@@ -16,4 +16,4 @@ source would credit two authors for the same bytes.
 property = "crosstalk_provenance::props::reader_output_match_agrees_with_relay_span"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

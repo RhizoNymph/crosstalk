@@ -1,0 +1,21 @@
+[invariant]
+id = "provenance.scan.status-terminal"
+statement = "Processing a ConversationDelta whose exchange is recorded leaves that exchange's scan status Indexed or Failed, and a Failed scan publishes nothing and keeps no span or match of that exchange."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+The conversation view reads each exchange's scan status to tell "nothing
+matched" from "not scanned yet" and from "could not be scanned" (a body
+content retention dropped). A delta that stopped half way would read as
+scanned with no matches, and one that failed while publishing would leave
+L5 matches whose spans L4 never kept.
+"""
+
+[evidence]
+unit = "crosstalk_provenance::tests::delta_ends_indexed_or_failed"
+integration = "crosstalk_provenance::integration::pg_store_reads_scan_status_and_matches"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "true", human = "false" }

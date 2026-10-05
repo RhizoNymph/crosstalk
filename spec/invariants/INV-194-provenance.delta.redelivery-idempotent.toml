@@ -16,4 +16,4 @@ first and second processing.
 dst = "crosstalk_provenance::dst::redelivered_delta_is_idempotent"
 
 [evidence-review]
-dst = { agent = "false", human = "false" }
+dst = { agent = "true", human = "false" }

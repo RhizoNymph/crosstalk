@@ -19,4 +19,4 @@ integration = "crosstalk_provenance::integration::pg_index_schema_has_no_text_co
 
 [evidence-review]
 type = { agent = "true", human = "false" }
-integration = { agent = "false", human = "false" }
+integration = { agent = "true", human = "false" }
