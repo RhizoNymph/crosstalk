@@ -13,8 +13,17 @@
 //!   characters decoded, hex digits upper-cased, RFC 3986 §6.2.2);
 //! - sorts the query parameters, keeping each one's text, and drops empty
 //!   ones; an empty query is no query.
+//!
+//! A URL whose host fails IDNA or host parsing (`http://xn--/path`) is not
+//! dropped (`flow.resource.invalid-host-url-opaque`): it becomes a
+//! `Locator::Opaque` on [`INVALID_HOST_URL_TOOL`] keyed by the raw text
+//! normalized deterministically (trimmed, scheme and host part lower case,
+//! user info and fragment dropped), so every agent that uses the same
+//! invalid URL reaches one resource. Such text never becomes a
+//! `Locator::Url`.
 
 use crosstalk_spec::derived::flow::resource::{Host, Locator};
+use crosstalk_spec::observed::message::ToolName;
 use url::Url;
 
 /// Why text is not a URL a locator can be made from.
@@ -26,9 +35,21 @@ pub enum UrlError {
     NoHost,
 }
 
-/// The canonical locator of `text`.
+/// The tool of the `Locator::Opaque` an invalid-host URL becomes. Angle
+/// brackets keep it apart from any real tool's name.
+pub const INVALID_HOST_URL_TOOL: &str = "<url>";
+
+/// The canonical locator of `text`: a `Locator::Url`, or the
+/// `Locator::Opaque` on [`INVALID_HOST_URL_TOOL`] of a URL whose host is
+/// invalid (`flow.resource.invalid-host-url-opaque`).
 pub fn url_locator(text: &str) -> Result<Locator, UrlError> {
-    let url = Url::parse(text.trim())?;
+    let text = text.trim();
+    let url = match Url::parse(text) {
+        Ok(url) => url,
+        Err(error) => {
+            return invalid_host_locator(text, error).ok_or(UrlError::Parse(error));
+        }
+    };
     let host = url
         .host_str()
         .filter(|host| !host.is_empty())
@@ -49,6 +70,45 @@ pub fn url_locator(text: &str) -> Result<Locator, UrlError> {
         host: Host(host),
         path,
         query: url.query().and_then(sorted_query),
+    })
+}
+
+/// The `Locator::Opaque` of `text`, a `scheme://authority…` URL whose host
+/// the parser refused (`error`: IDNA, a forbidden domain character, a bad
+/// IPv4 or IPv6 address). Its key is `text` trimmed, its scheme and host
+/// part lower-cased, any user info and the fragment dropped. `None` for
+/// any other error, or text with no `scheme://`.
+fn invalid_host_locator(text: &str, error: url::ParseError) -> Option<Locator> {
+    use url::ParseError::{
+        IdnaError, InvalidDomainCharacter, InvalidIpv4Address, InvalidIpv6Address,
+    };
+    if !matches!(
+        error,
+        IdnaError | InvalidDomainCharacter | InvalidIpv4Address | InvalidIpv6Address
+    ) {
+        return None;
+    }
+    let (scheme, rest) = text.split_once("://")?;
+    let scheme_ok = scheme.starts_with(|c: char| c.is_ascii_alphabetic())
+        && scheme
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'));
+    if !scheme_ok {
+        return None;
+    }
+    let rest = rest.split_once('#').map_or(rest, |(before, _)| before);
+    let authority_end = rest.find(['/', '?', '\\']).unwrap_or(rest.len());
+    let (authority, tail) = rest.split_at(authority_end);
+    let host = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    Some(Locator::Opaque {
+        tool: ToolName(INVALID_HOST_URL_TOOL.to_owned()),
+        key: format!(
+            "{}://{}{tail}",
+            scheme.to_ascii_lowercase(),
+            host.to_lowercase()
+        ),
     })
 }
 

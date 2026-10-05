@@ -48,6 +48,9 @@ so locator equality is resource identity.
   `host[:port][/path…]` whose host is a domain (`www.informations.com`)
   reads as `https://`; a lone file name (`README.md`) or words stay an
   `Arguments` error (`flow.extract.bare-host-url-is-https`, INV-1121).
+- A URL whose host fails IDNA or host parsing (`http://xn--/path`): an
+  `Opaque` resource, not a dropped access
+  (`flow.resource.invalid-host-url-opaque`, INV-1130).
 - The spans a write carries, from L4's spans (originated, forwarded from
   an input, and the writer's own relayed sources), and the stored
   `AccessOp`.
@@ -156,6 +159,7 @@ the writer's spans located in the call's part:
 | a relative path, no cwd; `~/x`; `C:\x` | `Opaque { tool, key }` | the path as written (`flow.resource.relative-path-opaque`) |
 | a file in a known clone | `File { host: Some(<repo id>), path: <path in repo> }` | `RepoBindings::locate`, longest root |
 | a URL | `Url { scheme, host, path, query }` | scheme/host lower case, IDNA, default port and fragment and user info dropped, dot segments resolved, percent-encoding normalized, query parameters sorted, empty query none |
+| a URL whose host IDNA or host parsing refuses (`http://xn--/path`) | `Opaque { tool: "<url>", key }`, never `Url` | the raw text trimmed, scheme and host part lower case, user info and fragment dropped; nothing else (no port, path or query normalization). Only IDNA, domain-character and IPv4/IPv6 errors on `scheme://…` text; other parse errors stay errors (`resource::url::INVALID_HOST_URL_TOOL`) |
 | a MediaWiki page | `Url` of the canonical article: `https://en.wikipedia.org/wiki/Dead_drop` | title: `_`/whitespace runs one space, trimmed, `#section` dropped, first letter upper-cased on capital-links sites; mobile host folded |
 | a forge repository | `Repository { host, owner, name }` | the spec's `Locator::repository`: host lower case without `www.`/port/trailing dot, owner (`/`-joined for nested groups) and name lower case, `.git` dropped. Reached by its remotes (https, `ssh://`, `git@host:o/n`, any case, `.git` or not) as `git clone`/`push`/`pull`/`fetch` operands or a clone's bound remote, and by `github.com/o/n`, `…/tree/<ref>`, `codeload.github.com/o/n/…`, `api.github.com/repos/o/n` and its other subpaths, Pages `o.github.io/n/…` (`o.github.io/` is `o/o.github.io`), `gitlab.com/<path…>/n`, `…/-/<other>`, `gitlab.com/api/v4/projects/<encoded path>`, `g.gitlab.io/p/…` |
 | a repository on the local filesystem | `File { host: None, path: <repo dir> }` | `/srv/shared/atlas.git` and `file:///srv/shared/atlas` are `/srv/shared/atlas` |
@@ -302,7 +306,7 @@ it goes (`git clone … && cat repo/README.md` reads the repository file).
 | `extract/mcp/mod.rs` | configured MCP tools | `candidates` |
 | `extract/mcp/config.rs` | the configuration | `ExtractConfig` (`from_json`, `new`, `with_http_tools`, `with_fetch_tools`, `with_sites`, `rule`, `http_tools`, `fetch_tools`), `McpServerConfig`, `McpToolRule`, `McpAccessRule`, `McpResource`, `RuleOp`, `RefusalMarker`, `ConfigError` (`HttpAndFetch` among them), `DEFAULT_HTTP_TOOLS` |
 | `extract/resource/path.rs` | paths | `AbsolutePath`, `WrittenPath`, `FileScope`, `file_locator`, `absolute_locator`, `PathError` |
-| `extract/resource/url.rs` | URLs | `url_locator`, `tool_url_locator` (a bare host as `https://`), `url_text`, `scan_urls`, `UrlError` |
+| `extract/resource/url.rs` | URLs | `url_locator` (an invalid host as `Opaque`), `INVALID_HOST_URL_TOOL`, `tool_url_locator` (a bare host as `https://`), `url_text`, `scan_urls`, `UrlError` |
 | `extract/resource/key.rs` | MCP keys | `KeyCanon`, `KeyError` |
 | `extract/resource/repo.rs` | repositories and their threads | `RepoId` (`parse`, `forge`, `locator`, `forge_parts`, `file`), `ForgeRepo` (`thread`, `collection`), `ForgeStyle`, `ThreadKind`, `RepoBindings` |
 | `extract/sites/mod.rs` | site rules | `SitesConfig`, `MediaWikiSite`, `HostPattern`, `SitePath`, `SiteAccess` |
@@ -415,6 +419,11 @@ JSON, in the spec's conventions (snake_case keys, enums tagged
   `extract::tests::fetch_config`.
 - `flow.extract.bare-host-url-is-https` (INV-1121):
   `extract::tests::bare_url`.
+- `flow.resource.invalid-host-url-opaque` (INV-1130):
+  `extract::resource::tests::invalid_host_url_is_opaque` and the invalid
+  label case of `equivalent_urls_share_resource_id` (whose seed for the
+  `xn--` flake is kept in
+  `crates/flow/proptest-regressions/extract/resource/tests.txt`).
 - New (INV-X): `flow.extract.http-method-op`,
   `flow.resource.http-url-tool-independent`,
   `flow.resource.wiki-page-spelling-independent`,

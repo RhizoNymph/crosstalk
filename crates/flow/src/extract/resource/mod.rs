@@ -8,7 +8,8 @@
 //! working directories or spellings get the same locator:
 //! - [`path`]: lexical path resolution, relative paths against the stated
 //!   working directory, `Opaque` when there is none;
-//! - [`url`]: URL normalization;
+//! - [`url`]: URL normalization, and an `Opaque` locator for a URL whose
+//!   host does not parse;
 //! - [`repo`]: a shared git repository (`Locator::Repository`) and its
 //!   files, keyed by the repository whichever clone or remote spelling
 //!   they are touched through, and its issues and pull/merge requests;
@@ -27,7 +28,9 @@ pub mod url;
 pub use key::{KeyCanon, KeyError};
 pub use path::{AbsolutePath, FileScope, PathError, WrittenPath, absolute_locator, file_locator};
 pub use repo::{ForgeRepo, ForgeStyle, RepoBindings, RepoId, ThreadKind};
-pub use url::{UrlError, scan_urls, tool_url_locator, url_locator, url_text};
+pub use url::{
+    INVALID_HOST_URL_TOOL, UrlError, scan_urls, tool_url_locator, url_locator, url_text,
+};
 
 #[cfg(test)]
 mod tests;

@@ -139,11 +139,15 @@ proptest! {
         prop_assert_eq!(from_relative, Ok(file_at(&expected)));
     }
 
-    /// `flow.resource.url-normalization`.
+    /// `flow.resource.url-normalization`, and for a host with a label IDNA
+    /// refuses `flow.resource.invalid-host-url-opaque`: the spellings the
+    /// fallback normalizes (scheme and host case, a fragment) share one
+    /// `Opaque` locator, never a `Url` one.
     #[test]
     fn equivalent_urls_share_resource_id(
         https in any::<bool>(),
-        labels in prop::collection::vec("[a-z][a-z0-9-]{0,6}", 1..4),
+        labels in prop::collection::vec(valid_label(), 1..4),
+        invalid in prop::option::of((invalid_label(), any::<prop::sample::Index>())),
         path in prop::collection::vec(
             "[a-zA-Z0-9_.~-]{1,6}".prop_filter("not a dot segment", |s| s != "." && s != ".."),
             0..4,
@@ -155,6 +159,10 @@ proptest! {
         shuffle in any::<prop::sample::Index>(),
     ) {
         let scheme = if https { "https" } else { "http" };
+        let mut labels = labels;
+        if let Some((label, at)) = &invalid {
+            labels.insert(at.index(labels.len() + 1), label.clone());
+        }
         let host = format!("{}.example", labels.join("."));
         let path = format!("/{}", path.join("/"));
         let pairs: Vec<String> = params.iter().map(|(k, v)| format!("{k}={v}")).collect();
@@ -171,6 +179,26 @@ proptest! {
                 .map(|(c, up)| if *up { c.to_ascii_uppercase() } else { c })
                 .collect()
         };
+        if invalid.is_some() {
+            let mut variant = format!("{}://{}", mixed(scheme), mixed(&host));
+            variant.push_str(&plain[scheme.len() + "://".len() + host.len()..]);
+            if let Some(fragment) = &fragment {
+                variant.push('#');
+                variant.push_str(fragment);
+            }
+            let a = url_locator(&plain);
+            let b = url_locator(&variant);
+            prop_assert_eq!(&a, &b);
+            let expected = Locator::Opaque {
+                tool: ToolName(INVALID_HOST_URL_TOOL.to_owned()),
+                key: plain.clone(),
+            };
+            prop_assert_eq!(&a, &Ok(expected.clone()));
+            prop_assert_eq!(url_text(&expected), None);
+            // Idempotent through its own key.
+            prop_assert_eq!(url_locator(&plain), Ok(expected));
+            return Ok(());
+        }
         let mut rotated = pairs.clone();
         if !rotated.is_empty() {
             let at = shuffle.index(rotated.len());
@@ -303,6 +331,17 @@ proptest! {
         prop_assert_eq!(p.overlaps(&q), shared);
         prop_assert_eq!(p.overlaps(&q), q.overlaps(&p));
     }
+}
+
+/// A host label IDNA accepts: never an `xn--` (punycode) label, which
+/// IDNA refuses unless it decodes.
+fn valid_label() -> impl Strategy<Value = String> {
+    "[a-z][a-z0-9-]{0,6}".prop_filter("not a punycode label", |label| !label.starts_with("xn--"))
+}
+
+/// A host label IDNA refuses: an `xn--` label that is not valid punycode.
+fn invalid_label() -> impl Strategy<Value = String> {
+    prop::sample::select(&["xn--", "xn---", "xn--a", "xn--abc-"][..]).prop_map(str::to_owned)
 }
 
 const PATHS: [&str; 6] = ["/", "/x", "/x/", "/x/y", "/xy", "/x/y/z"];
@@ -467,6 +506,56 @@ fn url_details() {
         });
         assert_eq!(url_locator(text).ok(), expected, "{text}");
     }
+}
+
+/// `flow.resource.invalid-host-url-opaque`: a URL whose host IDNA refuses
+/// is one `Opaque` resource whatever the case of its scheme and host, its
+/// user info or fragment, and whichever tool reaches it; a different path
+/// is a different resource.
+#[test]
+fn invalid_host_url_is_opaque() {
+    let expected = Locator::Opaque {
+        tool: ToolName(INVALID_HOST_URL_TOOL.to_owned()),
+        key: "http://xn--/path".to_owned(),
+    };
+    for text in [
+        "http://xn--/path",
+        "  HTTP://XN--/path ",
+        "http://Xn--/path#section",
+        "http://user:secret@xn--/path",
+    ] {
+        assert_eq!(url_locator(text), Ok(expected.clone()), "{text:?}");
+        assert_eq!(tool_url_locator(text), Ok(expected.clone()), "{text:?}");
+    }
+    assert_eq!(url_text(&expected), None);
+    // The path keeps its case and stays part of the identity.
+    assert_ne!(url_locator("http://xn--/Path"), Ok(expected.clone()));
+    assert_ne!(url_locator("http://xn--/other"), Ok(expected.clone()));
+    // Other parse errors stay errors.
+    assert!(url_locator("http://example.com:99999/").is_err());
+    assert!(url_locator("https://").is_err());
+    assert!(url_locator("not a url").is_err());
+
+    // Two agents, two tools, one resource.
+    let config = ExtractConfig::default();
+    let fetched = extract(
+        &config,
+        &context_in("/w"),
+        &call("web_fetch", json!({ "url": "HTTP://xn--/path#top" })),
+        Some(&ok("page")),
+    )
+    .expect("extracts");
+    let curled = extract(
+        &config,
+        &context_in("/w"),
+        &call("Bash", json!({ "command": "curl -s http://xn--/path" })),
+        Some(&ok("page")),
+    )
+    .expect("extracts");
+    assert_eq!(fetched.len(), 1, "{fetched:?}");
+    assert_eq!(curled.len(), 1, "{curled:?}");
+    assert_eq!(fetched[0].locator, expected);
+    assert_eq!(curled[0].locator, expected);
 }
 
 #[test]
