@@ -11,7 +11,7 @@ use crate::corpus::{Coverage, World};
 use crosstalk_spec::ids::ExchangeId;
 
 use crate::keys::AgentKey;
-use crate::predict::Prediction;
+use crate::predict::{EvidenceClass, Prediction};
 use crate::truth::{
     Exemption, Expectation, ExpectedTransmission, NegativeControl, NegativeReason, Tier,
 };
@@ -32,6 +32,11 @@ pub enum Outcome {
     /// It aligns with no label and the world's truth is a sample, or it
     /// falls under an exemption.
     Unjudged,
+    /// A discarded co-access that aligns with no label: the detector
+    /// opened it and decided it was not a transmission, so it reported
+    /// nothing. Never a false positive and never charged to a negative
+    /// control (a reread's co-access is discarded by design, INV-1122).
+    Dismissed,
 }
 
 /// One world's labels, indexed for judging.
@@ -97,9 +102,10 @@ impl<'w> Judge<'w> {
     }
 
     /// The outcome of `prediction`: the first label it aligns with, else
-    /// unjudged when an exemption covers it, else the most specific
-    /// negative control it violates, else what the world's coverage makes
-    /// of an unlabelled prediction.
+    /// dismissed when it is a discarded co-access, else unjudged when an
+    /// exemption covers it, else the most specific negative control it
+    /// violates, else what the world's coverage makes of an unlabelled
+    /// prediction.
     pub fn judge(&self, prediction: &Prediction) -> (Outcome, Option<&'w NegativeControl>) {
         let candidates = self
             .by_reader
@@ -118,6 +124,9 @@ impl<'w> Judge<'w> {
                 },
                 None,
             );
+        }
+        if prediction.class == EvidenceClass::Discarded {
+            return (Outcome::Dismissed, None);
         }
         if self
             .exemptions
