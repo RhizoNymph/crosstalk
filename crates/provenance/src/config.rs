@@ -14,9 +14,9 @@
 //!  "eviction_interval_secs": 3600, "semantic_threshold": 0.85,
 //!  "locator_keys": ["file_path", "path", "notebook_path", "url", "uri"],
 //!  "short_spans": {"min_chars": 24, "max_chars": 46},
-//!  "reader_output": {"min_chars": 64},
+//!  "reader_output": {"min_chars": 64, "rare_token": true},
 //!  "spread": {"agents": 4, "distinctive_chars": 64, "distinctive_ratio": 2,
-//!             "tokens_per_text": 512},
+//!             "tokens_per_text": 512, "drop_inherited": true},
 //!  "forwarding": false}
 //! ```
 
@@ -143,35 +143,83 @@ impl Default for ShortSpans {
 pub const DEFAULT_SHORT_MIN: u16 = 24;
 pub const DEFAULT_SHORT_MAX: u16 = 46;
 
+/// Whether a `ReaderOutput` stretch must carry a rare token
+/// (`provenance.match.reader-output-rare-token`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RareToken {
+    /// The stretch must hold a whole token (`fingerprint::token`) seen in
+    /// at most `SpreadRule::rare_bound(holders)` texts, the holders being
+    /// the source span's originations, copies and reads.
+    #[default]
+    Required,
+    /// Any stretch passing the length floor is matched, however common its
+    /// words.
+    NotRequired,
+}
+
 /// The stricter rules a `ReaderOutput` match must pass
 /// (`provenance.match.reader-output-strict`): text a reader writes that
 /// another agent wrote, with no visible input holding it, is often domain
 /// text both derived from the same task (SQL, shell idioms, stock phrases).
 /// The relayed stretch, one contiguous run, must have at least `min_chars`
-/// normalized characters; such a run is distinctive whatever its spread
-/// ([`SpreadRule`]), so a broadcast copied by many agents keeps matching
-/// its first writer. Other carriers keep no length floor.
+/// normalized characters, and, unless `rare_token` is `NotRequired`, hold a
+/// token rare world-wide relative to the source's holders
+/// (`provenance.match.reader-output-rare-token`): two agents filling the
+/// same sentence template with the same words write 64 characters or more
+/// alike with no transmission (bench run 20261005T184633Z, 24 matches),
+/// while a copied message carries a token seen only in its own copies and
+/// reads. A broadcast copied by many agents keeps matching its first
+/// writer: every copy and read raises the bound. Other carriers keep no
+/// length floor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReaderOutputRules {
     min_chars: u32,
+    rare_token: RareToken,
 }
 
 impl ReaderOutputRules {
+    /// `min_chars`, with a rare token required (the default).
     pub fn new(min_chars: u32) -> Self {
-        Self { min_chars }
+        Self {
+            min_chars,
+            rare_token: RareToken::default(),
+        }
+    }
+
+    /// These rules with another rare-token requirement.
+    pub fn with_rare_token(mut self, rare_token: RareToken) -> Self {
+        self.rare_token = rare_token;
+        self
     }
 
     /// The fewest normalized characters a `ReaderOutput` match covers.
     pub fn min_chars(&self) -> usize {
         usize::try_from(self.min_chars).unwrap_or(usize::MAX)
     }
+
+    /// Whether a `ReaderOutput` stretch must carry a rare token.
+    pub fn rare_token(&self) -> RareToken {
+        self.rare_token
+    }
 }
 
 impl Default for ReaderOutputRules {
-    /// 64 characters.
+    /// 64 characters, a rare token required.
     fn default() -> Self {
-        Self { min_chars: 64 }
+        Self::new(64)
     }
+}
+
+/// Whether a short match all of whose tokens the origin agent was given is
+/// dropped (`provenance.match.inherited-fragment-dropped`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum InheritedFragments {
+    /// Dropped: the origin agent added nothing of its own to the fragment,
+    /// so a reader holding it is explained by the upstream both share.
+    #[default]
+    Dropped,
+    /// Matched like any other short fragment.
+    Kept,
 }
 
 /// The cross-agent spread rule (`provenance.match.cross-agent-spread`)
@@ -191,13 +239,18 @@ impl Default for ReaderOutputRules {
 /// boilerplate run, is a template skeleton filled with different slot
 /// words, and is dropped whole. A match with a contiguous run of
 /// `distinctive_chars` or more is kept whatever the spread. Each scanned
-/// text observes at most `tokens_per_text` distinct tokens.
+/// text observes at most `tokens_per_text` distinct tokens. With
+/// `inherited` [`InheritedFragments::Dropped`] (the default), a match of
+/// short runs whose every whole token its origin agent was given in its own
+/// request is dropped too, whatever the spread
+/// (`provenance.match.inherited-fragment-dropped`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SpreadRule {
     agents: NonZeroU32,
     distinctive_chars: u32,
     distinctive_ratio: u32,
     tokens_per_text: u32,
+    inherited: InheritedFragments,
 }
 
 impl SpreadRule {
@@ -218,7 +271,20 @@ impl SpreadRule {
             distinctive_chars,
             distinctive_ratio,
             tokens_per_text,
+            inherited: InheritedFragments::default(),
         })
+    }
+
+    /// This rule with inherited fragments dropped or kept.
+    pub fn with_inherited(mut self, inherited: InheritedFragments) -> Self {
+        self.inherited = inherited;
+        self
+    }
+
+    /// Whether a short match made only of tokens its origin agent was given
+    /// is dropped (`provenance.match.inherited-fragment-dropped`).
+    pub fn inherited(&self) -> InheritedFragments {
+        self.inherited
     }
 
     /// How many distinct originating agents make a non-distinctive fragment
@@ -259,6 +325,7 @@ impl Default for SpreadRule {
             distinctive_chars: 64,
             distinctive_ratio: 2,
             tokens_per_text: 512,
+            inherited: InheritedFragments::default(),
         }
     }
 }
@@ -761,6 +828,12 @@ struct RawSpread {
     distinctive_ratio: u32,
     #[serde(default = "default_tokens")]
     tokens_per_text: u32,
+    #[serde(default = "default_true")]
+    drop_inherited: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn default_ratio() -> u32 {
@@ -786,6 +859,7 @@ impl Default for RawSpread {
             distinctive_chars: default_distinctive(),
             distinctive_ratio: default_ratio(),
             tokens_per_text: default_tokens(),
+            drop_inherited: true,
         }
     }
 }
@@ -821,6 +895,8 @@ impl Default for RawShortSpans {
 struct RawReaderOutput {
     #[serde(default = "default_reader_output_chars")]
     min_chars: u32,
+    #[serde(default = "default_true")]
+    rare_token: bool,
 }
 
 fn default_reader_output_chars() -> u32 {
@@ -831,6 +907,7 @@ impl Default for RawReaderOutput {
     fn default() -> Self {
         Self {
             min_chars: default_reader_output_chars(),
+            rare_token: true,
         }
     }
 }
@@ -871,13 +948,24 @@ impl TryFrom<RawConfig> for ProvenanceConfig {
             Similarity::new(raw.semantic_threshold).map_err(|_| ConfigError::Threshold)?;
         let locator_keys = LocatorKeys::new(raw.locator_keys)?;
         let short_spans = ShortSpans::new(raw.short_spans.min_chars, raw.short_spans.max_chars)?;
-        let reader_output = ReaderOutputRules::new(raw.reader_output.min_chars);
+        let reader_output = ReaderOutputRules::new(raw.reader_output.min_chars).with_rare_token(
+            if raw.reader_output.rare_token {
+                RareToken::Required
+            } else {
+                RareToken::NotRequired
+            },
+        );
         let spread = SpreadRule::new(
             raw.spread.agents,
             raw.spread.distinctive_chars,
             raw.spread.distinctive_ratio,
             raw.spread.tokens_per_text,
-        )?;
+        )?
+        .with_inherited(if raw.spread.drop_inherited {
+            InheritedFragments::Dropped
+        } else {
+            InheritedFragments::Kept
+        });
         Self::new(
             winnow,
             decode,

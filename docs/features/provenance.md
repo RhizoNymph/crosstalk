@@ -181,6 +181,25 @@ watermark.
      observation of its own, at most `spread.tokens_per_text` (512) of
      them, within the index's retention; a capped text undercounts, which
      errs toward keeping matches.
+  2c. **Inherited fragments** (`provenance.match.inherited-fragment-dropped`,
+     `SpreadRule::inherited`, on by default). A candidate match on an
+     originated span whose merged hit runs are all shorter than
+     `spread.distinctive_chars` is dropped whole when its runs hold at
+     least one whole token and every one of them occurs in a carrying part
+     (tool result, user turn, system prompt) of the origin span's own
+     exchange's request (`Scanner::given_tokens`: the stored request list,
+     bodies through the `MessageSource`, each message's tokens cached by
+     hash in a bounded `TokenCache`). The origin added nothing of its own:
+     on the bench the orchestrator names a page to its writer and to its
+     readers, the writer narrates "I'll update the wiki page
+     `queue-backpressure-39` ...", and every reader's prompt shares a
+     k-gram with the narration (17 `UserTurn` false matches, held by one or
+     two writers, so the spread rule never applied). A made-up secret holds
+     a token its writer's request lacks and is kept. **Tradeoff:** a short
+     rewording of a secret the writer was given in its own input is not
+     matched, as a forwarded copy is not with forwarding off. Forwarded
+     spans, runs of 64 characters or more, and matches whose origin request
+     is no longer recorded are not affected.
   3. For each origin span, one layer wins. A layer whose text holds the
      whole origin text (normalized) beats one that does not; then the one
      covering the most part bytes wins, then the shorter chain. That way
@@ -211,11 +230,20 @@ watermark.
   - When `s` is another agent's span, a `ReaderOutput` match covers the
     same bytes, if the stretch passes the stricter reader-output rules
     (INV-1093): the stretch is one contiguous run, so it needs at least
-    `reader_output.min_chars` (64) normalized characters and a hit on `s`.
+    `reader_output.min_chars` (64) normalized characters and a hit on `s`;
+    and, with `reader_output.rare_token` on (the default,
+    `provenance.match.reader-output-rare-token`), a whole token seen in at
+    most `SpreadRule::rare_bound(h)` texts, `h` being `s`'s originations,
+    copies and matched reads (`Propagated` hits). Two agents filling one
+    sentence template with the same words write 64 characters or more
+    alike (24 bench false matches, rarest tokens seen in 7 to 74 texts).
     Otherwise the stretch is still `Relayed(Span(s))` and no match is
     made. Other carriers keep no length floor. A broadcast (one writer,
     many later copies) keeps matching that writer however many copies
-    there are: a 64-character contiguous run is kept whatever its spread.
+    there are: the spread rule never applies, and each copy and read
+    raises the bound. **Tradeoff (flagged for decision):** an unobserved
+    copy of 64 characters or more made only of words common in the world
+    yields no match; `"rare_token": false` restores it.
   - The rest is resolved again.
   - A candidate without hits is `Common` when every fingerprint is above
     the cutoff, else `Originated`. A whole short value's short-span hash
@@ -370,6 +398,8 @@ and changes span states only through `SpanState::advance`.
 | `semantic_threshold` | 0.85 |
 | `short_spans.min_chars`, `short_spans.max_chars` | 24, 46: whole values of this many normalized characters take the short-span exact path; `min_chars` is also the floor for originated text without a k-gram |
 | `reader_output.min_chars` | 64 normalized characters |
+| `reader_output.rare_token` | true: a `ReaderOutput` stretch must hold a token rare relative to its source's originations, copies and reads (`RareToken`) |
+| `spread.drop_inherited` | true: a short match whose every token its origin was given in its own request is dropped (`InheritedFragments`) |
 | `spread.agents`, `spread.distinctive_chars`, `spread.distinctive_ratio`, `spread.tokens_per_text` | 4, 64, 2, 512: a fragment four agents originated or copied, at any time, with no token seen in at most 2 texts per holder plus one, is boilerplate for matches whose runs are all under 64 characters; such a match is dropped whole; each text observes at most 512 tokens |
 | `forwarding` | false: forwarded spans are not indexed (INV-1090) |
 
@@ -429,14 +459,14 @@ feeder reads through it. `PgProvenanceStore` does not yet.
 | File | Role | Key exports |
 | --- | --- | --- |
 | `src/lib.rs` | Crate doc, modules | — |
-| `src/config.rs` | Typed config | `ProvenanceConfig`, `IndexSettings`, `DecodeLimits`, `ShortSpans`, `ReaderOutputRules`, `SpreadRule`, `winnow_params`, `ConfigError` |
+| `src/config.rs` | Typed config | `ProvenanceConfig`, `IndexSettings`, `DecodeLimits`, `ShortSpans`, `ReaderOutputRules`, `RareToken`, `SpreadRule`, `InheritedFragments`, `winnow_params`, `ConfigError` |
 | `src/text/{mod,normalize,mapped}.rs` | Normalization with source ranges; decoded text with byte maps | `normalize`, `trimmed_len`, `NormChar`, `MappedText`, `MappedBuilder`, `trim_range` |
 | `src/fingerprint/{mod,hash}.rs` | Winnowing, the stable hash, prefix window hashes | `Winnowing`, `KGram`, `positioned`, `hash::rolling`, `hash::Prefix`, `hash::short`, `hash::token` |
 | `src/fingerprint/token.rs` | Tokens for world-wide rarity: what a text observes, the whole tokens in a window | `observed`, `whole_tokens_in`, `MIN_TOKEN_CHARS` |
 | `src/fingerprint/short.rs` | The short-span exact path: a whole value's hash, a read's token runs | `whole`, `token_runs` |
 | `src/decode/{mod,base64,hex,url,unicode,escape}.rs` | Decoders and the pipeline | `Step`, `TextDecoder`, `DecodedText`, `DecodePipeline`, `Layer`, `AnyDecoder`, the six decoders |
 | `src/segment/{mod,coverage,view}.rs` | The segmenter, input coverage, part views | `NovelRunSegmenter`, `Coverage`, `message_kgrams`, `runs`, `text_parts`, `view`, `PartKind` |
-| `src/scan/{mod,reads,output,hits,kind,cache,messages}.rs` | The scanner | `Scanner`, `Loaded`, `ScanEnv`, `IndexWork`, `ScanError`, `LiveSpans`, `match_kind`, `KGramCache`, `MessageSource`, `BlobMessages`, `MemoryMessages` |
+| `src/scan/{mod,reads,output,hits,kind,cache,messages}.rs` | The scanner | `Scanner`, `Loaded`, `ScanEnv`, `IndexWork`, `ScanError`, `LiveSpans`, `match_kind`, `KGramCache`, `TokenCache` (`cache::Bounded`), `MessageSource`, `BlobMessages`, `MemoryMessages` |
 | `src/scan/postings.rs` | What a span is posted under beyond its own fingerprints: context k-grams, short-span hashes | `Scanner::context_kgrams`, `Scanner::short_fingerprint` (crate) |
 | `src/engine.rs` | Processing, replay, eviction | `Provenance`, `Processed`, `EngineError`, `envelopes`, `exchange_record` |
 | `src/consumer.rs` | The bus consumer | `GROUP`, `SUBJECTS`, `subscribe`, `run`, `ConsumerSettings`, `ConsumerStats` |
@@ -462,8 +492,11 @@ feeder reads through it. `PgProvenanceStore` does not yet.
   - `integration` for INV-206 and INV-225: they name a semantic store that
     awaits P6.2;
   - the lint for INV-227.
-- New invariants (also INV-1094 `provenance.match.cross-agent-spread` and
-  INV-1150 `provenance.match.skeleton-dropped`):
+- New invariants (also INV-1094 `provenance.match.cross-agent-spread`,
+  INV-1150 `provenance.match.skeleton-dropped`, and, numbers pending,
+  `provenance.match.inherited-fragment-dropped` and
+  `provenance.match.reader-output-rare-token`; INV-1093 and INV-1094
+  restated to point at them):
   - `provenance.decode.utf8-lossless`;
   - `provenance.scan.status-terminal`;
   - INV-1090 `provenance.index.forwarded-indexed`;
@@ -501,6 +534,14 @@ feeder reads through it. `PgProvenanceStore` does not yet.
   originated spans and self-relays, so a forward through a file write
   carries no forwarded span (a forward through a message tool's result is
   matched directly); whether writes should carry forwards is L5's call.
+- **Bench run 20261005T184633Z** (staging 02103e9, before the skeleton and
+  rarity rules): 41 false matches. None is removed by the skeleton and
+  rarity rules: the 24 `ReaderOutput` ones are runs of 64 to 94
+  characters, which the spread rule exempts and which never pass through
+  it; the 17 `UserTurn` ones are one k-gram held by one or two writers,
+  under the four agents the rule needs. The inherited-fragment rule
+  removes the 17, the rare-token requirement the 24
+  (`tests::bench_boilerplate`).
 - **Short spans** take only whole values. A short originated piece that is
   not a whole value (a remainder) is matched only through context
   k-grams; one that sits next to no posted span has no posting.

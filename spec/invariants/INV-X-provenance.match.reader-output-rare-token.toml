@@ -1,0 +1,38 @@
+[invariant]
+id = "provenance.match.reader-output-rare-token"
+statement = "With ReaderOutputRules::rare_token Required (the default), a ContentMatch with carrier ReaderOutput is made only when its stretch, besides passing provenance.match.reader-output-strict, holds a whole token (fingerprint::token, not cut by the stretch's ends) observed in at most SpreadRule::rare_bound(h) texts, h being the source span's originations, its copies in other outputs and the reads matched on it (its Propagated hits); with NotRequired the stretch needs no such token."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+On the node0 bench (run 20261005T184633Z) 24 ReaderOutput matches of 64
+to 94 characters were false: the swarm's generator fills sentence
+templates with a topic's few terms, so two agents independently write
+"For search ranking, query rewrite matters more than embedding drift at
+our current scale." or "I'll update the wiki page `cache-invalidation-10`
+with my notes on cache invalidation." Each stretch clears the 64-character
+floor (provenance.match.reader-output-strict), and its holders are one to
+three agents, so the spread rule could not catch it even if it applied to
+long runs. What separates such a coincidence from a copy is distinctiveness:
+the rarest token of each false stretch was seen in 7 to 74 texts, while a
+copied message carries a token seen only where it was written, copied and
+read. The bound grows with every copy and every matched read, so a
+broadcast copied by many agents, or copied after many visible reads, keeps
+matching its first writer.
+
+The tradeoff, flagged for decision: an unobserved copy of 64 characters or
+more made only of words common in the world (each seen in more than
+2 x (originations + copies + reads) + 1 texts) yields no match; with no
+observed read, such a copy cannot be told from two agents writing the same
+stock prose. Visible carriers (tool results, user turns, system prompts)
+are not affected: their long runs stay exempt
+(provenance.match.cross-agent-spread), since a page read through a tool
+result is evidence on its own. ReaderOutputRules::rare_token NotRequired
+restores the earlier behaviour.
+"""
+
+[evidence]
+unit = ["crosstalk_provenance::tests::bench_boilerplate::coincident_template_sentence_in_a_readers_output_is_not_matched", "crosstalk_provenance::tests::bench_boilerplate::coincident_template_sentence_matches_when_no_rare_token_is_required", "crosstalk_provenance::tests::bench_boilerplate::long_broadcast_with_a_rare_word_in_a_busy_world_matches_the_first_writer", "crosstalk_provenance::tests::bench_boilerplate::unseen_copy_of_a_widely_read_message_matches", "crosstalk_provenance::tests::bench_boilerplate::long_broadcast_of_common_words_is_not_matched", "crosstalk_provenance::tests::match_quality::broadcast_copies_match_the_first_writer", "crosstalk_provenance::tests::bench_boilerplate::rare_token_and_inherited_switches_decode"]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

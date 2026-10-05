@@ -1,0 +1,38 @@
+[invariant]
+id = "provenance.match.inherited-fragment-dropped"
+statement = "With SpreadRule::inherited Dropped (the default), a candidate ContentMatch on an originated span, in one decode layer of a read, whose merged hit runs are each shorter than SpreadRule::distinctive_chars normalized characters, is dropped whole when its hit runs hold at least one whole token (fingerprint::token) and every such token occurs in a part that carries something (a tool result, a user turn or a system prompt) of the origin span's own exchange's request; a match on a forwarded span, a match with a run of distinctive_chars or more, a match whose runs hold no whole token, and a match whose origin exchange's request is no longer recorded are not dropped by this rule."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+On the node0 bench (run 20261005T184633Z) the orchestrator names a page to
+its writer ("... in the team wiki, page `queue-backpressure-39`.") and to
+its readers ("Before you continue, read the wiki page
+`queue-backpressure-39` ..."). The writer narrates "I'll update the wiki
+page `queue-backpressure-39` with my notes ...", which is originated (the
+words it shares with its prompt are under a shingle long), and each
+reader's prompt shares one 32-character k-gram with it: 17 UserTurn false
+matches. Only the page's writers hold the fragment (one or two agents), so
+the spread rule (provenance.match.cross-agent-spread) never applies, and
+the user turns that hold it are reads, never originations. What makes the
+match empty is that the writer added nothing: every token of the shared
+fragment was given to it in its own request. Writer and reader both hold
+it because they share an upstream, the same reason a forwarded span is not
+indexed when forwarding is off (provenance.index.forwarded-indexed) and a
+shared-upstream match confirms no channel (INV-963).
+
+A short secret the writer made up holds a token its request lacks, so it
+is kept: the rule never removes a short distinctive broadcast
+(provenance.match.cross-agent-spread). The tradeoff: a writer that rewords,
+in under 64 characters, a secret it was given (every token of it in its
+own tool result) is not matched where the rewording is read, as a
+forwarded copy is not with forwarding off. Runs of 64 characters or more
+are kept. Missing evidence keeps the match: a pruned request, bodies no
+longer stored, tokens seen only through a decode chain in the request.
+"""
+
+[evidence]
+unit = ["crosstalk_provenance::tests::bench_boilerplate::orchestrator_page_name_in_the_writers_narration_is_not_matched", "crosstalk_provenance::tests::bench_boilerplate::a_page_name_the_writer_chose_still_matches", "crosstalk_provenance::tests::bench_boilerplate::inherited_fragments_can_be_kept", "crosstalk_provenance::tests::bench_boilerplate::short_secret_from_a_prompted_writer_matches_the_first_writer", "crosstalk_provenance::tests::bench_boilerplate::a_short_rewording_of_a_given_secret_is_not_matched", "crosstalk_provenance::tests::match_quality::short_distinctive_broadcast_matches_the_first_writer"]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

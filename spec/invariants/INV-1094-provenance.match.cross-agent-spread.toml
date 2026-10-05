@@ -19,7 +19,10 @@ boilerplate only when none of its whole tokens is rare relative to its
 holders: a token in at most two texts per holder (the holder's writing and
 one read of it) plus one is distinctive. Long runs (64 characters or more)
 are kept whatever the spread: a broadcast or copy of that length is
-evidence on its own.
+evidence on its own. (A ReaderOutput stretch, having no observed read, must
+also hold a rare token: provenance.match.reader-output-rare-token. A short
+fragment held by fewer agents than the rule needs is still dropped when its
+origin was given every token of it: provenance.match.inherited-fragment-dropped.)
 
 The tradeoff: a template that carries a token seen nowhere else (a unique
 header such as "ROUTINE-NOTES-v2") reads as distinctive and is matched

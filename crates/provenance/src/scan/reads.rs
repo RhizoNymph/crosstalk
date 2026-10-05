@@ -22,12 +22,19 @@
 //! `matched_bytes` counts the covered bytes, at most the origin span's
 //! length for an exact match (`provenance.match.bytes-within-span`). Hits
 //! on the reader's own spans are skipped (`provenance.match.self-hit-skipped`).
+//!
+//! A candidate made only of short runs (each under
+//! `SpreadRule::distinctive_chars`) is dropped whole when it is a template
+//! skeleton (`provenance.match.skeleton-dropped`), or when its origin span
+//! was given every whole token of its runs in its own request
+//! (`provenance.match.inherited-fragment-dropped`).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU32;
 
+use crosstalk_spec::derived::provenance::fingerprint::Fingerprint;
 use crosstalk_spec::derived::provenance::matching::{Carrier, ContentMatch, MatchKind};
-use crosstalk_spec::derived::provenance::span::SpanLocation;
+use crosstalk_spec::derived::provenance::span::{Origin, SpanLocation};
 use crosstalk_spec::ids::SpanId;
 use crosstalk_spec::interfaces::l4_provenance::{FingerprintIndex, SemanticMatcher};
 use crosstalk_spec::observed::message::{AssistantPart, Message, MessageBody, PartRef};
@@ -37,6 +44,7 @@ use super::hits::{covered, extents_by_span, merge, spread_boilerplate};
 use super::kind::{is_exact, match_kind};
 use super::messages::MessageSource;
 use super::{ScanError, Scanner, Session};
+use crate::config::InheritedFragments;
 use crate::decode::Step;
 use crate::fingerprint::{short, token};
 use crate::segment::{PartKind, TextPart, text_parts, view};
@@ -198,6 +206,59 @@ impl Scanner {
         Ok(boilerplate)
     }
 
+    /// Whether the candidate match on `span` (its hit extents in `layer`) is
+    /// an inherited fragment (`provenance.match.inherited-fragment-dropped`):
+    /// none of its merged runs reaches `SpreadRule::distinctive_chars`, the
+    /// span is originated (a forwarded span holds its input's text by
+    /// definition), the runs hold at least one whole token, and every one of
+    /// them was given to the span's agent in its own exchange's request.
+    /// The origin then added nothing of its own to what the reader holds:
+    /// both got it from the upstream they share (an orchestrator naming a
+    /// page to its writer and to its readers). Unknown requests keep the
+    /// match.
+    async fn inherited_fragment<I, S, M, L>(
+        &self,
+        session: &mut Session<'_, I, S, M, L>,
+        layer: &str,
+        span: SpanId,
+        extents: &[(u32, u32)],
+    ) -> Result<bool, ScanError>
+    where
+        I: FingerprintIndex + Sync,
+        S: ProvenanceStore + Sync,
+        M: SemanticMatcher + Sync,
+        L: MessageSource + Sync,
+    {
+        if self.spread().inherited() == InheritedFragments::Kept || self.distinctive(layer, extents)
+        {
+            return Ok(false);
+        }
+        let Some(record) = session.live.get(span) else {
+            return Ok(false);
+        };
+        if record.span.state.origin() != Some(Origin::Originated) {
+            return Ok(false);
+        }
+        let exchange = record.span.exchange;
+        let tokens: BTreeSet<Fingerprint> = merge(extents.to_vec())
+            .into_iter()
+            .flat_map(|(start, end)| {
+                token::whole_tokens_in(
+                    layer,
+                    usize::try_from(start).unwrap_or(usize::MAX),
+                    usize::try_from(end).unwrap_or(usize::MAX),
+                )
+            })
+            .collect();
+        if tokens.is_empty() {
+            return Ok(false);
+        }
+        let Some(given) = self.given_tokens(session, exchange).await? else {
+            return Ok(false);
+        };
+        Ok(tokens.iter().all(|token| given.contains(token)))
+    }
+
     async fn read_part<I, S, M, L>(
         &self,
         session: &mut Session<'_, I, S, M, L>,
@@ -251,6 +312,13 @@ impl Scanner {
                 if boilerplate.contains_key(&span) && !self.distinctive(layer.text.text(), &extents)
                 {
                     tracing::debug!(exchange = ?session.exchange, span = ?span, "skeleton match dropped");
+                    continue;
+                }
+                if self
+                    .inherited_fragment(session, layer.text.text(), span, &extents)
+                    .await?
+                {
+                    tracing::debug!(exchange = ?session.exchange, span = ?span, "inherited fragment dropped");
                     continue;
                 }
                 let merged = merge(
