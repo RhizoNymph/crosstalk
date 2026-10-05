@@ -1,6 +1,6 @@
 //! Channels config declares: one carrying confirmed traffic, one nobody
 //! has used yet. A declaration without cross-agent traffic is listed as a
-//! declaration, counted as no channel and drawn nowhere (INV-753).
+//! declaration, counted as no channel and drawn nowhere (INV-857).
 
 use crosstalk_spec::derived::flow::resource::{Host, ResourcePattern};
 

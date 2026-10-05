@@ -1,6 +1,6 @@
 //! A channel whose every transmission is suspected: one agent writes an
 //! object others read, and no content ever matched. Listed, drawn and
-//! counted as unconfirmed (INV-753), and left out under "confirmed only".
+//! counted as unconfirmed (INV-857), and left out under "confirmed only".
 
 use crosstalk_spec::derived::flow::resource::{Host, Locator};
 

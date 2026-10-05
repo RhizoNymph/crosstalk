@@ -142,7 +142,7 @@ pub enum ChannelSource {
     /// the pattern matches are the channel's.
     Declared { pattern: ResourcePattern },
     /// Discovered by the first cross-agent transmission through `seed`
-    /// (INV-747): it exists because such a transmission does.
+    /// (INV-851): it exists because such a transmission does.
     Discovered { seed: ResourceRole },
 }
 

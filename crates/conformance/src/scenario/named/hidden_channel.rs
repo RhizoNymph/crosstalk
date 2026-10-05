@@ -1,6 +1,6 @@
 //! A discovered channel whose only cross-agent traffic was between two ids
 //! an operator later merged: hidden while the merge stands, listed again
-//! once it is reverted (INV-755).
+//! once it is reverted (INV-859).
 
 use crosstalk_spec::derived::flow::resource::{Host, Locator};
 

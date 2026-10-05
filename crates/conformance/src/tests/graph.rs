@@ -32,7 +32,7 @@ use crate::support::{World, collect, first};
 const WEIGHTINGS: [Weighting; 2] = [Weighting::Transmissions, Weighting::MatchedBytes];
 
 /// Nodes are canonical agents (INV-680) covering every edge's ends
-/// (INV-681), no edge joins an agent to itself (INV-758), one edge per
+/// (INV-681), no edge joins an agent to itself (INV-862), one edge per
 /// sender, reader and route, and shares sum to one per weighting.
 pub async fn topology_is_canonical_with_shares_summing_to_one<H: Harness>(h: &H) {
     let w = World::everything(h).await;
@@ -187,7 +187,7 @@ pub async fn edge_transmissions_are_exactly_the_edge<H: Harness>(h: &H) {
 
 /// The channel-centred view carries exactly `topology`'s transmission
 /// edges (INV-676), normalizes access and transmission shares separately
-/// (INV-675), and draws only channels listed as channels (INV-757).
+/// (INV-675), and draws only channels listed as channels (INV-861).
 pub async fn the_channel_centred_view_shares_the_topology_edges<H: Harness>(h: &H) {
     let w = World::everything(h).await;
     let f = TopologyFilter::default();
@@ -432,8 +432,8 @@ pub async fn false_detections_are_subtracted<H: Harness>(h: &H) {
 
 /// The channel-centred view draws listed channels only: an unconfirmed one
 /// marked, a hidden one and a declaration without traffic not at all
-/// (INV-757); confirmed only drops the unconfirmed channel and its access
-/// edges (INV-756) and changes no transmission edge (INV-759).
+/// (INV-861); confirmed only drops the unconfirmed channel and its access
+/// edges (INV-860) and changes no transmission edge (INV-863).
 pub async fn channel_graph_draws_only_listed_channels<H: Harness>(h: &H) {
     let w = World::everything(h).await;
     let draw = async |unconfirmed| {
@@ -488,7 +488,7 @@ pub async fn channel_graph_draws_only_listed_channels<H: Harness>(h: &H) {
 }
 
 /// A transmission between two ids of one merged agent counts nowhere
-/// (INV-758): not in any edge, and an edge between the two ids lists
+/// (INV-862): not in any edge, and an edge between the two ids lists
 /// nothing.
 pub async fn no_view_counts_a_transmission_within_one_agent<H: Harness>(h: &H) {
     let w = World::everything(h).await;

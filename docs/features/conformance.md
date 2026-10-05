@@ -1,24 +1,25 @@
 # L8 conformance suite
 
-`crosstalk-conformance` (`conformance/`) is a test suite that any
+`crosstalk-conformance` (`crates/conformance`, a TestSupport crate) is a test suite that any
 implementation of the spec's L8 traits (`QueryApi`, `OperatorActions`,
 `LiveFeed` and the export stream) must pass. It holds the behaviour the UI
 relies on (alias resolution, counting by confirmation time, bucket-aligned
 windows and the watermark, shares, filters and paging, permissions, the
 channel rules, action outcomes and audit) as `async` tests generic over the
-implementation. Today it runs against the fixture backend. The gateway's
-surface (`crates/surface` on `integration/impl`) will run the same tests.
+implementation. Today it runs against the UI's fixture backend
+(`ui/src/backend/fixture`). The next harness runs it against the real
+surface (`crosstalk-surface` over the memory stores seeded by
+`crosstalk-world`, the UI's world backend).
 
 This page has two parts:
 
-- **What exists on this branch.** The suite as built on the `#16`-era spec,
-  instantiated for `crosstalk-fixture`.
-- **The redesign onto `integration/impl`.** The suite seeded through the
-  spec's write traits, run against the memory stores, then Postgres and the
-  HTTP client. The coordinator and the gateway team decided this after the
-  first part was built. Nothing on this branch implements it yet: the
-  branch cannot compile against `integration/impl` until `feat/ui` is
-  migrated.
+- **What exists.** The suite in the workspace, instantiated for the UI
+  fixture.
+- **The redesign.** The suite seeded through the spec's write traits, run
+  against the memory stores, then Postgres and the HTTP client. The
+  coordinator and the gateway team decided this; the write traits and
+  `crosstalk-world` now exist on `staging`, and the next step is described
+  below.
 
 ## Scope
 
@@ -31,14 +32,14 @@ This page has two parts:
 - **The tests.** One `async fn` per test, generic over the harness,
   grouped by area, each citing the `spec/invariants` id it checks.
 - **`suite!`.** The macro that instantiates every test for one harness.
-- **The fixture's harness** (`crosstalk-fixture`, `src/conformance/`).
+- **The fixture's harness** (`ui/src/backend/fixture/conformance/`).
 
 ## Non-scope
 
 - **Fixture-specific behaviour.** World generation and determinism, the
   scenario contents of the generated week, the Parquet refusal, the live
-  clock, the fixture's export limit, and its seeded projection jobs stay as
-  fixture tests (`fixture/src/tests/`).
+  clock and replay, the fixture's export limit, and its seeded projection
+  jobs stay as fixture tests (`ui/src/backend/fixture/tests/`).
 - **Wire-level, end-to-end scenarios.** Harness traffic replayed through
   ingress, canonicalization and the stores is a later layer. See
   "End-to-end layer" below.
@@ -46,18 +47,14 @@ This page has two parts:
 - **New invariants.** The suite cites existing ones. If the UI ever adds
   any, its block is INV-900..949.
 
-## What exists on this branch
+## What exists
 
 ### Crates and dependencies
 
 | Crate | Role | Depends on |
 | --- | --- | --- |
-| `conformance/` `crosstalk-conformance` | The suite: harness trait, scenarios, self-check, tests, `suite!` | `crosstalk-spec`, `thiserror = "=2.0.21"`, `tokio = "=1.53.1"` (`rt`, `time`, `macros`, `sync`). No new third-party dependency. |
-| `fixture/` `crosstalk-fixture` | The synthetic backend. Under `cfg(test)` or the `testing` feature it also holds `conformance::FixtureHarness` and runs the suite (`src/conformance/suite.rs`). | `crosstalk-conformance`: optional under `testing`, and a dev-dependency |
-| `ui/` `crosstalk-ui` | Unchanged. Its dev-dependency on `crosstalk-fixture` with `testing` now pulls the suite crate in for tests only. | |
-
-Each crate keeps its own lock, as before (there is no workspace on this
-branch).
+| `crates/conformance` `crosstalk-conformance` | The suite: harness trait, scenarios, self-check, tests, `suite!`. A TestSupport crate in the architecture test (`crates/gateway/tests/architecture.rs`): only ever a dev-dependency of a layer crate. | `crosstalk-spec`, and the workspace's `thiserror` and `tokio` (`rt`, `time`, `macros`, `sync`). No new third-party dependency. |
+| `ui` `crosstalk-ui` | Its fixture holds `FixtureHarness` under `cfg(test)` (`ui/src/backend/fixture/conformance/`) and runs the suite in `cargo test -p crosstalk-ui`. | `crosstalk-conformance` as a dev-dependency |
 
 ### Data and control flow
 
@@ -205,12 +202,12 @@ check below cites the invariant it exercises.
   - A registered-only agent has no claims and no last-seen time.
 - **Channels** have their origin.
   - A declared channel has its pattern.
-  - A discovered one has its seed and seed locator (INV-747).
+  - A discovered one has its seed and seed locator (INV-851).
   - A promoted one has `Promoted { from }` and the promotion's pattern and
     policy.
   - A superseded one has its supersession.
   - Its listing follows the scenario's cross-agent traffic: confirmed,
-    unconfirmed, a declaration, hidden, or none when superseded (INV-753).
+    unconfirmed, a declaration, hidden, or none when superseded (INV-857).
 - **Transmissions** have a row by id (a non-crossing one may not).
   - The reader and sender are canonical.
   - The state matches the evidence, and a confirmed one settled before the
@@ -221,25 +218,25 @@ check below cites the invariant it exercises.
   cluster. A reverted merge carries its reversal and its veto (INV-617).
 - **Policy histories and verdict logs** end with the fact's decisions.
 - **A dropped body** shows `BodyDropped` on its side only (INV-698).
-- **A lone resource** seeds and belongs to no channel (INV-749).
+- **A lone resource** seeds and belongs to no channel (INV-853).
 - **The topic history and stale rules** exist; a stale rule is still
   enabled (INV-309).
 - **Dead letters** span enough groups.
 
 ### The tests (`conformance/src/tests/`)
 
-64 tests, all passing against the fixture:
+65 tests, all passing against the UI fixture:
 
 | Area | Tests | What they hold (invariants) |
 | --- | --- | --- |
 | `scenarios` | 18 | Every named scenario validates, and each one and their composition is observable fact by fact |
-| `graph` | 12 | Canonical nodes covering edges, no self-edges, shares sum to one (INV-680, 681, 758); counting by `Confirmed::at` (INV-589); windows add up (INV-354); an edge's transmissions are exactly its count and bytes (INV-409); the channel-centred view shares `topology`'s edges and draws listed channels only (INV-676, 675, 757); agent and channel filters resolve aliases and supersession (INV-679); route, topic and conjunction filters (INV-345, 637); false detections subtracted (INV-534); confirmed only (INV-756, 759); nothing within one agent counts (INV-758); claims shown as claims |
-| `series` | 8 | Series totals and groupings equal the graph (INV-446, 433, 437, 438); a coarser step sums finer points (INV-445); a grid for another bucket width is refused (INV-443); the overview is `EdgeTotals::of` the graph (INV-710, 743); queues are the lists and honour confirmed only (INV-760); every watermarked read carries the watermark (INV-579, 594, 588) |
+| `graph` | 12 | Canonical nodes covering edges, no self-edges, shares sum to one (INV-680, 681, 862); counting by `Confirmed::at` (INV-589); windows add up (INV-354); an edge's transmissions are exactly its count and bytes (INV-409); the channel-centred view shares `topology`'s edges and draws listed channels only (INV-676, 675, 861); agent and channel filters resolve aliases and supersession (INV-679); route, topic and conjunction filters (INV-345, 637); false detections subtracted (INV-534); confirmed only (INV-860, 863); nothing within one agent counts (INV-862); claims shown as claims |
+| `series` | 8 | Series totals and groupings equal the graph (INV-446, 433, 437, 438); a coarser step sums finer points (INV-445); a grid for another bucket width is refused (INV-443); the overview is `EdgeTotals::of` the graph (INV-710, 743); queues are the lists and honour confirmed only (INV-864); every watermarked read carries the watermark (INV-579, 594, 588) |
 | `refusals` | 5 | Unaligned windows (INV-351); unknown topic versions `NotFound` (INV-645); dropped versions `VersionNotRetained`, with topics, lineage and frozen sizes still readable (INV-572, 563); cursors bound to their request (INV-402); unknown ids |
 | `projections` | 5 | Each fit is a new job with a reproducible frame, pinned spec and watermark (INV-639, 623, 632, 634, 393); samples honour window and filter (INV-394, 381, 395); narrowing keeps the sample (INV-396); too few points fail (INV-629); jobs newest first |
-| `channels` | 16 | The default list and origin filters (INV-754, 691); listings follow cross-agent traffic (INV-753) and partition the list; declarations without traffic (INV-238); row counts are the resources' tally and the graph's (INV-687, 743); the window counts but never filters (INV-692); resources through the channel in force (INV-668); names (INV-689); policy histories; an unconfirmed channel's suspected transmissions (INV-764); channel transmissions are cross-agent only (INV-764) and need View (INV-765); a merge hides, an unmerge restores and a re-merge hides again (INV-755); alerts on a hidden channel (INV-763); discovery raises `NewChannel` and resources sit on one channel (INV-750, 748) |
+| `channels` | 17 | The default list and origin filters (INV-858, 691); listings follow cross-agent traffic (INV-857) and partition the list; declarations without traffic (INV-238); row counts are the resources' tally and the graph's (INV-687, 743); the window counts but never filters (INV-692); resources through the channel in force (INV-668); names (INV-689); policy histories; an unconfirmed channel's suspected transmissions (INV-868); channel transmissions are cross-agent only (INV-868) and need View (INV-869); a merge hides, an unmerge restores and a re-merge hides again (INV-859); alerts on a hidden channel (INV-867); discovery raises `NewChannel` and resources sit on one channel (INV-854, 852); rows by id leave out transmissions within one agent until an unmerge (INV-1036) |
 
-**Not ported yet.** These fixture tests stay in `fixture/src/tests/` until
+**Not ported yet.** These fixture tests stay in `ui/src/backend/fixture/tests/` until
 their suite versions exist, so nothing is lost meanwhile:
 - agents and governance (merge, unmerge, rename);
 - action outcomes and permissions;
@@ -253,13 +250,14 @@ their suite versions exist, so nothing is lost meanwhile:
 - live feed;
 - export.
 
-The redesign below is where they land: the coordinator stopped this branch
-before they were ported.
+They land with the redesign below.
 
 ### `suite!` and running
 
 ```rust
-crosstalk_conformance::suite!(crate::conformance::FixtureHarness::new().expect("clock"));
+crosstalk_conformance::suite!(
+    crate::backend::fixture::conformance::FixtureHarness::new().expect("the fixture's clock constants")
+);
 ```
 
 - **Expansion.** The macro expands to one module per area, and one
@@ -268,26 +266,21 @@ crosstalk_conformance::suite!(crate::conformance::FixtureHarness::new().expect("
   names through `use super::*`. It then runs the test on a fresh
   current-thread runtime with time enabled (`run`), and returns
   `Result<(), RunError>`.
-- **The fixture's suite** runs under `cargo test` in `fixture/`:
-  `cargo test conformance::suite`.
+- **The fixture's suite** runs with the UI's tests:
+  `cargo test -p crosstalk-ui conformance::suite` from the repository
+  root.
 
 ### Async and `Send`
 
-On this branch the spec's traits are native `async fn` without `Send`
-bounds:
+- The spec's traits return `impl Future + Send`, so a backend's futures
+  are `Send` and a generic client or an HTTP client polled from a
+  multi-threaded test needs no extra bounds.
+- `Harness` itself uses native `async fn` (`#[allow(async_fn_in_trait)]`):
+  the suite runs every test on a current-thread runtime and never spawns,
+  so the harness's own futures need not be `Send`. That keeps a harness
+  free to hold non-`Send` state, and keeps runs deterministic.
 
-- The suite runs every test on a current-thread runtime and never spawns,
-  so no future needs to be `Send`.
-- `Harness` follows the spec (`#[allow(async_fn_in_trait)]`).
-- A generic client, or a test that spawned (an HTTP client polled from a
-  multi-threaded server test), would need return-type-notation bounds:
-  `H::Backend: QueryApi<topology(..): Send>`.
-
-On `integration/impl` every spec trait returns `impl Future + Send`, so
-that need disappears. The redesign keeps the current-thread runner anyway,
-for determinism.
-
-### The fixture's harness (`fixture/src/conformance/`)
+### The fixture's harness (`ui/src/backend/fixture/conformance/`)
 
 **What it is.** The fixture cannot build arbitrary worlds: it generates one
 week from a seed. It provisions a named scenario by binding.
@@ -322,117 +315,107 @@ week from a seed. It provisions a named scenario by binding.
 - A role's id comes from `Bindings` only.
 - Every assertion that has an invariant cites it in the test's doc
   comment.
-- Ordering the spec leaves unobservable is not asserted. For example,
-  "newest channel first": a `ChannelRow` carries no creation time.
+- Only what L8 exposes is asserted: channel order is checked through
+  `ChannelRow::created_at` (INV-1035).
 
 ### Files
 
 | File | Role | Key exports |
 | --- | --- | --- |
-| `conformance/src/lib.rs` | Crate doc, re-exports | `Harness`, `Scenario`, `Bindings`, `run`, `suite!` |
-| `conformance/src/harness/mod.rs` | The harness contract | `Harness`, `Provision`, `Knobs`, `Provisioned`, `ProvisionError`, `Operators` |
-| `conformance/src/harness/callers.rs` | Callers from an authenticated directory | `Callers`, `CallerError` |
-| `conformance/src/scenario/{mod,roles,facts,bindings}.rs` | The vocabulary and validation | `Scenario`, `ScenarioBuilder`, `ScenarioError`, `Role<K>`, the `*Fact` types, `Evidence`, `Via`, `Timing`, `Bindings`, `Unbound` |
-| `conformance/src/scenario/named/*.rs` | The named scenarios | one module per scenario, `all`, `everything` |
-| `conformance/src/support/world.rs` | A provisioned world for a test | `World` |
-| `conformance/src/support/{paging,reads,windows}.rs` | Traversal, shared reads, aligned windows | `collect`, `first`, `counted`, `edge_rows`, `grid`, `halves`, `split_at`, `quiet`, `unaligned` |
-| `conformance/src/support/check.rs` | The scenario self-check | `observable` |
-| `conformance/src/tests/*.rs` | The tests by area | one `pub async fn` per test |
-| `conformance/src/suite.rs` | Runner and macro | `run`, `RunError`, `suite!` |
-| `fixture/src/conformance/{mod,bind,find,suite}.rs` | The fixture's harness | `FixtureHarness`, `SEED` |
+| `crates/conformance/src/lib.rs` | Crate doc, re-exports | `Harness`, `Scenario`, `Bindings`, `run`, `suite!` |
+| `crates/conformance/src/harness/mod.rs` | The harness contract | `Harness`, `Provision`, `Knobs`, `Provisioned`, `ProvisionError`, `Operators` |
+| `crates/conformance/src/harness/callers.rs` | Callers from an authenticated directory | `Callers`, `CallerError` |
+| `crates/conformance/src/scenario/{mod,roles,facts,bindings}.rs` | The vocabulary and validation | `Scenario`, `ScenarioBuilder`, `ScenarioError`, `Role<K>`, the `*Fact` types, `Evidence`, `Via`, `Timing`, `Bindings`, `Unbound` |
+| `crates/conformance/src/scenario/named/*.rs` | The named scenarios | one module per scenario, `all`, `everything` |
+| `crates/conformance/src/support/world.rs` | A provisioned world for a test | `World` |
+| `crates/conformance/src/support/{paging,reads,windows}.rs` | Traversal, shared reads, aligned windows | `collect`, `first`, `counted`, `edge_rows`, `grid`, `halves`, `split_at`, `quiet`, `unaligned` |
+| `crates/conformance/src/support/check.rs` | The scenario self-check | `observable` |
+| `crates/conformance/src/tests/*.rs` | The tests by area | one `pub async fn` per test |
+| `crates/conformance/src/suite.rs` | Runner and macro | `run`, `RunError`, `suite!` |
+| `ui/src/backend/fixture/conformance/{mod,bind,find,suite}.rs` | The fixture's harness (test-only) | `FixtureHarness`, `SEED` |
+| `crates/gateway/tests/architecture.rs` | Registers `conformance` as TestSupport | `TestSupport::Conformance` |
 
-## The redesign onto `integration/impl`
+## The redesign: seeding through the write traits
 
-### What `integration/impl` has (as read at `75573db`)
+### What `staging` has
 
-- **A workspace.** `spec/` plus `crates/*`, with one lock, and roles
-  enforced by `crates/gateway/tests/architecture.rs`:
-  - layer crates never depend on each other;
-  - test-support crates (`memory`, `sim`, `testkit`) may only be
-    dev-dependencies of layer crates.
+- **A workspace** (`spec/`, `crates/*`, `ui`) with one lock and the roles
+  `crates/gateway/tests/architecture.rs` enforces: layer crates never
+  depend on each other; test-support crates (`conformance`, `memory`,
+  `sim`, `testkit`, `world`) are only ever dev-dependencies of a layer
+  crate.
 - **Send futures.** Every spec trait method returns `impl Future + Send`.
-- **Store writes the spec already defines:**
-  - L3: `IdentityResolver::{merge, unmerge, rename}`, `ClaimStore::record`,
-    `ActivityStore`;
-  - L5: `ChannelRegistry::{declare, set_policy, promote}`,
-    `TransmissionVerdicts::set`;
-  - L6: `TopicCatalog::{pin, unpin, enforce_retention}`,
-    `ProjectionStore::*`, `AlertRuleStore`, `AlertTriage::triage`;
-  - L7: `EdgeStore::{apply, apply_access, judge, activate, drop_version,
-    advance_watermark}`;
-  - L2: `DeadLetterStore`, `BlobStore`.
-- **Writes still outside the spec.** The writes the spec gives no method
-  are the memory crate's seeding traits:
-  - `SeedAgents::{create, advance, attach}`;
-  - `SeedChannels::{discover, add_resource, record_access, set_detection,
-    confirm}`;
-  - `SeedTransmissions::put`;
-  - the catalog's fit lifecycle and the alert store's listing, which are
-    inherent methods.
-
-  The coordinator describes these as becoming the P0.6 spec write traits,
-  with time always passed in (`at`, `now`). At `75573db` there is no "P0.6"
-  in the tree, and the channel-semantics change (INV-850..869 there) has
-  not been ported: `SeedChannels::discover` still takes `first_access`.
-  The design below names the operations, not their final signatures.
-- **The surface.** `crates/surface` (P2.6) is still an empty library. It
-  will implement `QueryApi`, `OperatorActions`, `LiveFeed` and export over
-  the L3–L7 store traits, with an in-process constructor in `crosstalk-api`
-  over the memory stores.
-- **`crosstalk-sim`.** Virtual clock, seeded RNG, faults, a deterministic
-  simulation driver.
-- **`crosstalk-testkit`.** Builders, a recorded harness corpus, fake
-  upstreams.
+- **The write traits.** Besides the store writes the spec always had
+  (`IdentityResolver::{merge, unmerge, rename}`, `ClaimStore`,
+  `ActivityStore`, `ChannelRegistry::{declare, set_policy, promote}`,
+  `TransmissionVerdicts::set`, `TopicCatalog::{pin, unpin,
+  enforce_retention}`, `ProjectionStore`, `AlertRuleStore`, `AlertTriage`,
+  `EdgeStore::{apply, apply_access, judge, activate, drop_version,
+  advance_watermark}`, `DeadLetterStore`, `BlobStore`), the spec now has
+  the writes a layer's consumer makes: `AgentLifecycle`, `ChannelTraffic`,
+  `TransmissionStore`, `TopicLifecycle`, `SearchCorpus`,
+  `AlertRuleMaintenance`, `AlertActions`, `OperatorStore`, `SinkRegistry`.
+  Every write takes its time; no store reads a clock.
+- **`crosstalk-world`** (`crates/world`, TestSupport): the fixture's week
+  generated and written through those traits into any stores implementing
+  `crosstalk_world::WorldStores`, returning a `crosstalk_world::Scenario`
+  of handles (agents by fixture key, `ChannelKey`, `MergeKey`, `RuleKey`,
+  `JobKey`, the lone resource, dropped bodies, impersonators, registered
+  agents, the unmapped topic).
+- **The surface** (`crosstalk-surface`): `QueryApi`, `OperatorActions`,
+  `LiveFeed` and export over the store traits, with an in-process
+  constructor in `crosstalk-api` (`InProcess` over `MemoryStores`). The UI
+  serves it as its world backend (`ui/src/backend/world`).
+- **The channel semantics** port: `ChannelTraffic`/`ChannelReads`,
+  `ChannelWithTraffic`, `CoAccess::writer`, creation-time ordering
+  (`created_at`), with the invariants renumbered INV-850..869 and
+  INV-1030..1038.
 
 ### Decisions (from the coordinator and the gateway team)
 
 - **Seed through the write traits.** Scenarios are seeded through the
-  spec's write traits, not through a fixture or store backdoor. One suite,
-  generic over reads and writes, then runs unchanged against the memory
-  stores, Postgres and the HTTP client.
-- **The fixture becomes data plus a clock.** It becomes `crates/world`
-  (`crosstalk-world`), a TestSupport crate holding a seed script. The
-  script writes the synthetic world through the same write traits into the
-  memory stores.
-  - Its own `QueryApi`, `OperatorActions` and `LiveFeed` implementations
-    retire.
-  - Reads go through `crates/surface`.
-  - That port is under way on `feat/world-seed`.
+  spec's write traits, not through a fixture or store backdoor, so one
+  suite runs unchanged against the memory stores, Postgres and the HTTP
+  client.
+- **The fixture becomes data plus a clock.** `crosstalk-world` holds the
+  week as a seed script; reads go through `crosstalk-surface`. The UI's
+  own fixture backend stays for now (its replay mode serves the demo) and
+  keeps passing the suite until it retires.
 - **End-to-end comes later.** Wire traffic replayed through `sim` and
   `testkit` (ingress → canonical → stores) is a later layer.
+
+### Next steps
+
+1. **A world harness.** `Harness` for the UI's world backend (or directly
+   for `crosstalk_api::InProcess` over `MemoryStores` seeded by
+   `crosstalk-world`), binding the named scenarios to the world's
+   `Scenario` handles. Transmission roles the world does not name are
+   found through L8 reads (edges' and channels' transmission pages, read
+   by id) or through the memory stores' read traits; scenarios whose roles
+   cannot be bound that way are `Unsupported` there. This is where the
+   suite first meets the real surface.
+2. **A generic seeder.** The harness below, so the suite seeds its own
+   scenarios and any store set runs it.
 
 ### The harness, redesigned
 
 ```rust
-/// Writes a world through the spec's write traits.
-pub trait Stores: Send + Sync {
-    type Agents: IdentityResolver + AgentDirectory + ClaimStore + ActivityStore + AgentWrites;
-    type Channels: ChannelRegistry + ChannelDirectory + ChannelWrites;
-    type Transmissions: TransmissionVerdicts + TransmissionWrites;
-    type Edges: EdgeStore;
-    type Catalog: TopicCatalog + CatalogWrites;
-    type Rules: AlertRuleStore + AlertTriage;
-    type Letters: DeadLetterStore;
-    type Blobs: BlobStore;
-    // one accessor per store
-}
-
-pub trait Harness: Send + Sync {
-    type Stores: Stores;
-    type Surface: QueryApi + OperatorActions + LiveFeed + Send + Sync;
+pub trait Harness {
+    /// Fresh, empty stores: the memory set, or a fresh Postgres schema.
+    type Stores: crosstalk_world::WorldStores;
+    /// The surface over them: crosstalk-surface in process, or an HTTP
+    /// client in front of crosstalk-api serving them.
+    type Surface: QueryApi + OperatorActions + LiveFeed;
     type Hasher: RowHasher;
-    /// Fresh, empty stores (a memory set, or a fresh Postgres schema).
-    fn stores(&self, knobs: &Knobs) -> impl Future<Output = Result<Self::Stores, ProvisionError>> + Send;
-    /// The surface over those stores: crosstalk-surface in process, or an
-    /// HTTP client in front of crosstalk-api serving them.
-    fn surface(&self, stores: &Self::Stores) -> impl Future<Output = Result<Self::Surface, ProvisionError>> + Send;
+    async fn stores(&self, knobs: &Knobs) -> Result<Self::Stores, ProvisionError>;
+    async fn surface(&self, stores: Self::Stores, knobs: &Knobs) -> Result<Self::Surface, ProvisionError>;
     fn operators(&self) -> Operators;
     fn row_hasher(&self) -> Self::Hasher;
 }
 ```
 
-Here `*Writes` stands for the P0.6 traits (today's `Seed*`), whatever their
-final names.
+`crosstalk_world::WorldStores` is already the set of stores and write
+traits a seed needs, so the suite reuses it rather than defining its own.
 
 Several things change against the current harness:
 
@@ -464,12 +447,12 @@ through a `Timeline`:
 
 | Fact | Writes, in order |
 | --- | --- |
-| `AgentFact` | `AgentWrites::create` (registered or provisional), `advance` to established; for a seen agent, `ClaimStore::record` for each claimed family and an activity record at its first fact |
+| `AgentFact` | `AgentLifecycle` (registered or provisional), `advance` to established; for a seen agent, `ClaimStore::record` for each claimed family and an activity record at its first fact |
 | `ResourceFact` | Nothing on its own: stored by the first access, discovery or declaration that needs it |
 | `ChannelFact::Declared` | `ChannelRegistry::declare(pattern, …, at)` |
 | `ChannelFact::Discovered` | Nothing directly: the channel is created by its first cross-agent transmission (`ChannelRegistry::discover(resource, transmission, at)` after the INV-850..869 port). The binding is the id `discover` returns. |
-| `AccessFact` | `ChannelWrites::record_access` and `EdgeStore::apply_access` (the access lands on no channel when its resource has none) |
-| `TransmissionFact` | The write and read accesses (for a route through a resource), `TransmissionWrites::put` with the state the evidence names. For a confirmed one: `EdgeStore::apply` with its contribution under the active version, and the channel's confirmation (`confirm`, or what the port makes of it). For co-access evidence: the transmission put in `AwaitingContent` / `Suspected` / `Discarded`. |
+| `AccessFact` | `ChannelTraffic`'s access write and `EdgeStore::apply_access` (the access lands on no channel when its resource has none) |
+| `TransmissionFact` | The write and read accesses (for a route through a resource), `TransmissionStore`'s put with the state the evidence names. For a confirmed one: `EdgeStore::apply` with its contribution under the active version, and the channel's confirmation (`confirm`, or what the port makes of it). For co-access evidence: the transmission put in `AwaitingContent` / `Suspected` / `Discarded`. |
 | `MergeFact` | `IdentityResolver::merge` (author `Resolver` or `Operator`); when reverted, `unmerge` |
 | `PromotionFact` | `ChannelRegistry::promote` |
 | `PolicyFact` | `ChannelRegistry::set_policy` per decision |
@@ -498,7 +481,7 @@ through a `Timeline`:
   named scenarios.
 - `Bindings`; the seeder fills them with the ids it created.
 - The self-check (`check::observable`).
-- The 64 tests: they use only L8 reads and actions, roles, and the support
+- The 65 tests: they use only L8 reads and actions, roles, and the support
   layer.
 - `World` (its fields come from the seeder instead of the harness),
   `collect`, `reads`, `windows`.
@@ -508,9 +491,9 @@ through a `Timeline`:
 - **The harness.** `Harness::provision` is replaced by the
   `stores` + `surface` pair and the suite's `Seeder`; `bucket_width`,
   `now` and `extent` go.
-- **The fixture's binder retires.** `fixture/src/conformance/` goes with
-  `FixtureBackend`'s trait implementations.
-- **Invariant citations are renumbered** INV-746..765 → INV-850..869,
+- **The fixture's binder retires.** `ui/src/backend/fixture/conformance/`
+  goes with `FixtureBackend`'s trait implementations.
+- **Invariant citations follow the renumbering** (INV-746..765 → INV-850..869, done),
   following crosstalk-impl's map.
 - **The crate joins the workspace** as `crates/conformance`, and
   `crosstalk-world` as `crates/world`. Both are registered as TestSupport
@@ -570,7 +553,7 @@ pipeline derives what the write-level seeding asserted directly.
 
 For the gateway's developers.
 
-**Today, on this branch's API.**
+**Today's API.**
 
 1. Depend on `crosstalk-conformance` as a dev-dependency.
 2. Implement `Harness` in your test support:

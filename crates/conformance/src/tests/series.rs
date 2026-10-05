@@ -205,7 +205,7 @@ pub async fn the_overview_counts_the_graph<H: Harness>(h: &H) {
 
 /// The overview's queues are what the lists show, whatever the window or
 /// the filter (but `unconfirmed_channels`): open shown alerts, unreviewed
-/// listed channels, unconfirmed channels (INV-760).
+/// listed channels, unconfirmed channels (INV-864).
 pub async fn the_overview_queues_are_the_lists<H: Harness>(h: &H) {
     let w = World::everything(h).await;
     let open = alerts(
@@ -256,7 +256,7 @@ pub async fn the_overview_queues_are_the_lists<H: Harness>(h: &H) {
 
 /// Confirmed only leaves unconfirmed channels out of the queues: their
 /// count is `None` (not zero) and the unreviewed ones leave the review
-/// queue; open alerts are untouched (INV-760).
+/// queue; open alerts are untouched (INV-864).
 pub async fn overview_queues_honour_confirmed_only<H: Harness>(h: &H) {
     let w = World::of(h, suspected::scenario()).await;
     let read = async |unconfirmed| {

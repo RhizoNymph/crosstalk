@@ -34,11 +34,16 @@ pub fn topic_under(record: &TxRecord, version: TopicModelVersion) -> TopicUnder 
     }
 }
 
-/// The row of `record` ([`TransmissionSummary::of`]): agents and channel
-/// resolved as of this read, the current verdict, the topic under
-/// `version`.
-pub fn summary(ctx: &Ctx, record: &TxRecord, version: TopicModelVersion) -> TransmissionSummary {
-    TransmissionSummary::of(
+/// The row of `record` if it is listed ([`TransmissionSummary::listed`]):
+/// agents and channel resolved as of this read, the current verdict, the
+/// topic under `version`; `None` when its sender and reader resolve to one
+/// agent.
+pub fn listed(
+    ctx: &Ctx,
+    record: &TxRecord,
+    version: TopicModelVersion,
+) -> Option<TransmissionSummary> {
+    TransmissionSummary::listed(
         &record.transmission,
         ctx.aliases(),
         |id| ctx.verdict(id),
@@ -46,9 +51,11 @@ pub fn summary(ctx: &Ctx, record: &TxRecord, version: TopicModelVersion) -> Tran
     )
 }
 
-/// One row per stored transmission of `selection`, newest id first, topics
-/// under the version `selector` resolves to on the first page and the
-/// cursor pins afterwards. Unknown ids are left out.
+/// One row per stored transmission of `selection` that is listed
+/// ([`TransmissionSummary::listed`]: none whose sender and reader resolve
+/// to one agent), newest id first, topics under the version `selector`
+/// resolves to on the first page and the cursor pins afterwards. Unknown
+/// ids are left out.
 pub fn by_id(
     ctx: &Ctx,
     selection: &TransmissionSelection,
@@ -63,9 +70,9 @@ pub fn by_id(
         .ids()
         .iter()
         .filter_map(|id| ctx.world.tx(*id))
-        .map(|record| {
+        .filter_map(|record| {
             let key = (0, u128::MAX - record.transmission.id.as_ulid());
-            (key, summary(ctx, record, version))
+            Some((key, listed(ctx, record, version)?))
         })
         .collect();
     let page = page::paginate(

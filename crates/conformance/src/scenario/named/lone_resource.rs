@@ -1,6 +1,6 @@
 //! A key-value entry only one agent ever writes and reads: a resource on
 //! no channel. Its accesses are recorded, but it is in no channel list,
-//! graph or count and raised no new-channel alert (INV-749).
+//! graph or count and raised no new-channel alert (INV-853).
 
 use crosstalk_spec::derived::flow::resource::Locator;
 use crosstalk_spec::observed::client::HarnessFamily;

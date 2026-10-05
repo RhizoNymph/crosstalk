@@ -20,7 +20,7 @@ pub const ALIAS: AgentRole = AgentRole::new(NAME, "alias");
 pub const CHILD: AgentRole = AgentRole::new(NAME, "child");
 pub const ALIAS_MERGE: MergeRole = MergeRole::new(NAME, "alias_merge");
 /// From the alias to its canonical agent: within one agent once merged,
-/// so it counts nowhere (INV-758).
+/// so it counts nowhere (INV-862).
 pub const SELF_EDGE: TransmissionRole = TransmissionRole::new(NAME, "self_edge");
 
 /// Holds two aliases: `CHAIN_SECOND` merged into it, and `CHAIN_FIRST`

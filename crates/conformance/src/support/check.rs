@@ -107,7 +107,7 @@ async fn agents<H: Harness>(w: &World<'_, H>) {
 }
 
 /// What a channel's row must list as, from the scenario's traffic through
-/// it (INV-753): confirmed once a confirmed cross-agent transmission went
+/// it (INV-857): confirmed once a confirmed cross-agent transmission went
 /// through it, unconfirmed while only suspected ones did, a declaration
 /// when declared (or promoted) without any, hidden when discovered and all
 /// its traffic is within one agent, none when superseded.
@@ -165,7 +165,7 @@ async fn channels<H: Harness>(w: &World<'_, H>) {
                 let seed_row = row
                     .seed()
                     .unwrap_or_else(|| panic!("{} has a seed", fact.role));
-                assert_eq!(seed_row.id, seed_id, "{}'s seed (INV-747)", fact.role);
+                assert_eq!(seed_row.id, seed_id, "{}'s seed (INV-851)", fact.role);
                 if let Some(resource) = w.scenario.resource(*seed) {
                     assert_eq!(seed_row.locator, resource.locator, "{}'s seed", fact.role);
                 }
@@ -210,7 +210,7 @@ async fn channels<H: Harness>(w: &World<'_, H>) {
         assert_eq!(
             row.listing(),
             expected_listing(w, fact.role),
-            "{}'s listing follows its traffic (INV-753)",
+            "{}'s listing follows its traffic (INV-857)",
             fact.role
         );
     }
@@ -226,8 +226,14 @@ async fn transmissions<H: Harness>(w: &World<'_, H>) {
         let id = w.id(fact.role);
         let crosses = w.scenario.crosses(fact);
         let found = row(&w.backend, &w.lead, id).await;
+        let listed = crosses || fact.state == Evidence::Detected;
+        assert_eq!(
+            found.is_some(),
+            listed,
+            "{} is listed by id exactly when it crosses or is detected (INV-1036)",
+            fact.role
+        );
         let Some(summary) = found else {
-            assert!(!crosses, "{} has a row by id", fact.role);
             continue;
         };
         assert_eq!(
@@ -394,7 +400,7 @@ async fn dropped_bodies<H: Harness>(w: &World<'_, H>) {
     }
 }
 
-/// A resource only one agent used is on no channel (INV-749): no listed
+/// A resource only one agent used is on no channel (INV-853): no listed
 /// or bound channel is seeded by it or lists it among its resources.
 async fn lone_resources<H: Harness>(w: &World<'_, H>) {
     let lone: HashSet<_> = w

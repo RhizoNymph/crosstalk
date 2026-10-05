@@ -84,6 +84,7 @@ macro_rules! suite {
                 a_merge_hides_the_channel_and_an_unmerge_restores_it,
                 alerts_on_a_hidden_channel_are_not_listed,
                 discovered_channels_raised_an_alert_and_hold_their_resources,
+                rows_by_id_leave_out_transmissions_within_one_agent,
             }
             series {
                 series_totals_match_the_graph,

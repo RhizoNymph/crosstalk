@@ -46,17 +46,22 @@ fn origins(kinds: Vec<CanonicalOriginKind>) -> ChannelFilter {
 }
 
 /// The default list holds every channel in force (confirmed, unconfirmed,
-/// declarations) and no hidden or superseded one, each once; superseded
+/// declarations) and no hidden or superseded one, newest created first
+/// (INV-1035); superseded
 /// channels are listed only when asked for, by origin alone, with no
-/// counts of their own (INV-754, INV-691).
+/// counts of their own (INV-858, INV-691).
 pub async fn the_default_list_is_every_channel_in_force<H: Harness>(h: &H) {
     let w = World::everything(h).await;
     let listed = channel_rows(&w.backend, &w.lead, &ChannelFilter::default()).await;
     let listed_ids = ids(&listed);
-    // "Newest channel first" is not checked: a row carries no creation
-    // time, so the order's key is not observable through L8.
     let distinct: HashSet<_> = listed_ids.iter().collect();
     assert_eq!(distinct.len(), listed_ids.len(), "each channel once");
+    assert!(
+        listed
+            .windows(2)
+            .all(|p| p[0].created_at() >= p[1].created_at()),
+        "newest created first (INV-1035)"
+    );
     assert!(listed.iter().all(|r| r.supersession().is_none()));
     assert!(listed.iter().all(|r| r.listing() != Some(Listing::Hidden)));
     for present in [
@@ -134,7 +139,7 @@ pub async fn the_default_list_is_every_channel_in_force<H: Harness>(h: &H) {
 }
 
 /// Every row's listing and confirmation follow from its origin and its
-/// cross-agent traffic (INV-753).
+/// cross-agent traffic (INV-857).
 pub async fn listings_follow_cross_agent_traffic<H: Harness>(h: &H) {
     let w = World::everything(h).await;
     let mut rows = channel_rows(&w.backend, &w.lead, &ChannelFilter::default()).await;
@@ -157,7 +162,7 @@ pub async fn listings_follow_cross_agent_traffic<H: Harness>(h: &H) {
 }
 
 /// Listing kinds filter exactly: declarations, unconfirmed and confirmed
-/// channels partition the default list (INV-754).
+/// channels partition the default list (INV-858).
 pub async fn listings_split_channels_declarations_and_unconfirmed_ones<H: Harness>(h: &H) {
     let w = World::everything(h).await;
     let of = async |kind| {
@@ -421,7 +426,7 @@ async fn channel_transmissions<H: Harness>(
 
 /// An unconfirmed channel lists its suspected transmissions for review:
 /// as many as its unconfirmed traffic, routed through it, newest opened
-/// first, each naming senders other than its reader (INV-764).
+/// first, each naming senders other than its reader (INV-868).
 pub async fn an_unconfirmed_channel_lists_its_suspected_transmissions<H: Harness>(h: &H) {
     let w = World::everything(h).await;
     let s3 = w.id(suspected::S3);
@@ -472,7 +477,7 @@ pub async fn an_unconfirmed_channel_lists_its_suspected_transmissions<H: Harness
 }
 
 /// A transmission whose agents merged into one is not a channel
-/// transmission: the hidden channel lists none (INV-764).
+/// transmission: the hidden channel lists none (INV-868).
 pub async fn channel_transmissions_are_cross_agent_only<H: Harness>(h: &H) {
     let w = World::of(h, hidden_channel::scenario()).await;
     let listed = channel_transmissions(&w, w.id(hidden_channel::SELF_NOTES), None).await;
@@ -487,7 +492,7 @@ pub async fn channel_transmissions_are_cross_agent_only<H: Harness>(h: &H) {
     );
 }
 
-/// A channel's transmissions need View (INV-765).
+/// A channel's transmissions need View (INV-869).
 pub async fn channel_transmissions_need_view<H: Harness>(h: &H) {
     let w = World::of(h, suspected::scenario()).await;
     assert_eq!(
@@ -509,7 +514,7 @@ pub async fn channel_transmissions_need_view<H: Harness>(h: &H) {
 
 /// "Confirmed only" changes no transmission view: the graph, the
 /// overview's activity and the transmissions they count are the same
-/// (INV-759).
+/// (INV-863).
 pub async fn confirmed_only_changes_no_transmission_view<H: Harness>(h: &H) {
     let w = World::everything(h).await;
     let exclude = TopologyFilter {
@@ -562,7 +567,7 @@ async fn drawn<H: Harness>(w: &World<'_, H>, channel: ChannelId) -> bool {
 /// A discovered channel whose traffic a merge left within one agent is
 /// hidden from lists, the channel graph and counts while its row and
 /// policy history still answer; unmerging lists, draws and counts it
-/// again, and merging again restores exactly the earlier lists (INV-755).
+/// again, and merging again restores exactly the earlier lists (INV-859).
 pub async fn a_merge_hides_the_channel_and_an_unmerge_restores_it<H: Harness>(h: &H) {
     let w = World::of(h, hidden_channel::scenario()).await;
     let notes = w.id(hidden_channel::SELF_NOTES);
@@ -658,7 +663,7 @@ pub async fn a_merge_hides_the_channel_and_an_unmerge_restores_it<H: Harness>(h:
 }
 
 /// Alerts about a hidden channel are not listed, though stored: an unmerge
-/// shows them again, and `alert` reads one by id either way (INV-763).
+/// shows them again, and `alert` reads one by id either way (INV-867).
 pub async fn alerts_on_a_hidden_channel_are_not_listed<H: Harness>(h: &H) {
     let w = World::of(h, hidden_channel::scenario()).await;
     let notes = w.id(hidden_channel::SELF_NOTES);
@@ -682,7 +687,7 @@ pub async fn alerts_on_a_hidden_channel_are_not_listed<H: Harness>(h: &H) {
     let shown = alerts(&w.backend, &w.lead, &about).await;
     assert!(
         !shown.is_empty(),
-        "discovery raised an alert about it (INV-750)"
+        "discovery raised an alert about it (INV-854)"
     );
     let again = OperatorAction::merge_agents(
         &w.lead,
@@ -699,8 +704,8 @@ pub async fn alerts_on_a_hidden_channel_are_not_listed<H: Harness>(h: &H) {
 }
 
 /// Every channel the scenarios discover has a new-channel alert, and no
-/// channel lists a resource of a channel it does not hold (INV-750,
-/// INV-748).
+/// channel lists a resource of a channel it does not hold (INV-854,
+/// INV-852).
 pub async fn discovered_channels_raised_an_alert_and_hold_their_resources<H: Harness>(h: &H) {
     use crosstalk_spec::aggregates::alert::{AlertSubject, BuiltinRule};
     let w = World::everything(h).await;
@@ -739,4 +744,32 @@ pub async fn discovered_channels_raised_an_alert_and_hold_their_resources<H: Har
             }
         }
     }
+}
+
+/// Rows by id leave out a transmission whose agents resolve to one, and
+/// an unmerge lists it again (INV-1036).
+pub async fn rows_by_id_leave_out_transmissions_within_one_agent<H: Harness>(h: &H) {
+    let w = World::of(h, hidden_channel::scenario()).await;
+    let between = w.id(hidden_channel::BETWEEN);
+    assert!(
+        crate::support::reads::row(&w.backend, &w.lead, between)
+            .await
+            .is_none(),
+        "within one agent while the merge stands"
+    );
+    w.backend
+        .act(
+            &w.lead,
+            OperatorAction::Unmerge {
+                merge: hiding_merge(&w),
+            },
+        )
+        .await
+        .expect("unmerge");
+    let listed = crate::support::reads::row(&w.backend, &w.lead, between).await;
+    assert_eq!(
+        listed.map(|r| r.id),
+        Some(between),
+        "listed again after the unmerge"
+    );
 }

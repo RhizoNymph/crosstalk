@@ -1,7 +1,7 @@
 //! Scenarios: worlds described as facts over roles, provisioned by each
 //! implementation and checked through L8.
 //!
-//! - [`roles`]: typed symbolic names ([`AgentRole`], [`ChannelRole`], ...).
+//! - `roles`: typed symbolic names ([`AgentRole`], [`ChannelRole`], ...).
 //! - [`facts`]: the vocabulary ([`Fact`]).
 //! - [`Scenario`]: a named, validated set of facts. [`Scenario::compose`]
 //!   unions scenarios into one world; roles carry their scenario's name, so

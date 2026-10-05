@@ -8,8 +8,8 @@ use std::time::Duration;
 use crosstalk_spec::aggregates::edge::{RouteKind, TopologyFilter};
 use crosstalk_spec::aggregates::filter::TopicVersionSelector;
 use crosstalk_spec::aggregates::projection::{
-    FitFailure, PointRoute, Projection, ProjectionInfo, ProjectionLimit, ProjectionParams, ProjectionStatus,
-    ProjectionStatusKind,
+    FitFailure, PointRoute, Projection, ProjectionInfo, ProjectionLimit, ProjectionParams,
+    ProjectionStatus, ProjectionStatusKind,
 };
 use crosstalk_spec::ids::ProjectionId;
 use crosstalk_spec::interfaces::l8_surface::summary::TopicUnder;
@@ -156,14 +156,19 @@ pub async fn samples_honour_the_window_and_filter<H: Harness>(h: &H) {
         assert!(matches!(point.route(), PointRoute::Channel(_)));
         assert!(window.contains(point.confirmed_at()));
         assert_ne!(
-            point.from(), point.to(),
-            "a transmission between two agents (INV-758)"
+            point.from(),
+            point.to(),
+            "a transmission between two agents (INV-862, INV-1037)"
         );
         let summary = summaries
             .iter()
             .find(|s| s.id == point.transmission())
             .expect("a stored transmission");
-        assert_eq!(point.route(), PointRoute::of(&summary.route), "its route as resolved");
+        assert_eq!(
+            point.route(),
+            PointRoute::of(&summary.route),
+            "its route as resolved"
+        );
         let topic = match summary.state.topic() {
             Some(TopicUnder::Topic(t)) => Some(t),
             _ => None,
