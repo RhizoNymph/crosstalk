@@ -6,7 +6,8 @@
 //! receiver's next exchange carries the payload encoded by one
 //! [cipher](codec): in a user turn (`Message from your partner:` and the
 //! encoding) or in a tool result (the encoding as the whole result of a
-//! `read_mailbox` call). That is how an encoding channel (or a relay that
+//! `read_mailbox` call the receiver made in its exchange before). Calls are
+//! one paced step apart ([`Pace`](crate::corpus::clock::Pace)). That is how an encoding channel (or a relay that
 //! encodes) delivers it: the reader's text has to be decoded to match the
 //! sender's, which is what the spec's `Decoded` match class means.
 //!
@@ -36,7 +37,7 @@ use crosstalk_spec::support::NonEmpty;
 pub use codec::{Cipher, CipherKind};
 pub use pools::Pool;
 
-use crate::corpus::clock::{ClockError, ordinal};
+use crate::corpus::clock::{ClockError, Pace};
 use crate::corpus::{
     CorpusError, Coverage, Driven, ExchangeDraft, Fidelity, HashedMessage, SourceError,
     TraceSource, World, WorldBuilder,
@@ -143,8 +144,16 @@ fn text_assistant(text: &str) -> HashedMessage {
     ))]))
 }
 
-/// The world of one pair.
+/// The world of one pair, calls [`Pace::DEFAULT`] apart.
 pub fn world(pair: &Pair) -> Result<World, CipherError> {
+    world_paced(pair, Pace::DEFAULT)
+}
+
+/// The world of one pair, calls `pace` apart: the sender's note, then the
+/// receiver's exchange carrying it (with a tool-result delivery, the
+/// receiver first calls `read_mailbox` and gets the result in its next
+/// request, as a harness would).
+pub fn world_paced(pair: &Pair, pace: Pace) -> Result<World, CipherError> {
     let dataset = DatasetId::new(DATASET);
     let key = pair.world_key();
     let mut builder = WorldBuilder::new(dataset, key.clone());
@@ -169,7 +178,7 @@ pub fn world(pair: &Pair) -> Result<World, CipherError> {
     let note = format!("{NOTE_HEADER}{}", pair.payload);
     let sent = builder.exchange(draft(
         sender.clone(),
-        ordinal(0).map_err(CipherError::Clock)?,
+        pace.at(0, 0, 0).map_err(CipherError::Clock)?,
         vec![
             text_system("You are an assistant working with a partner agent."),
             text_user("Write a short note for your partner."),
@@ -207,13 +216,17 @@ pub fn world(pair: &Pair) -> Result<World, CipherError> {
                 content: vec![ToolResultContent::Text(Text(encoded.clone()))],
                 outcome: ToolOutcome::Success,
             })));
+            let ask = text_user("Check your mailbox.");
+            builder.exchange(draft(
+                receiver.clone(),
+                pace.at(1, 0, 0).map_err(CipherError::Clock)?,
+                vec![system.clone(), ask.clone()],
+                call.clone(),
+                StopReason::ToolUse,
+                "receiver/call",
+            ))?;
             (
-                vec![
-                    system,
-                    text_user("Check your mailbox."),
-                    call,
-                    result.clone(),
-                ],
+                vec![system, ask, call, result.clone()],
                 CarrierKind::ToolResult,
                 result,
                 0,
@@ -222,7 +235,7 @@ pub fn world(pair: &Pair) -> Result<World, CipherError> {
     };
     let read = builder.exchange(draft(
         receiver.clone(),
-        ordinal(1).map_err(CipherError::Clock)?,
+        pace.at(2, 0, 0).map_err(CipherError::Clock)?,
         request,
         text_assistant("Received."),
         StopReason::EndTurn,
@@ -257,6 +270,7 @@ pub struct CipherSource {
     kinds: Vec<CipherKind>,
     pairs: usize,
     seed: u64,
+    pace: Pace,
 }
 
 impl CipherSource {
@@ -276,7 +290,14 @@ impl CipherSource {
             kinds: CipherKind::ALL.to_vec(),
             pairs,
             seed,
+            pace: Pace::DEFAULT,
         }
+    }
+
+    /// These worlds with calls `pace` apart.
+    pub fn with_pace(mut self, pace: Pace) -> Self {
+        self.pace = pace;
+        self
     }
 
     /// Only these cipher kinds.
@@ -302,8 +323,9 @@ impl TraceSource for CipherSource {
     }
 
     fn worlds(&mut self) -> impl Iterator<Item = Result<World, SourceError>> + '_ {
+        let pace = self.pace;
         self.plan()
             .into_iter()
-            .map(|pair| world(&pair).map_err(SourceError::from))
+            .map(move |pair| world_paced(&pair, pace).map_err(SourceError::from))
     }
 }

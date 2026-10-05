@@ -1,12 +1,36 @@
 //! Building one world's exchanges and labels from a connected component's
 //! revisions.
 //!
-//! Two passes. The first synthesises every exchange (a read before each edit
-//! whose author differs from the page's previous author, then the edit) and
-//! records, per revision, the ids and message hashes it minted. The second
-//! reads those back to emit labels: a Channel transmission from each earlier
-//! author whose inserted lines survive into the body a reader read, and a
+//! Two passes. The first synthesises every exchange and records, per
+//! revision, the ids and message hashes it minted. The second reads those
+//! back to emit labels: a Channel transmission from each earlier author
+//! whose inserted lines survive into the body a reader read, and a
 //! ReaderOutput relay when a reader's own edit quotes such a line verbatim.
+//!
+//! **The shape of a harness.** Each agent is one conversation that only
+//! grows: every request is the agent's previous request, its previous
+//! response, and the new inputs, so L3 threads an agent's exchanges into
+//! one conversation. A tool call is the response of one exchange and its
+//! result arrives in the agent's next request, never in the same one. One
+//! revision is one turn of its author:
+//!
+//! ```text
+//! with a read (the page's previous author is someone else):
+//!   [.. user "Update P."]                      → GET P            (call)
+//!   [.. GET P, result: page body]              → POST P {body}    (read exchange; edit exchange)
+//!   [.. POST P, result: "Saved P."]            → "Updated P."
+//! without one:
+//!   [.. user "Update P."]                      → POST P {body}    (edit exchange)
+//!   [.. POST P, result: "Saved P."]            → "Updated P."
+//! ```
+//!
+//! The read exchange is the one whose request carries the page body: the
+//! channel label sits there, in the GET's tool result (INV-269: the match
+//! is in the result of the call that produced the read access). The POST's
+//! success acknowledgement arrives one call later, so the write has an
+//! outcome. Every exchange is one call step of the world's [`Pace`]
+//! (1 to 5 s by default), in revision order, so a sender's write precedes
+//! any later reader's read of it.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -17,13 +41,14 @@ use crosstalk_spec::observed::message::{
     AssistantPart, MessageBody, SystemPart, Text, ToolArguments, ToolCall, ToolCallId,
     ToolExecution, ToolName, ToolOutcome, ToolResult, ToolResultContent, UserPart,
 };
-use crosstalk_spec::support::{NonEmpty, Timestamp};
+use crosstalk_spec::support::NonEmpty;
 
 use super::attribution::{attribute, line_byte_range, lines, runs};
 use super::resource::{page_locator, page_url};
 use super::schema::Revision;
 use super::tools;
 use super::{DATASET, REVISIONS_FILE, WikiError};
+use crate::corpus::clock::Pace;
 use crate::corpus::{
     Coverage, Driven, ExchangeDraft, Fidelity, HashedMessage, World, WorldBuilder,
 };
@@ -42,10 +67,11 @@ const MIN_BYTES: usize = 24;
 /// never a run of wiki markup punctuation.
 const MIN_WORD_CHARS: usize = 20;
 const MODEL: &str = "wiki/agent";
+const SYSTEM: &str = "You are a wiki agent.";
 
 /// Builds the world for one component's revisions (already ordered by time,
-/// then page, then seq).
-pub fn world(key: WorldKey, revs: &[&Revision]) -> Result<World, WikiError> {
+/// then page, then seq), its calls `pace` apart.
+pub fn world(key: WorldKey, revs: &[&Revision], pace: Pace) -> Result<World, WikiError> {
     let dataset = DatasetId::new(DATASET);
     let mut builder = WorldBuilder::new(dataset, key.clone());
     for identity in distinct_identities(revs) {
@@ -54,28 +80,16 @@ pub fn world(key: WorldKey, revs: &[&Revision]) -> Result<World, WikiError> {
 
     let pages = PageIndex::new(revs);
     let mut records: BTreeMap<&str, RevRecord> = BTreeMap::new();
-    let mut counter: u64 = 0;
+    let mut turns = Turns::new(pace);
 
-    // Pass 1: exchanges.
+    // Pass 1: exchanges, one turn of its author per revision.
     for rev in revs {
         let (page, li) = pages.locate(rev);
         let actor = AgentKey::new(key.clone(), rev.identity());
         let prev = (li > 0).then(|| page.revs[li - 1]);
-        let read = match prev {
-            Some(prev) if prev.identity() != rev.identity() => {
-                Some(build_read(&mut builder, &actor, rev, prev, &mut counter)?)
-            }
-            _ => None,
-        };
-        let edit = build_edit(
-            &mut builder,
-            &actor,
-            rev,
-            &page.sources[li],
-            li,
-            &mut counter,
-        )?;
-        records.insert(rev.rev_id.as_str(), RevRecord { edit, read });
+        let read = prev.filter(|prev| prev.identity() != rev.identity());
+        let record = turns.revision(&mut builder, &actor, rev, read, &page.sources[li], li)?;
+        records.insert(rev.rev_id.as_str(), record);
     }
 
     // Pass 2: labels.
@@ -92,6 +106,132 @@ pub fn world(key: WorldKey, revs: &[&Revision]) -> Result<World, WikiError> {
     }
 
     Ok(builder.finish(Coverage::Partial))
+}
+
+/// Every agent's conversation so far and the world's call clock.
+struct Turns {
+    pace: Pace,
+    /// The next call step.
+    step: u64,
+    /// Each agent's transcript: its last request and response.
+    transcripts: BTreeMap<AgentKey, Vec<HashedMessage>>,
+}
+
+impl Turns {
+    fn new(pace: Pace) -> Self {
+        Self {
+            pace,
+            step: 0,
+            transcripts: BTreeMap::new(),
+        }
+    }
+
+    /// One exchange of `agent`: its transcript plus `inputs` as the request,
+    /// `response` as the response, at the next call step. The transcript
+    /// keeps both, so the agent's next request extends this one.
+    #[allow(clippy::too_many_arguments)]
+    fn exchange(
+        &mut self,
+        builder: &mut WorldBuilder,
+        agent: &AgentKey,
+        inputs: Vec<HashedMessage>,
+        response: HashedMessage,
+        stop: StopReason,
+        source: SourceRef,
+    ) -> Result<ExchangeId, WikiError> {
+        let at = self.pace.at(self.step, 0, 0).map_err(WikiError::Clock)?;
+        self.step += 1;
+        let transcript = self
+            .transcripts
+            .entry(agent.clone())
+            .or_insert_with(|| vec![system(SYSTEM)]);
+        transcript.extend(inputs);
+        let draft = ExchangeDraft {
+            agent: agent.clone(),
+            at,
+            protocol: WireProtocol::OpenAiChat,
+            model: MODEL.to_owned(),
+            request: transcript.clone(),
+            response: response.clone(),
+            stop,
+            usage: None,
+            fidelity: Fidelity::Synthetic,
+            source,
+        };
+        let exchange = builder.exchange(draft)?;
+        transcript.push(response);
+        Ok(exchange)
+    }
+
+    /// `rev`'s turn: a read of `read`'s body when it is someone else's
+    /// revision, the edit, and the edit's acknowledgement.
+    fn revision(
+        &mut self,
+        builder: &mut WorldBuilder,
+        actor: &AgentKey,
+        rev: &Revision,
+        read: Option<&Revision>,
+        source: &[usize],
+        li: usize,
+    ) -> Result<RevRecord, WikiError> {
+        let url = page_url(&rev.wiki, &rev.name);
+        let cite =
+            |part: &str| SourceRef::new(REVISIONS_FILE, format!("/rev/{}/{part}", rev.rev_id));
+        let task = user(&format!("Update {}.", rev.name));
+
+        let inserted = inserted_text(&rev.body, source, li);
+        let edit_id = format!("edit-{}", rev.rev_id);
+        let edit_call = assistant_call(&edit_id, tools::TOOL, &tools::write_args(&url, &inserted))?;
+        let response_hash = edit_call.hash();
+
+        let (edit_inputs, read) = match read {
+            Some(prev) => {
+                let read_id = format!("read-{}", rev.rev_id);
+                let read_call = assistant_call(&read_id, tools::TOOL, &tools::read_args(&url))?;
+                self.exchange(
+                    builder,
+                    actor,
+                    vec![task],
+                    read_call,
+                    StopReason::ToolUse,
+                    cite("read/call"),
+                )?;
+                let result = tool_result(&read_id, &prev.body);
+                let result_hash = result.hash();
+                (vec![result], Some(result_hash))
+            }
+            None => (vec![task], None),
+        };
+        // The edit: with a read, this exchange's request carries the page
+        // body, so it is the read exchange too.
+        let edit_path = if read.is_some() { "read" } else { "edit" };
+        let exchange = self.exchange(
+            builder,
+            actor,
+            edit_inputs,
+            edit_call,
+            StopReason::ToolUse,
+            cite(edit_path),
+        )?;
+        self.exchange(
+            builder,
+            actor,
+            vec![tool_result(&edit_id, &format!("Saved {}.", rev.name))],
+            assistant_text(&format!("Updated {}.", rev.name)),
+            StopReason::EndTurn,
+            cite("edit/ack"),
+        )?;
+        Ok(RevRecord {
+            edit: EditRecord {
+                exchange,
+                response_hash,
+            },
+            read: read.map(|result_hash| ReadRecord {
+                exchange,
+                result_hash,
+            }),
+        })
+    }
 }
 
 /// What pass 1 recorded for one revision.
@@ -212,84 +352,6 @@ fn assistant_text(text: &str) -> HashedMessage {
     HashedMessage::new(MessageBody::Assistant(vec![AssistantPart::Text(Text(
         text.to_owned(),
     ))]))
-}
-
-fn next_at(counter: &mut u64) -> Result<Timestamp, WikiError> {
-    let at = crate::corpus::clock::ordinal(*counter).map_err(WikiError::Clock)?;
-    *counter += 1;
-    Ok(at)
-}
-
-/// Synthesises the read exchange before `rev`'s edit: a `GET` of the page
-/// URL whose tool result is `prev`'s body.
-fn build_read(
-    builder: &mut WorldBuilder,
-    reader: &AgentKey,
-    rev: &Revision,
-    prev: &Revision,
-    counter: &mut u64,
-) -> Result<ReadRecord, WikiError> {
-    let url = page_url(&rev.wiki, &rev.name);
-    let call_id = format!("read-{}", rev.rev_id);
-    let call = assistant_call(&call_id, tools::TOOL, &tools::read_args(&url))?;
-    let result = tool_result(&call_id, &prev.body);
-    let result_hash = result.hash();
-    let at = next_at(counter)?;
-    let draft = ExchangeDraft {
-        agent: reader.clone(),
-        at,
-        protocol: WireProtocol::OpenAiChat,
-        model: MODEL.to_owned(),
-        request: vec![system("You are a wiki agent."), call, result],
-        response: assistant_text("Read the page."),
-        stop: StopReason::EndTurn,
-        usage: None,
-        fidelity: Fidelity::Synthetic,
-        source: SourceRef::new(REVISIONS_FILE, format!("/rev/{}/read", rev.rev_id)),
-    };
-    let exchange = builder.exchange(draft)?;
-    Ok(ReadRecord {
-        exchange,
-        result_hash,
-    })
-}
-
-/// Synthesises the edit exchange: a `POST` of the page URL whose `body` is the
-/// lines this revision inserted (those attributed to its own index `li`).
-fn build_edit(
-    builder: &mut WorldBuilder,
-    author: &AgentKey,
-    rev: &Revision,
-    source: &[usize],
-    li: usize,
-    counter: &mut u64,
-) -> Result<EditRecord, WikiError> {
-    let inserted = inserted_text(&rev.body, source, li);
-    let url = page_url(&rev.wiki, &rev.name);
-    let call_id = format!("edit-{}", rev.rev_id);
-    let call = assistant_call(&call_id, tools::TOOL, &tools::write_args(&url, &inserted))?;
-    let response_hash = call.hash();
-    let at = next_at(counter)?;
-    let draft = ExchangeDraft {
-        agent: author.clone(),
-        at,
-        protocol: WireProtocol::OpenAiChat,
-        model: MODEL.to_owned(),
-        request: vec![
-            system("You are a wiki agent."),
-            user(&format!("Update {}.", rev.name)),
-        ],
-        response: call,
-        stop: StopReason::ToolUse,
-        usage: None,
-        fidelity: Fidelity::Synthetic,
-        source: SourceRef::new(REVISIONS_FILE, format!("/rev/{}/edit", rev.rev_id)),
-    };
-    let exchange = builder.exchange(draft)?;
-    Ok(EditRecord {
-        exchange,
-        response_hash,
-    })
 }
 
 /// The lines of `body` this revision inserted: those whose source is its own
