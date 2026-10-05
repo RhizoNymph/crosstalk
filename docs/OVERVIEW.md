@@ -170,7 +170,10 @@ Overview:
       reference matcher, or the gateway's own Pipeline::ingest, which is
       unscored until L3 to L5 consume the bus) produces spec Transmissions;
       the scorer aligns them with the labels and reports per dataset,
-      route, carrier, match class and tier against regression gates.
+      route, carrier, match class and tier against regression gates. The
+      swarm benchmark (ct-eval swarm) instead scores the live gateway: it
+      joins the demo swarm's ground truth to the gateway's exchange log and
+      blobs, and scores a saved L8 transmissions export and its evidence.
     e2e: >
       Crate crosstalk-e2e (a composer): the end-to-end smoke harness. A
       scripted two-agent Claude Code scenario as wire traffic, captured
@@ -1020,7 +1023,8 @@ Features Index:
       - crates/eval/src/bin/ct-eval/main.rs
       - crates/eval/src/datasets/agentdojo/mod.rs
       - crates/eval/src/datasets/tau2/mod.rs
-    depends_on: [type_spec, gateway, transport, sim, testkit]
+      - crates/eval/src/datasets/swarm_truth/mod.rs
+    depends_on: [type_spec, gateway, transport, flow_extract, export, http_api, sim, testkit]
     doc: docs/features/eval.md
   e2e_smoke:
     description: >
