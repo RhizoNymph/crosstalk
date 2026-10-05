@@ -368,9 +368,10 @@ fn unique_tag(writer: usize) -> String {
 
 #[test]
 fn large_template_bodies_stay_linear() {
-    // 40 pages x 40 originators x 300 template lines would be 480,000
-    // matches if every copy matched every page creator's span.
-    let writers = 40;
+    // 74 pages x 74 originators x 300 template lines would be 1,642,800
+    // matches if every copy matched every page creator's span. The
+    // originators exceed the boilerplate cutoff.
+    let writers = ReferenceConfig::default().max_postings + 24;
     let copies = 300;
     let root = large_body_export(writers, copies);
     let mut source =

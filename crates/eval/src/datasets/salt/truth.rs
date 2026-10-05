@@ -181,11 +181,7 @@ impl EpisodeLabels<'_> {
                 .episode
                 .call_of_event(delivery.event_id)
                 .and_then(|(message, _)| sender.exchange_of_response(message));
-            let needs = if needs_escape(&delivery.content) {
-                MatchNeed::json_string()
-            } else {
-                MatchNeed::Exact
-            };
+            let needs = MatchNeed::through_json_string(&delivery.content);
             out.push(Expectation::Transmission(ExpectedTransmission::new(
                 TransmissionLabel {
                     from: sender.key.clone(),
@@ -340,14 +336,6 @@ fn call_location(episode: &AgentEpisode, index: usize, id: &str) -> Option<SpanL
         .iter()
         .position(|part| matches!(part, AssistantPart::ToolCall(call) if call.id.0 == id))?;
     location::whole_part(message, u16::try_from(part).ok()?).ok()
-}
-
-/// Whether `text` changes when written as a JSON string's contents: it holds
-/// a quote, a backslash or a control character. Such text is never
-/// byte-identical inside canonical tool-call arguments.
-fn needs_escape(text: &str) -> bool {
-    text.chars()
-        .any(|ch| matches!(ch, '"' | '\\' | '\u{0}'..='\u{1f}'))
 }
 
 /// Whether call `id` in the episode's region is to a shared-resource tool.

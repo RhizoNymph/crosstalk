@@ -12,6 +12,7 @@ use crosstalk_eval::predict::reads::Resolved;
 use crosstalk_eval::predict::{
     AgentMap, EvidenceClass, PredictedRoute, Prediction, WorldDirectory, from_transmission,
 };
+use crosstalk_eval::reference::classify::Classified::Match;
 use crosstalk_eval::reference::classify::classify;
 use crosstalk_eval::reference::decode::decode_candidates;
 use crosstalk_eval::reference::fold::{fold, fold_plain, string_codec};
@@ -245,15 +246,18 @@ fn hits_are_classed_by_the_weakest_transformation() {
     // A span as it sits inside JSON tool-call arguments: escaped.
     let span = r#"Say \"hello\" to\nthe Vendor Desk today"#;
     let plain = fold_plain(span);
-    assert_eq!(classify(span, &plain, r#"\"hello\" to"#), MatchKind::Exact);
+    assert_eq!(
+        classify(span, &plain, r#"\"hello\" to"#),
+        Match(MatchKind::Exact)
+    );
     assert_eq!(
         classify(span, &plain, "THE   vendor desk"),
-        MatchKind::Normalized,
+        Match(MatchKind::Normalized),
         "case and whitespace only"
     );
     assert_eq!(
         classify(span, &plain, "\"hello\" to\nthe vendor"),
-        MatchKind::Decoded(NonEmpty::new(Codec::JsonString)),
+        Match(MatchKind::Decoded(NonEmpty::new(Codec::JsonString))),
         "delivered unescaped: one level of JSON string decoding"
     );
     let yaml = "a long note that \\\n    continues on the next line";
@@ -263,7 +267,7 @@ fn hits_are_classed_by_the_weakest_transformation() {
             &fold_plain(yaml),
             "a long note that continues on the next line"
         ),
-        MatchKind::Decoded(NonEmpty::new(Codec::YamlString)),
+        Match(MatchKind::Decoded(NonEmpty::new(Codec::YamlString))),
         "an escaped line break is YAML's"
     );
 }
@@ -628,8 +632,8 @@ fn shared_template_world(originators: usize, copies: usize) -> (World, AgentKey,
 #[test]
 fn text_many_agents_originate_is_boilerplate() {
     // Without a cutoff every copy matches every originator's span:
-    // 40 originators x 400 copies = 16,000 matches in one read.
-    let originators = 40;
+    // 74 originators x 400 copies = 29,600 matches in one read.
+    let originators = ReferenceConfig::default().max_postings + 24;
     let copies = 400;
     let (world, first, reader) = shared_template_world(originators, copies);
     let config = ReferenceConfig::default();
@@ -661,9 +665,126 @@ fn text_a_few_agents_originate_still_matches_each() {
 #[test]
 fn matches_grow_linearly_with_the_read_body() {
     // A large read body of boilerplate costs no more matches than a small one.
-    let (small, _, _) = shared_template_world(40, 10);
-    let (large, _, _) = shared_template_world(40, 4_000);
+    let originators = ReferenceConfig::default().max_postings + 24;
+    let (small, _, _) = shared_template_world(originators, 10);
+    let (large, _, _) = shared_template_world(originators, 4_000);
     let (small, _) = matched(&small);
     let (large, _) = matched(&large);
     assert_eq!(small.matches, large.matches);
+}
+
+#[test]
+fn unescape_once_undoes_exactly_one_string_level() {
+    use crosstalk_eval::reference::fold::unescape_once;
+    assert_eq!(
+        unescape_once(r#"say \"hi\"\nthen go"#),
+        "say \"hi\"\nthen go"
+    );
+    // An escaped backslash before `n` is a backslash and an `n`, never a
+    // line break: one level only.
+    assert_eq!(unescape_once(r"a \\n b"), r"a \n b");
+    assert_eq!(unescape_once(r#"\\\"quoted\\\""#), r#"\"quoted\""#);
+    assert_eq!(unescape_once(r"café 😀"), "café 😀");
+    assert_eq!(unescape_once("long \\\n    line"), "long line");
+    assert_eq!(
+        unescape_once(r"bell \x41 and \q and end\"),
+        r"bell A and \q and end\"
+    );
+}
+
+#[test]
+fn two_string_levels_are_out_of_reach() {
+    use crosstalk_eval::reference::classify::Classified;
+    // The span holds the text raw; the read holds it escaped twice.
+    let span = r#"She said "move the meeting" and "bring the ledger" today"#;
+    let plain = fold_plain(span);
+    // One JSON string level: the contents of the literal, no quotes.
+    let escape = |text: &str| {
+        let quoted = serde_json::to_string(text).unwrap_or_default();
+        quoted[1..quoted.len() - 1].to_owned()
+    };
+    let once = escape(span);
+    let twice = escape(&once);
+    assert_eq!(
+        classify(span, &plain, &once),
+        Match(MatchKind::Decoded(NonEmpty::new(Codec::JsonString))),
+        "one level: in reach"
+    );
+    assert_eq!(
+        classify(span, &plain, &twice),
+        Classified::TwoStringLevels,
+        "two levels: no spec decoder undoes them"
+    );
+    // A span written inside JSON arguments (escaped once) read escaped
+    // twice is one level apart: in reach.
+    assert_eq!(
+        classify(&once, &fold_plain(&once), &twice),
+        Match(MatchKind::Decoded(NonEmpty::new(Codec::JsonString)))
+    );
+}
+
+#[test]
+fn the_matcher_reports_no_match_two_string_levels_apart() {
+    // Quotes every few words, so every 24-byte window holds an escape.
+    let content = r#""alpha" "bravo" "charlie" "delta" "echo" "foxtrot" "golf" "hotel""#;
+    let once = serde_json::to_string(content).unwrap_or_default();
+    let twice = serde_json::to_string(&once).unwrap_or_default();
+    let mut pair = pair();
+    pair.alice_writes(1, says(content));
+    pair.bob_reads(2, vec![result("call_9", &format!("{{\"log\": {twice}}}"))]);
+    let (world, _, _) = pair.finish();
+    let (output, predictions) = matched(&world);
+    assert!(predictions.is_empty(), "{predictions:?}");
+    assert!(
+        output.out_of_reach > 0,
+        "the fold found it; the spec cannot"
+    );
+
+    // One level apart, the same text is a JSON string match.
+    let mut pair = self::pair();
+    pair.alice_writes(1, says(content));
+    pair.bob_reads(2, vec![result("call_9", &format!("{{\"log\": {once}}}"))]);
+    let (world, _, _) = pair.finish();
+    let (output, predictions) = matched(&world);
+    assert!(!predictions.is_empty());
+    assert_eq!(output.out_of_reach, 0);
+    assert!(
+        kinds(&output)
+            .iter()
+            .all(|kind| *kind == MatchKind::Decoded(NonEmpty::new(Codec::JsonString))),
+        "{:?}",
+        kinds(&output)
+    );
+}
+
+#[test]
+fn the_default_boilerplate_cutoff_is_l4s() {
+    // L4's `IndexSettings::default().cutoff()` (crates/provenance): a
+    // fingerprint in more than 50 live texts is boilerplate.
+    assert_eq!(ReferenceConfig::default().max_postings, 50);
+    assert_eq!(crosstalk_eval::reference::MAX_POSTINGS, 50);
+}
+
+#[test]
+fn yaml_single_quotes_and_bridged_ranges_stay_in_reach() {
+    use crosstalk_eval::reference::classify::Classified;
+    let span = "use the subject 'All messages with Travel Agency' and the body";
+    let plain = fold_plain(span);
+    // A YAML single-quoted scalar doubles the quote: one YAML level.
+    assert_eq!(
+        classify(
+            span,
+            &plain,
+            "use the subject ''All\n  messages with Travel Agency'' and the body"
+        ),
+        Match(MatchKind::Decoded(NonEmpty::new(Codec::YamlString)))
+    );
+    // A range the fold joined across one character neither side shares is
+    // not two string levels: no reading explains it, so it stays in reach.
+    let bridged = classify(
+        span,
+        &plain,
+        "use the subject 'All messages with Travel Agency'X and the body",
+    );
+    assert_ne!(bridged, Classified::TwoStringLevels);
 }

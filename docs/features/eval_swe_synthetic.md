@@ -159,14 +159,19 @@ any source ─▶ pipeline::run ─▶ Scorer (+ sources::SourceTally over every
 - **The source tally is complete.** `Score::sources` counts every violation,
   whatever the example cap. It keeps the `TOP_SOURCES` largest.
 
-## Reference baselines (2026-10-05, `ReferenceDetector::default()`)
+## Reference baselines (2026-10-05, `ReferenceDetector::default()`: boilerplate cutoff 50, one string level)
 
 Background, with 16 trajectories per world:
 
 | Corpus | Worlds | Exchanges | False positives | Per 1k exchanges | Boilerplate / SharedSource |
 | --- | --- | --- | --- | --- | --- |
-| open-swe (`--count 16`, 13 shards) | 13 | 14,311 | 4,732 | 330.7 | 4,680 / 52 |
+| open-swe (`--count 16`, 13 shards) | 13 | 14,311 | 4,722 | 330.0 | 4,670 / 52 |
 | lmcache (`--count 16`, 5 files) | 5 | 2,513 | 4,742 | 1,887.0 | 336 / 4,406 |
+
+The cutoff (16 before, 50 now, L4's default) changes none of these
+numbers. Classifying hits by string level removed 10 open-swe and 4
+splice false positives that only two string levels undone explained
+(4,732 and 1,632 before).
 
 Top open-swe sources are harness and agent phrasing: `Current working
 directory` (484), `the reproduction script` (393), `understand the
@@ -177,7 +182,7 @@ positives fall on shared repository paths (`/workspace/django/django/`,
 1,249) and `cd /workspace/django && python -c`.
 
 Splices (`--count 80`, seed 0; 59 editor views, 21 shell reads). There are
-1,632 false positives over 11,780 exchanges (138.5 per 1k):
+1,628 false positives over 11,780 exchanges (138.2 per 1k):
 
 | Variant | Editor view | Shell cat | All in reach |
 | --- | --- | --- | --- |
@@ -189,7 +194,14 @@ Splices (`--count 80`, seed 0; 59 editor views, 21 shell reads). There are
 The reference finds every shell-read splice's content, but routes it
 `Direct`: it resolves `str_replace_editor` paths to `Locator::File`, not
 `cat -n P` in a bash command. So the labels go unfound, and the
-predictions are counted as `direct` false positives.
+predictions are counted as `direct` false positives. This is the
+reference's gap, not the corpus's: crosstalk-flow's real L5 extractors
+(`ToolExtractors`, default config, no working directory) resolve both the
+spliced `bash {"command": "cat -n P"}` read and the editor's
+`{"command": "view", "path": P}` to one `Locator::File { host: None,
+path: P }`, as a `Read` (`tests/swe_splice.rs`,
+`the_real_extractor_reads_a_shell_cat_as_the_same_file`). A detector built
+on L5 routes shell-read splices through the file channel.
 
 Cipher pairs (`--count 50`; 50 per cipher, over the four default pools):
 

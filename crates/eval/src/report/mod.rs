@@ -44,6 +44,9 @@ pub struct Report {
     pub overall: Summary,
     /// Rows of out-of-reach labels: expected, but missed by design.
     pub out_of_reach: Summary,
+    /// Labels only access-only evidence lines up with, kept apart from
+    /// `overall`: no content prediction found them.
+    pub access_only: AccessOnly,
     pub rows: Vec<ReportRow>,
     pub transmissions: Vec<TransmissionRow>,
     pub violations: Vec<ViolationRow>,
@@ -58,6 +61,31 @@ pub struct Report {
     /// The false-positive rate and its sources, when the run had negative
     /// controls.
     pub background: Option<Background>,
+}
+
+/// Labels (out-of-reach ones aside) that only a suspected or discarded
+/// prediction aligned with: the detector saw the co-access but never
+/// matched content. They are missed in `overall`, never found; this is the
+/// recall the access pattern alone would have had on top of it.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+pub struct AccessOnly {
+    /// Missed labels a suspected or discarded prediction aligned with.
+    pub labels: u64,
+    /// Every in-reach label (`overall`'s expected).
+    pub expected: u64,
+    /// `labels / expected`; `None` with no label.
+    pub recall: Option<f64>,
+}
+
+impl AccessOnly {
+    pub fn of(overall: &Counts) -> Self {
+        Self {
+            labels: overall.suspected,
+            expected: overall.expected,
+            recall: (overall.expected > 0)
+                .then(|| overall.suspected as f64 / overall.expected as f64),
+        }
+    }
 }
 
 /// What a run's negative controls say: how often the detector reported
@@ -112,6 +140,7 @@ impl Report {
             })
             .collect();
         Self {
+            access_only: AccessOnly::of(&overall),
             overall: Summary {
                 precision: overall.precision(),
                 recall: overall.recall(),

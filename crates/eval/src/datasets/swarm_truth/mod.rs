@@ -151,7 +151,13 @@ pub fn score<B: Bodies>(
     let mut bodies = Cached::new(bodies);
     let resolved = resolve(truth, truth_name, &sessions, &mut bodies)?;
     let mut diagnostics = resolved.diagnostics;
-    let predictions = detected::predictions(exported, evidence, &resolved.agents, &mut diagnostics);
+    let predictions = detected::predictions(
+        exported,
+        evidence,
+        &resolved.agents,
+        &mut bodies,
+        &mut diagnostics,
+    );
     let mut scorer = Scorer::new(examples);
     scorer.add_world(&resolved.world, &predictions);
     let score: Score = scorer.finish();
