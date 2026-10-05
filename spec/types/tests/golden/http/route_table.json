@@ -115,6 +115,36 @@
     "permission": "view"
   },
   {
+    "calls": "QueryApi::channel_transmissions",
+    "method": "GET",
+    "path": "/channels/{id}/transmissions",
+    "args": [
+      {
+        "name": "id",
+        "place": "path",
+        "optional": false
+      },
+      {
+        "name": "filter",
+        "place": "query",
+        "optional": false
+      },
+      {
+        "name": "version",
+        "place": "query",
+        "optional": false
+      },
+      {
+        "name": "page",
+        "place": "query",
+        "optional": false
+      }
+    ],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "view"
+  },
+  {
     "calls": "QueryApi::agents",
     "method": "GET",
     "path": "/agents",

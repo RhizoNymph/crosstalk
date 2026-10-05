@@ -1,0 +1,22 @@
+[invariant]
+id = "flow.consumer.stored-transmission-never-regresses"
+statement = "The flow consumer stores a correlator update for a transmission only when the stored state admits it (AwaitingContent to Suspected or Confirmed, Suspected to Confirmed or Discarded, Confirmed extended, a new id opened), so a redelivered, retried or reordered update never moves a stored transmission back nor announces anything."
+kind = "coordination"
+requires = ["property", "unit"]
+rationale = """
+The correlator's updates reach the stores through a queue that retries
+failed steps, and a step whose save committed but whose caller saw an
+error is applied again. Applying an update the stored state no longer
+admits would turn a confirmed transmission back into a suspected one,
+revive a discarded one, or announce a second TransmissionSuspected; the
+lifecycle automaton (`correlate::lifecycle::advance`) is the one rule both
+the correlator's output and the consumer's writes follow.
+"""
+
+[evidence]
+property = "crosstalk_flow::correlate::tests::props::states_only_move_forward"
+unit = "crosstalk_flow::consumer::tests::rules::stale_updates_never_move_a_stored_transmission_back"
+
+[evidence-review]
+property = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

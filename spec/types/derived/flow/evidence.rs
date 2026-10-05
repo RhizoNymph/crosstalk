@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::derived::flow::access::{Access, AccessOp};
 use crate::derived::provenance::matching::ContentMatch;
-use crate::ids::AccessId;
+use crate::ids::{AccessId, AgentId};
 use crate::wire::Rejected;
 
 #[derive(Debug, Clone, PartialEq)]
@@ -28,11 +28,17 @@ pub enum Evidence {
 ///
 /// Built only through [`CoAccess::new`], which checks the two accesses.
 ///
-/// On the wire, `{"write": .., "read": .., "lag_micros": 30000000}`: the lag
-/// in whole microseconds ([`crate::wire::duration`]). Decoding cannot rerun
-/// [`CoAccess::new`], whose checks read the two accesses (their resources,
-/// agents, operations and times) and the correlation window, none of which
-/// the value holds. It checks what the value can know about itself: the
+/// It names the writer (the write access's agent, as attributed), so a
+/// transmission backed only by co-accesses says who its senders were
+/// without looking the accesses up: what
+/// [`Transmission::crossing`](crate::derived::flow::transmission::Transmission::crossing)
+/// and a channel's transmission rows read.
+///
+/// On the wire, `{"write": .., "writer": .., "read": .., "lag_micros":
+/// 30000000}`: the lag in whole microseconds ([`crate::wire::duration`]).
+/// Decoding cannot rerun [`CoAccess::new`], whose checks read the two
+/// accesses (their resources, agents, operations and times) and the
+/// correlation window, none of which the value holds. It checks what the value can know about itself: the
 /// write and the read are two accesses (`WrongOperations`, since one access
 /// is not both a write and a read), and the lag is positive
 /// (`ReadNotAfterWrite`).
@@ -40,6 +46,7 @@ pub enum Evidence {
 #[serde(rename_all = "snake_case", try_from = "RawCoAccess")]
 pub struct CoAccess {
     write: AccessId,
+    writer: AgentId,
     read: AccessId,
     #[serde(with = "crate::wire::duration")]
     lag_micros: Duration,
@@ -63,6 +70,7 @@ pub enum InvalidCoAccess {
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 struct RawCoAccess {
     write: AccessId,
+    writer: AgentId,
     read: AccessId,
     #[serde(with = "crate::wire::duration")]
     lag_micros: Duration,
@@ -83,6 +91,7 @@ impl TryFrom<RawCoAccess> for CoAccess {
         }
         Ok(Self {
             write: raw.write,
+            writer: raw.writer,
             read: raw.read,
             lag_micros: raw.lag_micros,
         })
@@ -113,6 +122,7 @@ impl CoAccess {
         }
         Ok(Self {
             write: write.id,
+            writer: write.agent,
             read: read.id,
             lag_micros: lag,
         })
@@ -120,6 +130,12 @@ impl CoAccess {
 
     pub fn write(&self) -> AccessId {
         self.write
+    }
+
+    /// The agent the write was attributed to: the sender this co-access
+    /// names. Resolved through merges by readers, at read time.
+    pub fn writer(&self) -> AgentId {
+        self.writer
     }
 
     pub fn read(&self) -> AccessId {

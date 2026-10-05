@@ -15,7 +15,7 @@ fn harness() -> HarnessConfig {
 
 #[test]
 fn sizes_match_assignment_count() {
-    // analysis.sizes.match-assignments, and the catalog against itself
+    // analysis.sizes.match-cross-agent-assignments, and the catalog against itself
     let result = check_topic_catalog(harness(), |config| async move {
         reference_catalog(config).expect("a reference catalog")
     });

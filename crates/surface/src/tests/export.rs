@@ -57,8 +57,9 @@ async fn drain<S: ExportStream>(mut stream: S) -> (Vec<ExportRow>, ExportTrailer
 /// complete trailer that verifies, and is audited as started and ended.
 #[tokio::test]
 async fn access_export_streams_verifies_and_is_audited() {
-    let fixture = Fixture::new().await;
+    let mut fixture = Fixture::new().await;
     fixture.scene().await;
+    fixture.relay().await;
     let watermark = fixture.watermark(minute(5)).await;
     let caller = fixture.caller(Who::Viewer).await;
     let request = accesses(ExportFormat::Jsonl);
@@ -85,8 +86,9 @@ async fn access_export_streams_verifies_and_is_audited() {
 /// rows it handed out.
 #[tokio::test]
 async fn abandoned_export_is_audited() {
-    let fixture = Fixture::new().await;
+    let mut fixture = Fixture::new().await;
     fixture.scene().await;
+    fixture.relay().await;
     fixture.watermark(minute(5)).await;
     let caller = fixture.caller(Who::Viewer).await;
     let export = match fixture
@@ -118,8 +120,9 @@ async fn abandoned_export_is_audited() {
 /// refusal is audited.
 #[tokio::test]
 async fn export_refuses_an_unwritten_format_before_reading() {
-    let fixture = Fixture::new().await;
+    let mut fixture = Fixture::new().await;
     fixture.scene().await;
+    fixture.relay().await;
     assert!(!config().export_formats.offers(ExportFormat::Parquet));
     let viewer = fixture.caller(Who::Viewer).await;
     let refused = QueryError::InvalidInput(InputError::UnsupportedFormat {
@@ -185,8 +188,9 @@ async fn export_without_permission_is_refused_and_audited() {
 async fn oversized_export_is_refused() {
     let mut config = config();
     config.export_limits = ExportLimits::new(NonZeroU64::MIN);
-    let fixture = Fixture::with_config(config).await;
+    let mut fixture = Fixture::with_config(config).await;
     fixture.scene().await;
+    fixture.relay().await;
     fixture.watermark(minute(5)).await;
     let viewer = fixture.caller(Who::Viewer).await;
     let refused = QueryError::Conflict(ConflictKind::ExportTooLarge { rows: 2, limit: 1 });
@@ -205,8 +209,9 @@ async fn oversized_export_is_refused() {
 /// Nothing settled yet: the export plans no rows and completes empty.
 #[tokio::test]
 async fn export_before_the_watermark_is_empty() {
-    let fixture = Fixture::new().await;
+    let mut fixture = Fixture::new().await;
     fixture.scene().await;
+    fixture.relay().await;
     let viewer = fixture.caller(Who::Viewer).await;
     let export = match fixture
         .surface

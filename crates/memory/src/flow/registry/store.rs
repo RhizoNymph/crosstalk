@@ -4,7 +4,6 @@
 
 use crosstalk_spec::aggregates::access::ResourceUsePage;
 use crosstalk_spec::derived::flow::access::Access;
-use crosstalk_spec::derived::flow::channel::Channel;
 use crosstalk_spec::derived::flow::channel::Declaration;
 use crosstalk_spec::derived::flow::channel::policy::{
     Policy, PolicyAuthor, PolicyDecision, PolicyHistory, Recorded,
@@ -14,16 +13,22 @@ use crosstalk_spec::derived::flow::resource::{Locator, Resource, ResourcePattern
 use std::collections::BTreeMap;
 
 use crosstalk_spec::batch::IdBatch;
-use crosstalk_spec::ids::{AccessId, ChannelId, TransmissionId};
+use crosstalk_spec::derived::flow::transmission::Transmission;
+use crosstalk_spec::ids::{AccessId, ChannelId, ResourceId, TransmissionId};
 use crosstalk_spec::interfaces::l3_reconstruction::AgentDirectory;
 use crosstalk_spec::interfaces::l5_flow::channels::{
-    AccessReadError, AccessStore, ChannelReads, ChannelTraffic, DetectionUpdate, TrafficError,
+    AccessReadError, AccessStore, ChannelReads, ChannelTraffic, ChannelWithTraffic,
+    DetectionUpdate, TrafficError,
 };
 use crosstalk_spec::interfaces::l5_flow::{
-    ChannelDirectory, ChannelLookup, ChannelRegistry, PromoteError, Promoted, RegistryError,
+    ChannelDirectory, ChannelLookup, ChannelRegistry, Discovery, PromoteError, Promoted,
+    RegistryError,
 };
+use crosstalk_spec::interfaces::l8_surface::channel_traffic::ChannelTransmissionFilter;
 use crosstalk_spec::interfaces::l8_surface::lists::ChannelFilter;
-use crosstalk_spec::paging::{ChannelList, Page, PageRequest, ResourceUseList};
+use crosstalk_spec::paging::{
+    ChannelList, ChannelTransmissionList, Page, PageRequest, ResourceUseList,
+};
 use crosstalk_spec::support::{Change, TimeWindow, Timestamp};
 
 use super::MemoryChannels;
@@ -139,32 +144,44 @@ impl<D: AgentDirectory + Send + Sync> ChannelRegistry for MemoryChannels<D> {
 }
 
 impl<D: Send + Sync> ChannelTraffic for MemoryChannels<D> {
-    async fn discover(
-        &mut self,
-        channel: ChannelId,
-        resource: Resource,
-        first_access: AccessId,
-    ) -> Result<(), TrafficError> {
-        let events = self
-            .state
-            .write()
-            .discover(channel, resource, first_access)?;
-        self.outbox.publish(events);
-        Ok(())
-    }
-
     async fn add_resource(
         &mut self,
-        channel: ChannelId,
         resource: Resource,
-    ) -> Result<(), TrafficError> {
-        let events = self.state.write().add_resource(channel, resource)?;
+    ) -> Result<Option<ChannelId>, TrafficError> {
+        let (channel, events) = self.state.write().add_resource(resource)?;
         self.outbox.publish(events);
-        Ok(())
+        Ok(channel)
     }
 
     async fn record_access(&mut self, access: Access) -> Result<(), TrafficError> {
         self.state.write().record_access(access)
+    }
+
+    async fn discover(
+        &mut self,
+        channel: ChannelId,
+        resource: ResourceId,
+        transmission: TransmissionId,
+        at: Timestamp,
+    ) -> Result<Discovery, TrafficError> {
+        let (discovery, events) =
+            self.state
+                .write()
+                .discover(channel, resource, transmission, at)?;
+        if let Discovery::Created(channel) = discovery {
+            tracing::debug!(channel = ?channel, resource = ?resource, transmission = ?transmission, "channel discovered");
+        }
+        self.outbox.publish(events);
+        Ok(discovery)
+    }
+
+    async fn record_transmission(
+        &mut self,
+        transmission: &Transmission,
+    ) -> Result<Change, TrafficError> {
+        let (change, events) = self.state.write().record_transmission(transmission)?;
+        self.outbox.publish(events);
+        Ok(change)
     }
 
     async fn set_detection(
@@ -175,17 +192,6 @@ impl<D: Send + Sync> ChannelTraffic for MemoryChannels<D> {
         let (change, events) = self.state.write().set_detection(channel, update)?;
         self.outbox.publish(events);
         Ok(change)
-    }
-
-    async fn confirm(
-        &mut self,
-        channel: ChannelId,
-        transmission: TransmissionId,
-        at: Timestamp,
-    ) -> Result<ChannelId, TrafficError> {
-        let (canonical, events) = self.state.write().confirm(channel, transmission, at)?;
-        self.outbox.publish(events);
-        Ok(canonical)
     }
 }
 
@@ -210,16 +216,17 @@ impl<D: Send + Sync> AccessStore for MemoryChannels<D> {
     }
 }
 
-impl<D: Send + Sync> ChannelReads for MemoryChannels<D> {
-    async fn channel(&self, id: ChannelId) -> Result<Option<Channel>, RegistryError> {
-        Ok(self.state.read().channels.get(&id).cloned())
+impl<D: AgentDirectory + Send + Sync> ChannelReads for MemoryChannels<D> {
+    async fn channel(&self, id: ChannelId) -> Result<Option<ChannelWithTraffic>, RegistryError> {
+        let agent = |agent| self.agents.canonical(agent);
+        Ok(self.state.read().read_channel(id, &agent))
     }
 
     async fn channels(
         &self,
         filter: &ChannelFilter,
         page: &PageRequest<ChannelList>,
-    ) -> Result<Page<Channel, ChannelList>, RegistryError> {
+    ) -> Result<Page<ChannelWithTraffic, ChannelList>, RegistryError> {
         let mut cursors = lock(&self.cursors);
         let after = match &page.after {
             None => None,
@@ -230,13 +237,53 @@ impl<D: Send + Sync> ChannelReads for MemoryChannels<D> {
                     .ok_or(RegistryError::InvalidCursor)?,
             ),
         };
-        let rows = self.state.read().channels_matching(filter, after);
+        let agent = |agent| self.agents.canonical(agent);
+        let rows = self.state.read().channels_matching(filter, after, &agent);
         page_after(
             &mut cursors.channels,
             rows,
             page.size,
             filter.clone(),
-            |channel| channel.id,
+            |read| (read.channel().origin.created_at(), read.channel().id),
+        )
+        .map_err(|error| RegistryError::Store {
+            reason: error.to_string(),
+        })
+    }
+
+    async fn transmissions(
+        &self,
+        channel: ChannelId,
+        filter: &ChannelTransmissionFilter,
+        page: &PageRequest<ChannelTransmissionList>,
+    ) -> Result<Page<Transmission, ChannelTransmissionList>, RegistryError> {
+        let canonical = {
+            let state = self.state.read();
+            state.channel(channel)?;
+            state.canonical(channel)
+        };
+        let binding = (canonical, *filter);
+        let mut cursors = lock(&self.cursors);
+        let after = match &page.after {
+            None => None,
+            Some(cursor) => Some(
+                cursors
+                    .transmissions
+                    .resolve(cursor, &binding)
+                    .ok_or(RegistryError::InvalidCursor)?,
+            ),
+        };
+        let agent = |agent| self.agents.canonical(agent);
+        let (_, rows) = self
+            .state
+            .read()
+            .channel_transmissions(channel, filter, after, &agent)?;
+        page_after(
+            &mut cursors.transmissions,
+            rows,
+            page.size,
+            binding,
+            |transmission| (transmission.opened_at, transmission.id),
         )
         .map_err(|error| RegistryError::Store {
             reason: error.to_string(),

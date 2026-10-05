@@ -62,15 +62,20 @@ pub enum AlertRuleKind {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum BuiltinRule {
-    /// A channel was discovered that no config declared.
+    /// A channel was discovered that no config declared: the first
+    /// transmission between two different agents went through a resource on
+    /// no channel (`ChannelDiscovered`). Never raised for a resource only one
+    /// agent uses, or written and not read by anyone else. The channel is
+    /// unconfirmed when this fires (a co-access opened its first
+    /// transmission) until content confirms one.
     NewChannel,
     /// Confirmed traffic on a channel whose policy is unreviewed.
     UnreviewedTraffic,
     /// Confirmed traffic on a channel whose policy is unsanctioned.
     UnsanctionedTraffic,
-    /// A declared channel whose policy is sanctioned saw no traffic within
-    /// its idle window. Flow reports every unused declared channel; this rule
-    /// checks the policy.
+    /// A declared channel whose policy is sanctioned saw no cross-agent
+    /// transmission within its idle window. Flow reports every unused
+    /// declared channel; this rule checks the policy.
     SanctionedUnused,
     /// A transmission was left with access-pattern evidence only.
     SuspectedTransmission,

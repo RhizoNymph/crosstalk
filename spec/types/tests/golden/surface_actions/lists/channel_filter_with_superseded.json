@@ -6,6 +6,10 @@
       "discovered"
     ]
   },
+  "listings": [
+    "confirmed",
+    "declaration"
+  ],
   "detections": [
     "active",
     "dormant"

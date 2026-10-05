@@ -6,9 +6,9 @@ property = "postcondition"
 requires = ["unit"]
 rationale = """
 Promotion attaches a pattern; it does not restart detection. Resetting an
-Active channel would hide its confirmed traffic until the next cross
-access. The seed and first access stay as the evidence the channel was
-found from. A superseded channel's resources already resolve to the
+Active channel would hide its cross-agent traffic until the next cross
+access. The seed (the resource and the first cross-agent transmission
+through it) stays as the evidence the channel was found from. A superseded channel's resources already resolve to the
 channel that absorbed it, so it is refused with the supersession naming
 where to act instead.
 """

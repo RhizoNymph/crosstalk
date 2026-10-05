@@ -9,7 +9,7 @@ use crate::aggregates::edge::{RouteKind, TopologyFilter};
 use crate::aggregates::filter::{TopicVersionSelector, VersionUnavailable};
 use crate::aggregates::projection::frame::{FrameHeader, ProjectionFrame};
 use crate::aggregates::projection::{
-    Fitted, PointRoute, ProjectedPoint, Projection, ProjectionInfo, ProjectionLimit,
+    Fitted, PointParts, PointRoute, ProjectedPoint, Projection, ProjectionInfo, ProjectionLimit,
     ProjectionParams, ProjectionSpec, ProjectionStatus,
 };
 use crate::aggregates::quality::{MatchClass, QualityMatch};
@@ -152,7 +152,7 @@ fn topic(n: u128) -> TopicId {
 }
 
 fn point(n: u128, topic: Option<TopicId>) -> ProjectedPoint {
-    ProjectedPoint {
+    ProjectedPoint::new(PointParts {
         transmission: transmission(n),
         from: agent(1),
         to: agent(2),
@@ -161,7 +161,8 @@ fn point(n: u128, topic: Option<TopicId>) -> ProjectedPoint {
         confirmed_at: at(100),
         x: Finite::new(0.25).expect("finite"),
         y: Finite::new(-2.0).expect("finite"),
-    }
+    })
+    .expect("a point between two agents")
 }
 
 pub(super) fn points() -> Vec<ProjectedPoint> {
@@ -712,7 +713,7 @@ fn judged(state: TransmissionState) -> (Transmission, VerdictLog) {
 #[test]
 fn verdict_rows_follow_the_log_with_the_detector_call() {
     let (transmission, log) = judged(TransmissionState::Confirmed(confirmed()));
-    let rows = verdict_rows(&transmission, &log).expect("same transmission");
+    let rows = verdict_rows(&transmission, &log, NoAliases).expect("same transmission");
     let revision = |n| VerdictRevision::new(std::num::NonZeroU32::new(n).expect("non-zero"));
     let expected: Vec<ExportRow> = [
         (Some(Verdict::FalseDetection), 10, 1),
@@ -743,7 +744,7 @@ fn verdict_rows_follow_the_log_with_the_detector_call() {
 fn verdict_rows_exist_only_for_judgeable_states() {
     for (state, judgeable) in every_state() {
         let (transmission, log) = judged(state);
-        let rows = verdict_rows(&transmission, &log).expect("same transmission");
+        let rows = verdict_rows(&transmission, &log, NoAliases).expect("same transmission");
         assert_eq!(rows.len(), if judgeable { 3 } else { 0 });
     }
 }
@@ -753,7 +754,7 @@ fn verdict_rows_refuse_another_transmissions_log() {
     let (transmission, _) = judged(TransmissionState::Confirmed(confirmed()));
     let other = VerdictLog::new(crate::tests::fixtures::transmission(5));
     assert_eq!(
-        verdict_rows(&transmission, &other),
+        verdict_rows(&transmission, &other, NoAliases),
         Err(VerdictRowsError::OtherTransmission)
     );
 }
