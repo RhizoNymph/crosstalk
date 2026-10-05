@@ -1007,8 +1007,11 @@ Features Index:
   eval:
     description: >
       crosstalk-eval and the ct-eval CLI (a composer): dataset converters
-      (SALT-NLP first) streaming worlds of checked spec
-      NormalizedExchanges on a deterministic virtual clock, with typed,
+      (SALT-NLP, AgentDojo, tau2-bench, AI Village, collusion-wiki (synthesised
+      http_request reads and writes of public wiki pages) and swarm-traces (a
+      decode-chain corpus reported by chain, count and length only))
+      streaming worlds of checked
+      spec NormalizedExchanges on a deterministic virtual clock, with typed,
       JSONL-serialisable ground truth (expected transmissions, negative
       controls, exemptions, agent clusters, with tiers); predictions converted from
       spec Transmissions (one per ContentMatch, and one per CoAccess of a
@@ -1019,7 +1022,8 @@ Features Index:
       and a DetectionQuality bridge keyed by QualityMatch; a Detector seam
       with the naive reference matcher (escape-aware matching classed as
       Exact, Normalized or Decoded([JsonString | YamlString]), decoding,
-      opaque-blob exclusion), the gateway pipeline (Pipeline::ingest under
+      opaque-blob exclusion, an L4-style boilerplate cutoff on shingle
+      postings), the gateway pipeline (Pipeline::ingest under
       the corpus clock or a sim clock, reported as unscored), and
       LiveDetector over the LiveBackend seam (a fresh composition per
       world: ingest, settle, list transmissions, read spans, accesses,
@@ -1031,6 +1035,8 @@ Features Index:
       - crates/eval/src/gateway.rs
       - crates/eval/src/score/align.rs
       - crates/eval/src/datasets/salt/mod.rs
+      - crates/eval/src/datasets/wiki/mod.rs
+      - crates/eval/src/datasets/swarm/mod.rs
       - crates/eval/src/bin/ct-eval/main.rs
       - crates/eval/src/datasets/agentdojo/mod.rs
       - crates/eval/src/datasets/tau2/mod.rs

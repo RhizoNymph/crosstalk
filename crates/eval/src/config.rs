@@ -47,8 +47,9 @@ pub enum ConfigError {
 
 impl Default for EvalConfig {
     /// `~/Data/ai/agents`, with SALT at `salt-nlp`, AgentDojo at `agentdojo`,
-    /// τ²-bench at `tau2-bench/data/tau2/results/final` and AI Village at
-    /// `ai-village`.
+    /// τ²-bench at `tau2-bench/data/tau2/results/final`, AI Village at
+    /// `ai-village`, collusion-wiki at `collusion-wiki` and swarm-traces at
+    /// `swarm-traces`.
     fn default() -> Self {
         let mut datasets = BTreeMap::new();
         datasets.insert(
@@ -73,6 +74,18 @@ impl Default for EvalConfig {
             "ai-village".to_owned(),
             DatasetConfig {
                 path: "ai-village".to_owned(),
+            },
+        );
+        datasets.insert(
+            "collusion-wiki".to_owned(),
+            DatasetConfig {
+                path: "collusion-wiki".to_owned(),
+            },
+        );
+        datasets.insert(
+            "swarm-traces".to_owned(),
+            DatasetConfig {
+                path: "swarm-traces".to_owned(),
             },
         );
         Self {

@@ -125,6 +125,10 @@ pub enum SourceError {
     #[error(transparent)]
     Salt(#[from] crate::datasets::salt::SaltError),
     #[error(transparent)]
+    Wiki(#[from] Box<crate::datasets::wiki::WikiError>),
+    #[error(transparent)]
+    Swarm(#[from] Box<crate::datasets::swarm::SwarmError>),
+    #[error(transparent)]
     Corpus(#[from] CorpusError),
     #[error(transparent)]
     AiVillage(#[from] crate::datasets::ai_village::AiVillageError),
