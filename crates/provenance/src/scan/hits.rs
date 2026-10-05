@@ -120,23 +120,32 @@ pub fn extents_by_span(
 /// A lookup returns every posting of each queried fingerprint, so the
 /// agents of its live hit spans, and of their copies in other outputs
 /// (spans relayed from them), are its originating agents within retention.
+///
+/// Returns each such fingerprint with its holders: how many originations
+/// and copies it has. Whether it is boilerplate also needs its
+/// distinctiveness, which the scanner reads from token frequencies.
 pub fn spread_boilerplate(
     hits: &[FingerprintHit],
     live: &LiveSpans,
     rule: SpreadRule,
-) -> BTreeSet<Fingerprint> {
-    let mut agents: BTreeMap<Fingerprint, BTreeSet<AgentId>> = BTreeMap::new();
+) -> BTreeMap<Fingerprint, usize> {
+    let mut found: BTreeMap<Fingerprint, (BTreeSet<SpanId>, Vec<AgentId>)> = BTreeMap::new();
     for hit in hits {
-        agents.entry(hit.fingerprint).or_default().extend(
-            live.originations(hit.span)
-                .into_iter()
-                .map(|(_, agent)| agent),
-        );
+        let (spans, agents) = found.entry(hit.fingerprint).or_default();
+        if spans.insert(hit.span) {
+            agents.extend(
+                live.originations(hit.span)
+                    .into_iter()
+                    .map(|(_, agent)| agent),
+            );
+        }
     }
-    agents
+    found
         .into_iter()
-        .filter(|(_, agents)| agents.len() >= rule.agents())
-        .map(|(fingerprint, _)| fingerprint)
+        .filter_map(|(fingerprint, (_, agents))| {
+            let distinct: BTreeSet<&AgentId> = agents.iter().collect();
+            (distinct.len() >= rule.agents()).then_some((fingerprint, agents.len()))
+        })
         .collect()
 }
 

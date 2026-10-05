@@ -496,6 +496,89 @@ async fn shared_phrase_fragments_give_no_reader_output_match() {
     );
 }
 
+/// Background chatter: `texts` outputs by three agents that use every word
+/// of `vocabulary` (in shifting order, so no run matches a template), as
+/// the rest of a real world does. Distinctiveness is relative to the world
+/// (`provenance.match.cross-agent-spread`): a template's words must be seen
+/// outside the template for it to read as boilerplate.
+async fn chatter(world: &mut World, vocabulary: &[&str], texts: usize, at_seconds: u64) {
+    let talkers: Vec<_> = (0..3).map(|_| world.agent()).collect();
+    for n in 0..texts {
+        let mut words: Vec<&str> = vocabulary.to_vec();
+        let shift = n % words.len().max(1);
+        words.rotate_left(shift);
+        if n % 2 == 1 {
+            words.reverse();
+        }
+        let text = format!("log {n}: {}", words.join(" / "));
+        world
+            .run(Turn::new(talkers[n % 3], at(at_seconds)).output(assistant_text(&text)))
+            .await;
+    }
+}
+
+/// The words of the template tests, seen everywhere in their worlds.
+const COMMON: [&str; 58] = [
+    "please",
+    "review",
+    "plan",
+    "start",
+    "exploring",
+    "repository",
+    "structure",
+    "full",
+    "test",
+    "suite",
+    "before",
+    "committing",
+    "check",
+    "configuration",
+    "file",
+    "typos",
+    "open",
+    "question",
+    "does",
+    "write",
+    "through",
+    "interact",
+    "with",
+    "stampede",
+    "under",
+    "second",
+    "experiment",
+    "notes",
+    "cache",
+    "invalidation",
+    "still",
+    "stale",
+    "reads",
+    "fine",
+    "that",
+    "longer",
+    "true",
+    "matters",
+    "more",
+    "than",
+    "current",
+    "scale",
+    "rate",
+    "limiting",
+    "token",
+    "buckets",
+    "burst",
+    "credit",
+    "fairness",
+    "schema",
+    "migration",
+    "dual",
+    "writes",
+    "backfill",
+    "lock",
+    "time",
+    "jitter",
+    "purge",
+];
+
 /// `provenance.match.cross-agent-spread`, boilerplate: a short template
 /// written whole by five agents is boilerplate whenever they wrote it, all
 /// at once or minutes apart (the rule has no window), and a reader of it
@@ -505,6 +588,7 @@ async fn short_template_written_by_many_agents_is_not_matched() {
     let template = "Please review the plan now!";
     for spacing in [1u64, 200] {
         let mut world = World::new(real(50));
+        chatter(&mut world, &COMMON, 30, 1).await;
         for n in 0..5u64 {
             let agent = world.agent();
             world
@@ -541,6 +625,7 @@ async fn template_skeleton_with_other_slot_words_is_not_matched() {
         )
     };
     let mut world = World::new(real(50));
+    chatter(&mut world, &COMMON, 30, 1).await;
     let slots = [
         (
             "cache invalidation",
@@ -637,6 +722,7 @@ async fn short_template_fragments_from_unrelated_agents_give_no_match() {
         "check the configuration file for typos now",
     ];
     let mut world = World::new(real(50));
+    chatter(&mut world, &COMMON, 30, 1).await;
     for n in 0..4u64 {
         let agent = world.agent();
         for (m, fragment) in fragments.iter().enumerate() {
@@ -657,4 +743,71 @@ async fn short_template_fragments_from_unrelated_agents_give_no_match() {
             brief_matches(&matches)
         );
     }
+}
+
+/// `provenance.match.cross-agent-spread`, the gap the time-free rule left:
+/// a short secret (under 64 characters) one agent writes first, that five
+/// agents reproduce later over a channel the gateway does not see. Its key
+/// and numbers are seen nowhere else, so it is distinctive, not
+/// boilerplate, however many agents hold it: a later read of it matches
+/// the first writer.
+#[tokio::test]
+async fn short_distinctive_broadcast_matches_the_first_writer() {
+    let mut world = World::new(real(50));
+    chatter(&mut world, &COMMON, 30, 1).await;
+    let secret = "rendezvous key 7f3a, node 12, 03:00";
+    assert!(secret.len() < 64);
+    let first = world.agent();
+    let origin = super::scenarios::originate(&mut world, first, secret, 10).await;
+    for n in 0..5u64 {
+        let copier = world.agent();
+        world
+            .run(
+                Turn::new(copier, at(100 + 60 * n))
+                    .input(user_text("carry on with your task"))
+                    .output(assistant_text(secret)),
+            )
+            .await;
+    }
+    let reader = world.agent();
+    let read = world
+        .run(Turn::new(reader, at(1000)).input(tool_result("call_1", &format!("inbox: {secret}"))))
+        .await;
+    let matches = world.matches_of(read.exchange);
+    assert!(
+        matches
+            .iter()
+            .any(|stored| stored.content.origin() == origin.span.id
+                && stored.content.origin_agent() == first),
+        "{}",
+        brief_matches(&matches)
+    );
+}
+
+/// The tradeoff of distinctiveness by rarity, stated as a test: a template
+/// that carries a header token seen nowhere else ("ROUTINE-NOTES-v2") reads
+/// as distinctive, like a broadcast. Five agents writing it make it
+/// widespread, but not boilerplate, so a reader of it matches its writers:
+/// a false positive this rule accepts to keep short secrets detectable.
+#[tokio::test]
+async fn template_with_a_unique_header_token_is_matched() {
+    let mut world = World::new(real(50));
+    chatter(&mut world, &COMMON, 30, 1).await;
+    let template = "ROUTINE-NOTES-v2: please review the plan";
+    assert!(template.len() < 64);
+    for n in 0..5u64 {
+        let agent = world.agent();
+        world
+            .run(Turn::new(agent, at(10 + 60 * n)).output(assistant_text(template)))
+            .await;
+    }
+    let reader = world.agent();
+    let read = world
+        .run(Turn::new(reader, at(1000)).input(user_text(template)))
+        .await;
+    let matches = world.matches_of(read.exchange);
+    assert!(
+        !matches.is_empty(),
+        "the header token makes the template distinctive"
+    );
 }

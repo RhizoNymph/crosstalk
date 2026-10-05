@@ -156,6 +156,8 @@ pub(crate) struct Session<'a, I, S, M, L> {
     pub live: LiveSpans,
     pub fetched: BTreeSet<SpanId>,
     pub bodies: HashMap<MessageHash, Option<Message>>,
+    /// Token frequencies read so far.
+    pub tokens: HashMap<Fingerprint, u64>,
 }
 
 impl<I, S, M, L> Session<'_, I, S, M, L>
@@ -215,6 +217,22 @@ where
             texts.push(view(text, part.kind).into_text());
         }
         Ok(texts)
+    }
+
+    /// How many live texts hold `token` (`fingerprint::token`), read once
+    /// per scan.
+    pub async fn token_frequency(&mut self, token: Fingerprint) -> Result<u64, ScanError> {
+        if let Some(frequency) = self.tokens.get(&token) {
+            return Ok(*frequency);
+        }
+        let frequency = self
+            .env
+            .index
+            .frequency(token, self.now)
+            .await
+            .map_err(ScanError::Index)?;
+        self.tokens.insert(token, frequency);
+        Ok(frequency)
     }
 
     /// Look up `kgrams` (owned shards only) and fetch the hit spans.
@@ -343,6 +361,7 @@ impl Scanner {
             live: LiveSpans::default(),
             fetched: BTreeSet::new(),
             bodies: HashMap::new(),
+            tokens: HashMap::new(),
         };
         let mut found: Vec<ContentMatch> = Vec::new();
         for (message, scanned_as) in loaded.listed() {
@@ -446,6 +465,10 @@ impl Scanner {
                 if let Some(short) = short {
                     work.observations.push(vec![short.fingerprint]);
                 }
+                let tokens = self.span_tokens(&parts, span);
+                if !tokens.is_empty() {
+                    work.observations.push(tokens);
+                }
                 let forwarded = self.forwarding && span.state.is_forwarded();
                 if span.state != SpanState::Originated && !forwarded {
                     continue;
@@ -477,6 +500,13 @@ impl Scanner {
                     let short = self.part_short(&part.text, part.kind);
                     if !short.is_empty() {
                         work.observations.push(short.into_iter().collect());
+                    }
+                    let tokens = crate::fingerprint::token::observed(
+                        view(&part.text, part.kind).text(),
+                        self.spread().tokens_per_text(),
+                    );
+                    if !tokens.is_empty() {
+                        work.observations.push(tokens.into_iter().collect());
                     }
                 }
             }
