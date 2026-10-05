@@ -91,7 +91,10 @@ fn wiki_reads_are_confirmed_and_scored() {
     let summary = run(&mut wiki(), &mut detector(), 10, |_, _| {});
     assert!(summary.failures.is_empty(), "{:?}", summary.failures);
     let total = summary.score.total(&Selector::default());
-    assert_eq!(total.predicted, u64::try_from(predicted).unwrap_or(u64::MAX));
+    assert_eq!(
+        total.predicted,
+        u64::try_from(predicted).unwrap_or(u64::MAX)
+    );
 }
 
 #[test]
@@ -103,7 +106,10 @@ fn splice_worlds_are_confirmed_and_scored() {
     let summary = run(&mut splice(), &mut detector(), 10, |_, _| {});
     assert!(summary.failures.is_empty(), "{:?}", summary.failures);
     let total = summary.score.total(&Selector::default());
-    assert_eq!(total.predicted, u64::try_from(predicted).unwrap_or(u64::MAX));
+    assert_eq!(
+        total.predicted,
+        u64::try_from(predicted).unwrap_or(u64::MAX)
+    );
 }
 
 /// `ct-eval run --detector live` with `args`, its report.json and
@@ -163,5 +169,6 @@ fn two_live_runs_give_byte_identical_reports() {
 }
 
 fn path(path: &Path) -> &str {
-    path.to_str().unwrap_or_else(|| panic!("non-UTF-8 fixture path"))
+    path.to_str()
+        .unwrap_or_else(|| panic!("non-UTF-8 fixture path"))
 }

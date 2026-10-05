@@ -197,13 +197,14 @@ impl LiveWorld for GatewayWorld {
         let conversations = &self.live.layers().conversations;
         let mut out = BTreeMap::new();
         for &exchange in exchanges.ids() {
-            let placed = conversations
-                .placement(exchange)
-                .await
-                .map_err(|error| BackendError::Read {
-                    read: LiveRead::Attribution,
-                    reason: format!("{error:?}"),
-                })?;
+            let placed =
+                conversations
+                    .placement(exchange)
+                    .await
+                    .map_err(|error| BackendError::Read {
+                        read: LiveRead::Attribution,
+                        reason: format!("{error:?}"),
+                    })?;
             if let Some(placement) = placed {
                 out.insert(
                     exchange,

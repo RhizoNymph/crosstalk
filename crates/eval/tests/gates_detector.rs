@@ -33,7 +33,10 @@ fn a_gate_without_a_detector_is_the_reference_matchers() {
         names(&gates.for_detector(GateDetector::Reference)),
         ["reference recall", "reference precision"]
     );
-    assert_eq!(names(&gates.for_detector(GateDetector::Live)), ["live recall"]);
+    assert_eq!(
+        names(&gates.for_detector(GateDetector::Live)),
+        ["live recall"]
+    );
     assert!(gates.for_detector(GateDetector::Pipeline).gates.is_empty());
 }
 
