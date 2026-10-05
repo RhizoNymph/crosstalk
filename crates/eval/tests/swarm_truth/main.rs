@@ -13,6 +13,7 @@ use crosstalk_eval::datasets::swarm_truth::{
     Effect, Inputs, JoinFailure, RowKind, Side, SwarmOutcome, default_blobs, default_evidence, run,
 };
 use crosstalk_eval::keys::{AgentKey, WorldKey};
+use crosstalk_eval::predict::EvidenceClass;
 use crosstalk_eval::report::Gates;
 use crosstalk_eval::truth::{CarrierKind, MatchNeed, NegativeReason, RouteExpectation, Tier};
 use crosstalk_spec::aggregates::edge::RouteKind;
@@ -400,7 +401,7 @@ fn a_found_transmission_is_a_true_positive() {
         .find(|row| {
             row.key.route == RouteKind::Channel
                 && row.key.carrier == CarrierKind::ToolResult
-                && row.key.class == MatchClass::Normalized
+                && row.key.class == EvidenceClass::from(MatchClass::Normalized)
                 && row.key.tier == Some(Tier::Construction)
         })
         .expect("the normalized channel row");
@@ -419,7 +420,10 @@ fn a_missed_transmission_is_a_false_negative() {
         .report
         .rows
         .iter()
-        .find(|row| row.key.class == MatchClass::Exact && row.key.tier == Some(Tier::Construction))
+        .find(|row| {
+            row.key.class == EvidenceClass::from(MatchClass::Exact)
+                && row.key.tier == Some(Tier::Construction)
+        })
         .expect("the exact row");
     assert_eq!(row.counts.expected, 1);
     assert_eq!(row.counts.missed, 1);
