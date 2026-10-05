@@ -1,6 +1,5 @@
-//! `"backend": {"http": ..}`: where the gateway's L8 HTTP API is, the
-//! bearer token, and (only when the server lists several operators) which
-//! one the token is.
+//! `"backend": {"http": ..}`: where the gateway's L8 HTTP API is and the
+//! bearer token. Who the token is, the server says (`QueryApi::me`).
 //!
 //! ```json
 //! {"url": "http://crosstalk:8081", "token": {"env": "CROSSTALK_API_TOKEN"}}
@@ -17,18 +16,14 @@
 
 use crosstalk_api::http::{BearerToken as ServerToken, InvalidBearerToken};
 use crosstalk_client::{BaseUrl, BearerToken};
-use crosstalk_spec::ids::OperatorId;
 
 use super::ConfigError;
-use crate::url::ulid::UlidId;
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct RawHttp {
     url: String,
     token: EnvRef,
-    #[serde(default)]
-    operator: Option<String>,
 }
 
 /// A secret named by its environment variable: `{"env": "NAME"}`.
@@ -44,21 +39,6 @@ pub struct HttpConfig {
     pub url: BaseUrl,
     /// The operator's credential. Its `Debug` is redacted.
     pub token: BearerToken,
-    pub operator: OperatorPick,
-}
-
-/// Which of the operators the server lists the token signs in as.
-///
-/// The spec has no "who am I" read, so the UI finds itself in
-/// `QueryApi::operators`: the operators with permissions, current in the
-/// server's directory.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum OperatorPick {
-    /// The only current operator (the gateway's: one token, one
-    /// operator); several are a startup error.
-    TheOnlyOne,
-    /// The current operator with this id.
-    Id(OperatorId),
 }
 
 /// Why the token's text is not one the API accepts.
@@ -81,17 +61,7 @@ impl RawHttp {
         let name = self.token.env;
         let text = env(&name).ok_or_else(|| ConfigError::TokenUnset { env: name.clone() })?;
         let token = token(&text).map_err(|reason| ConfigError::Token { env: name, reason })?;
-        let operator = match self.operator {
-            None => OperatorPick::TheOnlyOne,
-            Some(id) => {
-                OperatorPick::Id(OperatorId::parse_ulid(&id).map_err(ConfigError::HttpOperator)?)
-            }
-        };
-        Ok(HttpConfig {
-            url,
-            token,
-            operator,
-        })
+        Ok(HttpConfig { url, token })
     }
 }
 
