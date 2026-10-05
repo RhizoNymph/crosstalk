@@ -124,6 +124,7 @@ fn config(blobs: BlobConfig) -> LiveConfig {
         ticking: Ticking::OnSettle,
         seed: 7,
         capture: None,
+        exchange_log: None,
     }
 }
 
@@ -180,7 +181,8 @@ async fn every_slot_runs_and_shutdown_drains() {
         drained,
         LiveDrained {
             capture: true,
-            stages: true
+            stages: true,
+            log: true,
         }
     );
 }

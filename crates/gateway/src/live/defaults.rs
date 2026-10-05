@@ -54,6 +54,7 @@ impl LiveConfig {
             ticking: Ticking::OnSettle,
             seed,
             capture: None,
+            exchange_log: None,
         })
     }
 }

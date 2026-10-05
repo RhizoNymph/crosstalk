@@ -111,3 +111,32 @@ async fn two_settled_runs_give_identical_transmissions() -> Result<(), Failure> 
     assert_eq!(one, two);
     Ok(())
 }
+
+/// Settled past the scenario's end plus the settle bound (`evidence_window
+/// + suspected_ttl`) and one bucket, the L7 watermark has passed every
+/// exchange of the scenario, so exports and edge reads treat its buckets as
+/// final.
+#[tokio::test]
+async fn the_watermark_passes_the_scenario_once_settled_past_the_bound() -> Result<(), Failure> {
+    let (composition, _observer) = settled().await?;
+    let scenario = relay();
+    assert!(
+        composition.live().watermark() < scenario.start,
+        "the watermark moved before the settle bound passed"
+    );
+    let bound = crosstalk_e2e::options::EVIDENCE_WINDOW
+        + crosstalk_e2e::options::SUSPECTED_TTL
+        + crosstalk_e2e::options::BUCKET;
+    let micros = u64::try_from(bound.as_micros()).map_err(|_| unexpected("bound"))?;
+    let until =
+        crosstalk_spec::support::Timestamp::from_micros(scenario.ends_at().as_micros() + micros);
+    composition.live().settle(until).await?;
+    let watermark = composition.live().watermark();
+    assert!(
+        watermark > scenario.ends_at(),
+        "watermark {watermark:?} has not passed the scenario's end {:?}",
+        scenario.ends_at()
+    );
+    composition.shutdown().await;
+    Ok(())
+}

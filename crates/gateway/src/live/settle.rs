@@ -163,6 +163,21 @@ async fn busy(bus: &MpscBus, slots: &[Slot]) -> Result<bool, SettleError> {
     Ok(false)
 }
 
+/// Wait until `group` is empty.
+pub(super) async fn group_idle(
+    bus: &MpscBus,
+    group: &crosstalk_spec::interfaces::l2_transport::ConsumerGroup,
+) -> Result<(), BusError> {
+    loop {
+        match bus.depth(group).await? {
+            Some(depth) if depth.tracked() + depth.waiting > 0 => {
+                tokio::time::sleep(POLL).await;
+            }
+            _ => return Ok(()),
+        }
+    }
+}
+
 /// Wait until every one of `slots`' groups is empty.
 pub(super) async fn idle(bus: &MpscBus, slots: &[Slot]) -> Result<(), SettleError> {
     while busy(bus, slots).await? {

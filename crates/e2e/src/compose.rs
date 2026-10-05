@@ -81,6 +81,7 @@ pub async fn compose_with(start: Timestamp, ticking: Ticking) -> Result<Composit
         ticking,
         seed: 0xE2E,
         capture: None,
+        exchange_log: None,
     })
     .await?;
     let caller = live

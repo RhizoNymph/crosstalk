@@ -85,21 +85,45 @@ impl Publisher {
 }
 
 /// How much work the stages have done: every delivery and side input
-/// handled adds one. Clones share the count.
+/// handled adds one to the process's total, and to the handling stage's
+/// own count when the handle is a stage's ([`Activity::stage`]). Clones
+/// share the counts.
 #[derive(Debug, Clone, Default)]
-pub struct Activity(Arc<AtomicU64>);
+pub struct Activity {
+    total: Arc<AtomicU64>,
+    own: Option<Arc<AtomicU64>>,
+}
 
 impl Activity {
+    /// A handle sharing this total with a count of its own.
+    pub fn stage(&self) -> Self {
+        Self {
+            total: Arc::clone(&self.total),
+            own: Some(Arc::new(AtomicU64::new(0))),
+        }
+    }
+
     pub fn bump(&self) {
-        self.0.fetch_add(1, Ordering::SeqCst);
+        self.add(1);
     }
 
     pub fn add(&self, count: u64) {
-        self.0.fetch_add(count, Ordering::SeqCst);
+        self.total.fetch_add(count, Ordering::SeqCst);
+        if let Some(own) = &self.own {
+            own.fetch_add(count, Ordering::SeqCst);
+        }
     }
 
+    /// The process's total.
     pub fn read(&self) -> u64 {
-        self.0.load(Ordering::SeqCst)
+        self.total.load(Ordering::SeqCst)
+    }
+
+    /// This handle's own count (the total for a handle without one).
+    pub fn handled(&self) -> u64 {
+        self.own
+            .as_ref()
+            .map_or_else(|| self.read(), |own| own.load(Ordering::SeqCst))
     }
 }
 
@@ -118,6 +142,9 @@ pub struct StageContext {
     pub flow: FlowSettings,
     /// Seeds every stage's id entropy, so a run is reproducible.
     pub seed: u64,
+    /// The L7 watermark the topology stage last exposed, in microseconds
+    /// (0 until it first advances).
+    pub watermark: Arc<AtomicU64>,
 }
 
 /// Why a stage did not handle an envelope.

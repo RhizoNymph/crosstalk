@@ -38,21 +38,26 @@ pub mod wiring;
 #[cfg(test)]
 mod tests;
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 use crosstalk_api::{Backbone, InProcess, InProcessError, InProcessOptions};
 use crosstalk_flow::consumer::{FlowConfig, InvalidFlowConfig, Settings as FlowSettings};
 use crosstalk_memory::support::Outbox;
 use crosstalk_provenance::config::ProvenanceConfig;
+use crosstalk_spec::events::Subject;
 use crosstalk_spec::ids::SeededRandom;
 use crosstalk_spec::interfaces::l0_ingress::RawExchange;
 use crosstalk_spec::interfaces::l2_transport::{BusError, EventBus};
 use crosstalk_spec::interfaces::l8_surface::Caller;
 use crosstalk_spec::interfaces::l8_surface::operators::{CallerError, RequestIdentity};
+use crosstalk_spec::support::Timestamp;
 use crosstalk_surface::Surface;
 use crosstalk_transport::blob::OpenError;
 use crosstalk_transport::{BusConfig, MpscBus, StartError};
+use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
@@ -68,7 +73,10 @@ pub use self::stage::{
     Slot, SlotTaken, Stage, StageContext, StageError, Stages, settle_delivery,
 };
 use crate::capture::CaptureStage;
+use crate::log::ExchangeLog;
+use crate::log::consumer::{self as log_consumer, LogStats};
 use crate::pipeline::{BuildError, Deps, Pipeline, Settings};
+use crate::tasks::Tasks;
 
 /// The pipeline a live process ingests through.
 pub type LivePipeline = Pipeline<LiveBlobs, MpscBus>;
@@ -108,6 +116,9 @@ pub struct LiveConfig {
     /// The proxy's capture channel, for a process that serves the L0
     /// listener; `None` to ingest only through [`Live::pipeline`].
     pub capture: Option<mpsc::Receiver<RawExchange>>,
+    /// The exchange log (the gateway's P3 stopgap), appended by its own
+    /// consumer group; `None` to keep no log.
+    pub exchange_log: Option<ExchangeLog>,
 }
 
 /// Why a live process did not start. Nothing it spawned keeps running
@@ -128,6 +139,8 @@ pub enum LiveError {
     Slot(#[from] SlotTaken),
     #[error("the {} slot did not subscribe: {error:?}", slot.name())]
     Subscribe { slot: Slot, error: BusError },
+    #[error("the exchange log did not subscribe: {0:?}")]
+    LogSubscribe(BusError),
 }
 
 /// How a live process drained on shutdown.
@@ -138,13 +151,28 @@ pub struct LiveDrained {
     pub capture: bool,
     /// Every slot's group was empty before the bus stopped.
     pub stages: bool,
+    /// The exchange log consumed every published envelope in time (true
+    /// when it does not run).
+    pub log: bool,
 }
 
-/// A running stage: its task and where its commands go.
+/// A running stage: its task, where its commands go, and its count.
 struct Running {
     slot: Slot,
     task: JoinHandle<()>,
     commands: mpsc::UnboundedSender<Command>,
+    activity: Activity,
+}
+
+/// What a live process reports for `/healthz`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct LiveReport {
+    /// Deliveries and side inputs each stage handled, by slot name.
+    pub stages: BTreeMap<String, u64>,
+    /// The L7 watermark, in microseconds since the epoch (0 until it first
+    /// advances).
+    pub watermark_micros: u64,
 }
 
 /// A running live process.
@@ -159,6 +187,12 @@ pub struct Live {
     flushes: mpsc::UnboundedSender<relay::Flush>,
     ticker: Option<JoinHandle<()>>,
     capture: Option<JoinHandle<()>>,
+    exchange_log: Option<JoinHandle<()>>,
+    log_stats: Arc<LogStats>,
+    /// `exchange_log` and `capture` when they run, for `/readyz`.
+    tasks: Tasks,
+    /// One flag per stage task, for `/readyz`'s `live`.
+    stage_tasks: Tasks,
 }
 
 impl Live {
@@ -176,6 +210,7 @@ impl Live {
             ticking,
             seed,
             capture,
+            exchange_log,
         } = config;
         let flow = FlowSettings::try_from(flow)?;
         let reader = clock.reader();
@@ -210,6 +245,7 @@ impl Live {
             clock: reader,
             flow,
             seed,
+            watermark: Arc::new(AtomicU64::new(0)),
         };
         let mut stages = Stages::default();
         wiring::wire_all(&mut stages, &context, &provenance)?;
@@ -218,6 +254,18 @@ impl Live {
             tracing::warn!(slot = slot.name(), "slot unfilled: its layer does not run");
         }
         // Every group subscribes before anything below can publish.
+        let log_subscription = match &exchange_log {
+            Some(_) => Some(
+                bus.subscribe(
+                    &[Subject::ExchangeCaptured],
+                    log_consumer::group(),
+                    pipeline.consumer_retry,
+                )
+                .await
+                .map_err(LiveError::LogSubscribe)?,
+            ),
+            None => None,
+        };
         let mut subscribed = Vec::new();
         for (slot, plug) in stages.into_plugs() {
             let subscription = bus
@@ -226,23 +274,35 @@ impl Live {
                 .map_err(|error| LiveError::Subscribe { slot, error })?;
             subscribed.push((slot, plug, subscription));
         }
+        let mut stage_tasks = Tasks::new();
         let stages: Vec<Running> = subscribed
             .into_iter()
             .map(|(slot, plug, subscription)| {
                 let (commands, received) = mpsc::unbounded_channel();
+                let own = activity.stage();
                 let control = Control {
                     retry: pipeline.consumer_retry,
                     commands: received,
-                    activity: activity.clone(),
+                    activity: own.clone(),
                     slot,
                 };
                 Running {
                     slot,
-                    task: tokio::spawn((plug.run)(subscription, control)),
+                    task: stage_tasks.spawn(slot.name(), (plug.run)(subscription, control)),
                     commands,
+                    activity: own,
                 }
             })
             .collect();
+        let mut tasks = Tasks::new();
+        let log_stats = Arc::new(LogStats::new());
+        let exchange_log = match (exchange_log, log_subscription) {
+            (Some(log), Some(subscription)) => Some(tasks.spawn(
+                "exchange_log",
+                log_consumer::run(subscription, log, Arc::clone(&log_stats)),
+            )),
+            _ => None,
+        };
         let (flushes, flush_requests) = mpsc::unbounded_channel();
         let outbox = tokio::spawn(relay::forward_outbox(
             outboxed,
@@ -258,8 +318,9 @@ impl Live {
             ))),
             Ticking::OnSettle => None,
         };
-        let capture =
-            capture.map(|captured| tokio::spawn(CaptureStage::new(built.ingester()).run(captured)));
+        let capture = capture.map(|captured| {
+            tasks.spawn("capture", CaptureStage::new(built.ingester()).run(captured))
+        });
         tracing::info!(
             stages = ?stages.iter().map(|running| running.slot.name()).collect::<Vec<_>>(),
             capture = capture.is_some(),
@@ -277,7 +338,57 @@ impl Live {
             flushes,
             ticker,
             capture,
+            exchange_log,
+            log_stats,
+            tasks,
+            stage_tasks,
         })
+    }
+
+    /// The process's long-running side tasks (`exchange_log`, `capture`)
+    /// and their running flags. A clone shares the flags.
+    pub fn tasks(&self) -> &Tasks {
+        &self.tasks
+    }
+
+    /// Whether every stage task is still running.
+    pub fn stages_running(&self) -> StagesRunning {
+        StagesRunning(self.stage_tasks.clone())
+    }
+
+    /// The exchange log consumer's counters.
+    pub fn log_stats(&self) -> &Arc<LogStats> {
+        &self.log_stats
+    }
+
+    /// The L7 watermark the topology stage last exposed.
+    pub fn watermark(&self) -> Timestamp {
+        Timestamp::from_micros(self.context.watermark.load(Ordering::SeqCst))
+    }
+
+    /// The `/healthz` section: each stage's handled count and the
+    /// watermark.
+    pub fn report(&self) -> LiveReport {
+        LiveReport {
+            stages: self
+                .stages
+                .iter()
+                .map(|running| (running.slot.name().to_owned(), running.activity.handled()))
+                .collect(),
+            watermark_micros: self.context.watermark.load(Ordering::SeqCst),
+        }
+    }
+
+    /// A cloneable reader of [`Live::report`], for the ops listener.
+    pub fn reporter(&self) -> LiveReporter {
+        LiveReporter {
+            stages: self
+                .stages
+                .iter()
+                .map(|running| (running.slot, running.activity.clone()))
+                .collect(),
+            watermark: Arc::clone(&self.context.watermark),
+        }
     }
 
     /// Where exchanges enter: `pipeline().ingest(exchange, at)` or
@@ -348,16 +459,59 @@ impl Live {
                 false
             }
         };
+        let log = match self.exchange_log.is_some() {
+            true => {
+                let group = log_consumer::group();
+                let empty = settle::group_idle(&bus, &group);
+                matches!(tokio::time::timeout_at(deadline, empty).await, Ok(Ok(())))
+            }
+            false => true,
+        };
         bus.shutdown().await;
         for running in self.stages {
             join_by(running.slot.name(), running.task, deadline).await;
         }
+        if let Some(task) = self.exchange_log {
+            join_by("exchange log consumer", task, deadline).await;
+        }
         self.outbox.abort();
         self.backend.shutdown().await;
-        tracing::info!(capture, stages = drained, "live process stopped");
+        tracing::info!(capture, stages = drained, log, "live process stopped");
         LiveDrained {
             capture,
             stages: drained,
+            log,
+        }
+    }
+}
+
+/// Whether every stage task of a live process still runs; cloneable, for
+/// `/readyz`.
+#[derive(Debug, Clone)]
+pub struct StagesRunning(Tasks);
+
+impl StagesRunning {
+    pub fn all(&self) -> bool {
+        self.0.states().iter().all(|(_, running)| *running)
+    }
+}
+
+/// A cloneable reader of a live process's [`LiveReport`], for `/healthz`.
+#[derive(Debug, Clone)]
+pub struct LiveReporter {
+    stages: Vec<(Slot, Activity)>,
+    watermark: Arc<AtomicU64>,
+}
+
+impl LiveReporter {
+    pub fn report(&self) -> LiveReport {
+        LiveReport {
+            stages: self
+                .stages
+                .iter()
+                .map(|(slot, activity)| (slot.name().to_owned(), activity.handled()))
+                .collect(),
+            watermark_micros: self.watermark.load(Ordering::SeqCst),
         }
     }
 }
