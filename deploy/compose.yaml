@@ -115,7 +115,7 @@ services:
       - data:/var/lib/crosstalk
     ports:
       # Agents connect here: ANTHROPIC_BASE_URL=http://<host-ip>:<CROSSTALK_PROXY_PORT>/anthropic
-      # 8081 is the L8 API; the gateway binds it once the HTTP API (P7.1) exists.
+      # 8081 is the L8 operator API (the UI reaches it on the compose network).
       - ${CROSSTALK_PROXY_BIND:-0.0.0.0}:${CROSSTALK_PROXY_PORT:-8080}:8080
       - ${CROSSTALK_BIND:-127.0.0.1}:${CROSSTALK_API_PORT:-8081}:8081
       - ${CROSSTALK_BIND:-127.0.0.1}:${CROSSTALK_OPS_PORT:-9464}:9464
@@ -146,13 +146,20 @@ services:
       dockerfile: deploy/ui.Dockerfile
     restart: unless-stopped
     logging: *logging
+    # The HTTP backend reads the gateway's operator API at crosstalk:8081
+    # with the same bearer token the gateway checks.
+    environment:
+      CROSSTALK_API_TOKEN: ${CROSSTALK_API_TOKEN:?run deploy/run.sh init}
+      RUST_LOG: ${CROSSTALK_UI_LOG:-info}
     volumes:
       - ./config/ui.json:/etc/crosstalk/ui.json:ro
     ports:
       - ${CROSSTALK_BIND:-127.0.0.1}:${CROSSTALK_UI_PORT:-3000}:3000
+    # The UI exits at startup when the API is unreachable, so it waits for
+    # the gateway to be healthy (its API listener is bound by then).
     depends_on:
       crosstalk:
-        condition: service_started
+        condition: service_healthy
 
   # ---- infrastructure observability -------------------------------------
 

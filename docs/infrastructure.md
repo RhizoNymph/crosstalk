@@ -112,9 +112,9 @@ what grow.
   runs first), and the strict wire contract is safe because the in-process
   bus never holds messages across a restart.
 - `crosstalk` (`serve --role all`), healthy when `/readyz` answers.
-- `ui` (profile `ui`), built once `ui/` is merged; it talks to the gateway
-  over HTTP when the UI's HTTP backend lands, and runs on its fixture until
-  then.
+- `ui` (profile `ui`, added by `run.sh` whenever `ui/` exists): the operator
+  UI on its HTTP backend, reading the gateway's API at `crosstalk:8081` with
+  `CROSSTALK_API_TOKEN`; it starts once `crosstalk` is healthy.
 - The observability stack (below).
 
 Only the proxy binds beyond localhost; the API, UI, Grafana, Prometheus and
