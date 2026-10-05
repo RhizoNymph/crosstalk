@@ -301,6 +301,15 @@ normal suite:
 - collapsed whitespace;
 - verbatim placement.
 
+**Tool-call arguments are cut per string value** (INV-1057,
+`provenance.span.tool-arguments-per-value`): when a call's arguments are
+JSON, the novel stretches are cut to the string values they cover
+(`segment::string_values`, keys and non-string values excluded) before
+they become originated spans, so a span's view equals the decoded value
+the tool received; a `Write {file_path, content}` yields the page and the
+path as two spans. A value with no k-gram (shorter than k) yields none.
+Arguments that are not JSON are segmented whole. Relayed runs are not cut.
+
 `MemoryProvenanceStore` also implements the spec's `SpanIndex` over the
 spans `commit_scan` wrote: `record` adds nothing, `spans` returns the
 originated spans (any state whose origin is `Originated`) as recorded,

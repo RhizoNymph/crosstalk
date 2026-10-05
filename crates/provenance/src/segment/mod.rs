@@ -16,7 +16,11 @@
 //! 3. Text copied from a server tool's result in the same output (a web
 //!    fetch the provider ran) is no one's: it gets no span.
 //! 4. Every remaining stretch, trimmed of surrounding whitespace, is a
-//!    candidate `Originated` span, kept when it has at least one k-gram
+//!    candidate `Originated` span. In a tool call's arguments (valid JSON)
+//!    a stretch is first cut to the string values it covers
+//!    ([`string_values`]), so an originated span never holds a key, a
+//!    quote or the structure, and its view is what the tool wrote
+//!    (`provenance.span.tool-arguments-per-value`). It is kept when it has at least one k-gram
 //!    (shorter text can never be matched).
 //!    None of its k-grams occurs in any input layer, so it shares no
 //!    fingerprint with the inputs (`provenance.span.originated-absent-from-inputs`).
@@ -39,7 +43,7 @@ use crosstalk_spec::observed::message::{Message, PartRef};
 use crosstalk_spec::support::ByteRange;
 
 pub use self::coverage::{Coverage, MessageKGrams, Occurrence, message_kgrams};
-pub use self::view::{PartKind, TextPart, text_parts, view};
+pub use self::view::{PartKind, TextPart, string_values, text_parts, view};
 use crate::decode::DecodePipeline;
 use crate::fingerprint::{KGram, Winnowing};
 use crate::text::{MappedText, normalize, trim_range};
@@ -150,7 +154,13 @@ impl NovelRunSegmenter {
             let (start, end) = run_bytes(&seen, &kgrams, run);
             covered.push((start, end));
         }
-        for (start, end) in gaps(&mut covered, text_len) {
+        let mut novel = gaps(&mut covered, text_len);
+        if part.kind == PartKind::ToolArguments
+            && let Some(values) = string_values(&part.text)
+        {
+            novel = within(&novel, &values);
+        }
+        for (start, end) in novel {
             let Some((start, end)) = trim_range(&part.text, start, end) else {
                 continue;
             };
@@ -246,6 +256,22 @@ pub fn runs(kgrams: &[KGram], coverage: &Coverage) -> Vec<Run> {
         index += 1;
     }
     runs
+}
+
+/// The parts of `gaps` inside one of `values`: each gap cut at the value
+/// boundaries, in order.
+fn within(gaps: &[(u32, u32)], values: &[(u32, u32)]) -> Vec<(u32, u32)> {
+    let mut cut = Vec::new();
+    for &(gap_start, gap_end) in gaps {
+        for &(value_start, value_end) in values {
+            let start = gap_start.max(value_start);
+            let end = gap_end.min(value_end);
+            if start < end {
+                cut.push((start, end));
+            }
+        }
+    }
+    cut
 }
 
 /// The stretches of `0..len` no interval in `covered` touches.

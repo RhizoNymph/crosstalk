@@ -129,3 +129,64 @@ fn server_tool_results_get_no_span() {
         }
     }
 }
+
+/// INV-1057 (`provenance.span.tool-arguments-per-value`): originated spans
+/// in tool-call arguments are cut from the decoded string values, so their
+/// text equals what the tool wrote: a `Write {file_path, content}` with a
+/// novel page yields the page as its own span (its view equal to the
+/// content, escapes decoded), the path as another, and no span holds a key,
+/// a quote or the JSON structure.
+#[test]
+fn tool_argument_spans_are_cut_per_string_value() {
+    let content =
+        "# Runbook\n\nBefore any \"rollback\" of the ledger service, drain the amber queue.\n";
+    let path = "/srv/team-wiki/runbooks/ledger-rollback-procedure.md";
+    let call = tool_call(
+        "call_1",
+        "Write",
+        &serde_json::json!({ "file_path": path, "content": content, "mode": 420 }),
+    );
+    let output = message(assistant(vec![call]));
+    let drafts = segmenter().segment(&output, &[]);
+    assert!(
+        drafts.iter().all(|d| d.origin == Origin::Originated),
+        "{}",
+        super::fixtures::brief_drafts(&drafts)
+    );
+    let views: Vec<String> = drafts
+        .iter()
+        .map(|draft| {
+            crate::segment::view(
+                &slice(&output, draft),
+                crate::segment::PartKind::ToolArguments,
+            )
+            .into_text()
+        })
+        .collect();
+    // Canonical JSON orders the keys: `content` before `file_path`.
+    assert_eq!(views, vec![content.to_owned(), path.to_owned()]);
+    for draft in &drafts {
+        let raw = slice(&output, draft);
+        assert!(!raw.contains("\"file_path\""), "a key in {raw:?}");
+        assert!(!raw.contains("\"content\""), "a key in {raw:?}");
+    }
+}
+
+/// A value too short for one k-gram yields no span; text that is not JSON
+/// is segmented whole, as before.
+#[test]
+fn short_values_yield_no_span_and_invalid_arguments_stay_whole() {
+    let call = tool_call(
+        "call_1",
+        "Read",
+        &serde_json::json!({ "file_path": "/a/b.md", "limit": "10" }),
+    );
+    let output = message(assistant(vec![call]));
+    assert!(segmenter().segment(&output, &[]).is_empty());
+
+    assert_eq!(
+        crate::segment::string_values(r#"{"a": "xy", "b": ["z", 1, {"c": "w"}]}"#),
+        Some(vec![(7, 9), (19, 20), (33, 34)])
+    );
+    assert_eq!(crate::segment::string_values("not json at all"), None);
+}

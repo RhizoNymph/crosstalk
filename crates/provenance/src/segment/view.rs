@@ -78,3 +78,40 @@ pub fn view(text: &str, kind: PartKind) -> MappedText {
     }
     MappedText::identity(text)
 }
+
+/// The byte ranges of every string value in a tool call's arguments
+/// (between its quotes, escapes included), in order: object keys and
+/// non-string values are left out. `None` when `text` is not JSON, so the
+/// caller treats the whole part as one text.
+///
+/// Originated spans in tool-call arguments are cut from these ranges, so a
+/// span's view (its JSON-unescaped text) is text the tool received: the
+/// decoded string value, never the keys or the structure around it
+/// (`provenance.span.tool-arguments-per-value`).
+pub fn string_values(text: &str) -> Option<Vec<(u32, u32)>> {
+    serde_json::from_str::<serde::de::IgnoredAny>(text).ok()?;
+    let bytes = text.as_bytes();
+    let mut values = Vec::new();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] != b'"' {
+            index += 1;
+            continue;
+        }
+        let start = index + 1;
+        let mut end = start;
+        while end < bytes.len() && bytes[end] != b'"' {
+            end += if bytes[end] == b'\\' { 2 } else { 1 };
+        }
+        let mut next = end + 1;
+        while next < bytes.len() && bytes[next].is_ascii_whitespace() {
+            next += 1;
+        }
+        let is_key = bytes.get(next) == Some(&b':');
+        if !is_key && end > start {
+            values.push((u32::try_from(start).ok()?, u32::try_from(end).ok()?));
+        }
+        index = end + 1;
+    }
+    Some(values)
+}
