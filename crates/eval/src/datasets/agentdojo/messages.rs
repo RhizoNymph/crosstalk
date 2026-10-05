@@ -59,6 +59,7 @@ pub fn convert(raw: &[RawMessage]) -> Result<Conversation, AgentDojoError> {
                         name: ToolName(call.function.clone()),
                         arguments: arguments(&call.args),
                         execution: ToolExecution::Client,
+                        signature: None,
                     }));
                     pending.push((id, call.clone()));
                 }

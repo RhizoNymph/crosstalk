@@ -140,6 +140,7 @@ fn tool_call(call: &RawCall) -> ToolCall {
         name: ToolName(call.name.clone()),
         arguments,
         execution: ToolExecution::Client,
+        signature: None,
     }
 }
 
