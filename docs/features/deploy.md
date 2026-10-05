@@ -142,6 +142,7 @@ without breaking the linking of exchanges across the change:
 | `deploy/grafana/dashboards/gateway.json` | "crosstalk / gateway" (uid `crosstalk-gateway`): health, capture, pipeline, exchange log, the captured → published → written funnel, and the gateway's WARN/ERROR logs. |
 | `deploy/loki/loki.yaml` | Single-binary Loki on the filesystem, 7-day retention. |
 | `deploy/alloy/config.alloy` | Docker log discovery, `service`/`container`/`stream` labels, JSON `level` label for crosstalk, migrate and ui. |
+| `deploy/compose.demo.yaml`, `deploy/demo.Dockerfile`, `deploy/demo/` | The token-free demo (fake upstream, wiki, agent swarm; `run.sh demo ...`): see [demo.md](demo.md). |
 
 ## Store tests against the compose Postgres
 

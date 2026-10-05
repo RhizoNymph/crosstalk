@@ -165,6 +165,11 @@ Overview:
       unscored until L3 to L5 consume the bus) produces spec Transmissions;
       the scorer aligns them with the labels and reports per dataset,
       route, carrier, match class and tier against regression gates.
+    e2e: >
+      Crate crosstalk-e2e (a composer): the end-to-end smoke harness. A
+      scripted two-agent Claude Code scenario as wire traffic, captured
+      through L0 and L1, fed through Pipeline::ingest, and asserted through
+      the L8 surface; the scenario is reusable for demos.
     deploy: >
       deploy/ (outside the workspace): docker compose on one machine with
       Postgres, a migrate step, the crosstalk binary as --role all, the UI,
@@ -430,9 +435,9 @@ Features Index:
       edition 2024, unsafe forbidden, shared exact pins, one lock), one
       empty library per implementation crate, the dependency rule (layer
       crates never depend on each other or on the composers api, client,
-      eval or gateway, take
-      transport only as a dev-dependency, and take memory, sim and testkit
-      only as dev-dependencies) checked by an architecture test over cargo
+      eval or gateway, take transport only as a dev-dependency, take
+      memory, sim and testkit only as dev-dependencies, and never depend
+      on the tool crate demo) checked by an architecture test over cargo
       metadata, scripts/check.sh (fmt, clippy, test, doc, invariant
       validator), and the invariant evidence path convention
       (crosstalk_spec:: or crosstalk_<crate>::, checked by
@@ -862,6 +867,35 @@ Features Index:
       - docs/infrastructure.md
     depends_on: [workspace, store, ingress, transport]
     doc: docs/features/deploy.md
+  demo:
+    description: >
+      crosstalk-demo (crates/demo, a tool crate no layer depends on), one
+      binary with four subcommands. upstream is a fake Anthropic upstream:
+      POST /v1/messages, streaming SSE or JSON, in the real wire format,
+      answered with text and tool_use deterministically from a seed and the
+      request body, with a configurable first-byte wait and stream pacing.
+      wiki is an in-memory HTTP page store with versions and authors, the
+      shared channel. swarm runs N agents through the crosstalk proxy. Each
+      keeps a growing conversation, resent whole every turn, with fake
+      x-api-keys per agent or group. The model's wiki_write and wiki_read
+      calls run against the wiki, and their results go back as tool_result,
+      so one agent's model output reaches another's input. swarm reports
+      throughput, p50/p95/p99 time to first byte and total time, and the
+      expected transmissions, optionally as a ground-truth JSONL file.
+      healthcheck serves the distroless image. deploy/compose.demo.yaml,
+      deploy/demo.Dockerfile, deploy/demo/crosstalk.demo.json and run.sh
+      demo up|run|down|logs run the demo on the compose stack. It reuses
+      testkit's harness client and SSE parser and the spec's seeded random
+      source.
+    entry_points:
+      - crates/demo/src/main.rs
+      - crates/demo/src/upstream/mod.rs
+      - crates/demo/src/wiki/mod.rs
+      - crates/demo/src/swarm/mod.rs
+      - deploy/compose.demo.yaml
+      - deploy/run.sh
+    depends_on: [testkit, deploy, gateway, workspace]
+    doc: docs/features/demo.md
   world:
     description: >
       crosstalk-world (crates/world, TestSupport): the UI fixture's
@@ -952,4 +986,29 @@ Features Index:
       - crates/eval/src/bin/ct-eval/main.rs
     depends_on: [type_spec, gateway, transport, sim, testkit]
     doc: docs/features/eval.md
+  e2e_smoke:
+    description: >
+      crosstalk-e2e (a composer): the end-to-end smoke. A deterministic
+      wiki relay scenario as Claude Code HTTP traffic (agent A writes a
+      shared wiki page with a distinctive sentence through Write, agent B
+      reads it through Read and repeats it; two sessions, two API keys),
+      captured through L0's route table, identifier and adapter and L1's
+      normalizer into NormalizedExchanges, fed through Pipeline::ingest in
+      time order, and read back only through QueryApi (agents by session,
+      the A to B channel edge, the confirmed transmission, its evidence,
+      the discovered channel). The composition is shaped like
+      crosstalk_gateway::live::Live and is wired today from InProcess plus
+      a pipeline over its blob store and bus; the assertions needing L3 to
+      L7 are ignored until Live composes them. The scenario and readers are
+      a library, so a UI demo can feed the same traffic into a running
+      Live.
+    entry_points:
+      - crates/e2e/src/lib.rs
+      - crates/e2e/src/scenario/mod.rs
+      - crates/e2e/src/capture.rs
+      - crates/e2e/src/compose.rs
+      - crates/e2e/src/read.rs
+      - crates/e2e/tests/smoke/main.rs
+    depends_on: [gateway, ingress, canonical, surface_service, memory, workspace]
+    doc: docs/features/e2e_smoke.md
 ```
