@@ -465,8 +465,8 @@ async fn identity_and_rule_actions_stamp_caller() {
 async fn declaration_of(fixture: &Fixture, channel: ChannelId) -> Declaration {
     use crosstalk_spec::interfaces::l5_flow::channels::ChannelReads;
     match fixture.world.channels.channel(channel).await {
-        Ok(Some(stored)) => match stored.origin {
-            ChannelOrigin::Declared { declaration, .. } => declaration,
+        Ok(Some(stored)) => match &stored.channel().origin {
+            ChannelOrigin::Declared { declaration, .. } => declaration.clone(),
             other => panic!("not declared: {other:?}"),
         },
         other => panic!("channel: {other:?}"),
@@ -641,7 +641,14 @@ async fn second_channel(fixture: &Fixture, scene: &mut super::world::Scene) -> C
         .build();
     let channel = scene.ids.channel();
     fixture
-        .channel(channel, &resource, scene.a2, minute(1))
+        .channel(
+            &mut scene.ids,
+            channel,
+            &resource,
+            scene.a2,
+            scene.a3,
+            minute(1),
+        )
         .await;
     channel
 }

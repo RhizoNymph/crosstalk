@@ -20,7 +20,7 @@ use tokio::sync::mpsc::UnboundedReceiver;
 use super::support::{at, fit_active, fit_ready, model};
 use crate::analysis::catalog::{InMemoryTopicCatalog, TopicVersions};
 use crate::model::build::{
-    catalog, non_zero, operator, topic, topic_id, transmission, ts, unit, window,
+    agent, catalog, non_zero, operator, topic, topic_id, transmission, ts, unit, window,
 };
 use crate::support::{Outbox, drain};
 
@@ -34,6 +34,8 @@ fn assigned(topic: Option<u64>, at_micros: u64, bytes: u64) -> StoredAssignment 
         topic: topic.map(topic_id),
         confirmed_at: ts(at_micros),
         matched_bytes: non_zero(bytes),
+        from: agent(1),
+        to: agent(2),
     }
 }
 
@@ -64,7 +66,7 @@ async fn fresh_catalog_has_version_zero_active_and_unfitted() {
 
 #[tokio::test]
 async fn sizes_count_assignments_per_topic_and_window() {
-    // analysis.sizes.match-assignments
+    // analysis.sizes.match-cross-agent-assignments
     let (mut catalog, _events) = new_catalog(2);
     let v1 = fit_ready(
         &mut catalog,
@@ -666,5 +668,52 @@ async fn fit_returned_rejects_topics_of_another_model_version() {
             topic: topic_id(1),
             version
         })
+    );
+}
+
+#[tokio::test]
+async fn sizes_leave_out_transmissions_within_one_agent() {
+    // analysis.sizes.match-cross-agent-assignments: an assignment whose
+    // sender has since been merged into its reader counts nowhere, and the
+    // unmerge counts it again.
+    use crate::analysis::aliases::StaticDirectory;
+
+    let directory = StaticDirectory::new();
+    let (catalog, _events) = new_catalog(2);
+    let mut catalog = catalog.with_agents(directory.clone());
+    let v1 = fit_ready(&mut catalog, 10, &[(1, [1.0, 0.0, 0.0])]).await;
+    catalog
+        .assign(transmission(1), v1, assigned(Some(1), 100, 10))
+        .await
+        .unwrap();
+    let within = StoredAssignment {
+        from: agent(3),
+        ..assigned(Some(1), 110, 5)
+    };
+    catalog.assign(transmission(2), v1, within).await.unwrap();
+    let count = |sizes: crosstalk_spec::aggregates::topic_history::TopicSizes| {
+        sizes
+            .topics()
+            .iter()
+            .map(|size| size.stats)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        count(catalog.sizes(v1, None).await.unwrap()),
+        vec![stats(2, 15)]
+    );
+    directory.merge(agent(3), agent(2)).unwrap();
+    assert_eq!(
+        count(catalog.sizes(v1, None).await.unwrap()),
+        vec![stats(1, 10)]
+    );
+    assert_eq!(
+        count(catalog.sizes(v1, window(0, 200)).await.unwrap()),
+        vec![stats(1, 10)]
+    );
+    directory.unmerge(agent(3));
+    assert_eq!(
+        count(catalog.sizes(v1, None).await.unwrap()),
+        vec![stats(2, 15)]
     );
 }

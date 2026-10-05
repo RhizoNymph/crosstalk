@@ -3,8 +3,9 @@
 //!
 //! Each part adds its steps; [`crate::script::Script::into_steps`] orders
 //! them by time. Parts are added in dependency order, so among steps at the
-//! same instant a fit's activation precedes a job that fails on it, and a
-//! channel's discovery precedes the access that discovered it.
+//! same instant a fit's activation precedes a job that fails on it, the
+//! read that opened a channel's first cross-agent transmission precedes the
+//! discovery, and the discovery precedes that transmission's save.
 
 mod agents;
 mod alerts;
@@ -16,7 +17,6 @@ mod transmissions;
 use std::collections::BTreeMap;
 
 use crosstalk_spec::ids::{ChannelId, ProjectionId};
-use crosstalk_spec::support::Timestamp;
 
 use crate::clock::Anchor;
 use crate::config::WorldConfig;
@@ -26,7 +26,7 @@ use crate::generate::Generated;
 use crate::scenario::{ChannelKey, JobKey};
 use crate::script::{Script, Step};
 
-pub use channels::promotion;
+pub use channels::{Placement, Seeding, promotion};
 
 /// The seed script and the ids it mints for roles.
 #[derive(Debug)]
@@ -53,28 +53,17 @@ pub fn assemble(inputs: Inputs<'_>) -> Result<Assembled, WorldError> {
         anchor,
     } = inputs;
     let mut script = Script::default();
+    let placement = Placement::of(generated)?;
     config::assemble(generated, config, declared, &mut script)?;
     agents::assemble(generated, &mut script)?;
-    channels::assemble(generated, &mut script)?;
+    channels::assemble(generated, &placement, &mut script)?;
     transmissions::assemble(generated, embedder, &mut script)?;
-    alerts::assemble(generated, config, &discovered_at(generated), &mut script)?;
+    alerts::assemble(generated, config, &placement.created(), &mut script)?;
     surface::bodies(generated, &mut script);
     let jobs = surface::projections(generated, config, anchor, &mut script)?;
-    surface::letters(generated, anchor, &mut script)?;
+    surface::letters(generated, &placement, anchor, &mut script)?;
     Ok(Assembled {
         steps: script.into_steps(),
         jobs,
     })
-}
-
-/// When each channel saw its first access: a discovered channel's
-/// creation.
-pub fn discovered_at(generated: &Generated) -> BTreeMap<ChannelId, Timestamp> {
-    let mut out = BTreeMap::new();
-    for access in &generated.traffic.accesses {
-        if let Some(channel) = generated.traffic.resource_channel.get(&access.resource) {
-            out.entry(*channel).or_insert(access.at);
-        }
-    }
-    out
 }

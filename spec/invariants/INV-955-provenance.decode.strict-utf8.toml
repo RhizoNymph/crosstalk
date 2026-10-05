@@ -1,0 +1,25 @@
+[invariant]
+id = "provenance.decode.strict-utf8"
+statement = "For every Decoded that a Base64, Hex or UrlEncoding Decoder::decode returns, the bytes the codec decodes from the source range are valid UTF-8 and equal the bytes of Decoded::text, and a decodable substring whose decoded bytes are not valid UTF-8 yields no Decoded."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+Base64 and hex substrings are everywhere in agent traffic that is not
+encoded text: signatures, encrypted blobs, hashes, compressed payloads,
+images. Decoding them yields binary. A lossy conversion (replacing invalid
+sequences with U+FFFD) turns that binary into text, which is then
+fingerprinted and matched; runs of replacement characters and the few
+printable bytes between them recur across unrelated blobs and agents, so
+decoded binary would manufacture spans and matches. Strict decoding keeps
+every Decoded an exact decoding of text someone encoded, and drops the
+rest. Unicode normalization produces text from text and is not covered.
+"""
+
+[evidence]
+unit = "crosstalk_provenance::tests::decoded_binary_yields_no_text"
+property = "crosstalk_provenance::props::decoded_text_is_exactly_the_decoded_bytes"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+property = { agent = "false", human = "false" }

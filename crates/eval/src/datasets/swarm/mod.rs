@@ -405,6 +405,7 @@ fn assistant_call(
             name: ToolName(name.to_owned()),
             arguments: ToolArguments::Json(json),
             execution: ToolExecution::Client,
+            signature: None,
         }),
     ])))
 }

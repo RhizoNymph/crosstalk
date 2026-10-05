@@ -19,9 +19,11 @@ take it as a dev-dependency only. It depends on `crosstalk-spec`,
 - **Generation** (`generate/`): 44 agent ids (40 canonical after merges)
   across Claude Code, Codex, pi, oh-my-pi and self-hosted scripts, with
   sub-agents, labels, three config-registered agents, five merges (one
-  repointing, one reverted with a veto) and impersonation claims; 16
+  repointing, one reverted with a veto) and impersonation claims; 15
   channels (declared, discovered, promoted, superseded, sanctioned,
-  unsanctioned, reset, dormant, unused, awaiting traffic); about 5,000
+  unsanctioned, reset, dormant, unused, awaiting traffic, listed
+  unconfirmed, hidden by a merge) and a resource only one agent uses,
+  which is no channel; about 5,000
   transmissions on a weekday daytime curve in every state, route, match
   kind, codec chain and carrier, with their accesses, co-access records,
   content matches and message bodies; three topic versions; user rules;
@@ -39,7 +41,8 @@ take it as a dev-dependency only. It depends on `crosstalk-spec`,
 - **Handles** (`Scenario`): the ids every role got: agents by fixture key
   (`cc0`, `cc0.a`, `pi1`, `al0`), `ChannelKey`, `MergeKey`, `RuleKey`,
   `JobKey`, sinks, topics per version, the unmapped v1 topic, the lone
-  resource, dropped bodies, impersonators, registered agents.
+  resource (and `ChannelKey::Scratch`, the id of the channel the world
+  never creates for it), dropped bodies, impersonators, registered agents.
 - **Clock** (`WorldClock`): the spec `Clock`, fixed at the anchor for tests
   or moving on from it in real time for serving.
 
@@ -74,10 +77,13 @@ World::seed(&mut stores)
   3. assemble       Script of Step { at, Op }:
                     config (directory load, config entries, sink deliveries, model)
                     agents (create, establish, merge/unmerge, rename, claims, activity)
-                    channels (discover/add resource at first access, accesses,
-                              Candidate/Dormant/Unused, policies, promotion, refusal)
-                    transmissions (saves per state, confirm, assign, index, edge;
-                              re-fits v1/v2, pin, verdicts, watermark)
+                    channels (resource at first sighting: on a declared channel
+                              or on none; accesses; discovery at the first
+                              cross-agent transmission through a seed;
+                              Dormant/Unused; policies, promotion, refusal)
+                    transmissions (saves per state, each channel state recorded
+                              as traffic, assign, index, edge; re-fits v1/v2,
+                              pin, verdicts, watermark)
                     alerts (rules, triage drafts, acknowledgements, resolutions)
                     bodies, projection jobs, dead letters
                     → sorted by time, stable among equal times
@@ -88,8 +94,18 @@ World::seed(&mut stores)
 
 **Ordering.** Steps sort by time; among equal times, the order assembly
 added them in. Parts are added in dependency order (a fit's activation
-before a job that fails on it; a channel's discovery before the access
-that discovered it).
+before a job that fails on it; the read that opened a channel's first
+cross-agent transmission, then the discovery, then that transmission's
+save).
+
+**Placement** (`assemble::Placement`). Where each resource is over the
+week: a declared channel's resources are on it from their first sighting;
+a discovered channel's seed is on no channel until its first cross-agent
+transmission opens (the oldest channel transmission routed through it
+with a co-access), which discovers it; after the promotion, the standup
+page's lookups name the promoted channel; the scratch entry is never on
+one. `AddResource` is checked against it, `Discover` is planned from it,
+and the `AccessRecorded` dead letter names the channel it gives.
 
 **Store-assigned ids.** Declared channels (before generation), merge
 records, user rules and alerts (during the run, behind `MergeKey`,
@@ -119,9 +135,11 @@ every write is given its time; nothing reads a clock while seeding.
 | `CreateAgent`, `Advance` | `AgentLifecycle::create`, `advance` |
 | `Claim`, `Activity` | `ClaimStore::record`, `ActivityStore::record` |
 | `Merge`, `Unmerge`, `Rename` | `IdentityResolver::merge`, `unmerge`, `rename` (operator ones audited) |
-| `Discover`, `AddResource`, `Detection`, `Confirm` | `ChannelTraffic::discover`, `add_resource`, `set_detection`, `confirm` |
-| `Access` | `ChannelTraffic::record_access`, then `EdgeStore::apply_access` |
-| `Save` | `TransmissionStore::save` |
+| `AddResource` | `ChannelTraffic::add_resource`, which must place the resource where `Placement` does (`Diverged` otherwise) |
+| `Discover` | `ChannelTraffic::discover` under the plan's minted id, which must answer `Created` |
+| `Detection` | `ChannelTraffic::set_detection` (`Dormant`, `Unused`) |
+| `Access` | `ChannelTraffic::record_access`, then `EdgeStore::apply_access` (bucketed by resource) |
+| `Save` | `TransmissionStore::save`; for a channel transmission past `Detected`, then `ChannelTraffic::record_transmission` (opened or confirmed keeps its canonical channel `Active`; a declared channel goes `InUse`) |
 | `Policy`, `Promote` | `ChannelRegistry::set_policy`, `promote` (audited); a sanction then `AlertTriage::channel_sanctioned` |
 | `ForbiddenPolicy` | the audit entry of a refused call (`Forbidden`) |
 | `Verdict` | `TransmissionVerdicts::set` (audited); a new revision then `EdgeStore::judge`, `SearchCorpus::judge`, `AlertTriage::transmission_judged` |
@@ -151,27 +169,33 @@ every write is given its time; nothing reads a clock while seeding.
 | Alerts in every state and suppress reason, with deduplicated occurrences (616 for the default seed) | `assemble/alerts.rs` | — |
 | Verdicts (one withdrawn), sinks, audit history with two refused calls, four dead letters, four projection jobs | `assemble/transmissions.rs`, `config.rs`, `surface.rs` | `JobKey::*` |
 | Dropped bodies, sender side and reader side | `generate/retention.rs` | `Scenario::dropped` |
-| Channel semantics: a single-agent scratch resource, an unconfirmed S3 handoff, a channel hidden by a merge | `generate/traffic.rs`, `drafts.rs` | `Scenario::lone_resource`, `ChannelKey::Scratch`, `S3Handoff`, `SelfNotes` |
+| Channel semantics: a single-agent scratch resource on no channel, an S3 handoff listed unconfirmed (suspected traffic only), a channel hidden by a merge (its traffic all within `cx1` once `al1` merged into it) | `generate/traffic.rs`, `drafts.rs`, `assemble/channels.rs` | `Scenario::lone_resource`, `ChannelKey::Scratch` (never stored), `S3Handoff`, `SelfNotes` |
 
 ## Divergences from the UI fixture
 
 Where `integration/impl`'s spec differs from the UI's, the world follows
 `integration/impl`.
 
-1. **Discovery.** A discovered channel is created at the first access to
-   any of its resources, which becomes its seed (`Observed`); its other
-   resources join at their first access. The fixture created it at its
-   first cross-agent transmission, seeded at its first planned locator
-   (the channel-semantics rule, INV-850..869 once ported).
-2. **The scratch entry is a channel.** `cc7`'s key-value entry gets a
-   discovered channel (`ChannelKey::Scratch`, `Observed`); the fixture
-   kept it a resource on no channel. No `NewChannel` alert is raised for
-   it (the fixture's alert set is kept).
-3. **Detection.** `Observed` at discovery, `Candidate` at the first
-   co-access when it precedes the first confirmation, `Active` on each
-   confirmation; the S3 handoff, with suspected traffic only, stays
-   `Candidate` (the fixture: active, unconfirmed). The self-notes channel
-   is listed (the fixture hid it while the merge stands).
+1. **Discovery** follows the channel-semantics rule, as the fixture's
+   did: a discovered channel is created by the first cross-agent
+   transmission through its seed, when it opens, and seeded by it. Its id
+   is minted before traffic is generated (traffic is routed by it), at the
+   start of the channel's planned traffic window (`Draft::created`), so
+   the id's time is that, not the discovery's.
+2. **A discovered channel holds one resource.** The fixture's discovered
+   channels held several (the hijacked wiki three pages, the pastebin
+   three pastes, the memory server three tools, team notes and the handoff
+   directory two each). On `integration/impl` a discovered channel holds
+   exactly its seed and a resource joins a channel only through a declared
+   pattern, so each other resource would discover a channel of its own.
+   The world keeps each one's first locator as its seed and drops the
+   rest. Declared channels keep all their resources.
+3. **Detection.** `Active` from discovery (a declared channel `InUse` at
+   its first cross-agent transmission), kept active by every transmission
+   that opens or is confirmed; `Dormant` a day after a dormant channel's
+   last one. As in the fixture, the S3 handoff is active and listed
+   unconfirmed, and the self-notes channel is hidden while the merge
+   stands; the scratch entry is a resource on no channel.
 4. **Remap threshold 0.65, not 0.8.** The memory catalog's lineage
    similarity is the clamped cosine; the fixture's was `(cos + 1) / 2`.
    0.65 keeps the outcome: only v1's "Engineering chatter" is unmapped.
@@ -207,7 +231,8 @@ Where `integration/impl`'s spec differs from the UI's, the world follows
     characters.
 12. **Dead letters.** The `EdgeUpdated` letter's bucket is five minutes
     (the fixture used an hour); the `AccessRecorded` letter names the
-    channel the lookup named at the time.
+    channel the lookup named at the time (none for a resource on no
+    channel).
 
 ## Gap list: fixture reads with no store or spec trait
 
@@ -220,8 +245,8 @@ seed does not work around any of them.
 | --- | --- | --- | --- | --- |
 | 1 | A transmission's topic under a version (`TxRecord::assignment`) | `transmissions_by_id` (`TopicUnder`), `edge_transmissions` rows, the transmissions export's topic column | No read of a stored assignment. `TopicLifecycle::assign` writes it; `TopicCatalog` reads only sizes. The memory search index and edge store reach it through `InMemoryTopicCatalog::assignment`, an inherent method behind the memory-only `TopicVersions` trait. | `TopicCatalog::assignments(version, ids: &IdBatch<TransmissionId>) -> BTreeMap<TransmissionId, StoredAssignment>` (`VersionNotRetained` for a dropped version) |
 | 2 | A span's location (`Blobs::span`) | `transmission_evidence`: the sender-side excerpt of every content match | No span store. `FingerprintIndex` keeps fingerprints only; nothing records an `OriginatedSpan` (its location) for reading back. | L4 `SpanStore`: `record(span: OriginatedSpan)` (the provenance consumer's write) and `spans(ids: &IdBatch<SpanId>) -> BTreeMap<SpanId, OriginatedSpan>` |
-| 3 | An access and its resource by id (`World::access`, `World::resource`) | `transmission_evidence`'s `AccessDetail` for co-access evidence; a discovered channel's seed access and when it happened | `ChannelTraffic::record_access` stores accesses, but `ChannelReads` reads only channels; a resource is readable only inside a windowed `resource_use` page. | `ChannelReads::accesses(ids: &IdBatch<AccessId>) -> BTreeMap<AccessId, (Access, Resource)>` |
-| 4 | Transmissions by state, channel and window (`World::transmissions`) | Verdicts and quality rows over unconfirmed transmissions (`verdict_rows` export of a verdict on a suspected one), a review queue of suspected transmissions, the channel-semantics port's `channel_transmissions` and `CrossTraffic` | `TransmissionStore` reads one id. `EdgeStore::transmissions` drills into an edge, which holds aggregated confirmed transmissions only. | `TransmissionStore::list(query: TransmissionQuery { window, states, channel }, page: &PageRequest<TransmissionList>) -> Page<Transmission, TransmissionList>` (channel resolved through `ChannelDirectory`) |
+| 3 | An access and its resource by id (`World::access`, `World::resource`) | `transmission_evidence`'s `AccessDetail` for co-access evidence | `ChannelTraffic::record_access` stores accesses, but `ChannelReads` reads only channels and their transmissions; a resource is readable only inside a windowed `resource_use` page. | `ChannelReads::accesses(ids: &IdBatch<AccessId>) -> BTreeMap<AccessId, (Access, Resource)>` |
+| 4 | Transmissions by state, channel and window (`World::transmissions`) | Verdicts and quality rows over unconfirmed transmissions (`verdict_rows` export of a verdict on a suspected one), a review queue of suspected transmissions across channels (one channel's is `ChannelReads::transmissions`) | `TransmissionStore` reads one id. `EdgeStore::transmissions` drills into an edge, which holds aggregated confirmed transmissions only. | `TransmissionStore::list(query: TransmissionQuery { window, states, channel }, page: &PageRequest<TransmissionList>) -> Page<Transmission, TransmissionList>` (channel resolved through `ChannelDirectory`) |
 | 5 | Content retention dropping a body (`Blobs::drop_body`) | Seeding the dropped-bodies scenario; retention itself | `BlobStore` has `put` and `get`, no delete, and no content retention is specified. The seed never stores those bodies (a `get` of `None` is "dropped by retention" by the spec's definition). | `BlobStore::drop(hash)`, or an L2 `ContentRetention::enforce(now) -> Vec<MessageHash>` |
 | 6 | The configured sinks, built-in rules and retention as config loads (`config::record`) | Seeding config through writes; config reloads | Only operators load through a trait (`OperatorStore::load`, audited in one transaction). Sinks, built-in rule status and sinks, topic retention and frame retention are store constructor config; their `ConfigChange` entries are appended to the audit log separately, so a load and its entries are not one transaction. | A config-load trait per area mirroring `OperatorStore::load`: `SinkRegistry::load(sinks, hash, at)`, `AlertRuleStore::provision(builtins, hash, at)`, `TopicCatalog::set_retention(policy, hash, at)`, each returning its `ConfigChange`s and appending them in its transaction |
 
@@ -231,20 +256,24 @@ nodes with the defaults (no labels, claims or policies). A `NodeFacts`
 cache fed by L3's and L5's events (as the spec describes it) is wiring
 work for `crosstalk-surface` or the gateway.
 
-## Tests waiting for the channel-semantics port
+## Channel-semantics tests
 
-In `tests/channels.rs`, each `#[ignore = "waits for the channel-semantics port"]`;
-the facts they read are seeded today:
+In `tests/channels.rs`, once marked to wait for the channel-semantics port
+and now run as written:
 
 - `the_scratch_entry_one_agent_uses_is_no_channel`
 - `the_unconfirmed_s3_handoff_is_active`
 - `the_channel_hidden_by_a_merge_is_not_listed`
 - `discovered_channels_are_seeded_by_a_cross_agent_transmission`
 
-When the port lands, discovery moves to the first cross-agent
-transmission (`ChannelRegistry::discover(resource, transmission, at)`), the
-scratch entry's channel and `ChannelKey::Scratch` go, and these tests are
-updated to the port's reads (`Listing`, `CrossTraffic`).
+Added with the port: the hijacked wiki discovered from its one page, the
+scratch entry's lookup (`NoChannel`), every channel's `Listing`, the S3
+handoff's review list (`ChannelReads::transmissions`), and each discovered
+channel created when its seed transmission opened.
+
+`the_hijacked_wiki_is_discovered_and_holds_its_three_pages` is ignored: it
+expects a discovered channel with two resources besides its seed, which
+the semantics rule out (see divergence 2).
 
 ## Invariants and constraints
 
@@ -258,6 +287,11 @@ updated to the port's reads (`Listing`, `CrossTraffic`).
   seedings list by list); another seed gives another world.
 - **Ids carry their time.** Every minted id is a ULID whose time is its
   entity's (`Mint`, one seeded `UlidGenerator` per id).
+- **Channels follow cross-agent traffic.** A discovered channel is
+  created only by `ChannelTraffic::discover`, at its first cross-agent
+  transmission, and holds exactly its seed; a resource only one agent uses
+  is never a channel; projection frames hold no transmission within one
+  agent.
 - **Every value through the spec's checked constructors**; a refusal is
   `WorldError::Invalid`. A store's refusal is `WorldError::Store` with the
   trait's typed error (`StoreError`); a store answering differently from
@@ -287,7 +321,7 @@ updated to the port's reads (`Listing`, `CrossTraffic`).
 | `crates/world/src/rng.rs`, `text/` | SplitMix64; message templates and codecs (ported verbatim) | `Rng`, `Theme`, `paragraph`, `sentence` |
 | `crates/world/src/generate/` | Generation: `times`, `agents`, `drafts`, `channels`, `topics`, `traffic`, `states`, `evidence`, `bodies`, `retention`, `rules` | `generate`, `Generated`, `Cast`, `ChannelPlan`, `TopicModel`, `Traffic`, `TxRecord`, `Blobs` |
 | `crates/world/src/script/` | The script's ops and ordering | `Script`, `Step`, `Op`, `AlertKey`, `RuleRef` |
-| `crates/world/src/assemble/` | Generated data to steps: `config`, `agents`, `channels`, `transmissions`, `alerts`, `surface` | `assemble`, `Assembled` |
+| `crates/world/src/assemble/` | Generated data to steps: `config`, `agents`, `channels` (placement and discovery), `transmissions`, `alerts`, `surface` | `assemble`, `Assembled`, `Placement`, `Seeding`, `promotion` |
 | `crates/world/src/run/` | The runner: one module per area of writes; the ledger and alert book | (crate) `Runner`, `Ledger` |
 | `crates/world/tests/support/` | The memory stores as `WorldStores` (with transport's blob store and the bus's dead letters), one shared seeded world per binary, whole-list reads | `MemoryWorld`, `seed`, `shared`, `run`, `read::*` |
 | `crates/world/tests/*.rs` | Scenario tests through the read traits: `agents`, `channels`, `insight`, `history`; `generation` (the generated data, no stores) | — |

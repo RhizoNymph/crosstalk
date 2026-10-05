@@ -14,7 +14,7 @@ scopes are different evidence values.
 """
 
 [evidence]
-property = "crosstalk_reconstruct::tests::harness_ids_do_not_match_across_scopes"
+property = "crosstalk_reconstruct::tests::pg_props::harness_ids_do_not_match_across_scopes"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

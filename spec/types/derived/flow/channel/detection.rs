@@ -1,27 +1,39 @@
 //! Detection state of a channel: what its traffic shows.
 //!
+//! A channel's traffic is its cross-agent transmissions: transmissions
+//! routed through it whose sender and reader are different agents. A
+//! co-access opens one (a write by one agent, then a read by another,
+//! [`CoAccess`](crate::derived::flow::evidence::CoAccess)), and content
+//! evidence may confirm it later. Accesses alone are not traffic: a
+//! resource only one agent touches, or one written and never read by
+//! anyone else, is a resource, not a channel (`l5_flow`, "Discovery"), and
+//! a declared channel whose resources see only such accesses is still
+//! awaiting traffic.
+//!
 //! ```text
 //! declared:   AwaitingTraffic ─idle─▶ Unused
 //!                   │                   │
-//!                   └──── access ───────┴─▶ InUse(Observed)
+//!                   └── cross-agent ────┴─▶ InUse(Active)
+//!                       transmission
 //!
-//! traffic:    Observed ─cross access─▶ Candidate ─confirm─▶ Active ─idle─▶ Dormant
-//!                                          ▲                                 │
-//!                                          └────────── cross access ─────────┘
+//! traffic:    Active ─idle─▶ Dormant ─cross-agent transmission─▶ Active
 //! ```
 //!
-//! A cross access is a read by an agent other than an earlier writer.
+//! A discovered channel is created by its first cross-agent transmission,
+//! so it starts `Active`: no discovered channel ever has a state without
+//! traffic. A promoted channel keeps the `TrafficDetection` it had when it
+//! was discovered and continues on the traffic machine. A superseded
+//! channel's detection is frozen: a transmission whose stored route names
+//! it moves the detection of the channel that superseded it instead.
 //!
-//! A promoted channel keeps the `TrafficDetection` it had when it was
-//! discovered and continues on the traffic machine. A superseded channel's
-//! detection is frozen: a confirmation of a transmission whose stored route
-//! names it is a confirmation on the channel that superseded it, and moves
-//! that channel's detection (`confirm` above) instead.
+//! Whether any of that traffic is confirmed is a separate axis, decided at
+//! read time from the transmissions themselves, after merged agents
+//! resolve ([`confirmation`](super::confirmation)): detection says when a
+//! channel carried traffic, confirmation what evidence backs it.
 
 use serde::{Deserialize, Serialize};
 
-use crate::derived::flow::evidence::CoAccess;
-use crate::ids::{AccessId, TransmissionId};
+use crate::ids::TransmissionId;
 use crate::support::Timestamp;
 
 /// Detection for a channel declared before any traffic.
@@ -33,18 +45,19 @@ use crate::support::Timestamp;
     deny_unknown_fields
 )]
 pub enum DeclaredDetection {
-    /// No traffic yet, and the idle window has not closed.
+    /// No cross-agent transmission yet, and the idle window has not closed.
     AwaitingTraffic,
-    /// No traffic by the time the idle window closed. Flow publishes
-    /// `DeclaredChannelUnused` whatever the policy; the `SanctionedUnused`
-    /// alert rule (L6) checks whether the policy is sanctioned.
+    /// No cross-agent transmission by the time the idle window closed.
+    /// Flow publishes `DeclaredChannelUnused` whatever the policy; the
+    /// `SanctionedUnused` alert rule (L6) checks whether the policy is
+    /// sanctioned.
     Unused {
         since: Timestamp,
     },
     InUse(TrafficDetection),
 }
 
-/// Detection once a channel has traffic.
+/// Detection once a channel has cross-agent traffic.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(
     tag = "type",
@@ -53,20 +66,32 @@ pub enum DeclaredDetection {
     deny_unknown_fields
 )]
 pub enum TrafficDetection {
-    /// Accessed, but not yet written by one agent and read by another.
-    Observed { first_access: AccessId },
-    /// Written by one agent and read by another; no content match yet.
-    Candidate { first_cross_access: CoAccess },
-    /// At least one confirmed transmission.
+    /// A cross-agent transmission was opened or confirmed through it within
+    /// the idle window. `since` is when it last became active: its first
+    /// cross-agent transmission, or the one that ended a dormant spell.
     Active {
         since: Timestamp,
         last_transmission: TransmissionId,
     },
-    /// Was active; no confirmed transmission within the idle window.
+    /// Was active; no cross-agent transmission within the idle window.
     Dormant {
         since: Timestamp,
         last_transmission: TransmissionId,
     },
+}
+
+impl TrafficDetection {
+    /// The last cross-agent transmission opened or confirmed through it.
+    pub fn last_transmission(&self) -> TransmissionId {
+        match self {
+            Self::Active {
+                last_transmission, ..
+            }
+            | Self::Dormant {
+                last_transmission, ..
+            } => *last_transmission,
+        }
+    }
 }
 
 /// Which detection state a channel is in, without its data: what a graph
@@ -76,8 +101,6 @@ pub enum TrafficDetection {
 pub enum DetectionKind {
     AwaitingTraffic,
     Unused,
-    Observed,
-    Candidate,
     Active,
     Dormant,
 }
@@ -85,8 +108,6 @@ pub enum DetectionKind {
 impl DetectionKind {
     pub fn of_traffic(detection: &TrafficDetection) -> Self {
         match detection {
-            TrafficDetection::Observed { .. } => Self::Observed,
-            TrafficDetection::Candidate { .. } => Self::Candidate,
             TrafficDetection::Active { .. } => Self::Active,
             TrafficDetection::Dormant { .. } => Self::Dormant,
         }

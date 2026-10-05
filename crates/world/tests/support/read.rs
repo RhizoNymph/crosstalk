@@ -53,12 +53,13 @@ pub async fn agents(seeded: &Seeded) -> Result<Vec<AgentProfile>, String> {
 }
 
 pub async fn channels(seeded: &Seeded, filter: ChannelFilter) -> Result<Vec<Channel>, String> {
-    collect(|page| {
+    let listed = collect(|page| {
         let store = seeded.stores.channels.clone();
         let filter = filter.clone();
         async move { store.channels(&filter, &page).await }
     })
-    .await
+    .await?;
+    Ok(listed.into_iter().map(|read| read.into_parts().0).collect())
 }
 
 pub async fn alerts(seeded: &Seeded) -> Result<Vec<Alert>, String> {

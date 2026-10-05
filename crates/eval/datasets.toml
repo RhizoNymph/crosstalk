@@ -8,3 +8,9 @@ path = "collusion-wiki"
 
 [datasets.swarm-traces]
 path = "swarm-traces"
+
+[datasets.agentdojo]
+path = "agentdojo"
+
+[datasets.tau2]
+path = "tau2-bench/data/tau2/results/final"

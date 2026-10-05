@@ -15,9 +15,10 @@ use crosstalk_spec::aggregates::node::{CanonicalOriginKind, CanonicalStateKind};
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::aggregates::topic_history::TopicVersionHistory;
 use crosstalk_spec::aliases::Aliases;
+use crosstalk_spec::derived::flow::channel::confirmation::{Confirmation, Listing};
 use crosstalk_spec::derived::flow::channel::detection::DetectionKind;
 use crosstalk_spec::derived::flow::channel::policy::PolicyKind;
-use crosstalk_spec::ids::{AgentId, ChannelId, TopicId};
+use crosstalk_spec::ids::{AgentId, ChannelId, ResourceId, TopicId};
 use crosstalk_spec::interfaces::l3_reconstruction::AgentDirectory;
 use crosstalk_spec::interfaces::l5_flow::ChannelDirectory;
 use crosstalk_spec::interfaces::l7_topology::{AgentFacts, ChannelFacts, NodeFacts};
@@ -34,7 +35,9 @@ pub fn agent_facts(facts: &impl NodeFacts, canonical: AgentId) -> AgentFacts {
 }
 
 /// `canonical`'s facts from `facts`, or the default for a channel it has not
-/// seen: a discovered, observed, unreviewed channel summarized by its id.
+/// seen: a discovered, active, unreviewed channel listed as confirmed,
+/// summarized by its id (only a transmission edge draws such a channel; its
+/// accesses are not drawn).
 pub fn channel_facts(facts: &impl NodeFacts, canonical: ChannelId) -> ChannelFacts {
     facts
         .channel(canonical)
@@ -57,7 +60,15 @@ pub trait TopologyEnv: Send + Sync {
 
     fn agent(&self, canonical: AgentId) -> AgentFacts;
 
+    /// `canonical`'s facts, with the defaults for an unseen channel.
     fn channel(&self, canonical: ChannelId) -> ChannelFacts;
+
+    /// `canonical`'s facts; `None` for a channel the facts have not seen.
+    fn known_channel(&self, canonical: ChannelId) -> Option<ChannelFacts>;
+
+    /// The canonical channel holding `resource` now; `None` for a resource
+    /// on no channel (`NodeFacts::channel_of`).
+    fn channel_of(&self, resource: ResourceId) -> Option<ChannelId>;
 }
 
 /// A [`TopologyEnv`] from its parts.
@@ -101,6 +112,16 @@ where
     fn channel(&self, canonical: ChannelId) -> ChannelFacts {
         channel_facts(&self.nodes, canonical)
     }
+
+    fn known_channel(&self, canonical: ChannelId) -> Option<ChannelFacts> {
+        self.nodes.channel(canonical)
+    }
+
+    fn channel_of(&self, resource: ResourceId) -> Option<ChannelId> {
+        self.nodes
+            .channel_of(resource)
+            .map(|channel| ChannelDirectory::canonical(&self.directory, channel))
+    }
 }
 
 /// An environment's resolution as the spec's [`Aliases`].
@@ -137,6 +158,7 @@ pub struct StaticNodes {
 struct NodeTables {
     agents: BTreeMap<AgentId, AgentFacts>,
     channels: BTreeMap<ChannelId, ChannelFacts>,
+    resources: BTreeMap<ResourceId, ChannelId>,
 }
 
 impl StaticNodes {
@@ -164,6 +186,15 @@ impl StaticNodes {
     pub fn set_channel(&self, channel: ChannelId, description: ChannelFacts) {
         lock(&self.state).channels.insert(channel, description);
     }
+
+    /// `resource` is now held on `channel` (`None`: on no channel).
+    pub fn set_resource(&self, resource: ResourceId, channel: Option<ChannelId>) {
+        let mut tables = lock(&self.state);
+        match channel {
+            Some(channel) => tables.resources.insert(resource, channel),
+            None => tables.resources.remove(&resource),
+        };
+    }
 }
 
 fn default_agent() -> AgentFacts {
@@ -188,9 +219,10 @@ fn default_channel(canonical: ChannelId) -> ChannelFacts {
     ChannelFacts {
         label: None,
         origin: CanonicalOriginKind::Discovered,
-        detection: DetectionKind::Observed,
+        detection: DetectionKind::Active,
         policy: PolicyKind::Unreviewed,
         locator_summary: default_summary(canonical),
+        listing: Listing::Channel(Confirmation::Confirmed),
     }
 }
 
@@ -201,5 +233,9 @@ impl NodeFacts for StaticNodes {
 
     fn channel(&self, canonical: ChannelId) -> Option<ChannelFacts> {
         lock(&self.state).channels.get(&canonical).cloned()
+    }
+
+    fn channel_of(&self, resource: ResourceId) -> Option<ChannelId> {
+        lock(&self.state).resources.get(&resource).copied()
     }
 }

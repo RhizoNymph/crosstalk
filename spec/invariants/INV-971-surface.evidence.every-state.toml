@@ -1,0 +1,21 @@
+[invariant]
+id = "surface.evidence.every-state"
+statement = "QueryApi::transmission_evidence returns Some for every stored transmission in every TransmissionState, holding an AccessDetail for both accesses of each CoAccess its state holds (AwaitingContent's one, Suspected's and Discarded's, and Confirmed::co_access in Confirmed, Classified and Aggregated) read through AccessStore::accesses, and a MatchEvidence per content match in the confirmed states; a Detected transmission, which has no co-access and no content yet, has both lists empty."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Suspected and discarded transmissions are exactly the ones an operator
+must judge on access evidence alone (their verdicts are the detector's
+negatives in detection quality), so their evidence page must show who
+wrote and who read the resource, not an empty page. Assembly already lists
+both accesses of each co-access in every state
+(surface.evidence.follows-transmission); this invariant is the query: it
+reads them for every state, through the batch read, and refuses no state.
+"""
+
+[evidence]
+unit = "crosstalk_surface::tests::evidence_for_every_transmission_state"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

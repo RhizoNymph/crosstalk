@@ -3,7 +3,7 @@
 use crosstalk_spec::aggregates::edge::TopologyFilter;
 use crosstalk_spec::aggregates::filter::TopicVersionSelector;
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
-use crosstalk_spec::derived::flow::transmission::{Transmission, TransmissionState};
+use crosstalk_spec::derived::flow::transmission::{Crossing, Transmission, TransmissionState};
 use crosstalk_spec::derived::flow::verdict::Verdict;
 use crosstalk_spec::ids::TransmissionId;
 use crosstalk_spec::interfaces::l5_flow::transmissions::TransmissionStore;
@@ -173,13 +173,18 @@ impl<S: SurfaceStores> Surface<S> {
             let Some(transmission) = self.stores.transmissions().transmission(id).await? else {
                 continue;
             };
+            if transmission.crossing(aliases) == Crossing::WithinOneAgent {
+                // `TransmissionSummary::listed` leaves it out: its agents
+                // have since merged into one.
+                continue;
+            }
             if rows.len() == size {
                 more = true;
                 break;
             }
             let verdict = self.current_verdict(&transmission).await?;
             let topic = topic_under(&transmission, version);
-            rows.push(TransmissionSummary::of(
+            rows.extend(TransmissionSummary::listed(
                 &transmission,
                 aliases,
                 |_| verdict,

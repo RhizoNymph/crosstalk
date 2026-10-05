@@ -130,6 +130,10 @@ pub enum SourceError {
     Swarm(#[from] Box<crate::datasets::swarm::SwarmError>),
     #[error(transparent)]
     Corpus(#[from] CorpusError),
+    #[error(transparent)]
+    AgentDojo(#[from] crate::datasets::agentdojo::AgentDojoError),
+    #[error(transparent)]
+    Tau2(#[from] crate::datasets::tau2::Tau2Error),
 }
 
 /// A dataset as a stream of worlds.

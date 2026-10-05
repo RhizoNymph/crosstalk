@@ -18,8 +18,8 @@ use std::sync::Arc;
 use crosstalk_spec::aggregates::edge::{EdgeKey, TopicSlot, TopologyFilter};
 use crosstalk_spec::aggregates::projection::frame::{FrameHeader, ProjectionFrame};
 use crosstalk_spec::aggregates::projection::{
-    FitFailure, PointRoute, ProjectedPoint, ProjectionInfo, ProjectionLimit, ProjectionParams,
-    ProjectionSpec,
+    FitFailure, PointParts, PointRoute, ProjectedPoint, ProjectionInfo, ProjectionLimit,
+    ProjectionParams, ProjectionSpec,
 };
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::aggregates::watermark::PipelineFrontier;
@@ -44,7 +44,7 @@ use crate::scenario::{ChannelKey, JobKey};
 use crate::script::{Op, Script};
 use crate::text::Theme;
 
-use super::channels::promotion;
+use super::channels::{Placement, promotion};
 
 pub fn bodies(generated: &Generated, script: &mut Script) {
     for (hash, body) in generated.traffic.blobs.clone().into_bodies() {
@@ -216,8 +216,11 @@ fn frame(
         .iter()
         .filter(|t| t.classification().is_some())
         .filter(|t| {
-            t.confirmed()
-                .is_some_and(|c| spec.window().contains(c.at()))
+            t.confirmed().is_some_and(|c| {
+                spec.window().contains(c.at())
+                    // No projection holds a transmission within one agent.
+                    && canonical(generated, c.from(), at) != canonical(generated, t.transmission.to, at)
+            })
         })
         .collect();
     let matching = u64::try_from(admitted.len()).map_err(|e| WorldError::invalid("matching", e))?;
@@ -246,7 +249,7 @@ fn frame(
             Route::Channel(channel) => Route::Channel(promotion.canonical(*channel, at)),
             other => other.clone(),
         };
-        points.push(ProjectedPoint {
+        let point = ProjectedPoint::new(PointParts {
             transmission: record.id(),
             from: canonical(generated, confirmed.from(), at),
             to: canonical(generated, record.transmission.to, at),
@@ -255,7 +258,9 @@ fn frame(
             confirmed_at: confirmed.at(),
             x: Finite::new(x as f32).map_err(|e| WorldError::invalid("x", e))?,
             y: Finite::new(y as f32).map_err(|e| WorldError::invalid("y", e))?,
-        });
+        })
+        .map_err(|e| WorldError::invalid("ProjectedPoint", e))?;
+        points.push(point);
     }
     let header = FrameHeader {
         projection: job.id(),
@@ -292,6 +297,7 @@ fn canonical(generated: &Generated, agent: AgentId, at: Timestamp) -> AgentId {
 /// Four deliveries that ran out of retries, one per consumer group.
 pub fn letters(
     generated: &Generated,
+    placement: &Placement,
     anchor: Anchor,
     script: &mut Script,
 ) -> Result<(), WorldError> {
@@ -392,18 +398,10 @@ pub fn letters(
         script,
     )?;
 
-    let promotion = promotion(generated)?;
-    let recorded = generated
-        .traffic
-        .accesses
-        .iter()
-        .rev()
-        .nth(3)
-        .and_then(|access| {
-            let channel = *generated.traffic.resource_channel.get(&access.resource)?;
-            Some((access, promotion.canonical(channel, access.at)))
-        });
-    if let Some((access, channel)) = recorded {
+    let recorded = generated.traffic.accesses.iter().rev().nth(3);
+    if let Some(access) = recorded {
+        // The channel the lookup named when it was recorded, or none.
+        let channel = placement.channel_at(access.resource, access.at);
         letter(
             access.at,
             "flow",

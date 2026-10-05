@@ -5,6 +5,12 @@
 //! ct-eval truth --dataset salt [--root DIR] [--limit N] [--include TEXT]… [--out FILE]
 //! ```
 //!
+//! `--dataset` is `salt`, `agentdojo`, `tau2`, `wiki` (collusion-wiki) or
+//! `swarm` (swarm-traces). For the wiki, `--family`, `--wiki`,
+//! `--min-agents` and `--max-agents` select worlds. For AgentDojo, `--include
+//! pipeline=…`, `suite=…`, `attack=…` and `task=…` match a path component
+//! exactly, and `run` also prints how the injections arrived.
+//!
 //! `run` prints the table, writes `report.json` and `report.txt` to `--out`,
 //! and exits 2 when a gate fails. `truth` writes the labels as JSONL.
 
@@ -16,11 +22,14 @@ use std::process::ExitCode;
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use crosstalk_eval::config::EvalConfig;
-use crosstalk_eval::corpus::TraceSource;
+use crosstalk_eval::corpus::{SourceError, TraceSource, World};
+use crosstalk_eval::datasets::agentdojo::{self, AgentDojoSource};
 use crosstalk_eval::datasets::salt::{SaltSource, Selection};
 use crosstalk_eval::datasets::swarm::{SwarmSelection, SwarmSource};
+use crosstalk_eval::datasets::tau2::{self, Tau2Source};
 use crosstalk_eval::datasets::wiki::{WikiSelection, WikiSource};
 use crosstalk_eval::gateway::PipelineDetector;
+use crosstalk_eval::keys::DatasetId;
 use crosstalk_eval::pipeline::{Detector, ReferenceDetector, run};
 use crosstalk_eval::reference::ReferenceConfig;
 use crosstalk_eval::report::table::render;
@@ -46,6 +55,8 @@ enum Command {
 #[derive(Clone, Copy, ValueEnum)]
 enum Dataset {
     Salt,
+    Agentdojo,
+    Tau2,
     /// collusion-wiki: public wikis as dead drops.
     Wiki,
     /// swarm-traces: the decoder corpus.
@@ -56,9 +67,43 @@ impl Dataset {
     fn name(self) -> &'static str {
         match self {
             Self::Salt => "salt",
+            Self::Agentdojo => "agentdojo",
+            Self::Tau2 => "tau2",
             Self::Wiki => crosstalk_eval::datasets::wiki::DATASET,
             Self::Swarm => crosstalk_eval::datasets::swarm::DATASET,
         }
+    }
+}
+
+/// Any dataset's source.
+enum AnySource {
+    Salt(SaltSource),
+    AgentDojo(AgentDojoSource),
+    Tau2(Tau2Source),
+    Wiki(WikiSource),
+    Swarm(SwarmSource),
+}
+
+impl TraceSource for AnySource {
+    fn id(&self) -> DatasetId {
+        match self {
+            Self::Salt(source) => source.id(),
+            Self::AgentDojo(source) => source.id(),
+            Self::Tau2(source) => source.id(),
+            Self::Wiki(source) => source.id(),
+            Self::Swarm(source) => source.id(),
+        }
+    }
+
+    fn worlds(&mut self) -> impl Iterator<Item = Result<World, SourceError>> + '_ {
+        let worlds: Box<dyn Iterator<Item = Result<World, SourceError>> + '_> = match self {
+            Self::Salt(source) => Box::new(source.worlds()),
+            Self::AgentDojo(source) => Box::new(source.worlds()),
+            Self::Tau2(source) => Box::new(source.worlds()),
+            Self::Wiki(source) => Box::new(source.worlds()),
+            Self::Swarm(source) => Box::new(source.worlds()),
+        };
+        worlds
     }
 }
 
@@ -73,10 +118,10 @@ struct SourceArgs {
     #[arg(long)]
     config: Option<PathBuf>,
     /// Read at most this many worlds (SALT: trace files, stratified across
-    /// conditions; wiki/swarm: worlds, largest first for wiki).
+    /// conditions; wiki: worlds, largest first).
     #[arg(long)]
     limit: Option<usize>,
-    /// SALT: keep only files whose path contains this (repeatable).
+    /// Keep only files whose path contains this (repeatable).
     #[arg(long)]
     include: Vec<String>,
     /// Wiki: keep only pages in these task clusters, e.g. relay-coordination
@@ -165,9 +210,9 @@ fn crate_file(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join(name)
 }
 
-fn dataset_root(args: &SourceArgs) -> Result<PathBuf> {
-    match &args.root {
-        Some(root) => Ok(root.clone()),
+fn open_source(args: &SourceArgs) -> Result<AnySource> {
+    let root = match &args.root {
+        Some(root) => root.clone(),
         None => {
             let path = args
                 .config
@@ -179,50 +224,55 @@ fn dataset_root(args: &SourceArgs) -> Result<PathBuf> {
                 EvalConfig::default()
             };
             let home = std::env::var_os("HOME").map(PathBuf::from);
-            Ok(config.dataset_root(args.dataset.name(), home.as_deref())?)
+            config.dataset_root(args.dataset.name(), home.as_deref())?
         }
-    }
-}
-
-fn open_salt(args: &SourceArgs) -> Result<SaltSource> {
-    let root = dataset_root(args)?;
+    };
     let selection = Selection {
         limit: args.limit,
         include: args.include.clone(),
     };
-    SaltSource::open(&root, &selection)
-        .with_context(|| format!("opening SALT at {}", root.display()))
-}
-
-fn open_wiki(args: &SourceArgs) -> Result<WikiSource> {
-    let root = dataset_root(args)?;
-    let selection = WikiSelection {
-        families: args.family.clone(),
-        wikis: args.wiki.clone(),
-        min_agents: args.min_agents,
-        max_agents: args.max_agents,
-        limit: args.limit,
-    };
-    WikiSource::open(&root, &selection)
-        .with_context(|| format!("opening collusion-wiki at {}", root.display()))
-}
-
-fn open_swarm(args: &SourceArgs) -> Result<SwarmSource> {
-    let root = dataset_root(args)?;
-    let selection = SwarmSelection { limit: args.limit };
-    SwarmSource::open(&root, &selection)
-        .with_context(|| format!("opening swarm-traces at {}", root.display()))
-}
-
-fn run_command(args: RunArgs) -> Result<ExitCode> {
-    match args.source.dataset {
-        Dataset::Salt => run_source(open_salt(&args.source)?, args),
-        Dataset::Wiki => run_source(open_wiki(&args.source)?, args),
-        Dataset::Swarm => run_source(open_swarm(&args.source)?, args),
+    match args.dataset {
+        Dataset::Salt => SaltSource::open(&root, &selection)
+            .map(AnySource::Salt)
+            .with_context(|| format!("opening SALT at {}", root.display())),
+        Dataset::Agentdojo => AgentDojoSource::open(
+            &root,
+            &agentdojo::Selection {
+                limit: selection.limit,
+                include: selection.include,
+            },
+        )
+        .map(AnySource::AgentDojo)
+        .with_context(|| format!("opening AgentDojo at {}", root.display())),
+        Dataset::Tau2 => Tau2Source::open(
+            &root,
+            &tau2::Selection {
+                limit: selection.limit,
+                include: selection.include,
+            },
+        )
+        .map(AnySource::Tau2)
+        .with_context(|| format!("opening τ²-bench at {}", root.display())),
+        Dataset::Wiki => WikiSource::open(
+            &root,
+            &WikiSelection {
+                families: args.family.clone(),
+                wikis: args.wiki.clone(),
+                min_agents: args.min_agents,
+                max_agents: args.max_agents,
+                limit: args.limit,
+            },
+        )
+        .map(AnySource::Wiki)
+        .with_context(|| format!("opening collusion-wiki at {}", root.display())),
+        Dataset::Swarm => SwarmSource::open(&root, &SwarmSelection { limit: args.limit })
+            .map(AnySource::Swarm)
+            .with_context(|| format!("opening swarm-traces at {}", root.display())),
     }
 }
 
-fn run_source<S: TraceSource>(mut source: S, args: RunArgs) -> Result<ExitCode> {
+fn run_command(args: RunArgs) -> Result<ExitCode> {
+    let mut source = open_source(&args.source)?;
     let gates_path = args
         .gates
         .clone()
@@ -257,7 +307,11 @@ fn run_source<S: TraceSource>(mut source: S, args: RunArgs) -> Result<ExitCode> 
         failures,
         summary.unscored,
     );
-    let table = render(&report);
+    let mut table = render(&report);
+    if let AnySource::AgentDojo(source) = &source {
+        table.push('\n');
+        table.push_str(&source.tally().to_string());
+    }
     print!("{table}");
     if let Some(out) = &args.out {
         fs::create_dir_all(out).with_context(|| format!("creating {}", out.display()))?;
@@ -273,14 +327,7 @@ fn run_source<S: TraceSource>(mut source: S, args: RunArgs) -> Result<ExitCode> 
 }
 
 fn truth_command(args: TruthArgs) -> Result<ExitCode> {
-    match args.source.dataset {
-        Dataset::Salt => truth_source(open_salt(&args.source)?, &args),
-        Dataset::Wiki => truth_source(open_wiki(&args.source)?, &args),
-        Dataset::Swarm => truth_source(open_swarm(&args.source)?, &args),
-    }
-}
-
-fn truth_source<S: TraceSource>(mut source: S, args: &TruthArgs) -> Result<ExitCode> {
+    let mut source = open_source(&args.source)?;
     let mut out: Box<dyn Write> = match &args.out {
         Some(path) => Box::new(BufWriter::new(
             File::create(path).with_context(|| format!("creating {}", path.display()))?,

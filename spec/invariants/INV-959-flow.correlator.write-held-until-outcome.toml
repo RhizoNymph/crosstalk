@@ -1,0 +1,35 @@
+[invariant]
+id = "flow.correlator.write-held-until-outcome"
+statement = "The flow consumer hands a write to Correlator::on_access only once its WriteOutcome is final, when the call's ToolResult arrives or, failing that, at the first tick at or after CorrelationTiming::write_settles_at of the call's exchange time as WriteOutcome::Unknown, so no transmission holds a CoAccess whose write's result is ToolOutcome::Error or a rejection its tool's content rule reads, in any order of processing the result, the read, the content match and the ticks."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+Writes are extracted from the call, and the call's result arrives later,
+usually in the writer's next request of the conversation (in the same
+response for a server tool). A reader's read can be processed in between.
+If the correlator paired the write as soon as it saw the call, a rejected
+write would already have opened an AwaitingContent or Suspected
+transmission by the time its error arrived, and no TransmissionUpdate takes
+a co-access back out. So the write is held, unpaired and unrecorded, until
+its outcome is known.
+
+A result that never arrives must not hold the write forever: the agent may
+have stopped, or the harness dropped the result. Since a result normally
+arrives with the conversation's next exchange, a write still held when the
+correlator's settle window closes is one whose conversation had no later
+exchange carrying its result, and it is released as Unknown, which pairs
+at lower confidence. Releasing by write_settles_at (the write's time plus
+settle_after) keeps every confirmation the released write leads to inside
+the bound L7's watermark relies on: the read is after the write, and the
+write is after the previous tick minus settle_after. A result arriving after
+the release changes nothing; the access was recorded once.
+"""
+
+[evidence]
+dst = [
+    "crosstalk_flow::dst::rejected_write_never_pairs",
+    "crosstalk_flow::dst::write_without_result_settles_unknown",
+]
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

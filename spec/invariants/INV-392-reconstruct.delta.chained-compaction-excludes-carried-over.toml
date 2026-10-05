@@ -14,7 +14,7 @@ the second time and its matches would be reported again.
 """
 
 [evidence]
-property = "crosstalk_reconstruct::tests::chained_compaction_excludes_carried_over"
+property = "crosstalk_reconstruct::tests::thread_props::chained_compaction_excludes_carried_over"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

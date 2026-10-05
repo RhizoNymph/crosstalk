@@ -112,6 +112,7 @@ fn every_route() -> Vec<Route> {
             | Route::ChannelNames
             | Route::PromotionPreview
             | Route::ChannelResources
+            | Route::ChannelTransmissions
             | Route::Agents
             | Route::Agent
             | Route::AgentNames
@@ -414,6 +415,11 @@ fn paths_resolve_to_their_route_or_none() {
             Method::Get,
             format!("/channels/{id}/resources"),
             Some(Target::Route(Route::ChannelResources)),
+        ),
+        (
+            Method::Get,
+            format!("/channels/{id}/transmissions"),
+            Some(Target::Route(Route::ChannelTransmissions)),
         ),
         (
             Method::Get,

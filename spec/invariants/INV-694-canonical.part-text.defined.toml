@@ -1,6 +1,6 @@
 [invariant]
 id = "canonical.part-text.defined"
-statement = "Message::part_text returns a text part's text, visible reasoning's text, a tool call's argument text (canonical JSON or the invalid text kept), and a tool result's Text contents joined with TOOL_RESULT_SEPARATOR; NotText for opaque reasoning, media, unknown blocks and a tool result without text; and NoSuchPart for an index past the last part."
+statement = "Message::part_text returns a text part's text, visible reasoning's text, a tool call's argument text (canonical JSON or the invalid text kept), and a tool result's Text contents joined with TOOL_RESULT_SEPARATOR, never a tool-call id or a reasoning or tool-call signature; NotText for opaque reasoning, media, unknown blocks and a tool result without text; and NoSuchPart for an index past the last part."
 kind = "domain"
 property = "postcondition"
 requires = ["unit"]
@@ -8,7 +8,9 @@ rationale = """
 A span location is a part and a byte range, so the range only means
 something against one agreed text per part. Segmentation, fingerprinting,
 matching and the evidence page's excerpts all read this function, so they
-cut the same bytes.
+cut the same bytes. Opaque provider material (ids, signatures, opaque
+reasoning) is never part text, so it never becomes a span or a match
+(canonical.opaque.outside-part-text, provenance.decode.part-text-input).
 """
 
 [evidence]
@@ -17,6 +19,7 @@ unit = [
     "crosstalk_spec::tests::part_text::assistant_parts_index_text_reasoning_and_arguments",
     "crosstalk_spec::tests::part_text::tool_results_join_their_text_contents_and_skip_the_rest",
     "crosstalk_spec::tests::part_text::an_index_past_the_parts_names_no_part",
+    "crosstalk_spec::tests::part_text::ids_signatures_and_opaque_reasoning_are_not_part_text",
 ]
 
 [evidence-review]

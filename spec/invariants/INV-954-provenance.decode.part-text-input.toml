@@ -1,0 +1,29 @@
+[invariant]
+id = "provenance.decode.part-text-input"
+statement = "Every text provenance passes to Decoder::decode or Fingerprinter::fingerprints is a byte range of Message::part_text of a part it scans, or the text of a Decoded produced from such a text, and never a ToolCallId, a Reasoning::Opaque payload, a reasoning or tool-call signature, or an Unknown part's raw JSON."
+kind = "domain"
+property = "invariant"
+requires = ["property"]
+rationale = """
+The base64 and hex decoders find every decodable substring of what they
+are given. Given a tool-call id or a thought signature, they decode
+provider-shaped bytes that recur across every agent on that provider, and
+the decoded text then matches between agents that never communicated.
+Tool-call ids are the easy path to this mistake, because they sit beside
+the text in every ToolCall and ToolResult and in Gemini carry a base64
+thought signature after __thought__; tool-call signatures sit beside the
+arguments. Reading only part text, whose table in observed/message/text.rs
+excludes ids, signatures, opaque reasoning and unknown blocks, keeps
+decoder and fingerprinter input to what agents wrote and read. Spans are
+located in part text by construction
+(provenance.span.location-indexes-part-text), so with this rule changing
+only opaque fields changes no span, fingerprint or match beyond the
+message hashes that name the parts. Checked with spy decoders and a spy
+fingerprinter over generated deltas whose opaque fields hold base64.
+"""
+
+[evidence]
+property = "crosstalk_provenance::props::decoders_and_fingerprinter_read_only_part_text"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

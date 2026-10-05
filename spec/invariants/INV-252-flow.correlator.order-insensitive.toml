@@ -11,9 +11,9 @@ depend on arrival order would make detection nondeterministic under load.
 """
 
 [evidence]
-property = "crosstalk_flow::correlator::tests::evidence_order_permutations_agree"
-dst = "crosstalk_flow::dst::match_before_access_confirms"
+property = "crosstalk_flow::correlate::tests::props::evidence_order_permutations_agree"
+dst = "crosstalk_flow::consumer::tests::dst::match_before_access_confirms"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
-dst = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }
+dst = { agent = "true", human = "false" }

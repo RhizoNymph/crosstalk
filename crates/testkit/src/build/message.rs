@@ -47,6 +47,7 @@ pub fn tool_call(id: &str, name: &str, arguments: &serde_json::Value) -> Assista
         name: ToolName(name.to_owned()),
         arguments: ToolArguments::Json(CanonicalJson(arguments.to_string())),
         execution: ToolExecution::Client,
+        signature: None,
     })
 }
 

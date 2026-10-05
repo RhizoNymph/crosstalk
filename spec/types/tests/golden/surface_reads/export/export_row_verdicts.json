@@ -5,7 +5,10 @@
     "route_kind": "channel",
     "call": {
       "type": "content",
-      "data": "exact"
+      "data": {
+        "class": "exact",
+        "carrier": "tool_result"
+      }
     },
     "revision": 1,
     "verdict": "genuine",

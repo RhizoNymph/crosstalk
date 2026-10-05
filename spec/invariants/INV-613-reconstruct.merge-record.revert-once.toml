@@ -17,8 +17,8 @@ unit = [
     "crosstalk_spec::tests::agents::a_record_cannot_be_reverted_twice",
     "crosstalk_spec::tests::wire::observed::identity::merge_records_refuse_a_self_merge_and_a_second_reversal",
 ]
-integration = "crosstalk_reconstruct::tests::pg_unmerge_twice_conflicts"
+integration = "crosstalk_reconstruct::tests::pg_agents::pg_unmerge_twice_conflicts"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }
-integration = { agent = "false", human = "false" }
+integration = { agent = "true", human = "false" }

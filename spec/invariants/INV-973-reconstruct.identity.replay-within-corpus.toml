@@ -1,0 +1,24 @@
+[invariant]
+id = "reconstruct.identity.replay-within-corpus"
+statement = "The reconstruct consumer attributes an exchange whose ClientContext::ingress is IngressMode::Replay { corpus } only to agents first attributed exchanges replayed from the same corpus, attributes a live exchange only to agents first attributed live exchanges, and never merges two agents of different populations (live, or two corpora)."
+kind = "domain"
+property = "invariant"
+requires = ["property"]
+rationale = """
+Recorded datasets carry their own credentials, accounts and harness ids,
+often one shared test key for every trajectory, and the same system
+prompts live agents use. Without a partition a replayed exchange would
+resolve to a live agent holding equal evidence (or a prompt fingerprint
+would attach it to one), and two corpora sharing a test key would merge
+into one agent, inventing communication between populations that never
+met. Within one corpus the usual rules apply. The evidence values are
+unchanged; the consumer keeps the populations apart around
+IdentityResolver::resolve, whose signature takes no population (P4.1
+chooses how).
+"""
+
+[evidence]
+property = "crosstalk_reconstruct::tests::replayed_agents_stay_in_their_corpus"
+
+[evidence-review]
+property = { agent = "false", human = "false" }
