@@ -34,10 +34,27 @@ pub enum Outcome {
     Unjudged,
 }
 
+/// What evidence a positive label expects.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Expects {
+    /// A content match ([`Expectation::Transmission`]).
+    Content,
+    /// Access evidence only ([`Expectation::AccessOnly`], INV-963).
+    Access,
+}
+
+/// One positive label and the evidence it expects.
+#[derive(Debug, Clone, Copy)]
+pub struct Positive<'w> {
+    pub expected: &'w ExpectedTransmission,
+    pub expects: Expects,
+}
+
 /// One world's labels, indexed for judging.
 pub struct Judge<'w> {
     coverage: Coverage,
-    positives: Vec<&'w ExpectedTransmission>,
+    positives: Vec<Positive<'w>>,
     by_reader: BTreeMap<(&'w AgentKey, ExchangeId), Vec<usize>>,
     negatives: Vec<&'w NegativeControl>,
     exemptions: Vec<&'w Exemption>,
@@ -50,7 +67,14 @@ impl<'w> Judge<'w> {
         let mut exemptions = Vec::new();
         for expectation in world.truth() {
             match expectation {
-                Expectation::Transmission(expected) => positives.push(expected),
+                Expectation::Transmission(expected) => positives.push(Positive {
+                    expected,
+                    expects: Expects::Content,
+                }),
+                Expectation::AccessOnly(expected) => positives.push(Positive {
+                    expected: expected.transmission(),
+                    expects: Expects::Access,
+                }),
                 Expectation::NoTransmission(control) => negatives.push(control),
                 Expectation::Unjudged(exemption) => exemptions.push(exemption),
                 Expectation::AgentCluster(_) => {}
@@ -58,8 +82,8 @@ impl<'w> Judge<'w> {
         }
         negatives.sort_by_key(|control| specificity(control));
         let mut by_reader: BTreeMap<(&AgentKey, ExchangeId), Vec<usize>> = BTreeMap::new();
-        for (at, expected) in positives.iter().enumerate() {
-            let label = expected.label();
+        for (at, positive) in positives.iter().enumerate() {
+            let label = positive.expected.label();
             by_reader
                 .entry((&label.to, label.reader_exchange))
                 .or_default()
@@ -74,7 +98,8 @@ impl<'w> Judge<'w> {
         }
     }
 
-    pub fn positives(&self) -> &[&'w ExpectedTransmission] {
+    /// Every positive label, content and access-only alike.
+    pub fn positives(&self) -> &[Positive<'w>] {
         &self.positives
     }
 
@@ -93,7 +118,7 @@ impl<'w> Judge<'w> {
             .unwrap_or_default()
             .iter()
             .copied()
-            .filter(move |&at| aligns(prediction, self.positives[at]))
+            .filter(move |&at| aligns(prediction, self.positives[at].expected))
     }
 
     /// The outcome of `prediction`: the first label it aligns with, else
@@ -108,9 +133,12 @@ impl<'w> Judge<'w> {
             .unwrap_or_default();
         if let Some(&at) = candidates
             .iter()
-            .find(|&&at| aligns(prediction, self.positives[at]))
+            .find(|&&at| aligns(prediction, self.positives[at].expected))
         {
-            let tier = self.positives[at].label().tier;
+            // Any evidence aligned with an access-only label is right about
+            // the pair and the place, so it is correct; only access evidence
+            // finds that label (the scorer).
+            let tier = self.positives[at].expected.label().tier;
             return (
                 Outcome::Correct {
                     expectation: at,
