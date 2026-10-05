@@ -18,10 +18,12 @@ through the wiki. The compose override `deploy/compose.demo.yaml` and
 - A shared wiki (`wiki`): an in-memory HTTP page store with versions and
   authors.
 - A swarm driver (`swarm`): N agents with growing conversations. The whole
-  conversation is resent every turn. The agents execute wiki tool calls and
-  send back their results. The driver reports throughput, client-observed
-  latency and the expected cross-agent transmissions, and can write that
-  ground truth as JSON lines.
+  conversation is resent every turn. The one declared tool is
+  `http_request`, the HTTP tool contract L5 recognises; the agents run the
+  model's GET and PUT calls against the wiki and send back their results.
+  The driver reports throughput, client-observed latency and the expected
+  cross-agent transmissions, and can write that ground truth as JSON lines
+  ([schema v2](#ground-truth-v2), which ct-eval scores against).
 - The container healthcheck (`healthcheck`), since the runtime image is
   distroless.
 - The compose override, the image, the demo gateway config and the
@@ -46,7 +48,7 @@ crates/demo/src/
   lib.rs                crate doc, modules
   cli.rs                Command, UsageError, USAGE
   knobs.rs              Span (A..B), PositiveSpan, Fraction, parse_duration, Rng
-  protocol.rs           wiki tools, PageSlug, Topic/TOPICS, Task (the marker)
+  protocol.rs           HTTP_TOOL, tool_definitions, page_url, read_input/write_input, WikiCall, CallRefused, PageSlug, Topic/TOPICS, Task (the marker)
   http.rs               DemoBody, serve (accept loop), BaseUrl, request, healthcheck, shutdown_signal
   logging.rs            JSON logs on stderr
   anthropic/mod.rs      Role, Block, Content, Message, ResponseBlock, StopReason, Usage, AssistantMessage
@@ -57,12 +59,14 @@ crates/demo/src/
   upstream/text.rs      deterministic prose from templates
   wiki/mod.rs           the wiki server and the task owning the pages
   wiki/store.rs         Wiki, Page, Author, Summary, WriteError (pure)
-  swarm/mod.rs          run: resolve, spawn agents, stop, drain, report
+  swarm/mod.rs          run: resolve, mint the run id, spawn agents, stop, drain, report; RunClock, Stamp, run_id, ulid_text
   swarm/config.rs       SwarmConfig, TaskMix
-  swarm/conversation.rs Conversation, Profile, ToolCall, ToolResult, PendingTools, Step, OrderError
-  swarm/agent.rs        one agent's loop, tool execution, headers, api_key
+  swarm/conversation.rs Conversation (claim_turn), Profile, ToolCall, ToolResult, PendingTools, Step, OrderError, locate_result
+  swarm/agent.rs        one agent's loop, turns, delivering reads with the request that carries them, headers, api_key, agent_name
+  swarm/tools.rs        execute: http_request against the wiki, PendingRead
+  swarm/truth.rs        ground truth v2: WriteRecord, ReadRecord, Reader, Content, Row, RunInfo, TruthBook
   swarm/stats.rs        Event, RequestSample, Outcome, collect, Report, percentile
-  tests/                sse, generate, conversation, units, servers, deploy
+  tests/                sse, generate, conversation, units, servers, deploy, truth, truth_run
 ```
 
 **Decision: a workspace crate, not a standalone one.** The architecture
@@ -88,9 +92,13 @@ testkit's `FakeUpstream` is not reused. It replays fixed cases on
 `127.0.0.1:0` and keeps every request in memory. The demo needs answers
 that depend on the request, a bind on `0.0.0.0` and no growth under load.
 
-No new third-party dependency was added. The crate uses only existing
-workspace pins: blake3, bytes, http-body-util, hyper, hyper-util, serde,
-serde_json, thiserror, tokio, tracing and tracing-subscriber.
+The crate uses workspace pins: blake3, bytes, http-body-util, hyper,
+hyper-util, serde, serde_json, sha2, thiserror, tokio, tracing and
+tracing-subscriber. `sha2 = "=0.11.0"` (default features off) was added to
+the root `[workspace.dependencies]` for the ground truth's `sha256`; that
+version was already in `Cargo.lock` through sqlx, so the lock gains no new
+package. The run id is a ULID from the spec's `UlidGenerator`, so no ULID
+crate is needed.
 
 ## Data and control flow
 
@@ -99,9 +107,11 @@ swarm agent i ──POST /anthropic/v1/messages (x-api-key per key group)──�
      ▲                                                                       │ forward unchanged, capture
      │ SSE / JSON answer                                                     ▼
      └───────────────────────────────────────────────────────────── fake-upstream :8070
-     │ tool_use wiki_write {page, content}  ──PUT /pages/<p> (x-wiki-author)──▶ wiki :8090
-     │ tool_use wiki_read  {page}           ──GET /pages/<p>──────────────────▶ wiki
+     │ tool_use http_request {PUT, <wiki>/pages/<p>, body} ──PUT /pages/<p> (x-wiki-author)──▶ wiki :8090
+     │ tool_use http_request {GET, <wiki>/pages/<p>}       ──GET /pages/<p>──────────────────▶ wiki
      └ tool_result (the page text, verbatim) in the next request ──▶ crosstalk ──▶ fake-upstream
+     │
+     └ Event (Request, WikiWrite, WikiRead, ...) ──mpsc──▶ collector (TruthBook) ──▶ report, --ground-truth file
 ```
 
 ### The task marker
@@ -109,20 +119,33 @@ swarm agent i ──POST /anthropic/v1/messages (x-api-key per key group)──�
 The swarm plays the user and the fake model plays an obedient model. Each
 prompt is a sentence of prose followed by one marker line:
 
-- `[task:write page=<slug> topic=<n>]`
-- `[task:read page=<slug>]`
+- `[task:write page=<slug> topic=<n> base=<wiki url>]`
+- `[task:read page=<slug> base=<wiki url>]`
 - `[task:chat topic=<n>]`
 
-`protocol::Task` renders and parses these lines.
+`protocol::Task` renders and parses these lines. `base` is the wiki base
+URL the swarm actually uses (`--wiki`, `http://wiki:8090` in compose), as
+`BaseUrl::url` renders it: lower-case host, port 80 left out, no trailing
+slash. The fake upstream answers from the request alone, so this is how it
+learns the URL to put in its tool calls; it echoes it, so the answer is
+still a function of the seed and the request.
+
+**One URL spelling.** `protocol::page_url(base, page)` is the only place a
+page URL is built: `<base>/pages/<page>`, the base's trailing slash trimmed,
+no trailing slash, no query. The model's tool input, the agent's check of
+the call, the truth's `route.url` and `read_tool.input.url` all use it, so
+the string is identical everywhere (L5's canonicaliser does not fold
+trailing slashes).
 
 The fake model reads the marker of the last `user` message. It skips
 `system` turns inside `messages`.
 
-- **Write** (when `wiki_write` is declared): a text block, then
-  `tool_use wiki_write {page, content}`. `content` is 40–160 words of
-  generated prose. Stop reason `tool_use`.
-- **Read** (when `wiki_read` is declared): a text block, then
-  `tool_use wiki_read {page}`. Stop reason `tool_use`.
+- **Write** (when `http_request` is declared): a text block, then
+  `tool_use http_request {"method":"PUT","url":"<base>/pages/<page>","body":<text>}`.
+  The body is 40–160 words of generated prose. Stop reason `tool_use`.
+- **Read** (when `http_request` is declared): a text block, then
+  `tool_use http_request {"method":"GET","url":"<base>/pages/<page>"}`.
+  Stop reason `tool_use`.
 - **A turn of tool results:** a closing prose answer. When every result is
   an error, the answer starts "That did not work". Stop reason `end_turn`.
 - **Chat, no marker, or an undeclared tool:** prose. Stop reason
@@ -201,10 +224,10 @@ One task owns the `Wiki`, and handlers reach it over an `mpsc` channel with
 
 Each agent works like this:
 
-- **Identity.** It is named `agent-NNN`. Its `x-api-key` is
-  `sk-ant-demoGGGG-<40 hex>`, stable per seed and shared by each group of
-  `agents-per-key` agents. Its system prompt names its focus topic
-  (`i mod topics`).
+- **Identity.** It is named `agent-NNN`. Its key group is
+  `i / agents-per-key`, and its `x-api-key` is `sk-ant-demoGGGG-<40 hex>`
+  for group `GGGG`, stable per seed. Its system prompt names its focus
+  topic (`i mod topics`) and the wiki's URL.
 - **Conversations.** Each has a fresh UUID-shaped
   `x-claude-code-session-id` and a drawn `turns` count of prompts.
 - **A prompt.** The agent draws the task:
@@ -228,16 +251,32 @@ Each agent works like this:
   - with `--claude-code-shape`: `user-agent: claude-cli/2.1.282
     (external, cli)`, `anthropic-beta: claude-code-20250219` and
     `x-app: cli`.
-- **Failures.** A failed request is retried up to 3 times, after 0.5 s and
-  then 1 s. After that, the conversation is abandoned and a new one starts.
-- **Tool results.**
+- **Failures.** A request is tried up to 3 times, after 0.5 s and then 1 s.
+  After that, the conversation is abandoned and a new one starts.
+- **Turns.** Every generation request claims its conversation's next turn
+  ordinal (`Conversation::claim_turn`) just before it is sent, once its
+  body and headers are built. The first is 0. Failed and retried requests
+  count; a request that could not be built was never sent and does not.
+- **Tool calls** (`swarm/tools.rs`). `WikiCall::parse` reads each call
+  against the configured wiki base: `http_request` GET of
+  `<base>/pages/<slug>` reads the page, PUT with a text `body` writes it
+  (methods case-insensitive). Every other call gets an error tool_result
+  and touches nothing: another tool name, another method, a URL that is not
+  `page_url(base, slug)` exactly, or a PUT without a body.
   - A write answers `Saved \`p\` (version v, n bytes).`.
   - A read answers with the page text, verbatim.
   - A missing page answers `is_error: true`.
 - **Events.** Each request reports a `RequestSample`: streaming or not,
   follow-up or not, the outcome, time to first byte, total time, and bytes
-  in each direction. Each wiki call reports a `WikiWrite`, a `WikiRead`
-  (with the writer and version read) or a `WikiError`.
+  in each direction. A write the wiki accepted reports a `WikiWrite`
+  (`WriteRecord`) at once: writer, key group, session, the turn of the
+  request whose answer held the PUT, the tool_use id, page, version and
+  when the wiki's answer arrived. A read (found or 404) is held as a
+  `PendingRead` and reported as a `WikiRead` (`ReadRecord`) when the first
+  request carrying its result is built (see
+  [Ground truth v2](#ground-truth-v2)). A failed wiki call reports a
+  `WikiError`. A finished conversation reports `ConversationEnded` with
+  its session.
 
 `Conversation` enforces the order. `ask` works only when idle. `receive`
 works only after a request, and returns `Step::Tools(PendingTools)` when the
@@ -256,12 +295,114 @@ The collector logs progress every 10 s and returns these figures:
   non-streaming separately;
 - conversations completed and abandoned;
 - wiki writes, reads, missing pages, own-page reads and errors;
-- the expected transmissions: reads of a page another agent wrote last,
-  and the distinct writer→reader pairs.
+- the expected transmissions (first reads in a session of a version another
+  agent wrote), the distinct writer→reader pairs, rereads, and reads it
+  could not attribute;
+- the run id.
 
-With `--ground-truth PATH`, it writes each expected transmission as one
-JSON line: `{"writer","reader","page","version","at_ms"}`. `--json` prints
-the report as JSON instead of text.
+The counts of transmissions, self-reads, rereads and misses are exactly the
+ground-truth file's rows of each kind. With `--ground-truth PATH`, it
+writes the file below. `--json` prints the report as JSON instead of text.
+
+### Ground truth v2
+
+The schema is agreed with ct-eval's owner. Every line is one JSON object;
+the first line is the header. `turn` is the 0-based ordinal of generation
+requests (POST /v1/messages) the agent sent in that session, counting
+failed and retried ones and nothing else.
+
+```
+{"kind":"header","version":2,"world":"swarm-<run>","run":"<ulid>","seed":42,"agents":150,"keys":150,"agents_per_key":1,
+ "claude_code_shape":true,"started_at_unix_ms":…,"gateway_url":"<the --target base the swarm uses>","wiki_url":"<the wiki base>"}
+
+{"kind":"transmission","world":…,"writer":"a017","reader":"a042","page":"p12","version":3,
+ "writer_key_group":2,"reader_key_group":9,
+ "writer_session":"…","writer_turn":3,"writer_tool_use_id":"toolu_…",
+ "reader_session":"…","reader_turn":5,"reader_tool_use_id":"toolu_…",
+ "route":{"kind":"channel","url":"<wiki base>/pages/p12"},"carrier":"tool_result",
+ "read_tool":{"name":"http_request","input":{"method":"GET","url":"<wiki base>/pages/p12"}},
+ "content":{"blake3":"<hex>","sha256":"<hex>","excerpt":"<~80 chars of the body>","at":{"message":7,"block":1,"tool_use_id":"toolu_…"}},
+ "at_ms":12345,"at_unix_ms":…,"written_at_unix_ms":…,"read_at_unix_ms":…}
+
+{"kind":"self_read", <transmission's fields, writer == reader>}
+{"kind":"reread",    <transmission's fields; this reader already read this same page version earlier in the same session>}
+{"kind":"miss","world":…,"reader":…,"reader_key_group":…,"page":…,"reader_session":…,"reader_turn":…,"reader_tool_use_id":…,
+ "read_tool":{…},"at_ms":…,"at_unix_ms":…}
+{"kind":"agent_cluster","world":…,"key_group":2,"agents":["a004","a005"]}   (one per key group, singletons included, written once)
+```
+
+The example values are illustrative: agents are named `agent-NNN` and
+pages `<topic>-<n>`. The keys and their order are exact
+(`tests::truth::rows_have_exactly_the_v2_keys`).
+
+Meanings, and where each value comes from:
+
+- **`run`, `world`.** `run` is a ULID minted at start by the spec's
+  `UlidGenerator`, stamped with the start time, its 80 random bits drawn
+  from `Rng::derive(seed, ["run", started_at_unix_ms])`. Every other choice
+  of the run is seeded, so the id is a function of what the header records
+  (`seed`, `started_at_unix_ms`); two runs with one seed differ by their
+  start, two runs in one millisecond by their seed. `world` is
+  `swarm-<run>`.
+- **`gateway_url`, `wiki_url`.** `--gateway` and `--wiki` as
+  `BaseUrl::url` renders them.
+- **`agent_cluster`.** Written once, right after the header, one per key
+  group `0..keys` (singletons included): agents `g × agents_per_key` up to
+  the next group.
+- **`writer_turn`, `writer_tool_use_id`.** The writer's request whose
+  response held the PUT tool_use, and that tool_use's id.
+  `send_with_retries` returns the turn of the attempt that got the answer,
+  and `tools::execute` stamps it on the `WriteRecord`.
+- **`reader_turn`, `reader_tool_use_id`.** The reader's first request whose
+  `messages` carry the GET's tool_result (the request sent after the read
+  ran), and the GET tool_use's id. `exchange` claims the turn, then hands
+  every `PendingRead` to `deliver_reads` with the body value it is about to
+  send. If that attempt fails, the retry carries the result too, but the
+  row keeps the first.
+- **`content.at`.** `message` and `block` index `messages` and that
+  message's `content` exactly as serialised and sent:
+  `conversation::locate_result` searches the very `serde_json::Value` the
+  request body is serialised from, so a `role: "system"` turn under
+  `--claude-code-shape` counts like any other entry.
+- **`content` hashes and `excerpt`.** blake3 and sha256 (lower-case hex) of
+  the UTF-8 bytes of the tool_result's `content` string as found in that
+  body value, which is the wiki body verbatim. `excerpt` is a substring of
+  at most 80 characters, taken from a third of the way in and starting at a
+  word, past a page's generic opening.
+- **`route`, `read_tool`.** `route.url` is `page_url(wiki, page)`;
+  `read_tool.input` is the GET tool_use's input as the model sent it, which
+  the agent accepted only if its `url` is that same string.
+- **`key_group`.** The index of the shared fake `x-api-key`
+  (`agent / agents_per_key`).
+- **Times.** One wall-clock reading at start plus monotonic elapsed time
+  (`RunClock`), so stamps are ordered like events and
+  `unix_ms = started_at_unix_ms + at_ms` exactly. `at_ms` is the read's
+  time since the start; `at_unix_ms` equals `read_at_unix_ms` on read rows,
+  the moment the wiki's answer to the GET arrived. `written_at_unix_ms` is
+  when the wiki's answer to the PUT arrived at the writer: the wiki's API
+  is unchanged and carries no timestamp, so this is the client's view of
+  acceptance, at most one local round trip late.
+
+Classification (`truth::TruthBook`, owned by the collector, the one place
+that sees both sides). It keeps a map from (page, version) to the
+`WriteRecord`, and a per-session set of (page, version) already read
+(dropped when the session's conversation ends). For each read:
+
+1. A 404 is a `miss`.
+2. Otherwise the (page, version) the wiki's headers reported is looked up.
+   The session's seen-set is updated first, so "read before" is decided in
+   read order.
+3. `self_read` when the writer is the reader (whether or not it was read
+   before); else `reread` when the session had read that version before;
+   else `transmission`.
+
+A read whose write has not been reported yet (the writer's event can trail
+the reader's) waits in the book and is classified, in order, when the write
+arrives. A read whose write never arrives (a version from before this run,
+since the wiki outlives swarm runs, or a writer aborted after the wiki
+accepted its PUT) gets no row and is counted in `unattributed_reads`.
+Writes that fail produce no row. A read whose follow-up request is never
+sent (the run stopped) is not reported at all.
 
 ## What crosstalk should see
 
@@ -277,18 +418,19 @@ published and logged all 437. Once L3 to L5 exist, the traffic carries:
 - **Conversation threading.** Each request's messages extend the previous
   request's messages of the same session. Tool follow-ups continue a
   prompt.
-- **Originated spans.** The `content` of each `wiki_write` tool call is
-  40–160 words of model output, distinct across writes.
+- **Originated spans.** The `body` of each `http_request` PUT is 40–160
+  words of model output, distinct across writes.
 - **Cross-agent content matches.** When agent B reads a page agent A wrote,
   that text is the `content` of a `tool_result` in B's next request,
   verbatim (`ContentMatched`).
-- **A discovered channel.** The tool calls `wiki_write` and `wiki_read`
-  with the same `page` argument are writes and reads of one resource family:
-  the wiki, a channel nobody declared (`AccessRecorded`, then
-  `TransmissionConfirmed`).
-- **Ground truth.** The report's expected transmissions and writer→reader
-  pairs, or the `--ground-truth` file, are the edges a correct topology
-  shows.
+- **A discovered channel.** L5's HTTP tool contract reads `http_request`
+  PUTs (written spans from `body`) and GETs (read content from the
+  tool_result) of the same canonical URL `<wiki>/pages/<page>` as writes and
+  reads of one resource: the wiki, a channel nobody declared
+  (`AccessRecorded`, then `TransmissionConfirmed`).
+- **Ground truth.** The `--ground-truth` file's `transmission` rows are the
+  edges a correct topology shows, each with the exchanges (session and
+  turn) on both sides and the exact span in the reader's request.
 
 ## Running it
 
@@ -342,7 +484,7 @@ To run it through a gateway, add a gateway on 8080 whose route points at
 | | `--model NAME`, `--max-tokens N` | claude-opus-5-5, 4096 | Sent as is |
 | | `--idle-timeout D`, `--grace D` | 120s, 30s | Give up on a silent response; let in-flight work finish |
 | | `--claude-code-shape` | off | A `role: "system"` turn before each prompt, plus Claude Code headers |
-| | `--ground-truth PATH`, `--json` | — | Expected transmissions as JSON lines; the report as JSON |
+| | `--ground-truth PATH`, `--json` | — | Ground truth v2 as JSON lines; the report as JSON |
 | | `--gateway URL`, `--wiki URL` | 127.0.0.1:8080/anthropic, :8090 | Fixed to the compose services by `compose.demo.yaml` |
 | upstream | `--seed N` | 7 (`DEMO_UPSTREAM_SEED`) | Model output and timing |
 | | `--words A..B` | 40..160 (`DEMO_WORDS`) | Prose length per answer or page |
@@ -360,7 +502,8 @@ demo services.
 
 | File | Role |
 | --- | --- |
-| `crates/demo/Cargo.toml` | `crosstalk-demo`: spec, testkit; blake3, bytes, http-body-util, hyper (client, http1, server), hyper-util (tokio), serde, serde_json, thiserror, tokio (fs, io-util, macros, net, rt, rt-multi-thread, signal, sync, time), tracing, tracing-subscriber (env-filter, fmt, json, std); bin `crosstalk-demo` |
+| `Cargo.toml` | Adds the workspace pin `sha2 = { version = "=0.11.0", default-features = false }` (already locked through sqlx) |
+| `crates/demo/Cargo.toml` | `crosstalk-demo`: spec, testkit; blake3, bytes, http-body-util, hyper (client, http1, server), hyper-util (tokio), serde, serde_json, sha2, thiserror, tokio (fs, io-util, macros, net, rt, rt-multi-thread, signal, sync, time), tracing, tracing-subscriber (env-filter, fmt, json, std); bin `crosstalk-demo` |
 | `crates/demo/src/**` | See [Layout and reuse](#layout-and-reuse) |
 | `crates/gateway/tests/architecture.rs` | Adds the `Tool` role (`demo`), `Violation::LayerOnTool`, and tests for it |
 | `deploy/demo.Dockerfile` (+ `.dockerignore`) | Builds `crosstalk-demo` like `crosstalk.Dockerfile` (same toolchain, cache mounts and distroless runtime) |
@@ -375,6 +518,8 @@ demo services.
 | `tests::sse` | The event sequence and the fields of each event. Tool blocks start with empty input and an empty JSON delta. Deltas concatenate to the block. Frames parse with testkit's `EventStream`, concatenate to the exact bytes and reassemble to the message, under three splits. Broken streams are refused with typed errors. The non-streaming document round-trips |
 | `tests::generate` | Identical bytes for the same seed and body; another seed or body changes them. Write and read markers produce the matching tool call. Undeclared tools are never called. Tool results get a closing answer. System turns are skipped. Malformed requests are refused. Timing and length stay in range, and `max_tokens` caps the length |
 | `tests::conversation` | Each body's messages extend the previous body's. A tool call is answered by its result, refusing out-of-order and foreign results. The Claude Code shape puts a system turn before each prompt. Agent A's generated page reaches agent B's next request verbatim, through the real wiki store and the fake model |
+| `tests::truth` | Page URLs from one function (trailing slash, host case, port 80, IPv6) and their round trip through the marker. The one declared tool's schema. `WikiCall` accepts GET/PUT of a wiki page and refuses other tools, methods, URLs and body-less PUTs. The fake model's GET and PUT carry the marker's base URL, deterministically. The agent runs a batch of calls against a real wiki: results, the `WikiWrite` with its turn, and the pending reads. `locate_result` with and without the system turn. Turn claiming, excerpts, digests (sha256 known answer), run ids. The book: every kind, rereads per session, reads waiting for their write, unattributed reads, counts. Every row kind's exact keys and order |
+| `tests::truth_run` | Swarm runs over sockets against a recording model that fails the first attempt of about half the bodies (529). Every row is checked against the recorded requests: the header and clusters; `reader_turn` is the first request of the session carrying the result and `content.at` its exact block; the hashes are of those bytes, which are in the raw body; `writer_turn`'s request answers with the PUT whose body is the text; some ordinals count failed requests; the report's counts equal the rows; in both shapes; and all four read kinds appear |
 | `tests::units` | Spans, fractions, durations, the random stream, markers, page names, topics, the wiki store, nearest-rank percentiles, base URLs, and the CLI (accepted and refused lines) |
 | `tests::servers` | Over sockets: a paced stream (first byte, spread, same bytes twice); the JSON document, 401, 400, count_tokens, 404 and the healthcheck; the wiki (versions, authors, listing, limits); and a short swarm run whose report and ground-truth file show writes, reads and cross-agent transmissions with no failures |
 | `tests::deploy` | The demo config equals the deployment config except for the upstream URL |
@@ -389,8 +534,15 @@ demo services.
   them.
 - **Conversation order.** A conversation only grows by valid steps. Every
   tool call is answered exactly once, in order, before the next request.
-- **A transmission in the report** is a read of a page whose last writer
-  is another agent, and that page's text is in the reader's next request.
+- **A transmission in the report** is a session's first read of a page
+  version another agent wrote, and that page's text is in the reader's next
+  request at `content.at`. The report's transmission, self-read, reread and
+  miss counts equal the ground-truth file's rows of each kind.
+- **One page URL.** Every page URL comes from `protocol::page_url`.
+- **Turns** count every generation request sent in a conversation, failed
+  and retried ones included, from 0; nothing else claims one.
+- **The ground truth has one author:** the collector's `TruthBook`. Agents
+  only report what they did.
 - **Never on by accident.** `up` never starts the swarm (profile `swarm`,
   `restart: "no"`). The demo config differs from the deployment's only in
   the upstream URL (`tests::deploy`), and `deploy/config/crosstalk.json` is

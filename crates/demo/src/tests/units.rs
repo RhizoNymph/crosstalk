@@ -93,22 +93,42 @@ fn rng_is_deterministic_and_derived_streams_differ() {
 
 #[test]
 fn task_markers_round_trip() {
+    let base: BaseUrl = "http://wiki:8090".parse().expect("url");
     let tasks = [
         Task::Chat { topic: 3 },
         Task::Write {
             page: "rate-limiting-0".parse().expect("slug"),
             topic: 0,
+            base: base.clone(),
         },
         Task::Read {
             page: "x".parse().expect("slug"),
+            base: base.clone(),
+        },
+        Task::Read {
+            page: "x".parse().expect("slug"),
+            base: "http://[::1]:9/w".parse().expect("url"),
         },
     ];
     for task in tasks {
         assert_eq!(Task::parse(&task.marker()), Some(task.clone()));
         assert_eq!(Task::find(&task.prompt()), Some(task.clone()));
     }
+    assert_eq!(
+        Task::Write {
+            page: "a-1".parse().expect("slug"),
+            topic: 2,
+            base: base.clone(),
+        }
+        .marker(),
+        "[task:write page=a-1 topic=2 base=http://wiki:8090]"
+    );
     for junk in [
         "[task:write page=x]",
+        "[task:write page=x topic=1]",
+        "[task:read page=x]",
+        "[task:read page=x base=https://wiki]",
+        "[task:read page=x topic=1 base=http://wiki]",
         "[task:read]",
         "[task:fly page=x]",
         "[task:read page=Bad]",
@@ -119,11 +139,12 @@ fn task_markers_round_trip() {
         assert_eq!(Task::parse(junk), None, "{junk}");
     }
     // The last marker wins.
-    let text = "[task:chat topic=1]\nthen\n[task:read page=a-1]";
+    let text = "[task:chat topic=1]\nthen\n[task:read page=a-1 base=http://wiki:8090]";
     assert_eq!(
         Task::find(text),
         Some(Task::Read {
-            page: "a-1".parse().expect("slug")
+            page: "a-1".parse().expect("slug"),
+            base,
         })
     );
 }

@@ -18,19 +18,19 @@ use crate::anthropic::sse::Split;
 use crate::anthropic::{AssistantMessage, ResponseBlock, StopReason};
 use crate::http::{BaseUrl, healthcheck, request};
 use crate::knobs::{Fraction, PositiveSpan, Span};
-use crate::protocol::{Task, WIKI_WRITE, tool_definitions};
+use crate::protocol::{HTTP_TOOL, Task, tool_definitions};
 use crate::swarm::config::{SwarmConfig, TaskMix};
 use crate::upstream::generate::GenConfig;
 use crate::upstream::{UpstreamConfig, frame_offset};
 use crate::wiki::WikiConfig;
 
 /// A running server; dropping it stops it.
-struct Running {
-    addr: SocketAddr,
+pub(super) struct Running {
+    pub(super) addr: SocketAddr,
     _stop: oneshot::Sender<()>,
 }
 
-async fn listener() -> (TcpListener, SocketAddr) {
+pub(super) async fn listener() -> (TcpListener, SocketAddr) {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
     let addr = listener.local_addr().expect("addr");
     (listener, addr)
@@ -55,7 +55,7 @@ async fn upstream(first_byte_ms: Span, stream_ms: Span) -> Running {
     Running { addr, _stop: stop }
 }
 
-async fn wiki() -> Running {
+pub(super) async fn wiki() -> Running {
     let (listener, addr) = listener().await;
     let (stop, stopped) = oneshot::channel::<()>();
     let config = WikiConfig {
@@ -84,6 +84,7 @@ fn messages_body(stream: bool) -> Vec<u8> {
     let task = Task::Write {
         page: "release-plan-8".parse().expect("slug"),
         topic: 8,
+        base: "http://wiki:8090".parse().expect("url"),
     };
     serde_json::to_vec(&json!({
         "model": "claude-opus-5-5",
@@ -143,7 +144,9 @@ async fn upstream_streams_a_paced_tool_call() {
     let message = assemble_stream(&response.events().expect("sse")).expect("message");
     assert_eq!(message.stop_reason, StopReason::ToolUse);
     assert!(
-        matches!(&message.content[1], ResponseBlock::ToolUse { name, .. } if name == WIKI_WRITE)
+        matches!(&message.content[1], ResponseBlock::ToolUse { name, input, .. }
+            if name == HTTP_TOOL && input["method"] == "PUT"
+                && input["url"] == "http://wiki:8090/pages/release-plan-8")
     );
     // The same request again: the same bytes.
     let again = client.send(&req).await.expect("response");
@@ -322,7 +325,18 @@ async fn a_short_swarm_writes_reads_and_reports() {
     let lines = tokio::fs::read_to_string(&truth)
         .await
         .expect("ground truth");
-    let first: Value = serde_json::from_str(lines.lines().next().expect("a line")).expect("json");
+    let rows: Vec<Value> = lines
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("json"))
+        .collect();
+    assert_eq!(rows[0]["kind"], "header");
+    assert_eq!(rows[0]["version"], 2);
+    let transmissions: Vec<&Value> = rows
+        .iter()
+        .filter(|row| row["kind"] == "transmission")
+        .collect();
+    assert_eq!(transmissions.len() as u64, report.expected_transmissions);
+    let first = transmissions.first().expect("a transmission");
     assert_ne!(first["writer"], first["reader"]);
     let _ = tokio::fs::remove_file(&truth).await;
 }

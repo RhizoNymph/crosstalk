@@ -1,7 +1,8 @@
 //! What the agents report and the report built from it. Agents send
-//! [`Event`]s over a channel; one collector task owns every figure, logs
-//! progress, optionally writes the expected transmissions as JSON lines,
-//! and returns the [`Report`] when the last sender is gone.
+//! [`Event`]s over a channel; one collector task owns every figure and the
+//! [`TruthBook`] that pairs reads with writes, logs progress, optionally
+//! writes the ground truth (schema v2, [`super::truth`]) as JSON lines, and
+//! returns the [`Report`] when the last sender is gone.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -13,7 +14,7 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
 
-use crate::protocol::PageSlug;
+use super::truth::{ReadRecord, Row, RunInfo, TruthBook, WriteRecord};
 
 /// How one request ended, from the client's side.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -57,20 +58,14 @@ pub struct RequestSample {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Event {
     Request(RequestSample),
-    WikiWrite {
-        author: String,
-        page: PageSlug,
-        version: u64,
-    },
-    WikiRead {
-        reader: String,
-        page: PageSlug,
-        /// The writer and version read; `None` when the page did not exist.
-        found: Option<(String, u64)>,
-    },
+    /// A page version the wiki accepted.
+    WikiWrite(WriteRecord),
+    /// A read, sent once its result is in a request being sent.
+    WikiRead(ReadRecord),
     /// A wiki call that failed outright.
     WikiError,
     ConversationEnded {
+        session: String,
         completed: bool,
     },
 }
@@ -138,31 +133,82 @@ pub struct Report {
     pub wiki_misses: u64,
     pub wiki_errors: u64,
     pub pages_written: usize,
-    /// Reads of a page last written by another agent: each puts that
-    /// agent's model output into the reader's next request.
+    /// First reads in a session of a page version another agent wrote:
+    /// each puts that agent's model output into the reader's next request.
     pub expected_transmissions: u64,
     pub writer_reader_pairs: usize,
     pub self_reads: u64,
-}
-
-/// One expected transmission, as written to the ground-truth file.
-#[derive(Debug, Clone, Serialize)]
-struct Transmission<'a> {
-    writer: &'a str,
-    reader: &'a str,
-    page: &'a str,
-    version: u64,
-    at_ms: u128,
+    /// Reads of a page version another agent wrote that this session had
+    /// already read.
+    pub rereads: u64,
+    /// Found reads of a version whose write this run never reported (written
+    /// before the run, or by a writer cut off before reporting): no row.
+    pub unattributed_reads: u64,
+    /// The run's id; the ground truth's world is `swarm-<run>`.
+    pub run: String,
 }
 
 /// What the collector is told up front.
 #[derive(Debug, Clone)]
 pub struct CollectorSetup {
-    pub agents: u32,
-    pub keys: u32,
-    pub seed: u64,
+    pub info: RunInfo,
+    /// Agent `i`'s name is `agent_names[i]`.
+    pub agent_names: Vec<String>,
     pub ground_truth: Option<PathBuf>,
     pub progress_every: Duration,
+}
+
+/// The ground-truth file, while it is being written.
+struct TruthFile {
+    path: PathBuf,
+    file: tokio::io::BufWriter<tokio::fs::File>,
+}
+
+impl TruthFile {
+    async fn create(path: &PathBuf) -> Option<Self> {
+        match tokio::fs::File::create(path).await {
+            Ok(file) => Some(Self {
+                path: path.clone(),
+                file: tokio::io::BufWriter::new(file),
+            }),
+            Err(source) => {
+                let error = GroundTruthError::Io {
+                    path: path.clone(),
+                    source,
+                };
+                tracing::warn!(%error, "not writing ground truth");
+                None
+            }
+        }
+    }
+}
+
+/// Appends `rows` to the file; on an error, stops writing (the run goes on).
+async fn append(truth: &mut Option<TruthFile>, rows: &[Row]) {
+    let Some(out) = truth.as_mut() else {
+        return;
+    };
+    let mut bytes = Vec::new();
+    for row in rows {
+        match serde_json::to_vec(row) {
+            Ok(line) => {
+                bytes.extend_from_slice(&line);
+                bytes.push(b'\n');
+            }
+            Err(source) => {
+                let error = GroundTruthError::Encode(source);
+                tracing::warn!(%error, "ground-truth row skipped");
+            }
+        }
+    }
+    if let Err(source) = out.file.write_all(&bytes).await {
+        let error = GroundTruthError::Io {
+            path: out.path.clone(),
+            source,
+        };
+        tracing::warn!(%error, "ground truth stopped");
+        *truth = None;
+    }
 }
 
 #[derive(Debug, Default)]
@@ -179,35 +225,34 @@ pub enum GroundTruthError {
         path: PathBuf,
         source: std::io::Error,
     },
+    #[error("encoding a row: {0}")]
+    Encode(serde_json::Error),
 }
 
 /// Collects every event until all senders are dropped.
 pub async fn collect(setup: CollectorSetup, mut events: mpsc::Receiver<Event>) -> Report {
     let started = Instant::now();
     let mut truth = match &setup.ground_truth {
-        Some(path) => match tokio::fs::File::create(path).await {
-            Ok(file) => Some((path.clone(), tokio::io::BufWriter::new(file))),
-            Err(source) => {
-                let error = GroundTruthError::Io {
-                    path: path.clone(),
-                    source,
-                };
-                tracing::warn!(%error, "not writing ground truth");
-                None
-            }
-        },
+        Some(path) => TruthFile::create(path).await,
         None => None,
     };
+    let names = &setup.agent_names;
+    let opening = Row::opening(&setup.info, |i| {
+        names
+            .get(i as usize)
+            .cloned()
+            .unwrap_or_else(|| format!("agent-{i:03}"))
+    });
+    append(&mut truth, &opening).await;
+    let mut book = TruthBook::new(setup.info.world());
     let mut streaming = Kind::default();
     let mut whole = Kind::default();
     let (mut requests, mut ok, mut followups, mut req_bytes, mut resp_bytes) =
         (0, 0, 0, 0u64, 0u64);
     let mut failures: BTreeMap<String, u64> = BTreeMap::new();
-    let (mut completed, mut abandoned) = (0, 0);
-    let (mut writes, mut reads, mut misses, mut wiki_errors, mut transmissions, mut self_reads) =
-        (0, 0, 0, 0, 0, 0);
+    let (mut completed_count, mut abandoned) = (0, 0);
+    let (mut writes, mut reads, mut wiki_errors) = (0, 0, 0);
     let mut pages = BTreeSet::new();
-    let mut pairs = BTreeSet::new();
     let mut progress = tokio::time::interval(setup.progress_every);
     progress.tick().await;
     let mut last_requests = 0u64;
@@ -227,7 +272,7 @@ pub async fn collect(setup: CollectorSetup, mut events: mpsc::Receiver<Event>) -
                     rps = format!("{:.1}", (requests - last_requests) as f64 / window),
                     wiki_writes = writes,
                     wiki_reads = reads,
-                    expected_transmissions = transmissions,
+                    expected_transmissions = book.counts().transmissions,
                     "swarm progress"
                 );
                 last_requests = requests;
@@ -255,55 +300,47 @@ pub async fn collect(setup: CollectorSetup, mut events: mpsc::Receiver<Event>) -
                     *failures.entry(sample.outcome.to_string()).or_default() += 1;
                 }
             }
-            Event::WikiWrite { page, .. } => {
+            Event::WikiWrite(write) => {
                 writes += 1;
-                pages.insert(page);
+                pages.insert(write.page.clone());
+                let rows = book.write(write);
+                append(&mut truth, &rows).await;
             }
-            Event::WikiRead {
-                reader,
-                page,
-                found,
-            } => {
+            Event::WikiRead(read) => {
                 reads += 1;
-                match found {
-                    None => misses += 1,
-                    Some((writer, _)) if writer == reader => self_reads += 1,
-                    Some((writer, version)) => {
-                        transmissions += 1;
-                        if let Some((path, file)) = truth.as_mut() {
-                            let line = Transmission {
-                                writer: &writer,
-                                reader: &reader,
-                                page: page.as_str(),
-                                version,
-                                at_ms: started.elapsed().as_millis(),
-                            };
-                            let mut bytes = serde_json::to_vec(&line).unwrap_or_default();
-                            bytes.push(b'\n');
-                            if let Err(source) = file.write_all(&bytes).await {
-                                let error = GroundTruthError::Io {
-                                    path: path.clone(),
-                                    source,
-                                };
-                                tracing::warn!(%error, "ground truth stopped");
-                                truth = None;
-                            }
-                        }
-                        pairs.insert((writer, reader));
-                    }
+                if let Some(row) = book.read(read) {
+                    append(&mut truth, &[row]).await;
                 }
             }
             Event::WikiError => wiki_errors += 1,
-            Event::ConversationEnded { completed: true } => completed += 1,
-            Event::ConversationEnded { completed: false } => abandoned += 1,
+            Event::ConversationEnded { session, completed } => {
+                if completed {
+                    completed_count += 1;
+                } else {
+                    abandoned += 1;
+                }
+                book.end_session(&session);
+            }
         }
     }
-    if let Some((path, mut file)) = truth
-        && let Err(source) = file.flush().await
+    for reader in book.finish() {
+        tracing::info!(
+            reader = %reader.reader,
+            page = %reader.page,
+            session = %reader.session,
+            "read of a version this run never saw written; no ground-truth row"
+        );
+    }
+    if let Some(mut out) = truth
+        && let Err(source) = out.file.flush().await
     {
-        let error = GroundTruthError::Io { path, source };
+        let error = GroundTruthError::Io {
+            path: out.path,
+            source,
+        };
         tracing::warn!(%error, "ground truth not flushed");
     }
+    let counts = book.counts();
     let elapsed = started.elapsed().as_secs_f64();
     let latency = |kind: Kind| Latency {
         count: kind.total_us.len(),
@@ -311,9 +348,9 @@ pub async fn collect(setup: CollectorSetup, mut events: mpsc::Receiver<Event>) -
         total: Percentiles::of(kind.total_us),
     };
     Report {
-        agents: setup.agents,
-        keys: setup.keys,
-        seed: setup.seed,
+        agents: setup.info.agents,
+        keys: setup.info.keys,
+        seed: setup.info.seed,
         elapsed_secs: elapsed,
         requests,
         ok,
@@ -324,16 +361,19 @@ pub async fn collect(setup: CollectorSetup, mut events: mpsc::Receiver<Event>) -
         response_mib: resp_bytes as f64 / (1024.0 * 1024.0),
         streaming: latency(streaming),
         non_streaming: latency(whole),
-        conversations_completed: completed,
+        conversations_completed: completed_count,
         conversations_abandoned: abandoned,
         wiki_writes: writes,
         wiki_reads: reads,
-        wiki_misses: misses,
+        wiki_misses: counts.misses,
         wiki_errors,
         pages_written: pages.len(),
-        expected_transmissions: transmissions,
-        writer_reader_pairs: pairs.len(),
-        self_reads,
+        expected_transmissions: counts.transmissions,
+        writer_reader_pairs: book.pairs(),
+        self_reads: counts.self_reads,
+        rereads: counts.rereads,
+        unattributed_reads: counts.unattributed,
+        run: setup.info.run.clone(),
     }
 }
 
@@ -358,8 +398,8 @@ impl fmt::Display for Report {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(
             f,
-            "crosstalk demo swarm: {} agents on {} keys, {:.1} s, seed {}",
-            self.agents, self.keys, self.elapsed_secs, self.seed
+            "crosstalk demo swarm: {} agents on {} keys, {:.1} s, seed {}, run {}",
+            self.agents, self.keys, self.elapsed_secs, self.seed, self.run
         )?;
         let failed: Vec<String> = self
             .failures
@@ -405,8 +445,15 @@ impl fmt::Display for Report {
         )?;
         writeln!(
             f,
-            "expected transmissions  {} cross-agent reads over {} writer->reader pairs",
-            self.expected_transmissions, self.writer_reader_pairs
+            "expected transmissions  {} cross-agent reads over {} writer->reader pairs, {} rereads{}",
+            self.expected_transmissions,
+            self.writer_reader_pairs,
+            self.rereads,
+            if self.unattributed_reads == 0 {
+                String::new()
+            } else {
+                format!(", {} unattributed reads", self.unattributed_reads)
+            }
         )
     }
 }

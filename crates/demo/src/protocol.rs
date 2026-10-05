@@ -1,53 +1,133 @@
-//! What the swarm and the fake model agree on: the two wiki tools, page
-//! names, topics, and the task marker a user turn ends with.
+//! What the swarm and the fake model agree on: the one tool
+//! (`http_request`, the HTTP tool contract L5 recognises), the wiki's page
+//! URLs, page names, topics, and the task marker a user turn ends with.
 //!
 //! The swarm plays the user: each turn's prompt is prose followed by one
-//! marker line, `[task:write page=<slug> topic=<n>]`, `[task:read
-//! page=<slug>]` or `[task:chat topic=<n>]`. The fake model plays an
-//! obedient model: it reads the marker of the last user turn and answers
-//! with the matching tool call (or prose), so the swarm's knobs decide how
-//! often the wiki is written and read while the words still come from the
-//! model.
+//! marker line, `[task:write page=<slug> topic=<n> base=<wiki url>]`,
+//! `[task:read page=<slug> base=<wiki url>]` or `[task:chat topic=<n>]`.
+//! The fake model plays an obedient model: it reads the marker of the last
+//! user turn and answers with the matching `http_request` call against the
+//! wiki at `base` (or prose), so the swarm's knobs decide how often the
+//! wiki is written and read while the words still come from the model.
+//!
+//! Every page URL, in a tool call, in the agent's HTTP call and in the
+//! ground truth, comes from [`page_url`], so it is one string everywhere.
 
 use std::fmt;
 use std::str::FromStr;
 
 use serde_json::{Value, json};
 
-/// The tool that writes a wiki page: `{"page": slug, "content": text}`.
-pub const WIKI_WRITE: &str = "wiki_write";
-/// The tool that reads a wiki page: `{"page": slug}`.
-pub const WIKI_READ: &str = "wiki_read";
+use crate::http::BaseUrl;
+
+/// The one tool every swarm request declares: an HTTP request,
+/// `{"method", "url", "body"?}`.
+pub const HTTP_TOOL: &str = "http_request";
 
 /// The `tools` array every swarm request declares.
 pub fn tool_definitions() -> Value {
     json!([
         {
-            "name": WIKI_READ,
-            "description": "Read a page of the team wiki. Returns the page text.",
+            "name": HTTP_TOOL,
+            "description": "Send an HTTP request. The team wiki serves pages at <wiki>/pages/<name>: \
+                            GET returns the page text, PUT with a body creates or replaces it.",
             "input_schema": {
                 "type": "object",
                 "properties": {
-                    "page": {"type": "string", "description": "The page name, e.g. rate-limiting-3"}
+                    "method": {
+                        "type": "string",
+                        "enum": ["GET", "PUT"],
+                        "description": "The HTTP method"
+                    },
+                    "url": {"type": "string", "description": "The absolute URL, e.g. http://wiki:8090/pages/rate-limiting-3"},
+                    "body": {"type": "string", "description": "The request body (the full page text for a PUT)"}
                 },
-                "required": ["page"],
-                "additionalProperties": false
-            }
-        },
-        {
-            "name": WIKI_WRITE,
-            "description": "Create or replace a page of the team wiki.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "page": {"type": "string", "description": "The page name"},
-                    "content": {"type": "string", "description": "The full page text"}
-                },
-                "required": ["page", "content"],
+                "required": ["method", "url"],
                 "additionalProperties": false
             }
         }
     ])
+}
+
+/// The URL of `page` on the wiki at `base`: `<base>/pages/<page>`, no
+/// trailing slash, no query. The only place a page URL is built.
+pub fn page_url(base: &BaseUrl, page: &PageSlug) -> String {
+    format!("{}/pages/{page}", base.url().trim_end_matches('/'))
+}
+
+/// The `http_request` input that reads `page`.
+pub fn read_input(base: &BaseUrl, page: &PageSlug) -> Value {
+    json!({"method": "GET", "url": page_url(base, page)})
+}
+
+/// The `http_request` input that writes `body` to `page`.
+pub fn write_input(base: &BaseUrl, page: &PageSlug, body: &str) -> Value {
+    json!({"method": "PUT", "url": page_url(base, page), "body": body})
+}
+
+/// A tool call the swarm can run against the wiki.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum WikiCall {
+    Read { page: PageSlug },
+    Write { page: PageSlug, body: String },
+}
+
+/// Why a tool call is not one the wiki can answer.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum CallRefused {
+    #[error("no tool named {0}")]
+    UnknownTool(String),
+    #[error("`method` must be text")]
+    NoMethod,
+    #[error("method {0} is not supported; use GET or PUT")]
+    Method(String),
+    #[error("`url` must be text")]
+    NoUrl,
+    #[error("{url} is not a page of the team wiki ({base}/pages/<name>)")]
+    NotWiki { url: String, base: String },
+    #[error("a PUT needs a text `body`")]
+    NoBody,
+}
+
+impl WikiCall {
+    /// Reads the tool call `name(input)` as a wiki call against `base`.
+    pub fn parse(name: &str, input: &Value, base: &BaseUrl) -> Result<Self, CallRefused> {
+        if name != HTTP_TOOL {
+            return Err(CallRefused::UnknownTool(name.to_owned()));
+        }
+        let method = input
+            .get("method")
+            .and_then(Value::as_str)
+            .ok_or(CallRefused::NoMethod)?;
+        let url = input
+            .get("url")
+            .and_then(Value::as_str)
+            .ok_or(CallRefused::NoUrl)?;
+        let not_wiki = || CallRefused::NotWiki {
+            url: url.to_owned(),
+            base: base.url(),
+        };
+        let page: PageSlug = url
+            .strip_prefix(base.url().trim_end_matches('/'))
+            .and_then(|rest| rest.strip_prefix("/pages/"))
+            .ok_or_else(not_wiki)?
+            .parse()
+            .map_err(|_| not_wiki())?;
+        if method.eq_ignore_ascii_case("GET") {
+            Ok(WikiCall::Read { page })
+        } else if method.eq_ignore_ascii_case("PUT") {
+            let body = input
+                .get("body")
+                .and_then(Value::as_str)
+                .ok_or(CallRefused::NoBody)?;
+            Ok(WikiCall::Write {
+                page,
+                body: body.to_owned(),
+            })
+        } else {
+            Err(CallRefused::Method(method.to_owned()))
+        }
+    }
 }
 
 /// A wiki page name: 1 to 96 of `a-z`, `0-9` and `-`.
@@ -348,10 +428,14 @@ impl Topic {
 pub enum Task {
     /// Answer in prose about a topic.
     Chat { topic: u32 },
-    /// Write the findings on `topic` to `page`.
-    Write { page: PageSlug, topic: u32 },
-    /// Read `page` and use it.
-    Read { page: PageSlug },
+    /// Write the findings on `topic` to `page` of the wiki at `base`.
+    Write {
+        page: PageSlug,
+        topic: u32,
+        base: BaseUrl,
+    },
+    /// Read `page` of the wiki at `base` and use it.
+    Read { page: PageSlug, base: BaseUrl },
 }
 
 impl Task {
@@ -359,8 +443,10 @@ impl Task {
     pub fn marker(&self) -> String {
         match self {
             Task::Chat { topic } => format!("[task:chat topic={topic}]"),
-            Task::Write { page, topic } => format!("[task:write page={page} topic={topic}]"),
-            Task::Read { page } => format!("[task:read page={page}]"),
+            Task::Write { page, topic, base } => {
+                format!("[task:write page={page} topic={topic} base={}]", base.url())
+            }
+            Task::Read { page, base } => format!("[task:read page={page} base={}]", base.url()),
         }
     }
 
@@ -371,11 +457,11 @@ impl Task {
                 "What should we look at next on {}? Keep it short.",
                 Topic::of(*topic).label
             ),
-            Task::Write { page, topic } => format!(
+            Task::Write { page, topic, .. } => format!(
                 "Please write up your current findings on {} in the team wiki, page `{page}`.",
                 Topic::of(*topic).label
             ),
-            Task::Read { page } => format!(
+            Task::Read { page, .. } => format!(
                 "Before you continue, read the wiki page `{page}` and tell me what matters for us."
             ),
         };
@@ -394,20 +480,26 @@ impl Task {
         let kind = words.next()?;
         let mut page = None;
         let mut topic = None;
+        let mut base = None;
         for word in words {
             match word.split_once('=')? {
                 ("page", value) => page = Some(value.parse::<PageSlug>().ok()?),
                 ("topic", value) => topic = Some(value.parse::<u32>().ok()?),
+                ("base", value) => base = Some(value.parse::<BaseUrl>().ok()?),
                 _ => return None,
             }
         }
         match kind {
-            "chat" => Some(Task::Chat { topic: topic? }),
+            "chat" if page.is_none() && base.is_none() => Some(Task::Chat { topic: topic? }),
             "write" => Some(Task::Write {
                 page: page?,
                 topic: topic?,
+                base: base?,
             }),
-            "read" => Some(Task::Read { page: page? }),
+            "read" if topic.is_none() => Some(Task::Read {
+                page: page?,
+                base: base?,
+            }),
             _ => None,
         }
     }
