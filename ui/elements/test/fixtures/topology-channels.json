@@ -1,0 +1,471 @@
+{
+  "mode": "channels",
+  "window": {
+    "from": "2026-10-02T00:00:00Z",
+    "to": "2026-10-03T00:00:00Z"
+  },
+  "weighting": "tx",
+  "topicVersion": 3,
+  "watermark": "2026-10-02T23:22:30Z",
+  "nodes": [
+    {
+      "kind": "agent",
+      "id": "01K6HB7H0002GG002YXM000001",
+      "name": "planner",
+      "state": "established",
+      "parent": null,
+      "volume": 97,
+      "transmissionsIn": 43,
+      "transmissionsOut": 54,
+      "claims": [
+        {
+          "harness": "Claude Code",
+          "version": "2.1.3",
+          "userAgent": "claude-cli/2.1.3 (external, cli)",
+          "lastSeen": "2026-10-02T22:01:00Z"
+        }
+      ]
+    },
+    {
+      "kind": "agent",
+      "id": "01K6HB7H0002GG002YXM000002",
+      "name": "researcher",
+      "state": "established",
+      "parent": "01K6HB7H0002GG002YXM000001",
+      "volume": 41,
+      "transmissionsIn": 20,
+      "transmissionsOut": 21,
+      "claims": [
+        {
+          "harness": "Claude Code",
+          "version": "2.1.3",
+          "userAgent": "claude-cli/2.1.3 (external, cli)",
+          "lastSeen": "2026-10-02T22:02:00Z"
+        }
+      ]
+    },
+    {
+      "kind": "agent",
+      "id": "01K6HB7H0002GG002YXM000003",
+      "name": "…000003",
+      "state": "provisional",
+      "parent": "01K6HB7H0002GG002YXM000001",
+      "volume": 16,
+      "transmissionsIn": 9,
+      "transmissionsOut": 7,
+      "claims": [
+        {
+          "harness": "Claude Code",
+          "version": "2.1.3",
+          "userAgent": "claude-cli/2.1.3 (external, cli)",
+          "lastSeen": "2026-10-02T22:03:00Z"
+        }
+      ]
+    },
+    {
+      "kind": "agent",
+      "id": "01K6HB7H0002GG002YXM000004",
+      "name": "reviewer",
+      "state": "established",
+      "parent": null,
+      "volume": 51,
+      "transmissionsIn": 35,
+      "transmissionsOut": 16,
+      "claims": [
+        {
+          "harness": "Codex",
+          "version": "0.48.0",
+          "userAgent": "codex_cli_rs/0.48.0",
+          "lastSeen": "2026-10-02T22:04:00Z"
+        }
+      ]
+    },
+    {
+      "kind": "agent",
+      "id": "01K6HB7H0002GG002YXM000005",
+      "name": "ci-bot",
+      "state": "established",
+      "parent": null,
+      "volume": 18,
+      "transmissionsIn": 6,
+      "transmissionsOut": 12,
+      "claims": [
+        {
+          "harness": "pi",
+          "version": null,
+          "userAgent": "claude-cli/2.0.14 (external, sdk-ts)",
+          "lastSeen": "2026-10-02T22:05:00Z"
+        }
+      ]
+    },
+    {
+      "kind": "agent",
+      "id": "01K6HB7H0002GG002YXM000006",
+      "name": "docs-writer",
+      "state": "established",
+      "parent": null,
+      "volume": 44,
+      "transmissionsIn": 26,
+      "transmissionsOut": 18,
+      "claims": [
+        {
+          "harness": "Claude Code",
+          "version": "2.0.77",
+          "userAgent": "claude-cli/2.0.77 (external, cli)",
+          "lastSeen": "2026-10-02T22:06:00Z"
+        }
+      ]
+    },
+    {
+      "kind": "agent",
+      "id": "01K6HB7H0002GG002YXM000007",
+      "name": "…000007",
+      "state": "provisional",
+      "parent": null,
+      "volume": 4,
+      "transmissionsIn": 0,
+      "transmissionsOut": 4,
+      "claims": [
+        {
+          "harness": "unknown harness",
+          "version": null,
+          "userAgent": "python-httpx/0.28.1",
+          "lastSeen": "2026-10-02T22:07:00Z"
+        }
+      ]
+    },
+    {
+      "kind": "agent",
+      "id": "01K6HB7H0002GG002YXM000008",
+      "name": "triage",
+      "state": "established",
+      "parent": null,
+      "volume": 9,
+      "transmissionsIn": 6,
+      "transmissionsOut": 3,
+      "claims": [
+        {
+          "harness": "oh-my-pi",
+          "version": "1.9.2",
+          "userAgent": "oh-my-pi/1.9.2",
+          "lastSeen": "2026-10-02T22:08:00Z"
+        }
+      ]
+    },
+    {
+      "kind": "agent",
+      "id": "01K6HB7H0002GG002YXM000009",
+      "name": "…000009",
+      "state": "provisional",
+      "parent": "01K6HB7H0002GG002YXM000004",
+      "volume": 5,
+      "transmissionsIn": 5,
+      "transmissionsOut": 0,
+      "claims": [
+        {
+          "harness": "Codex",
+          "version": "0.48.0",
+          "userAgent": "codex_cli_rs/0.48.0",
+          "lastSeen": "2026-10-02T22:09:00Z"
+        }
+      ]
+    },
+    {
+      "kind": "agent",
+      "id": "01K6HB7H0002GG002YXM00000A",
+      "name": "deploy",
+      "state": "registered",
+      "parent": null,
+      "volume": 7,
+      "transmissionsIn": 5,
+      "transmissionsOut": 2,
+      "claims": []
+    },
+    {
+      "kind": "agent",
+      "id": "01K6HB7H0002GG002YXM00000B",
+      "name": "scraper",
+      "state": "established",
+      "parent": null,
+      "volume": 24,
+      "transmissionsIn": 3,
+      "transmissionsOut": 21,
+      "claims": [
+        {
+          "harness": "Codex",
+          "version": "0.47.1",
+          "userAgent": "codex_cli_rs/0.47.1",
+          "lastSeen": "2026-10-02T22:11:00Z"
+        }
+      ]
+    },
+    {
+      "kind": "agent",
+      "id": "01K6HB7H0002GG002YXM00000C",
+      "name": "summarizer",
+      "state": "established",
+      "parent": "01K6HB7H0002GG002YXM000006",
+      "volume": 16,
+      "transmissionsIn": 8,
+      "transmissionsOut": 8,
+      "claims": [
+        {
+          "harness": "Claude Code",
+          "version": "2.0.77",
+          "userAgent": "claude-cli/2.0.77 (external, cli)",
+          "lastSeen": "2026-10-02T22:12:00Z"
+        }
+      ]
+    },
+    {
+      "kind": "channel",
+      "id": "01K6HB7H000320002YXM000001",
+      "name": "/srv/shared/handoff*",
+      "origin": "declared",
+      "detection": "active",
+      "confirmation": "confirmed",
+      "policy": "sanctioned",
+      "volume": 142
+    },
+    {
+      "kind": "channel",
+      "id": "01K6HB7H000320002YXM000002",
+      "name": "pastebin.com/raw/x9Qe2LmP",
+      "origin": "discovered",
+      "detection": "active",
+      "confirmation": "unconfirmed",
+      "policy": "unreviewed",
+      "volume": 70
+    },
+    {
+      "kind": "channel",
+      "id": "01K6HB7H000320002YXM000003",
+      "name": "mcp:linear/get_issue:ENG-4411",
+      "origin": "discovered",
+      "detection": "active",
+      "confirmation": "confirmed",
+      "policy": "unsanctioned",
+      "volume": 61
+    },
+    {
+      "kind": "channel",
+      "id": "01K6HB7H000320002YXM000004",
+      "name": "github.com/acme/ops-notes*",
+      "origin": "declared",
+      "detection": "dormant",
+      "confirmation": "confirmed",
+      "policy": "unreviewed",
+      "volume": 25
+    }
+  ],
+  "edges": [
+    {
+      "kind": "access",
+      "agent": "01K6HB7H0002GG002YXM000001",
+      "channel": "01K6HB7H000320002YXM000001",
+      "op": "write",
+      "accesses": 50,
+      "share": 0.16778523489932887
+    },
+    {
+      "kind": "access",
+      "agent": "01K6HB7H0002GG002YXM000001",
+      "channel": "01K6HB7H000320002YXM000002",
+      "op": "read",
+      "accesses": 25,
+      "share": 0.08389261744966443
+    },
+    {
+      "kind": "access",
+      "agent": "01K6HB7H0002GG002YXM000004",
+      "channel": "01K6HB7H000320002YXM000001",
+      "op": "read",
+      "accesses": 72,
+      "share": 0.24161073825503357
+    },
+    {
+      "kind": "access",
+      "agent": "01K6HB7H0002GG002YXM000004",
+      "channel": "01K6HB7H000320002YXM000002",
+      "op": "write",
+      "accesses": 10,
+      "share": 0.03355704697986577
+    },
+    {
+      "kind": "access",
+      "agent": "01K6HB7H0002GG002YXM000005",
+      "channel": "01K6HB7H000320002YXM000002",
+      "op": "write",
+      "accesses": 24,
+      "share": 0.08053691275167785
+    },
+    {
+      "kind": "access",
+      "agent": "01K6HB7H0002GG002YXM000006",
+      "channel": "01K6HB7H000320002YXM000001",
+      "op": "write",
+      "accesses": 20,
+      "share": 0.06711409395973154
+    },
+    {
+      "kind": "access",
+      "agent": "01K6HB7H0002GG002YXM000006",
+      "channel": "01K6HB7H000320002YXM000003",
+      "op": "read",
+      "accesses": 31,
+      "share": 0.1040268456375839
+    },
+    {
+      "kind": "access",
+      "agent": "01K6HB7H0002GG002YXM000008",
+      "channel": "01K6HB7H000320002YXM000004",
+      "op": "read",
+      "accesses": 13,
+      "share": 0.0436241610738255
+    },
+    {
+      "kind": "access",
+      "agent": "01K6HB7H0002GG002YXM00000A",
+      "channel": "01K6HB7H000320002YXM000002",
+      "op": "read",
+      "accesses": 11,
+      "share": 0.03691275167785235
+    },
+    {
+      "kind": "access",
+      "agent": "01K6HB7H0002GG002YXM00000B",
+      "channel": "01K6HB7H000320002YXM000003",
+      "op": "write",
+      "accesses": 30,
+      "share": 0.10067114093959731
+    },
+    {
+      "kind": "access",
+      "agent": "01K6HB7H0002GG002YXM00000B",
+      "channel": "01K6HB7H000320002YXM000004",
+      "op": "write",
+      "accesses": 12,
+      "share": 0.040268456375838924
+    },
+    {
+      "kind": "transmission",
+      "from": "01K6HB7H0002GG002YXM000001",
+      "to": "01K6HB7H0002GG002YXM000002",
+      "route": "dl.p2c",
+      "routeKind": "delegation",
+      "share": 0.12048192771084337,
+      "transmissions": 20,
+      "matchedBytes": 14657
+    },
+    {
+      "kind": "transmission",
+      "from": "01K6HB7H0002GG002YXM000002",
+      "to": "01K6HB7H0002GG002YXM000001",
+      "route": "dl.c2p",
+      "routeKind": "delegation",
+      "share": 0.10843373493975904,
+      "transmissions": 18,
+      "matchedBytes": 13232
+    },
+    {
+      "kind": "transmission",
+      "from": "01K6HB7H0002GG002YXM000001",
+      "to": "01K6HB7H0002GG002YXM000003",
+      "route": "dl.p2c",
+      "routeKind": "delegation",
+      "share": 0.05421686746987952,
+      "transmissions": 9,
+      "matchedBytes": 6616
+    },
+    {
+      "kind": "transmission",
+      "from": "01K6HB7H0002GG002YXM000003",
+      "to": "01K6HB7H0002GG002YXM000001",
+      "route": "dl.c2p",
+      "routeKind": "delegation",
+      "share": 0.04216867469879518,
+      "transmissions": 7,
+      "matchedBytes": 5228
+    },
+    {
+      "kind": "transmission",
+      "from": "01K6HB7H0002GG002YXM000004",
+      "to": "01K6HB7H0002GG002YXM000001",
+      "route": "dr.tool.mcp__github__get_pull_request",
+      "routeKind": "direct",
+      "share": 0.03614457831325301,
+      "transmissions": 6,
+      "matchedBytes": 4534
+    },
+    {
+      "kind": "transmission",
+      "from": "01K6HB7H0002GG002YXM000004",
+      "to": "01K6HB7H0002GG002YXM000009",
+      "route": "dl.p2c",
+      "routeKind": "delegation",
+      "share": 0.030120481927710843,
+      "transmissions": 5,
+      "matchedBytes": 3803
+    },
+    {
+      "kind": "transmission",
+      "from": "01K6HB7H0002GG002YXM000006",
+      "to": "01K6HB7H0002GG002YXM00000C",
+      "route": "dl.p2c",
+      "routeKind": "delegation",
+      "share": 0.04819277108433735,
+      "transmissions": 8,
+      "matchedBytes": 6070
+    },
+    {
+      "kind": "transmission",
+      "from": "01K6HB7H0002GG002YXM00000C",
+      "to": "01K6HB7H0002GG002YXM000006",
+      "route": "dl.c2p",
+      "routeKind": "delegation",
+      "share": 0.04819277108433735,
+      "transmissions": 8,
+      "matchedBytes": 6292
+    },
+    {
+      "kind": "transmission",
+      "from": "01K6HB7H0002GG002YXM000007",
+      "to": "01K6HB7H0002GG002YXM000005",
+      "route": "un",
+      "routeKind": "unobserved",
+      "share": 0.024096385542168676,
+      "transmissions": 4,
+      "matchedBytes": 3183
+    },
+    {
+      "kind": "transmission",
+      "from": "01K6HB7H0002GG002YXM000008",
+      "to": "01K6HB7H0002GG002YXM000006",
+      "route": "dr.user",
+      "routeKind": "direct",
+      "share": 0.018072289156626505,
+      "transmissions": 3,
+      "matchedBytes": 2489
+    },
+    {
+      "kind": "transmission",
+      "from": "01K6HB7H0002GG002YXM00000A",
+      "to": "01K6HB7H0002GG002YXM000005",
+      "route": "dr.sys",
+      "routeKind": "direct",
+      "share": 0.012048192771084338,
+      "transmissions": 2,
+      "matchedBytes": 1832
+    },
+    {
+      "kind": "transmission",
+      "from": "01K6HB7H0002GG002YXM000002",
+      "to": "01K6HB7H0002GG002YXM00000B",
+      "route": "un",
+      "routeKind": "unobserved",
+      "share": 0.018072289156626505,
+      "transmissions": 3,
+      "matchedBytes": 2267
+    }
+  ]
+}

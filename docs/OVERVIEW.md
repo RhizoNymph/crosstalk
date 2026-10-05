@@ -88,8 +88,11 @@ Overview:
     L6's HTTP adapters (analysis, topics_sidecar): SidecarTopicModel and
     SidecarLayoutFitter over a Python sidecar (sidecar/topics: UMAP,
     HDBSCAN and c-TF-IDF behind a versioned JSON contract, deterministic
-    for a seed) and OpenAiEmbedder over an OpenAI-compatible endpoint. The
-    other crates are still empty. The phased implementation plan, with its
+    for a seed) and OpenAiEmbedder over an OpenAI-compatible endpoint.
+    The operator UI (crosstalk-ui, ui/) runs on the spec's L8 traits,
+    implemented by a fixture backend by default, or by the in-process
+    surface seeded with the synthetic world (ui). The other crates are
+    still empty. The phased implementation plan, with its
     dependencies, milestones and current status, is docs/roadmap.md.
 
   subsystems:
@@ -195,6 +198,21 @@ Overview:
       Alloy, node-exporter, cAdvisor, postgres-exporter). Where things are
       stored, how they run and how they scale is in docs/infrastructure.md.
 
+    ui: >
+      Crate crosstalk-ui (ui/, a workspace member; Topcoat): the operator
+      web UI. Server-rendered pages plus custom elements for the topology
+      graph and UMAP projection (WebGL), the time brush (SVG) and the
+      live-update listener, fed by the UI's own /data/ routes. Reads, acts
+      and subscribes only through the spec's L8 traits (QueryApi,
+      OperatorActions, LiveFeed), called on one concrete backend type (a
+      deterministic fixture implementing them until it is wired to
+      crosstalk-client), plus two documented gap traits for what the spec
+      does not expose to it yet (the bucket width and the present; the
+      export formats a backend writes) and a temporary channel-semantics
+      shim (ui/src/pending) standing in for the spec's cross-agent channel
+      types until the gateway's port lands. Callers come from the spec's
+      operator directory in trusted mode; view windows are bucket-aligned
+      and every linked view pins the URL's topic version.
   data_flow: >
     Each layer below runs in its own crate (crosstalk-<layer>); layer crates
     exchange data only as spec bus events or through spec traits that
@@ -298,6 +316,11 @@ Overview:
     responses, errors, live-feed items and bus events between
     nodes are decoded strictly, so a node that does not know a field or
     variant refuses the delivery rather than dropping data.
+    The operator UI renders L8's reads (QueryApi), with view state in the
+    URL (a bucket-aligned window and a pinned topic version), sends every
+    operator action through OperatorActions::act, downloads exports as
+    JSON Lines, and re-renders a page's region when the live feed (SSE from
+    LiveFeed) names something the page shows.
 
 Features Index:
   type_spec:
@@ -328,6 +351,48 @@ Features Index:
     entry_points: [spec/types/mod.rs, spec/Cargo.toml]
     depends_on: []
     doc: docs/features/type_spec.md
+  follow_mode:
+    status: design
+    description: >
+      Keeping UI views live as a gateway produces data. A follow=<span>
+      page key resolves on every render to the window ending at the
+      present (rounded up to a bucket) and is pinned into today's citeable
+      from/to URLs for everything below the page; the provisional tail
+      after the watermark is marked. Pages refresh by a server re-render
+      that Topcoat merges into the DOM, triggered by a tracked signal that
+      <ct-live> sets (replacing the dev-hook region swap), so the WebGL
+      elements keep their nodes and update in place (topology keeps node
+      positions and places new nodes with fixed-node ForceAtlas2; the time
+      brush stays anchored right). Includes the spec gap list (the present,
+      the bucket width, a coalesced traffic event, channel events for
+      traffic-driven listing changes, data revisions, projection
+      extensions), the fixture's controllable clock and deterministic
+      trickle, the testing strategy and a parallel implementation plan.
+    entry_points:
+      - ui/src/url/view_state.rs
+      - ui/src/pages/view.rs
+      - ui/src/components/live.rs
+      - ui/src/data/live.rs
+      - ui/elements/src/live/element.ts
+      - ui/elements/src/shared/element.ts
+      - ui/elements/src/topology/element.ts
+    depends_on: [ui, query_surface, type_spec]
+    doc: docs/features/follow_mode.md
+  conversation_view:
+    status: design
+    description: >
+      Operator page for one agent's conversation, turn by turn: inputs of
+      any role in request order and outputs, with provenance marks (text
+      other agents originated, output spans and who later read them,
+      relayed text, sub-agent delegations), harness claims, origin (fork,
+      compaction), compaction boundaries, WebSocket increments and replayed traffic
+      (labelled, filterable). Structure
+      with View, text with Content; turns paged by citeable index windows.
+      Waits on proposed L8 conversation reads
+      (docs/handoff/conversation-view-spec.md, INV-1000..1029).
+    entry_points: []
+    depends_on: [ui, query_surface, type_spec]
+    doc: docs/features/conversation_view.md
   query_surface:
     description: >
       The L8 contract the UI reads and acts through: callers from the
@@ -477,9 +542,9 @@ Features Index:
       edition 2024, unsafe forbidden, shared exact pins, one lock), one
       empty library per implementation crate, the dependency rule (layer
       crates never depend on each other or on the composers api, client,
-      eval or gateway, take
-      transport only as a dev-dependency, and take memory, sim and testkit
-      only as dev-dependencies) checked by an architecture test over cargo
+      eval or gateway, take transport only as a dev-dependency, take
+      memory, sim and testkit only as dev-dependencies, and never depend
+      on the tool crate demo) checked by an architecture test over cargo
       metadata, scripts/check.sh (fmt, clippy, test, doc, invariant
       validator), and the invariant evidence path convention
       (crosstalk_spec:: or crosstalk_<crate>::, checked by
@@ -1058,7 +1123,9 @@ Features Index:
       observability (host, container, Postgres and log metrics, dashboards,
       alert rules). Defines the contract the crosstalk binary implements:
       serve/migrate/healthcheck commands, ports 8080/8081/9464, the ops
-      endpoints and the config file's top-level keys.
+      endpoints and the config file's top-level keys. Also notes for
+      running on a shared host (snap Docker, host port clashes, syncing a
+      checkout, a smoke test, inspecting the distroless gateway).
     entry_points:
       - deploy/compose.yaml
       - deploy/run.sh
@@ -1067,6 +1134,42 @@ Features Index:
       - docs/infrastructure.md
     depends_on: [workspace, store, ingress, transport]
     doc: docs/features/deploy.md
+  demo:
+    description: >
+      crosstalk-demo (crates/demo, a tool crate no layer depends on), one
+      binary with four subcommands. upstream is a fake Anthropic upstream:
+      POST /v1/messages, streaming SSE or JSON, in the real wire format,
+      answered with text and tool_use deterministically from a seed and the
+      request body, with a configurable first-byte wait and stream pacing.
+      wiki is an in-memory HTTP page store with versions and authors, the
+      shared channel. swarm runs N agents through the crosstalk proxy. Each
+      keeps a growing conversation, resent whole every turn, with fake
+      x-api-keys per agent or group. The one declared tool is http_request
+      (L5's HTTP tool contract); the model's GET and PUT calls of
+      <wiki>/pages/<page> run against the wiki, and their results go back as
+      tool_result, so one agent's model output reaches another's input and
+      L5 can discover the wiki as a channel. swarm reports throughput,
+      p50/p95/p99 time to first byte and total time, and the expected
+      transmissions, self-reads, rereads and misses, optionally as a
+      ground-truth JSONL file (schema v2: header, agent clusters, and per
+      read the writer's and reader's session, turn and tool_use id, the
+      content's hashes and its exact message/block in the reader's request),
+      which ct-eval scores against.
+      healthcheck serves the distroless image. deploy/compose.demo.yaml,
+      deploy/demo.Dockerfile, deploy/demo/crosstalk.demo.json and run.sh
+      demo up|run|down|logs run the demo on the compose stack. It reuses
+      testkit's harness client and SSE parser and the spec's seeded random
+      source.
+    entry_points:
+      - crates/demo/src/main.rs
+      - crates/demo/src/upstream/mod.rs
+      - crates/demo/src/wiki/mod.rs
+      - crates/demo/src/swarm/mod.rs
+      - crates/demo/src/swarm/truth.rs
+      - deploy/compose.demo.yaml
+      - deploy/run.sh
+    depends_on: [testkit, deploy, gateway, workspace]
+    doc: docs/features/demo.md
   world:
     description: >
       crosstalk-world (crates/world, TestSupport): the UI fixture's
@@ -1097,6 +1200,47 @@ Features Index:
       - crates/world/tests/support/mod.rs
     depends_on: [type_spec, memory, transport, workspace]
     doc: docs/features/world.md
+  ui:
+    description: >
+      Operator web UI (crosstalk-ui, a workspace member): an overview,
+      topology (agents or bipartite with channels) with an edge drawer,
+      transmission evidence with verdicts, search and UMAP exploration,
+      topics (with version pins), channels (active, unconfirmed, declared
+      with no traffic yet, and the review queue; a channel's suspected
+      transmissions with verdicts; a shared confirmed-only filter) with
+      promotion, agents with merges, alerts and rules, export (JSON Lines
+      downloads), audit and pipeline, kept current by the SSE live feed.
+      Reads and acts through the spec's L8 traits (QueryApi,
+      OperatorActions, LiveFeed), the channel-semantics port's shapes
+      included, on one of three backends (backend::AppBackend): the
+      deterministic fixture (default; optionally replaying its last hours
+      for demos), the world backend (crosstalk_api::InProcess over the
+      memory stores, seeded with crosstalk-world), or the gateway's live
+      composition behind the `live` cargo feature (a stub until the
+      gateway provides it). What the spec lacks is two documented gap
+      traits (ui/src/contract: bucket width and present, export formats).
+      Built from the workspace root into deploy/ui.Dockerfile and
+      deploy/ui.demo.Dockerfile with its Topcoat asset bundle.
+    entry_points:
+      - ui/src/main.rs
+      - ui/src/app.rs
+      - ui/src/backend/mod.rs
+      - ui/src/backend/dispatch.rs
+      - ui/src/backend/fixture/surface.rs
+      - ui/src/backend/world/mod.rs
+      - ui/src/contract/mod.rs
+      - ui/src/pages/mod.rs
+      - ui/src/pages/view.rs
+      - ui/src/data/mod.rs
+      - ui/src/data/live.rs
+      - ui/src/pages/topology/mod.rs
+      - ui/src/pages/explore/mod.rs
+      - ui/src/pages/export/mod.rs
+      - ui/elements/src/topology/element.ts
+      - ui/elements/src/live/element.ts
+      - deploy/ui.Dockerfile
+    depends_on: [query_surface, read_models, export, type_spec, workspace, deploy, memory, world, surface_service]
+    doc: docs/features/ui.md
   eval:
     description: >
       crosstalk-eval and the ct-eval CLI (a composer): dataset converters

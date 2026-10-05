@@ -1,0 +1,29 @@
+[package]
+name = "crosstalk-demo"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "Demo and load generation for crosstalk: a fake Anthropic upstream, a shared wiki, and a swarm of simulated agents that talk through it."
+
+[lints]
+workspace = true
+
+[dependencies]
+crosstalk-spec = { path = "../../spec" }
+crosstalk-testkit = { path = "../testkit" }
+blake3.workspace = true
+bytes.workspace = true
+http-body-util.workspace = true
+hyper = { workspace = true, features = ["client", "http1", "server"] }
+hyper-util = { workspace = true, features = ["tokio"] }
+serde.workspace = true
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["fs", "io-util", "macros", "net", "rt", "rt-multi-thread", "signal", "sync", "time"] }
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter", "fmt", "json", "std"] }
+
+[[bin]]
+name = "crosstalk-demo"
+path = "src/main.rs"

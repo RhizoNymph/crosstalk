@@ -1,0 +1,16 @@
+{
+  "listen": "0.0.0.0:3000",
+  "operator": {
+    "id": "01J9ZQ3W8D0000000000000001",
+    "name": "researcher"
+  },
+  "backend": {
+    "fixture": {
+      "seed": 7,
+      "replay": {
+        "window_minutes": 240,
+        "speed": 10
+      }
+    }
+  }
+}

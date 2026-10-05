@@ -19,8 +19,8 @@ them and the contract the `crosstalk` binary implements for them.
 | Structured state | Postgres 18 + pgvector + pg_trgm, one schema per layer | Read replica for `api`; hash-partitioned fingerprints |
 | Time series (D3) | Plain Postgres, no TimescaleDB | Native range partitions on time-bucketed tables |
 | Bodies | `FsBlobStore` on the `data` named volume (`/var/lib/crosstalk/blobs`) | S3-compatible store behind `BlobStore` |
-| Body retention | Kept (issue #38) | Per-message blobs are enough; raw bodies are not stored |
-| Embeddings | Any OpenAI-compatible endpoint (config `embeddings`) | Scaling compute is the provider's problem, not ours |
+| Body retention | Per-message blobs kept indefinitely (issue #38); raw request bodies are never stored | Retention jobs dropping old message blobs |
+| Embeddings | A hosted OpenAI-compatible endpoint, so embedding never waits on a slow local model: OpenAI `text-embedding-3-small` in `deploy/config/crosstalk.json`'s `embeddings` block, keyed by `CROSSTALK_EMBEDDINGS_API_KEY` in `deploy/.env`. Another hosted provider is a `base_url` and `model` change | A local model on the deployment host's GPU, behind the same config block; scaling hosted compute is the provider's problem, not ours |
 | Topics / UMAP (D1) | Behind the L6 traits; batch, not streaming | A Python batch worker (umap-learn, HDBSCAN) if Rust options fall short |
 | API server (D5) | axum (on the workspace's hyper 1.11.1) | — |
 | Infra observability | Prometheus, Grafana, Loki, Alloy, node-exporter, cAdvisor, postgres-exporter | Same stack; app metrics join on the ops port |
@@ -119,6 +119,36 @@ what grow.
 
 Only the proxy binds beyond localhost; the API, UI, Grafana, Prometheus and
 Postgres bind 127.0.0.1 (reach them over SSH forwarding, or change the bind).
+node-exporter runs on the host network on port 19100. Every published host
+port is a `deploy/.env` variable, so the stack fits beside other projects
+on a shared machine; `docs/features/deploy.md` ("Running on a shared host")
+covers snap Docker, port clashes, syncing a checkout and a smoke test.
+
+### Accepted risks
+
+Accepted for now, for the hackathon, each with what replaces it:
+
+| Risk | Now | What changes it |
+|---|---|---|
+| Plain HTTP on the proxy | Agents' requests, credentials included, cross the network unencrypted; the proxy belongs on a trusted network | A TLS terminator in front of the proxy |
+| Unbounded disk growth | Bodies are kept (issue #38) and nothing deletes blobs or rows; see the growth figures under sizing | Retention jobs: dropping time partitions in Postgres and unreferenced blobs |
+| No backups | Losing the host's disk loses Postgres and the blobs | WAL-G (or pgBackRest) to object storage, and bucket versioning once blobs move to S3 |
+
+## Demo and load testing
+
+`deploy/compose.demo.yaml` layers a token-free demo over the stack. A fake
+Anthropic upstream (`fake-upstream`) answers deterministically, with
+realistic first-byte waits and 1–10 s streams. A shared in-memory wiki
+(`wiki`) is the channel. A swarm of simulated agents (`swarm`, profile
+`swarm`, never restarted) drives 100–200 concurrent conversations through
+`crosstalk:8080`. Its agents write wiki pages with the model's words and
+read each other's pages back as tool results. The gateway reads
+`deploy/demo/crosstalk.demo.json`, which points the Anthropic route at the
+fake upstream. `bash deploy/run.sh demo up`, then `demo run [--agents N
+...]`, prints throughput, client-observed latency percentiles and the
+expected cross-agent transmissions. Watch the stack in the usual Grafana
+dashboards meanwhile. `demo down` stops it. Details and knobs:
+`docs/features/demo.md`.
 
 ## Observability (infrastructure)
 
@@ -129,7 +159,7 @@ Postgres bind 127.0.0.1 (reach them over SSH forwarding, or change the bind).
 | Postgres connections, TPS, cache hits, size, slow statements | postgres-exporter + `pg_stat_statements` | same |
 | Every container's logs | Alloy → Loki (7 days), `level` lifted from JSON logs | Grafana Explore / logs row |
 | Alerts | Prometheus rules (`deploy/prometheus/rules/`) | Prometheus and Grafana UIs (no Alertmanager) |
-| The gateway itself | `crosstalk:9464/metrics` scrape job, already configured | to be filled by the application's own metrics |
+| The gateway itself | `crosstalk:9464/metrics` (capture, pipeline and exchange log counters, draining) and its WARN/ERROR logs | Grafana "crosstalk / gateway"; alerts in `deploy/prometheus/rules/gateway.yml` |
 
 Application metrics (proxy added latency, capture drops, bus queue depth,
 L7 watermark lag, embedding queue) belong to the application and arrive on
