@@ -9,15 +9,13 @@
 //! unscored rather than scoring it zero. Everything after `detect`
 //! (predictions, scoring, reports, gates) is detector-agnostic.
 
-use std::collections::BTreeMap;
-
-use crosstalk_spec::derived::flow::resource::Locator;
 use crosstalk_spec::derived::flow::transmission::Transmission;
-use crosstalk_spec::derived::provenance::span::SpanLocation;
-use crosstalk_spec::ids::{ChannelId, SpanId};
+use crosstalk_spec::interfaces::l4_provenance::IndexedSpan;
 
 use crate::corpus::{SourceError, TraceSource, World};
-use crate::predict::{PredictError, Prediction, WorldDirectory, from_transmission};
+use crate::predict::memory::{AccessTable, ChannelTable, SpanTable};
+use crate::predict::reads::{ReadError, Reads, Resolved, ready};
+use crate::predict::{AgentMap, PredictError, Prediction, WorldDirectory, from_transmission};
 use crate::reference::{ReferenceConfig, ReferenceError, run as reference_run};
 use crate::score::{Score, Scorer};
 
@@ -32,15 +30,16 @@ pub enum DetectionStatus {
     NoConsumers { ingested: u64 },
 }
 
-/// What a detector reports for one world.
+/// What a detector reports for one world: its transmissions, the corpus
+/// agents behind its agent ids, and what its transmissions name (spans,
+/// accesses, channel resources) read through the spec's read traits
+/// ([`Resolved::gather`]).
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Detection {
     pub status: DetectionStatus,
     pub transmissions: Vec<Transmission>,
-    /// The resources of each channel its transmissions were routed through.
-    pub channels: BTreeMap<ChannelId, Vec<Locator>>,
-    /// Where each originated span sits, when the detector can say.
-    pub spans: BTreeMap<SpanId, SpanLocation>,
+    pub agents: AgentMap,
+    pub resolved: Resolved,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -49,6 +48,10 @@ pub enum DetectError {
     Reference(#[from] ReferenceError),
     #[error(transparent)]
     Pipeline(#[from] crate::gateway::PipelineError),
+    #[error(transparent)]
+    Live(#[from] crate::detect::live::LiveError),
+    #[error("reading the detection's evidence: {0}")]
+    Read(#[from] ReadError),
 }
 
 /// Something that finds transmissions in a world's exchanges.
@@ -71,17 +74,34 @@ impl Detector for ReferenceDetector {
         "reference"
     }
 
+    /// Runs the matcher, then reads its evidence back through the spec's
+    /// read traits over eval-owned tables: the same path a gateway's stores
+    /// are read through.
     fn detect(&mut self, world: &World) -> Result<Detection, DetectError> {
         let output = reference_run(world, self.config)?;
+        let mut spans = SpanTable::default();
+        for span in &output.spans {
+            spans.insert(
+                span.id,
+                IndexedSpan {
+                    exchange: span.exchange,
+                    author: span.author,
+                    location: span.location,
+                },
+            );
+        }
+        let channels = ChannelTable::new(output.channels);
+        let reads = Reads {
+            spans: &spans,
+            accesses: &AccessTable::default(),
+            channels: &channels,
+        };
+        let resolved = ready(Resolved::gather(&output.transmissions, reads))??;
         Ok(Detection {
             status: DetectionStatus::Detected,
-            spans: output
-                .spans
-                .iter()
-                .map(|span| (span.id, span.location))
-                .collect(),
             transmissions: output.transmissions,
-            channels: output.channels,
+            agents: AgentMap::of_world(world),
+            resolved,
         })
     }
 }
@@ -107,8 +127,7 @@ pub enum WorldError {
 
 /// The predictions of one world's detection, sorted.
 pub fn predictions(world: &World, detection: &Detection) -> Result<Vec<Prediction>, PredictError> {
-    let directory =
-        WorldDirectory::new(world, detection.channels.clone()).with_spans(detection.spans.clone());
+    let directory = WorldDirectory::new(world, &detection.agents, &detection.resolved);
     let mut out = Vec::new();
     for transmission in &detection.transmissions {
         out.extend(from_transmission(transmission, &directory)?);

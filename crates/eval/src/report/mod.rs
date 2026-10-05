@@ -24,7 +24,7 @@ pub struct ReportRow {
     pub recall: Option<f64>,
 }
 
-/// Counts summed over every row, with their rates.
+/// Counts summed over every content row, with their rates.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Summary {
     #[serde(flatten)]
@@ -62,10 +62,7 @@ impl Report {
         failures: Vec<String>,
         unscored: Unscored,
     ) -> Self {
-        let mut overall = Counts::default();
-        for row in &score.rows {
-            overall.add(&row.counts);
-        }
+        let overall = score.total(&crate::score::Selector::default());
         let rows = score
             .rows
             .into_iter()
