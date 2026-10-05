@@ -21,7 +21,7 @@ new to the conversation is open for L3 (P4.1).
 """
 
 [evidence]
-property = "crosstalk_reconstruct::tests::new_system_only_when_first_or_changed"
+property = "crosstalk_reconstruct::tests::thread_props::new_system_only_when_first_or_changed"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

@@ -12,7 +12,7 @@ owned by reconstruction, not envelope dedup.
 """
 
 [evidence]
-dst = "crosstalk_reconstruct::tests::dst_rethreading_is_idempotent"
+dst = "crosstalk_reconstruct::tests::dst::dst_rethreading_is_idempotent"
 
 [evidence-review]
-dst = { agent = "false", human = "false" }
+dst = { agent = "true", human = "false" }

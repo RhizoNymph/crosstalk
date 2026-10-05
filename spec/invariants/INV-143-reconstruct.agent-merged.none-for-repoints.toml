@@ -13,7 +13,7 @@ trigger merge alerts for them.
 """
 
 [evidence]
-unit = "crosstalk_reconstruct::tests::repointed_agents_publish_no_agent_merged"
+unit = "crosstalk_reconstruct::tests::table::repointed_agents_publish_no_agent_merged"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }

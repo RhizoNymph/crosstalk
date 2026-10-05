@@ -13,7 +13,7 @@ for another compaction because it still contains the summary.
 """
 
 [evidence]
-property = "crosstalk_reconstruct::tests::turn_after_compaction_extends_compaction"
+property = "crosstalk_reconstruct::tests::thread_props::turn_after_compaction_extends_compaction"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }
