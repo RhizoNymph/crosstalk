@@ -101,6 +101,7 @@ fn body(turn: &Turn) -> MessageBody {
                         Err(_) => ToolArguments::Invalid(arguments.clone()),
                     },
                     execution: ToolExecution::Client,
+                    signature: None,
                 }));
             }
             MessageBody::Assistant(parts)

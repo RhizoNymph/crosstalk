@@ -70,6 +70,7 @@ fn assistant_part(block: &Value) -> AssistantPart {
                     Err(_) => ToolArguments::Invalid(arguments),
                 },
                 execution: ToolExecution::Client,
+                signature: None,
             })
         }
         _ => AssistantPart::Text(Text(text(&block["text"]))),
