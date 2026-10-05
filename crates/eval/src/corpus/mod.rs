@@ -126,6 +126,14 @@ pub enum SourceError {
     Salt(#[from] crate::datasets::salt::SaltError),
     #[error(transparent)]
     Corpus(#[from] CorpusError),
+    #[error(transparent)]
+    OpenSwe(#[from] crate::datasets::open_swe::OpenSweError),
+    #[error(transparent)]
+    Lmcache(#[from] crate::datasets::lmcache::LmcacheError),
+    #[error(transparent)]
+    Splice(#[from] crate::datasets::swe_splice::SpliceError),
+    #[error(transparent)]
+    Cipher(#[from] crate::datasets::cipher::CipherError),
 }
 
 /// A dataset as a stream of worlds.

@@ -5,6 +5,12 @@
 //! ct-eval truth --dataset salt [--root DIR] [--limit N] [--include TEXT]… [--out FILE]
 //! ```
 //!
+//! `--dataset open-swe | lmcache` mixes `--agents-per-world` independent
+//! trajectories per world from `--limit` shards (`--count` rows or sessions
+//! from each); `--dataset swe-splice` plants `--count` splices and
+//! `--dataset cipher` builds `--count` pairs per cipher, both seeded by
+//! `--corpus-seed`.
+//!
 //! `run` prints the table, writes `report.json` and `report.txt` to `--out`,
 //! and exits 2 when a gate fails. `truth` writes the labels as JSONL.
 
@@ -16,9 +22,14 @@ use std::process::ExitCode;
 use anyhow::{Context, Result};
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use crosstalk_eval::config::EvalConfig;
-use crosstalk_eval::corpus::TraceSource;
+use crosstalk_eval::corpus::{SourceError, TraceSource, World};
+use crosstalk_eval::datasets::cipher::{self, CipherSource};
+use crosstalk_eval::datasets::lmcache::LmcacheSource;
+use crosstalk_eval::datasets::open_swe::{self, Mixing, OpenSweSource};
 use crosstalk_eval::datasets::salt::{SaltSource, Selection};
+use crosstalk_eval::datasets::swe_splice::{self, SpliceSource};
 use crosstalk_eval::gateway::PipelineDetector;
+use crosstalk_eval::keys::DatasetId;
 use crosstalk_eval::pipeline::{Detector, ReferenceDetector, run};
 use crosstalk_eval::reference::ReferenceConfig;
 use crosstalk_eval::report::table::render;
@@ -44,13 +55,53 @@ enum Command {
 #[derive(Clone, Copy, ValueEnum)]
 enum Dataset {
     Salt,
+    OpenSwe,
+    Lmcache,
+    SweSplice,
+    Cipher,
 }
 
 impl Dataset {
     fn name(self) -> &'static str {
         match self {
             Self::Salt => "salt",
+            Self::OpenSwe => "open_swe",
+            Self::Lmcache => "lmcache",
+            Self::SweSplice => "swe_splice",
+            Self::Cipher => "cipher",
         }
+    }
+}
+
+/// Any dataset's source.
+enum Source {
+    Salt(SaltSource),
+    OpenSwe(OpenSweSource),
+    Lmcache(LmcacheSource),
+    Splice(SpliceSource),
+    Cipher(CipherSource),
+}
+
+impl TraceSource for Source {
+    fn id(&self) -> DatasetId {
+        match self {
+            Self::Salt(source) => source.id(),
+            Self::OpenSwe(source) => source.id(),
+            Self::Lmcache(source) => source.id(),
+            Self::Splice(source) => source.id(),
+            Self::Cipher(source) => source.id(),
+        }
+    }
+
+    fn worlds(&mut self) -> impl Iterator<Item = Result<World, SourceError>> + '_ {
+        let worlds: Box<dyn Iterator<Item = Result<World, SourceError>> + '_> = match self {
+            Self::Salt(source) => Box::new(source.worlds()),
+            Self::OpenSwe(source) => Box::new(source.worlds()),
+            Self::Lmcache(source) => Box::new(source.worlds()),
+            Self::Splice(source) => Box::new(source.worlds()),
+            Self::Cipher(source) => Box::new(source.worlds()),
+        };
+        worlds
     }
 }
 
@@ -70,6 +121,16 @@ struct SourceArgs {
     /// Keep only files whose path contains this (repeatable).
     #[arg(long)]
     include: Vec<String>,
+    /// Trajectories mixed into one world (open-swe, lmcache).
+    #[arg(long, default_value_t = open_swe::AGENTS_PER_WORLD)]
+    agents_per_world: usize,
+    /// Rows (open-swe) or sessions (lmcache) read from each file, splices
+    /// (swe-splice) or pairs per cipher (cipher).
+    #[arg(long)]
+    count: Option<usize>,
+    /// Seeds the synthetic corpora (swe-splice, cipher).
+    #[arg(long, default_value_t = 0)]
+    corpus_seed: u64,
 }
 
 #[derive(Args)]
@@ -143,7 +204,7 @@ fn crate_file(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join(name)
 }
 
-fn open_source(args: &SourceArgs) -> Result<SaltSource> {
+fn open_source(args: &SourceArgs) -> Result<Source> {
     let root = match &args.root {
         Some(root) => root.clone(),
         None => {
@@ -164,10 +225,38 @@ fn open_source(args: &SourceArgs) -> Result<SaltSource> {
         limit: args.limit,
         include: args.include.clone(),
     };
-    match args.dataset {
-        Dataset::Salt => SaltSource::open(&root, &selection)
-            .with_context(|| format!("opening SALT at {}", root.display())),
-    }
+    let opening = || format!("opening {} at {}", args.dataset.name(), root.display());
+    let mixing = Mixing {
+        agents_per_world: args.agents_per_world,
+        per_shard: args.count,
+    };
+    Ok(match args.dataset {
+        Dataset::Salt => Source::Salt(SaltSource::open(&root, &selection).with_context(opening)?),
+        Dataset::OpenSwe => {
+            Source::OpenSwe(OpenSweSource::open(&root, &selection, mixing).with_context(opening)?)
+        }
+        Dataset::Lmcache => {
+            Source::Lmcache(LmcacheSource::open(&root, &selection, mixing).with_context(opening)?)
+        }
+        Dataset::SweSplice => Source::Splice(
+            SpliceSource::open(
+                &root,
+                &selection,
+                args.count.unwrap_or(swe_splice::SPLICES),
+                args.corpus_seed,
+            )
+            .with_context(opening)?,
+        ),
+        Dataset::Cipher => Source::Cipher(
+            CipherSource::open(
+                &root,
+                &selection,
+                args.count.unwrap_or(cipher::PAIRS_PER_CIPHER),
+                args.corpus_seed,
+            )
+            .with_context(opening)?,
+        ),
+    })
 }
 
 fn run_command(args: RunArgs) -> Result<ExitCode> {

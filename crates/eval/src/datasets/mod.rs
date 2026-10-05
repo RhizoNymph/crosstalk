@@ -1,1 +1,9 @@
+pub mod background;
+pub mod chat;
+pub mod cipher;
+pub mod lmcache;
+pub mod open_swe;
+pub mod parquet_rows;
+pub mod rng;
 pub mod salt;
+pub mod swe_splice;
