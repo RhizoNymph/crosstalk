@@ -14,12 +14,13 @@ mod bind;
 mod find;
 mod suite;
 
-use crosstalk_conformance::harness::{Harness, Operators, Provision, ProvisionError, Provisioned};
-use crosstalk_spec::aggregates::series::BucketWidth;
-use crosstalk_spec::support::{EmptyWindow, TimeWindow, Timestamp};
+use crosstalk_conformance::harness::{Harness, Provision, ProvisionError, Provisioned};
+use crosstalk_spec::ids::OperatorId;
+use crosstalk_spec::interfaces::l8_surface::PermissionSet;
+use crosstalk_spec::support::{EmptyWindow, TimeWindow};
 
 use crate::backend::fixture::FixtureBackend;
-use crate::backend::fixture::clock::{BUCKET, all_time};
+use crate::backend::fixture::clock::all_time;
 use crate::backend::fixture::export::digest::RowDigest;
 use crate::backend::fixture::world::{OPERATOR_ONCALL, OPERATOR_RESEARCHER};
 
@@ -71,19 +72,14 @@ impl Harness for FixtureHarness {
         Ok(Provisioned { backend, bindings })
     }
 
-    fn operators(&self) -> Operators {
-        Operators {
-            lead: OPERATOR_RESEARCHER,
-            other: OPERATOR_ONCALL,
+    /// The researcher for every permission, the on-call operator for any
+    /// other set: the fixture checks only the caller's permissions.
+    fn operator(&self, holds: PermissionSet) -> OperatorId {
+        if holds == PermissionSet::ALL {
+            OPERATOR_RESEARCHER
+        } else {
+            OPERATOR_ONCALL
         }
-    }
-
-    fn bucket_width(&self) -> BucketWidth {
-        BUCKET
-    }
-
-    async fn now(&self, backend: &FixtureBackend) -> Timestamp {
-        backend.state.read().await.clock.now()
     }
 
     /// `[START, NOW + BUCKET)`: every generated access and confirmation.
