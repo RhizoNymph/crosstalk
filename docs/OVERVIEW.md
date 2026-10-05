@@ -1114,4 +1114,31 @@ Features Index:
       - crates/flow/src/consumer/apply.rs
     depends_on: [type_spec, channel_semantics, memory, sim, testkit, transport]
     doc: docs/features/flow_correlator.md
+  eval_ai_village:
+    description: >
+      The AI Village converter (crosstalk-eval datasets::ai_village, ct-eval
+      --dataset ai-village). Claude Code mode: the Claude Agent SDK agent's
+      exact calls, one world per context, with construction-tier labels for
+      every chat message it read through the village MCP server's
+      get_events (keyed by event id; Direct/ToolResult). Window mode
+      (default 2026-07-13..17): every standard agent, one world per village
+      day, requests rebuilt from responses (system prompt from goals and
+      memory, session history, chat since the previous call), structural
+      chat labels, heuristic repository-channel labels from bash accesses
+      on canonical repository URLs, GUI edits counted. Bash accesses follow
+      the agreed L5 HttpTool contract: curl, wget and gh/glab api keep
+      their equivalent http_request {method, url, body} call, git and the
+      forge CLIs' issue commands are marked Bash-only, every resource is a
+      canonical URL (L5's url_locator off the forges, the repository's web
+      URL on them), and each write carries the spec's WriteOutcome
+      (rejected writes never pair). Its streaming table passes, resource
+      normalizer and bash access tagger are reusable.
+    entry_points:
+      - crates/eval/src/datasets/ai_village/mod.rs
+      - crates/eval/src/datasets/ai_village/tables.rs
+      - crates/eval/src/datasets/ai_village/resource.rs
+      - crates/eval/src/datasets/ai_village/access/mod.rs
+      - crates/eval/src/datasets/ai_village/access/http.rs
+    depends_on: [eval, flow_extract]
+    doc: docs/features/eval_ai_village.md
 ```

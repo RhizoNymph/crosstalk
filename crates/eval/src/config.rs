@@ -72,6 +72,7 @@ pub const DEFAULT_DATASETS: &[(&str, &str)] = &[
     ("salt", "salt-nlp"),
     ("agentdojo", "agentdojo"),
     ("tau2", "tau2-bench/data/tau2/results/final"),
+    ("ai-village", "ai-village"),
     ("open_swe", "open-swe-traces"),
     ("lmcache", "lmcache"),
     ("swe_splice", "open-swe-traces"),

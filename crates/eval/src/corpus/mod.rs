@@ -127,6 +127,8 @@ pub enum SourceError {
     #[error(transparent)]
     Corpus(#[from] CorpusError),
     #[error(transparent)]
+    AiVillage(#[from] crate::datasets::ai_village::AiVillageError),
+    #[error(transparent)]
     OpenSwe(#[from] crate::datasets::open_swe::OpenSweError),
     #[error(transparent)]
     Lmcache(#[from] crate::datasets::lmcache::LmcacheError),

@@ -1,4 +1,5 @@
 pub mod agentdojo;
+pub mod ai_village;
 pub mod background;
 pub mod chat;
 pub mod cipher;
