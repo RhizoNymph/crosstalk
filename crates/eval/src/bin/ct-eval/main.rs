@@ -2,7 +2,7 @@
 //!
 //! ```text
 //! ct-eval run   --dataset salt [--root DIR] [--limit N] [--include TEXT]… [--out DIR] [--gates FILE]
-//!               [--detector reference|pipeline|live] [--seed N]
+//!               [--detector reference|pipeline|live] [--seed N] [--forwarding off|on]
 //! ct-eval truth --dataset salt [--root DIR] [--limit N] [--include TEXT]… [--out FILE]
 //! ct-eval swarm --truth FILE --exchanges LOG [--blobs DIR] --export FILE [--evidence FILE] [--out DIR] [--gates FILE]
 //! ct-eval swarm-fetch --api URL [--token-env VAR] [--truth FILE | --since-unix-ms MS] --out DIR
@@ -55,7 +55,7 @@ use crosstalk_eval::datasets::swarm::{SwarmSelection, SwarmSource};
 use crosstalk_eval::datasets::swe_splice::{self, SpliceSource};
 use crosstalk_eval::datasets::tau2::{self, Tau2Source};
 use crosstalk_eval::datasets::wiki::{WikiSelection, WikiSource};
-use crosstalk_eval::detect::live::{LiveDetector, LiveSettings, gateway_backend};
+use crosstalk_eval::detect::live::{Forwarding, LiveDetector, LiveSettings, gateway_backend};
 use crosstalk_eval::gateway::PipelineDetector;
 use crosstalk_eval::keys::DatasetId;
 use crosstalk_eval::pipeline::{Detector, ReferenceDetector, run};
@@ -288,8 +288,29 @@ struct RunArgs {
     /// for AgentDojo. Default: the built-in extractors.
     #[arg(long)]
     extract_config: Option<PathBuf>,
+    /// `--detector live`: whether L4 indexes text an agent forwards from
+    /// its own input under that agent (`ProvenanceConfig::forwarding`).
+    /// Default off, the shipped default; gates marked `forwarding = "on"`
+    /// apply only to runs with it on, the others only to runs with it off.
+    #[arg(long, value_enum, default_value_t = ForwardingChoice::Off)]
+    forwarding: ForwardingChoice,
     #[command(flatten)]
     matcher: MatcherArgs,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+enum ForwardingChoice {
+    Off,
+    On,
+}
+
+impl ForwardingChoice {
+    fn setting(self) -> Forwarding {
+        match self {
+            Self::Off => Forwarding::Off,
+            Self::On => Forwarding::On,
+        }
+    }
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -533,11 +554,13 @@ fn run_command(args: RunArgs) -> Result<ExitCode> {
         }
         DetectorChoice::Live => {
             let secs = |value: Option<u64>| value.map(std::time::Duration::from_secs);
-            let settings = LiveSettings::short(args.seed)?.with_windows(
-                secs(args.correlation_window),
-                secs(args.evidence_window),
-                secs(args.suspected_ttl),
-            )?;
+            let settings = LiveSettings::short(args.seed)?
+                .with_windows(
+                    secs(args.correlation_window),
+                    secs(args.evidence_window),
+                    secs(args.suspected_ttl),
+                )?
+                .with_forwarding(args.forwarding.setting());
             let backend = match &args.extract_config {
                 Some(path) => {
                     let text = std::fs::read_to_string(path)
@@ -557,7 +580,12 @@ fn run_command(args: RunArgs) -> Result<ExitCode> {
     if let Some(mut out) = dump {
         out.flush().context("writing predictions")?;
     }
-    let gates = gates.for_detector(args.detector.gated());
+    // Forwarding is a live setting: every other detector runs as shipped.
+    let forwarding = match args.detector {
+        DetectorChoice::Live => args.forwarding.setting(),
+        DetectorChoice::Reference | DetectorChoice::Pipeline => Forwarding::Off,
+    };
+    let gates = gates.for_run(args.detector.gated(), forwarding);
     let outcomes = gates.evaluate(&summary.score);
     let failures = summary.failures.iter().map(ToString::to_string).collect();
     let report = Report::new(
