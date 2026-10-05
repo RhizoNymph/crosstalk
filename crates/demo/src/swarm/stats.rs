@@ -15,6 +15,7 @@ use tokio::sync::mpsc;
 use tokio::time::Instant;
 
 use super::truth::{ReadRecord, Row, RunInfo, TruthBook, WriteRecord};
+use crate::protocol::Scenario;
 
 /// How one request ended, from the client's side.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
@@ -123,6 +124,7 @@ pub struct Report {
     pub agents: u32,
     pub keys: u32,
     pub seed: u64,
+    pub scenario: Scenario,
     pub elapsed_secs: f64,
     pub requests: u64,
     pub ok: u64,
@@ -374,6 +376,7 @@ pub async fn collect(setup: CollectorSetup, mut events: mpsc::Receiver<Event>) -
         agents: setup.info.agents,
         keys: setup.info.keys,
         seed: setup.info.seed,
+        scenario: setup.info.scenario,
         elapsed_secs: elapsed,
         requests,
         ok,
@@ -422,8 +425,8 @@ impl fmt::Display for Report {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         writeln!(
             f,
-            "crosstalk demo swarm: {} agents on {} keys, {:.1} s, seed {}, run {}",
-            self.agents, self.keys, self.elapsed_secs, self.seed, self.run
+            "crosstalk demo swarm: {} agents on {} keys, {:.1} s, seed {}, scenario {}, run {}",
+            self.agents, self.keys, self.elapsed_secs, self.seed, self.scenario, self.run
         )?;
         let failed: Vec<String> = self
             .failures

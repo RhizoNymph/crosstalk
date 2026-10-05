@@ -29,7 +29,7 @@ use serde::Serialize;
 use serde_json::Value;
 use sha2::Digest;
 
-use crate::protocol::{HTTP_TOOL, PageSlug};
+use crate::protocol::{HTTP_TOOL, PageSlug, Scenario};
 
 /// The schema version in the header.
 pub const VERSION: u32 = 2;
@@ -42,6 +42,7 @@ pub struct RunInfo {
     /// A ULID, minted at start.
     pub run: String,
     pub seed: u64,
+    pub scenario: Scenario,
     pub agents: u32,
     pub keys: u32,
     pub agents_per_key: u32,
@@ -207,6 +208,8 @@ pub struct ReadTool {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Header {
     pub version: u32,
+    /// The run's scenario; a reader treats a missing field as `headline`.
+    pub scenario: Scenario,
     pub world: String,
     pub run: String,
     pub seed: u64,
@@ -318,6 +321,7 @@ impl Row {
         let world = info.world();
         let mut rows = vec![Row::Header(Header {
             version: VERSION,
+            scenario: info.scenario,
             world: world.clone(),
             run: info.run.clone(),
             seed: info.seed,

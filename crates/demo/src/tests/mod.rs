@@ -5,6 +5,7 @@ mod deploy;
 mod generate;
 mod servers;
 mod sse;
+mod text;
 mod truth;
 mod truth_run;
 mod units;

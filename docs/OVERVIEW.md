@@ -1262,6 +1262,11 @@ Features Index:
       POST /v1/messages, streaming SSE or JSON, in the real wire format,
       answered with text and tool_use deterministically from a seed and the
       request body, with a configurable first-byte wait and stream pacing.
+      Its prose is high-entropy (unrelated outputs share no 32-byte run) or
+      templated boilerplate, picked per request by a [style:headline] /
+      [style:boilerplate] marker the swarm puts in each agent's system
+      prompt from its --scenario headline|boilerplate (default headline),
+      so one stateless upstream serves both scenarios.
       wiki is an in-memory HTTP page store with versions and authors, the
       shared channel. swarm runs N agents through the crosstalk proxy. Each
       keeps a growing conversation, resent whole every turn, with fake
@@ -1272,7 +1277,7 @@ Features Index:
       L5 can discover the wiki as a channel. swarm reports throughput,
       p50/p95/p99 time to first byte and total time, and the expected
       transmissions, self-reads, rereads and misses, optionally as a
-      ground-truth JSONL file (schema v2: header, agent clusters, and per
+      ground-truth JSONL file (schema v2: header with the scenario, agent clusters, and per
       read the writer's and reader's session, turn and tool_use id, the
       content's hashes and its exact message/block in the reader's request),
       which ct-eval scores against.
@@ -1307,7 +1312,11 @@ Features Index:
       service). Prints precision, recall and the gate result and passes
       ct-eval's exit code through (2 = a gate failed). Fails fast unless
       /readyz has the `live` and `api` tasks running and the API takes the
-      token. ct-eval ships in the crosstalk-demo image.
+      token. ct-eval ships in the crosstalk-demo image. --scenario
+      headline (default, high-entropy prose: the headline precision and
+      recall) or boilerplate (templated prose unrelated agents share: a
+      regression scenario for false positives on shared text), recorded in
+      bench.env.
     entry_points:
       - deploy/run.sh
       - deploy/bench.sh

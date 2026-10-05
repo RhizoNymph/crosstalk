@@ -155,6 +155,7 @@ pub async fn run(
         stream_fraction = config.stream_fraction.get(),
         claude_code_shape = config.claude_code_shape,
         seed = config.seed,
+        scenario = %config.scenario,
         "swarm starting"
     );
     let shared = Arc::new(Shared {
@@ -169,6 +170,7 @@ pub async fn run(
             info: RunInfo {
                 run,
                 seed: config.seed,
+                scenario: config.scenario,
                 agents,
                 keys,
                 agents_per_key: config.agents_per_key.get(),

@@ -19,6 +19,7 @@ and produces no score. See [Pending](#pending) for what is still needed.
 
 - `run.sh bench`, implemented in `deploy/bench.sh`: one run from a fresh
   world to a printed score, with the swarm's knobs passed through.
+- Two scenarios ([below](#scenarios)): `headline` and `boilerplate`.
 - The `bench` compose service (profile `bench`): `ct-eval` with the run
   directory bind-mounted and the gateway's `data` volume mounted read-only.
 - `ct-eval` and its gates file in the demo image.
@@ -46,6 +47,7 @@ On node0, from the repository root, with `deploy/.env` in place
 bash deploy/run.sh bench                                  # 20 agents, 2m, seed 42; asks before restarting
 bash deploy/run.sh bench --yes --agents 50 --duration 5m --seed 7
 bash deploy/run.sh bench --yes --claude-code-shape -- --agents-per-key 2 --write-fraction 0.3
+bash deploy/run.sh bench --yes --scenario boilerplate     # the shared-boilerplate regression scenario
 ```
 
 | Option | Default | Meaning |
@@ -53,6 +55,7 @@ bash deploy/run.sh bench --yes --claude-code-shape -- --agents-per-key 2 --write
 | `--agents N` | 20 | Swarm agents |
 | `--duration D` | 2m | Swarm run time (`crosstalk-demo` duration syntax) |
 | `--seed N` | 42 | Swarm seed |
+| `--scenario S` | headline | `headline` or `boilerplate`; passed to the swarm and recorded in `bench.env` |
 | `--claude-code-shape` | off | The swarm's Claude Code request shape |
 | `--settle-timeout SECS` | 900 | Give up waiting for Live's watermark to pass the swarm's end after this long |
 | `--yes`, `-y` | off | Restart `wiki` and `crosstalk` without asking |
@@ -60,6 +63,28 @@ bash deploy/run.sh bench --yes --claude-code-shape -- --agents-per-key 2 --write
 
 The exit code is ct-eval's: 0 when every gate passes (or none applies), 2
 when a gate fails, 1 for any failure before or during scoring.
+
+### Scenarios
+
+`--scenario` is passed to the swarm (`crosstalk-demo swarm --scenario`),
+which ends every agent's system prompt with a style marker; the fake
+upstream picks its prose generator from it per request, so one running
+upstream serves both and nothing restarts between scenarios
+([demo.md](demo.md#scenarios-and-prose-generators)). The truth header
+records it (`"scenario"`), as do `bench.env` and the printed headline.
+
+- **`headline`** (default): high-entropy model prose. Unrelated agents'
+  outputs share no 32-byte run, so a detection is either a real copy
+  through the wiki or a gateway error. Its precision and recall are the
+  benchmark's headline numbers.
+- **`boilerplate`**: the templated prose earlier runs used. Unrelated
+  outputs share template fragments of 30–64 bytes (`Open question: does
+  consumer lag interact with …`), as real agents share boilerplate. It is a
+  regression scenario for false positives on shared text: the first live
+  run on node0 scored precision 0.175 overall (0.951 on the wiki-channel
+  path) here, almost every false positive a 34–46 byte exact match between
+  different agents' outputs. Compare boilerplate runs with boilerplate
+  runs only.
 
 ## Data and control flow
 
@@ -109,8 +134,8 @@ Step by step:
    containers to report healthy (Docker resets health to `starting` on a
    restart), then repeats step 3's checks against the restarted gateway.
 5. **Swarm.** The run id is the UTC start time (`20261005T141500Z`). The
-   bench creates `deploy/bench/<run>/`, records the parameters and the image
-   ids in `bench.env`, and runs the `swarm` service once with the run
+   bench creates `deploy/bench/<run>/`, records the scenario, the
+   parameters and the image ids in `bench.env`, and runs the `swarm` service once with the run
    directory mounted at `/bench` and `--ground-truth /bench/<run>/truth.jsonl`.
    It runs as the invoking user (`--user $(id -u):$(id -g)`), so the files
    are theirs. The swarm's report is kept in `swarm.txt`. A missing or empty
@@ -142,7 +167,7 @@ Step by step:
    example:
 
    ```text
-   bench 20261005T141500Z
+   bench 20261005T141500Z (headline)
    overall: recall 0.912 (52 / 57), precision 0.963 (52 correct, 2 false, 1 unjudged)
    gates: none apply to demo-swarm
    result: pass
@@ -155,7 +180,7 @@ Step by step:
 
 ```text
 deploy/bench/<run>/
-  bench.env          run id, swarm arguments, settle window, image ids
+  bench.env          run id, scenario, swarm arguments, settle window, image ids
   truth.jsonl        ground truth v2 (the swarm)
   swarm.txt          the swarm's report
   healthz.json       the last /healthz body read while settling
@@ -245,6 +270,8 @@ like the `DEMO_*` variables they are not in `.env.example`.
   starts; an existing directory stops the run.
 - **The world is fresh:** an empty wiki and empty detection state at the
   start of every run. The exchange log and blobs are not fresh, by design.
+- **The scenario is recorded** in `bench.env` and the truth header, so a
+  score is never read against the other scenario's baseline.
 - **ct-eval's exit code is the bench's** once scoring runs (0 pass, 2 gate
   failed); any earlier failure is 1 with a message naming the step.
 - `deploy/bench/` is created by the invoking user before any bind mount of

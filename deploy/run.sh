@@ -16,7 +16,7 @@
 #   bash deploy/run.sh demo logs [service...]
 #
 #   bash deploy/run.sh bench [--agents N] [--duration D] [--seed N] [--claude-code-shape]
-#                            [--settle-timeout SECS] [--yes] [-- swarm options...]
+#                            [--scenario S] [--settle-timeout SECS] [--yes] [-- swarm options...]
 #       one scored detection benchmark on the demo stack: restarts wiki and
 #       crosstalk, runs the swarm with ground truth, waits for the gateway to
 #       settle, exports its detections and scores them with ct-eval into

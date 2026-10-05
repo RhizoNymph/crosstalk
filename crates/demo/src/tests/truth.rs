@@ -13,8 +13,8 @@ use crate::anthropic::{AssistantMessage, ResponseBlock, StopReason, Usage};
 use crate::http::BaseUrl;
 use crate::knobs::Span;
 use crate::protocol::{
-    CallRefused, HTTP_TOOL, PageSlug, Task, WikiCall, page_url, read_input, tool_definitions,
-    write_input,
+    CallRefused, HTTP_TOOL, PageSlug, Scenario, Task, WikiCall, page_url, read_input,
+    tool_definitions, write_input,
 };
 use crate::swarm::agent::{Agent, Shared};
 use crate::swarm::config::SwarmConfig;
@@ -462,6 +462,7 @@ fn info() -> RunInfo {
     RunInfo {
         run: "01J0000000000000000000000A".to_owned(),
         seed: 42,
+        scenario: Scenario::Boilerplate,
         agents: 5,
         keys: 3,
         agents_per_key: 2,
@@ -672,6 +673,7 @@ fn rows_have_exactly_the_v2_keys() {
         json!([
             "kind",
             "version",
+            "scenario",
             "world",
             "run",
             "seed",
@@ -686,6 +688,7 @@ fn rows_have_exactly_the_v2_keys() {
     );
     assert_eq!(header["value"]["kind"], "header");
     assert_eq!(header["value"]["version"], 2);
+    assert_eq!(header["value"]["scenario"], "boilerplate");
     assert_eq!(header["value"]["world"], "swarm-01J0000000000000000000000A");
     // One cluster per key group, singletons included.
     let clusters: Vec<Value> = opening[1..]

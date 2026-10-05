@@ -278,6 +278,8 @@ fn check(run: &Run) -> (BTreeSet<String>, bool) {
     assert_eq!(header["keys"], 3);
     assert_eq!(header["agents_per_key"], 2);
     assert_eq!(header["claude_code_shape"], run.config.claude_code_shape);
+    assert_eq!(header["scenario"], run.config.scenario.name());
+    assert_eq!(run.report.scenario, run.config.scenario);
     assert_eq!(header["gateway_url"], run.config.gateway.url());
     assert_eq!(header["wiki_url"], run.config.wiki.url());
     let started = header["started_at_unix_ms"].as_u64().expect("start");

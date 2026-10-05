@@ -83,10 +83,11 @@ impl Agent {
         let system = format!(
             "You are {name}, a research agent on a team of {} agents. Your focus is {}. \
              The team shares a wiki at {}/pages/<name>: read pages with {HTTP_TOOL} GET before \
-             relying on them and record what you learn with {HTTP_TOOL} PUT. Be concise.",
+             relying on them and record what you learn with {HTTP_TOOL} PUT. Be concise.\n\n{}",
             config.agents,
             focus.label,
-            config.wiki.url()
+            config.wiki.url(),
+            config.scenario.marker()
         );
         Self {
             index,
