@@ -12,6 +12,8 @@
 //! - [`tests`]: the tests, one `async fn` per test, generic over the
 //!   harness, by area. Each names the `spec/invariants` id it checks.
 //! - [`suite!`]: instantiates every test for one harness.
+//! - [`world`]: binds the named scenarios to a world `crosstalk-world`
+//!   seeded into any stores, for harnesses over real stores.
 //!
 //! Assertions are relations the spec defines (an edge's transmissions page
 //! holds exactly the edge's count, a merge then an unmerge leaves the
@@ -23,11 +25,13 @@
 //! implementation.
 
 pub mod harness;
+pub mod routed;
 pub mod scenario;
 mod suite;
 pub mod support;
 pub mod tests;
+pub mod world;
 
-pub use harness::{Harness, Knobs, Provision, ProvisionError, Provisioned};
+pub use harness::{ExpectedFailure, Harness, Knobs, Provision, ProvisionError, Provisioned};
 pub use scenario::{Bindings, Scenario};
 pub use suite::{RunError, run};

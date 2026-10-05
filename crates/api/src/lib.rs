@@ -12,6 +12,8 @@
 
 pub mod http;
 pub mod in_process;
+#[cfg(feature = "world")]
+pub mod world;
 
 pub use in_process::{Backbone, InProcess, InProcessError, InProcessOptions, MemoryStores};
 

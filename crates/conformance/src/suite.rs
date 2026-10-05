@@ -1,21 +1,66 @@
 //! Running the suite: [`run`] drives one test on a current-thread runtime,
 //! and [`suite!`](crate::suite) instantiates every test for a harness.
 
+use std::panic::{AssertUnwindSafe, catch_unwind};
+
 use crate::harness::Harness;
 
-/// The runtime a test needed could not be built.
+/// Why a test run did not pass.
 #[derive(Debug, thiserror::Error)]
-#[error("building the test runtime: {0}")]
-pub struct RunError(#[from] std::io::Error);
+pub enum RunError {
+    #[error("building the test runtime: {0}")]
+    Runtime(#[from] std::io::Error),
+    /// A test the harness lists as an expected failure passed: the
+    /// implementation was fixed, so the entry must go.
+    #[error(
+        "{test} passes but the harness lists it as an expected failure ({reason}); remove the entry"
+    )]
+    UnexpectedPass {
+        test: &'static str,
+        reason: &'static str,
+    },
+}
 
-/// Runs `test` against `harness` on a fresh current-thread runtime with
-/// time enabled. Nothing is spawned, so no future needs to be `Send`.
-pub fn run<H: Harness>(harness: H, test: impl AsyncFnOnce(&H)) -> Result<(), RunError> {
+/// Runs the test `name` against `harness` on a fresh current-thread
+/// runtime with time enabled. The suite spawns nothing itself; a harness
+/// may spawn on it (a server, a relay task), and those tasks run while the
+/// test is driven.
+///
+/// A test the harness lists in [`Harness::expected_failures`] must fail:
+/// its panic is caught and reported with the listed reason, and a pass is
+/// [`RunError::UnexpectedPass`].
+pub fn run<H: Harness>(
+    harness: H,
+    name: &'static str,
+    test: impl AsyncFnOnce(&H),
+) -> Result<(), RunError> {
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;
-    runtime.block_on(test(&harness));
-    Ok(())
+    let expected = harness
+        .expected_failures()
+        .iter()
+        .find(|failure| failure.test == name)
+        .copied();
+    match expected {
+        None => {
+            runtime.block_on(test(&harness));
+            Ok(())
+        }
+        Some(failure) => {
+            let outcome = catch_unwind(AssertUnwindSafe(|| runtime.block_on(test(&harness))));
+            match outcome {
+                Err(_) => {
+                    eprintln!("{name}: expected failure: {}", failure.reason);
+                    Ok(())
+                }
+                Ok(()) => Err(RunError::UnexpectedPass {
+                    test: name,
+                    reason: failure.reason,
+                }),
+            }
+        }
+    }
 }
 
 /// Instantiates every conformance test for a harness: one `#[test]` per
@@ -126,7 +171,7 @@ macro_rules! __suite_tests {
                 $(
                     #[test]
                     fn $test() -> ::core::result::Result<(), $crate::RunError> {
-                        $crate::run($harness, async |harness| {
+                        $crate::run($harness, concat!(stringify!($area), "::", stringify!($test)), async |harness| {
                             $crate::tests::$area::$test(harness).await
                         })
                     }

@@ -70,6 +70,23 @@ pub trait Harness {
 
     /// A fresh export digest hasher.
     fn row_hasher(&self) -> Self::Hasher;
+
+    /// Tests this implementation is known to fail, each with why: a gap
+    /// tracked elsewhere, not a reason to weaken the test. The runner
+    /// requires each listed test to fail, so a fix shows up as a failure
+    /// asking for the entry's removal.
+    fn expected_failures(&self) -> &[ExpectedFailure] {
+        &[]
+    }
+}
+
+/// A test an implementation is known to fail.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ExpectedFailure {
+    /// `area::test`, as `suite!` names it.
+    pub test: &'static str,
+    /// What is wrong or missing, and where it is tracked.
+    pub reason: &'static str,
 }
 
 /// What to provision.

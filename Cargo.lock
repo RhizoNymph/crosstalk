@@ -539,11 +539,13 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "bytes",
+ "crosstalk-conformance",
  "crosstalk-memory",
  "crosstalk-spec",
  "crosstalk-surface",
  "crosstalk-testkit",
  "crosstalk-transport",
+ "crosstalk-world",
  "form_urlencoded",
  "futures-util",
  "http-body-util",
@@ -594,6 +596,7 @@ name = "crosstalk-conformance"
 version = "0.1.0"
 dependencies = [
  "crosstalk-spec",
+ "crosstalk-world",
  "thiserror",
  "tokio",
 ]
