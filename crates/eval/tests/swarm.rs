@@ -8,6 +8,7 @@ use crosstalk_eval::corpus::{Coverage, TraceSource, World};
 use crosstalk_eval::datasets::swarm::codec::{Layer, decode};
 use crosstalk_eval::datasets::swarm::{SwarmSelection, SwarmSource};
 use crosstalk_eval::pipeline::{ReferenceDetector, run};
+use crosstalk_eval::predict::EvidenceClass;
 use crosstalk_eval::truth::{Expectation, MatchNeed, Tier};
 use crosstalk_spec::aggregates::quality::MatchClass;
 use crosstalk_spec::derived::provenance::matching::Codec;
@@ -106,7 +107,7 @@ fn reference_decodes_one_layer() {
     let mut detector = ReferenceDetector::default();
     let summary = run(&mut source, &mut detector, 0, |_, _| {});
     let decoded = summary.score.total(&crosstalk_eval::score::Selector {
-        class: Some(MatchClass::Decoded),
+        class: Some(EvidenceClass::from(MatchClass::Decoded)),
         ..Default::default()
     });
     // Three expected decoded transmissions; the reference finds the two
