@@ -466,3 +466,81 @@ fn the_reference_finds_editor_view_splices() {
     assert!(missed_editor.is_empty(), "{missed_editor:#?}");
     assert_eq!(summary.score.totals.expectations, 16);
 }
+
+/// The read call and its result as canonical messages, through the same
+/// chat conversion the splice generator uses.
+fn spliced_read(
+    form: ReadForm,
+    path: &str,
+    body: &str,
+) -> (
+    crosstalk_spec::observed::message::ToolCall,
+    crosstalk_spec::observed::message::ToolResult,
+) {
+    use crosstalk_spec::observed::message::{AssistantPart, MessageBody};
+    let id = "splice_read";
+    let (result, _) = form.result(path, id, body);
+    let bodies = crosstalk_eval::datasets::chat::bodies(&[form.call(path, id), result])
+        .unwrap_or_else(|e| panic!("{e}"));
+    let call = match &bodies[0] {
+        MessageBody::Assistant(parts) => parts.iter().find_map(|part| match part {
+            AssistantPart::ToolCall(call) => Some(call.clone()),
+            _ => None,
+        }),
+        _ => None,
+    }
+    .unwrap_or_else(|| panic!("no tool call: {:?}", bodies[0]));
+    let result = match &bodies[1] {
+        MessageBody::Tool(results) => results.iter().next().cloned(),
+        _ => None,
+    }
+    .unwrap_or_else(|| panic!("no tool result: {:?}", bodies[1]));
+    (call, result)
+}
+
+/// What crosstalk-flow's real L5 extractors make of a spliced read.
+fn extracted(form: ReadForm, path: &str) -> Vec<crosstalk_flow::extract::Classified> {
+    use crosstalk_flow::extract::{ConversationContext, ExtractConfig, ToolExtractors};
+    let config = ExtractConfig::default();
+    let context = ConversationContext::default();
+    let extractors = ToolExtractors::new(&config, &context);
+    let (call, result) = spliced_read(form, path, "def f():\n    return 42\n");
+    extractors
+        .extract_classified(&call, Some(&result))
+        .unwrap_or_else(|e| panic!("{form}: {e:?}"))
+}
+
+const SPLICED_PATH: &str = "/testbed/src/pkg/module.py";
+
+fn file_read(path: &str) -> crosstalk_flow::extract::Classified {
+    use crosstalk_flow::extract::ExtractedOp;
+    let editor = extracted(ReadForm::EditorView { observation: false }, path);
+    assert_eq!(editor.len(), 1, "{editor:?}");
+    assert_eq!(editor[0].op, ExtractedOp::Read);
+    editor[0].clone()
+}
+
+#[test]
+fn the_real_extractor_reads_an_editor_view_as_the_file() {
+    let read = file_read(SPLICED_PATH);
+    assert_eq!(
+        read.locator,
+        Locator::File {
+            host: None,
+            path: SPLICED_PATH.to_owned(),
+        }
+    );
+}
+
+#[test]
+fn the_real_extractor_reads_a_shell_cat_as_the_same_file() {
+    use crosstalk_flow::extract::ExtractedOp;
+    let shell = extracted(ReadForm::ShellCat, SPLICED_PATH);
+    assert_eq!(shell.len(), 1, "cat -n resolves to one access: {shell:?}");
+    assert_eq!(shell[0].op, ExtractedOp::Read);
+    assert_eq!(
+        shell[0].locator,
+        file_read(SPLICED_PATH).locator,
+        "the shell read and the editor view name one resource"
+    );
+}
