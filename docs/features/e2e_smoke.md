@@ -226,19 +226,17 @@ Then read through the UI, or through `crosstalk_e2e::read`.
 
 ## Gaps found (for the gateway's composition)
 
-- **The evidence test's assertions** (open; the owner decides). Since L4
-  cuts argument spans per string value (INV-1057), the origin excerpt of
-  B's tool-result match highlights A's page text (the `content` value,
-  shown JSON-escaped as the part stores it), which contains `SENTENCE` but
-  is not limited to it. Still failing, at `surface.rs` line 240
-  (`SENTENCE.contains(quoted.trim())`):
-  - the origin highlight is the whole page text;
-  - the read highlight is the matched run in B's tool result, which spans
-    the `Read` tool's line-number prefixes and the page's later lines;
-  - a second match is carried by `ReaderOutput`: B's `Read` call repeats
-    A's file path (42 characters, at least one k-gram, so it is its own
-    originated span), and that match's highlights are the path. Its
-    carrier assertion would fail next.
+- **The evidence test's assertions** (open; the owner decides). L4 cuts
+  argument spans per string value (INV-1057) and excludes locator values
+  (INV-1058), so the evidence page holds one match, carried by B's
+  `Read` tool result. It still fails at `surface.rs` line 240
+  (`SENTENCE.contains(quoted.trim())`) on its first excerpt:
+  - the origin highlight is A's whole page text (the `content` value,
+    shown JSON-escaped as the part stores it), which contains `SENTENCE`
+    but is not limited to it;
+  - the read highlight, checked next, is the matched run in B's tool
+    result: it starts mid-sentence and spans the `Read` tool's
+    line-number prefixes and the page's later lines.
 - Resolved by `Live`: the evidence feeder fills `MemoryEvidence` from
   L4's span store and L5's `AccessStore`; the stores' outbox is forwarded
   onto the bus; the gateway runs a minimal L6 classifier.
