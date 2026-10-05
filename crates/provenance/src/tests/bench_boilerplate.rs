@@ -250,12 +250,12 @@ async fn short_secret_from_a_prompted_writer_matches_the_first_writer() {
 }
 
 /// The tradeoff of inherited fragments, stated as a test: a writer that
-/// rewrites a secret it was given (every token of it in its own tool
-/// result) into a short message of its own wording is not matched where
-/// the message is read. Like a forwarded span with forwarding off, the
-/// fragment carries nothing the writer added.
+/// re-punctuates a secret it was given (the same tokens, in the same order,
+/// in its own tool result) into a short message is not matched where the
+/// message is read. Like a forwarded span with forwarding off, the fragment
+/// carries nothing the writer added.
 #[tokio::test]
-async fn a_short_rewording_of_a_given_secret_is_not_matched() {
+async fn a_short_repunctuated_copy_of_a_given_secret_is_not_matched() {
     let mut world = World::new(real());
     let writer = world.agent();
     world
@@ -263,17 +263,52 @@ async fn a_short_rewording_of_a_given_secret_is_not_matched() {
             Turn::new(writer, at(1))
                 .input(tool_result(
                     "call_1",
-                    "vault: the node is 12, the rendezvous is 03:00, key 7f3a",
+                    "vault> rendezvous-key=7f3a; node=12; at=03:00",
                 ))
-                .output(assistant_text("rendezvous key 7f3a, node 12, 03:00")),
+                .output(assistant_text("rendezvous key 7f3a, node 12, at 03:00")),
         )
         .await;
     let reader = world.agent();
     let read = world
-        .run(Turn::new(reader, at(10)).input(user_text("rendezvous key 7f3a, node 12, 03:00")))
+        .run(Turn::new(reader, at(10)).input(user_text("rendezvous key 7f3a, node 12, at 03:00")))
         .await;
     let matches = world.matches_of(read.exchange);
     assert!(matches.is_empty(), "{}", brief_matches(&matches));
+}
+
+/// SALT's shape: a short reply composed from words the writer saw spread
+/// over its conversation (every token given, but not in that order in any
+/// one part) is the writer's own text, and a delivery of it matches.
+#[tokio::test]
+async fn a_short_reply_from_words_seen_apart_still_matches() {
+    let mut world = World::new(real());
+    let writer = world.agent();
+    world
+        .run(
+            Turn::new(writer, at(1))
+                .history(user_text("Can you check the vendor budget for 2025?"))
+                .history(tool_result("call_1", "status: pending finance review"))
+                .input(user_text("Please confirm when the review is done."))
+                .output(assistant_text(
+                    "Budget review pending with finance for 2025.",
+                )),
+        )
+        .await;
+    let reader = world.agent();
+    let read = world
+        .run(
+            Turn::new(reader, at(10))
+                .input(user_text("Budget review pending with finance for 2025.")),
+        )
+        .await;
+    let matches = world.matches_of(read.exchange);
+    assert!(
+        matches
+            .iter()
+            .any(|stored| stored.content.origin_agent() == writer),
+        "{}",
+        brief_matches(&matches)
+    );
 }
 
 /// Background chatter: `texts` outputs by three agents using every word of

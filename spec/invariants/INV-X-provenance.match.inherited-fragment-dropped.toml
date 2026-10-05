@@ -32,7 +32,7 @@ longer stored, tokens seen only through a decode chain in the request.
 """
 
 [evidence]
-unit = ["crosstalk_provenance::tests::bench_boilerplate::orchestrator_page_name_in_the_writers_narration_is_not_matched", "crosstalk_provenance::tests::bench_boilerplate::a_page_name_the_writer_chose_still_matches", "crosstalk_provenance::tests::bench_boilerplate::inherited_fragments_can_be_kept", "crosstalk_provenance::tests::bench_boilerplate::short_secret_from_a_prompted_writer_matches_the_first_writer", "crosstalk_provenance::tests::bench_boilerplate::a_short_rewording_of_a_given_secret_is_not_matched", "crosstalk_provenance::tests::match_quality::short_distinctive_broadcast_matches_the_first_writer"]
+unit = ["crosstalk_provenance::tests::bench_boilerplate::orchestrator_page_name_in_the_writers_narration_is_not_matched", "crosstalk_provenance::tests::bench_boilerplate::a_page_name_the_writer_chose_still_matches", "crosstalk_provenance::tests::bench_boilerplate::inherited_fragments_can_be_kept", "crosstalk_provenance::tests::bench_boilerplate::short_secret_from_a_prompted_writer_matches_the_first_writer", "crosstalk_provenance::tests::bench_boilerplate::a_short_repunctuated_copy_of_a_given_secret_is_not_matched", "crosstalk_provenance::tests::bench_boilerplate::a_short_reply_from_words_seen_apart_still_matches", "crosstalk_provenance::tests::match_quality::short_distinctive_broadcast_matches_the_first_writer"]
 
 [evidence-review]
 unit = { agent = "true", human = "false" }

@@ -8,10 +8,10 @@
 //! first, within a budget of items held.
 //!
 //! - [`KGramCache`]: a message's k-grams per decode layer, for coverage.
-//! - [`TokenCache`]: the tokens a message gives its reader
+//! - [`TokenCache`]: the token sequences a message gives its reader
 //!   (`provenance.match.inherited-fragment-dropped`).
 
-use std::collections::{BTreeSet, HashMap, VecDeque};
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
 use crosstalk_spec::derived::provenance::fingerprint::Fingerprint;
@@ -33,12 +33,6 @@ impl Weighed for MessageKGrams {
     }
 }
 
-impl Weighed for BTreeSet<Fingerprint> {
-    fn weight(&self) -> usize {
-        self.len().max(1)
-    }
-}
-
 /// Values derived from messages, by hash, within a budget.
 #[derive(Debug)]
 pub struct Bounded<V> {
@@ -51,8 +45,9 @@ pub struct Bounded<V> {
 /// Messages' k-grams by hash.
 pub type KGramCache = Bounded<MessageKGrams>;
 
-/// The tokens each message gives its reader, by hash.
-pub type TokenCache = Bounded<BTreeSet<Fingerprint>>;
+/// The token sequences of the parts each message gives its reader, by
+/// hash (the same shape as a message's k-grams: one list per part).
+pub type TokenCache = Bounded<Vec<Vec<Fingerprint>>>;
 
 impl<V: Weighed> Bounded<V> {
     pub fn new(budget: usize) -> Self {

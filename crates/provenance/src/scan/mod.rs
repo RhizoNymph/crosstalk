@@ -32,6 +32,7 @@
 
 pub mod cache;
 pub mod hits;
+mod inherited;
 pub mod kind;
 pub mod messages;
 mod output;
@@ -143,9 +144,9 @@ pub struct Scanner {
     /// Input messages' k-grams. Locked only for a lookup or an insert, never
     /// across an await.
     cache: Mutex<KGramCache>,
-    /// The tokens each request message gives its reader
+    /// The token sequences each request message gives its reader
     /// (`provenance.match.inherited-fragment-dropped`). Locked like `cache`.
-    given: Mutex<TokenCache>,
+    pub(crate) given: Mutex<TokenCache>,
 }
 
 /// State one scan accumulates: live span records fetched so far, origin
@@ -161,9 +162,9 @@ pub(crate) struct Session<'a, I, S, M, L> {
     pub bodies: HashMap<MessageHash, Option<Message>>,
     /// Token frequencies read so far.
     pub tokens: HashMap<Fingerprint, u64>,
-    /// The tokens each origin exchange was given, read so far (`None` when
-    /// its request is no longer recorded).
-    pub given: HashMap<ExchangeId, Option<Arc<BTreeSet<Fingerprint>>>>,
+    /// What each origin exchange was given, read so far (`None` when its
+    /// request is no longer recorded).
+    pub given: HashMap<ExchangeId, Option<Arc<inherited::Given>>>,
 }
 
 impl<I, S, M, L> Session<'_, I, S, M, L>
@@ -307,73 +308,6 @@ impl Scanner {
             coverage.add_kgrams(Some(message.hash), &kgrams);
         }
         coverage
-    }
-
-    /// The tokens `message` gives the agent reading it: those of every part
-    /// that carries something (`reads::carrier`: tool results, user turns,
-    /// system prompts), not the agent's own assistant text or tool calls.
-    fn tokens_given_by(&self, message: &Message) -> BTreeSet<Fingerprint> {
-        text_parts(message)
-            .into_iter()
-            .filter(|part| reads::carrier(message, part).is_some())
-            .flat_map(|part| {
-                crate::fingerprint::token::observed(view(&part.text, part.kind).text(), usize::MAX)
-            })
-            .collect()
-    }
-
-    /// The tokens the agent of `exchange` was given in its request
-    /// (`provenance.match.inherited-fragment-dropped`): the union of
-    /// `Scanner::tokens_given_by` over the request's stored messages.
-    /// `None` when the exchange is not recorded or its request list was
-    /// pruned; a body no longer stored gives nothing.
-    pub(crate) async fn given_tokens<I, S, M, L>(
-        &self,
-        session: &mut Session<'_, I, S, M, L>,
-        exchange: ExchangeId,
-    ) -> Result<Option<Arc<BTreeSet<Fingerprint>>>, ScanError>
-    where
-        I: FingerprintIndex + Sync,
-        S: ProvenanceStore + Sync,
-        M: SemanticMatcher + Sync,
-        L: MessageSource + Sync,
-    {
-        if let Some(given) = session.given.get(&exchange) {
-            return Ok(given.clone());
-        }
-        let request = match session.env.store.exchange(exchange).await? {
-            Some((record, _)) if !record.request.is_empty() => record.request,
-            _ => {
-                session.given.insert(exchange, None);
-                return Ok(None);
-            }
-        };
-        let mut given = BTreeSet::new();
-        for hash in request {
-            let cached = self
-                .given
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .get(hash);
-            let tokens = match cached {
-                Some(tokens) => tokens,
-                None => {
-                    let Some(message) = session.env.messages.message(hash).await? else {
-                        continue;
-                    };
-                    let tokens = Arc::new(self.tokens_given_by(&message));
-                    self.given
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .put(hash, Arc::clone(&tokens));
-                    tokens
-                }
-            };
-            given.extend(tokens.iter().copied());
-        }
-        let given = Some(Arc::new(given));
-        session.given.insert(exchange, given.clone());
-        Ok(given)
     }
 
     pub fn segmenter(&self) -> &NovelRunSegmenter {
