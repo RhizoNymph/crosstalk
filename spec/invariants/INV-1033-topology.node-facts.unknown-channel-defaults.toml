@@ -1,0 +1,21 @@
+[invariant]
+id = "topology.node-facts.unknown-channel-defaults"
+statement = "A graph node for a canonical agent NodeFacts::agent returns None for is drawn Provisional, top-level, unlabelled and with no claims; a channel node for a channel NodeFacts::channel returns None for, which only a transmission edge can draw, is drawn Discovered, Active, Unreviewed and Confirmed and summarized by its id; and no access to a channel NodeFacts::channel returns None for is drawn."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+NodeFacts is a cache kept current from L3's and L5's events, so a graph can
+read an edge whose endpoint the cache has not seen yet. A confirmed
+transmission between two agents routed through a channel makes it an
+active, confirmed channel, so that is the conservative default; an access
+alone proves no communication, so without the channel's listing it is not
+drawn. Replaces topology.node-facts.unknown-defaults, whose default
+detection, Observed, no longer exists.
+"""
+
+[evidence]
+unit = "crosstalk_memory::topology::tests::graph::an_unseen_channel_routed_by_an_edge_is_drawn_with_defaults"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

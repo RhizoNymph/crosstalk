@@ -22,6 +22,10 @@
 //! (`provenance.index.wrong-shard-rejected`). `observe`, `frequency` and
 //! `evict` take any fingerprint.
 //!
+//! **Spans.** `SpanIndex::record` keeps where a span sits and who wrote it
+//! (`IndexedSpan::of`), once per span id; `SpanIndex::spans` reads a batch
+//! back, leaving out ids never recorded. `evict` keeps the records.
+//!
 //! **Order.** `lookup` returns hits in query order, then by span id and
 //! span offset. The trait does not order hits, so the harness compares
 //! them as multisets.
@@ -30,12 +34,15 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU16;
 use std::time::Duration;
 
+use crosstalk_spec::batch::IdBatch;
 use crosstalk_spec::derived::provenance::fingerprint::{
     Fingerprint, FingerprintHit, PositionedFingerprint,
 };
 use crosstalk_spec::derived::provenance::span::OriginatedSpan;
 use crosstalk_spec::ids::SpanId;
-use crosstalk_spec::interfaces::l4_provenance::{FingerprintIndex, IndexError};
+use crosstalk_spec::interfaces::l4_provenance::{
+    FingerprintIndex, IndexError, IndexedSpan, SpanIndex, SpanIndexError,
+};
 use crosstalk_spec::support::Timestamp;
 
 use crate::support::State;
@@ -119,11 +126,15 @@ impl IndexConfig {
     }
 }
 
-/// The index's data: postings and observations, no text.
+/// The index's data: postings, observations and where each indexed span
+/// sits, no text.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(crate) struct IndexState {
     /// Each fingerprint's postings: the span and the k-gram's offset in it.
     pub(crate) postings: BTreeMap<Fingerprint, BTreeSet<(SpanId, u32)>>,
+    /// Every span `SpanIndex::record` recorded, as first recorded. Never
+    /// evicted: eviction drops postings, and spans are never deleted.
+    pub(crate) spans: BTreeMap<SpanId, IndexedSpan>,
     /// One entry per observed text: its time and distinct fingerprints.
     pub(crate) observations: Vec<(Timestamp, BTreeSet<Fingerprint>)>,
 }
@@ -275,5 +286,32 @@ impl FingerprintIndex for MemoryFingerprintIndex {
             "spans evicted from the fingerprint index"
         );
         Ok(())
+    }
+}
+
+/// `provenance.span-index.spans-as-recorded`,
+/// `provenance.span-index.author-as-recorded`,
+/// `provenance.span-index.keys-within-batch`: the first record of each
+/// span, whatever was evicted since; unknown ids are left out.
+impl SpanIndex for MemoryFingerprintIndex {
+    async fn record(&mut self, span: &OriginatedSpan) -> Result<(), SpanIndexError> {
+        self.state
+            .write()
+            .spans
+            .entry(span.span().id)
+            .or_insert_with(|| IndexedSpan::of(span));
+        Ok(())
+    }
+
+    async fn spans(
+        &self,
+        ids: &IdBatch<SpanId>,
+    ) -> Result<BTreeMap<SpanId, IndexedSpan>, SpanIndexError> {
+        let state = self.state.read();
+        Ok(ids
+            .ids()
+            .iter()
+            .filter_map(|id| state.spans.get(id).map(|span| (*id, *span)))
+            .collect())
     }
 }

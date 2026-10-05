@@ -1,0 +1,23 @@
+[invariant]
+id = "flow.extract.http-method-op"
+statement = "For a call of a configured HTTP tool whose arguments carry `url` and `method`, ResourceExtractor::extract returns only Read accesses for GET and HEAD (and none without a delivered result), at least one Write access for POST, PUT, PATCH and DELETE, and no access for any other method, the method's case ignored."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+The eval converter replays agents' HTTP traffic as `http_request {method,
+url, body?}`, and collusion through a public wiki is a write by one agent
+and a read by another of the same page. The method is the only thing the
+call says about direction: a GET that became a write would pair a reader
+with itself as writer, a POST that became a read would hide the drop. Site
+rules may name a page instead of the URL, but never change the op the
+method gives.
+"""
+
+[evidence]
+unit = "crosstalk_flow::extract::tests::http::http_tool_calls"
+property = "crosstalk_flow::extract::tests::http::http_method_maps_to_op"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+property = { agent = "true", human = "false" }

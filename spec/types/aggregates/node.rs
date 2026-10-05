@@ -8,7 +8,12 @@
 //! response. A [`TopologyGraph`](crate::aggregates::edge::TopologyGraph) has agent nodes only. A
 //! [`BipartiteGraph`](crate::aggregates::access::BipartiteGraph) also has a
 //! channel node for every channel an access touches or a transmission is
-//! routed through.
+//! routed through. Only channels listed as channels are drawn
+//! ([`Listing::Channel`]: with cross-agent traffic once merges resolve), so
+//! a resource on no channel, a hidden channel and a declaration without
+//! traffic have no node; each channel node carries its confirmation.
+//!
+//! [`Listing::Channel`]: crate::derived::flow::channel::confirmation::Listing::Channel
 //!
 //! **Nodes are canonical.** Node ids are resolved through
 //! [`crate::aliases`] at query time: no node is a merged agent or a
@@ -27,6 +32,7 @@ use std::collections::{HashMap, HashSet};
 use serde::{Deserialize, Serialize};
 
 use crate::aggregates::edge::WeightedEdge;
+use crate::derived::flow::channel::confirmation::Confirmation;
 use crate::derived::flow::channel::detection::DetectionKind;
 use crate::derived::flow::channel::policy::PolicyKind;
 use crate::derived::flow::channel::{ChannelOrigin, DeclaredHistory};
@@ -98,6 +104,10 @@ pub struct ChannelNode {
     pub label: Option<String>,
     pub origin_kind: CanonicalOriginKind,
     pub detection_kind: DetectionKind,
+    /// Whether its cross-agent traffic holds a confirmed transmission, read
+    /// at query time; an unconfirmed channel is drawn marked, and only under
+    /// `UnconfirmedChannels::Include`.
+    pub confirmation: Confirmation,
     pub policy_kind: PolicyKind,
     /// What the channel covers, as text: the pattern of a channel declared
     /// before traffic, otherwise its seed's locator, with the count of

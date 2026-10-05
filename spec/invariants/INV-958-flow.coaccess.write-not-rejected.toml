@@ -1,0 +1,24 @@
+[invariant]
+id = "flow.coaccess.write-not-rejected"
+statement = "CoAccess::new refuses a write whose AccessOp::Write outcome is WriteOutcome::Rejected with InvalidCoAccess::RejectedWrite, so no CoAccess pairs a rejected write with a read."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+A rejected write delivered nothing, so no read can have received it
+through the resource, and a co-access built on it would open an
+AwaitingContent or Suspected transmission for a message that was never
+sent. In SALT, 119 of 513 sampled message sends were rejected, so this is a
+common case, not an edge one. The check sits in the checked constructor,
+beside the other pairing rules (flow.coaccess.op-kinds), so no transmission
+state or update can hold such a pair. Delivered and Unknown writes pair
+(WriteOutcome::pairs). The ordering half (a write must not pair before its
+outcome is known) is flow.correlator.write-held-until-outcome.
+"""
+
+[evidence]
+type = "crosstalk_spec::derived::flow::evidence::CoAccess::new"
+unit = "crosstalk_spec::tests::flow::co_access_never_holds_a_rejected_write"
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

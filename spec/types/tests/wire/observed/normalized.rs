@@ -84,6 +84,7 @@ fn response() -> Message {
                 r#"{"file_path":"/workspace/notes/plan.md","limit":1234567890123456789}"#.into(),
             )),
             execution: ToolExecution::Client,
+            signature: None,
         }),
         AssistantPart::Unknown(Unknown {
             kind: "zz_widget".into(),

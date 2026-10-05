@@ -1,0 +1,23 @@
+[invariant]
+id = "canonical.batch.bounded-reads"
+statement = "SpanIndex::spans and AccessStore::accesses each take an IdBatch, so every call asks for distinct ids in ascending order and at most IdBatch::MAX of them, the bound IdBatch::new enforces with TooManyIds."
+kind = "representation"
+requires = ["type"]
+rationale = """
+One bound for every batch read keeps each call's work and answer bounded,
+and lets a caller size every batch the same way: the evidence page,
+evaluation, the conversation view and the UI's world seed split larger sets
+of span and access ids into batches of at most IdBatch::MAX, as a page of
+rows does for its names (surface.query.names-batch-bounded). The bound
+lives in the checked constructor, so no store method ever receives more.
+"""
+
+[evidence]
+type = [
+    "crosstalk_spec::batch::IdBatch::new",
+    "crosstalk_spec::interfaces::l4_provenance::SpanIndex::spans",
+    "crosstalk_spec::interfaces::l5_flow::channels::AccessStore::accesses",
+]
+
+[evidence-review]
+type = { agent = "true", human = "false" }

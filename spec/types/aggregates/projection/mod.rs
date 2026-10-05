@@ -767,17 +767,31 @@ impl PointRoute {
 }
 
 /// One point of a projection: a row of a [`ProjectionFrame`]. On the wire
-/// (an export's point rows) `x` and `y` are JSON numbers, finite by type, so
-/// they always encode and a non-finite one is a decode error.
+/// (an export's point rows) its [`PointParts`], with `x` and `y` JSON
+/// numbers, finite by type, so they always encode and a non-finite one is
+/// a decode error.
+///
+/// A projection holds transmissions between different agents only (the
+/// sample's filter admits no transmission whose sender and reader resolve to
+/// one agent, `topology.filter.cross-agent-only`), so a point's sender and
+/// reader are always two agents: built only through
+/// [`ProjectedPoint::new`], which refuses equal ones, and decoded through
+/// it.
+#[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
+#[serde(try_from = "PointParts", into = "PointParts")]
+pub struct ProjectedPoint {
+    parts: PointParts,
+}
+
+/// A [`ProjectedPoint`]'s fields: its wire shape, and what
+/// [`ProjectedPoint::new`] checks.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
-pub struct ProjectedPoint {
+pub struct PointParts {
     pub transmission: TransmissionId,
     /// Canonical sender when the sample was read.
     pub from: AgentId,
-    /// Canonical reader when the sample was read. Equal to `from` when the
-    /// two agents had been merged by then; the topology graph drops such
-    /// transmissions.
+    /// Canonical reader when the sample was read; never `from`.
     pub to: AgentId,
     /// The route kind, and a channel route's canonical channel, when the
     /// sample was read.
@@ -788,6 +802,71 @@ pub struct ProjectedPoint {
     pub confirmed_at: Timestamp,
     pub x: Finite,
     pub y: Finite,
+}
+
+/// A point whose sender is its reader: a transmission within one agent,
+/// which no projection holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct PointWithinOneAgent(pub AgentId);
+
+impl ProjectedPoint {
+    /// Refuses `parts` whose sender is its reader.
+    pub fn new(parts: PointParts) -> Result<Self, PointWithinOneAgent> {
+        if parts.from == parts.to {
+            return Err(PointWithinOneAgent(parts.to));
+        }
+        Ok(Self { parts })
+    }
+
+    pub fn parts(&self) -> &PointParts {
+        &self.parts
+    }
+
+    pub fn transmission(&self) -> TransmissionId {
+        self.parts.transmission
+    }
+
+    pub fn from(&self) -> AgentId {
+        self.parts.from
+    }
+
+    pub fn to(&self) -> AgentId {
+        self.parts.to
+    }
+
+    pub fn route(&self) -> PointRoute {
+        self.parts.route
+    }
+
+    pub fn topic(&self) -> Option<TopicId> {
+        self.parts.topic
+    }
+
+    pub fn confirmed_at(&self) -> Timestamp {
+        self.parts.confirmed_at
+    }
+
+    pub fn x(&self) -> Finite {
+        self.parts.x
+    }
+
+    pub fn y(&self) -> Finite {
+        self.parts.y
+    }
+}
+
+impl TryFrom<PointParts> for ProjectedPoint {
+    type Error = Rejected<PointWithinOneAgent>;
+
+    fn try_from(parts: PointParts) -> Result<Self, Self::Error> {
+        Self::new(parts).map_err(|error| Rejected::new("projected point", error))
+    }
+}
+
+impl From<ProjectedPoint> for PointParts {
+    fn from(point: ProjectedPoint) -> Self {
+        point.parts
+    }
 }
 
 /// A ready projection as `QueryApi::projection` returns it: its job record
@@ -865,7 +944,7 @@ impl Projection {
     pub fn slot(&self, point: &ProjectedPoint) -> TopicSlot {
         TopicSlot {
             version: self.topic_version(),
-            topic: point.topic,
+            topic: point.topic(),
         }
     }
 }

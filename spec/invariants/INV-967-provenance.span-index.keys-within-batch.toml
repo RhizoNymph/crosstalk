@@ -1,0 +1,23 @@
+[invariant]
+id = "provenance.span-index.keys-within-batch"
+statement = "The keys of the map SpanIndex::spans returns are a subset of the ids of the IdBatch it was given: an id never recorded is absent, never an error and never answered with another span."
+kind = "domain"
+property = "invariant"
+requires = ["unit", "property"]
+rationale = """
+Callers join the answer back to what they asked for (the evidence page to
+its matches, the conversation view to its spans). An extra key would
+attach a span to a match that does not name it; an absent key is the one
+way to say a span was never recorded (a relayed or common span, or a fault
+the caller reports as EvidenceError::Missing). The batch itself is at most
+IdBatch::MAX distinct ids, which IdBatch::new enforces
+(canonical.batch.bounded-reads).
+"""
+
+[evidence]
+unit = "crosstalk_memory::provenance::tests::spans_read_back_as_recorded_through_eviction"
+property = "crosstalk_provenance::props::span_batch_keys_within_request"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+property = { agent = "false", human = "false" }

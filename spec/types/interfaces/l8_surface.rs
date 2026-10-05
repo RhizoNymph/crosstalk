@@ -41,12 +41,21 @@
 //!   sink has a [`SinkId`](crate::ids::SinkId) ([`sinks`]); an alert is delivered to the sinks its rule
 //!   lists, and `QueryApi::sinks` reports each sink's last delivery.
 //!
-//! **Channels.** `channels` lists [`ChannelRow`]s (the stored channel, its
-//! seed resource, and either its activity or its supersession), and
-//! `channel` returns one as the head of a channel page; `channel_names`
-//! names channel ids in batches; `promotion_preview` shows what
-//! `PromoteChannel` would do, computed by the same `promotion::plan`
-//! ([`channels`]).
+//! **Channels.** A channel exists once a transmission between different
+//! agents goes through it; a resource before that is only a resource, in no
+//! channel list, graph or count. `channels` lists [`ChannelRow`]s (the
+//! stored channel, its seed resource, and either its cross-agent traffic
+//! and activity or its supersession), never a hidden one, and `channel`
+//! returns one as the head of a channel page (a hidden one too);
+//! `channel_transmissions` lists a channel's cross-agent transmissions, an
+//! unconfirmed channel's suspected ones for review ([`channel_traffic`]);
+//! `channel_names` names channel ids in batches; `promotion_preview` shows
+//! what `PromoteChannel` would do, computed by the same `promotion::plan`
+//! ([`channels`]). Every channel count (rows, the overview's queues, the
+//! channel-centred graph) counts listed channels only: channels with
+//! cross-agent traffic, unconfirmed ones marked and left out under
+//! `UnconfirmedChannels::Exclude`, and declarations without traffic apart
+//! from both.
 //!
 //! **Lists.** Channels, agents, alert rules, alerts, dead letters, the audit
 //! log, the transmissions behind an edge, transmission rows by id, search
@@ -138,6 +147,7 @@
 
 pub mod actions;
 pub mod audit;
+pub mod channel_traffic;
 pub mod channels;
 pub mod errors;
 pub mod evidence;
@@ -180,14 +190,15 @@ use crate::ids::{AgentId, AlertId, AlertRuleId, ChannelId, ProjectionId, Transmi
 use crate::interfaces::l2_transport::{ConsumerGroup, DeadLetter};
 use crate::interfaces::l6_analysis::SearchResults;
 use crate::paging::{
-    AgentList, AlertList, AlertRuleList, AuditList, ChannelList, DeadLetterList,
-    EdgeTransmissionList, Page, PageRequest, ProjectionList, ResourceUseList, SearchList,
-    TopicList, TransmissionList,
+    AgentList, AlertList, AlertRuleList, AuditList, ChannelList, ChannelTransmissionList,
+    DeadLetterList, EdgeTransmissionList, Page, PageRequest, ProjectionList, ResourceUseList,
+    SearchList, TopicList, TransmissionList,
 };
 use crate::support::TimeWindow;
 use crate::wire::WireRequest;
 
 use audit::{AuditEntry, AuditFilter};
+use channel_traffic::{ChannelTransmissionFilter, ChannelTransmissionPage};
 use channels::{ChannelName, ChannelRow, PromotionPreview};
 use evidence::TransmissionEvidence;
 use excerpt::ExcerptWindow;
@@ -237,10 +248,11 @@ pub trait QueryApi {
     /// View. The channel stored under `id` as a [`ChannelRow`], the head of
     /// the channel page: a superseded id answers with its own record and its
     /// supersession (the UI's banner to the channel in force), not with the
-    /// channel it resolves to. Counts are over `window` (all time when
-    /// `None`), as for a `channels` row, and an unaligned window is refused
-    /// as there. `None` for an unknown channel. The watermark is read from
-    /// L7 before the registry and the buckets.
+    /// channel it resolves to. A hidden channel (`Listing::Hidden`) answers
+    /// too, so its page can say it is hidden and why. Counts are over
+    /// `window` (all time when `None`), as for a `channels` row, and an
+    /// unaligned window is refused as there. `None` for an unknown channel.
+    /// The watermark is read from L7 before the registry and the buckets.
     fn channel(
         &self,
         caller: &Caller,
@@ -258,9 +270,14 @@ pub trait QueryApi {
     ) -> impl Future<Output = Result<Option<PolicyHistory>, QueryError>> + Send;
 
     /// View. A page of the channels `filter` matches
-    /// ([`ChannelFilter::matches`]; superseded channels only when its origin
-    /// filter asks for them), newest channel first, each as a
-    /// [`ChannelRow`]. A row in force counts its writers and readers in
+    /// ([`ChannelFilter::matches`]: never a hidden channel; superseded
+    /// channels only when its origin filter asks for them), newest channel
+    /// first ([`ChannelRow::created_at`] descending, ties by id
+    /// descending), each as a [`ChannelRow`]. A row in force carries its
+    /// cross-agent traffic over all time
+    /// ([`CrossTraffic::tally`](crate::derived::flow::channel::confirmation::CrossTraffic::tally),
+    /// what `ChannelReads::channels` returns with it), from which its
+    /// listing and confirmation follow, and counts its writers and readers in
     /// `filter.window` (all time when `None`) over itself and every channel
     /// it superseded, exactly as
     /// [`ChannelCounts::tally`](channels::ChannelCounts::tally) of a full
@@ -280,6 +297,26 @@ pub trait QueryApi {
         filter: &ChannelFilter,
         page: &PageRequest<ChannelList>,
     ) -> impl Future<Output = Result<Watermarked<Page<ChannelRow, ChannelList>>, QueryError>> + Send;
+
+    /// View. A page of the cross-agent transmissions routed through
+    /// `channel`'s canonical channel or a channel it superseded that
+    /// `filter` keeps, newest opened first (ties by id), each as
+    /// [`ChannelTransmission::of`](channel_traffic::ChannelTransmission::of)
+    /// builds it with agents resolved at the read: a transmission whose
+    /// agents have since merged into one is not listed. Topics are read
+    /// under `version`, resolved on the first page as a linked view
+    /// resolves it and pinned by the cursor (errors as for any linked view).
+    /// Not `Watermarked`: rows are each transmission's current state, as for
+    /// `transmissions_by_id`. Unknown channel is `NotFound`; the cursor binds
+    /// the canonical channel, the filter and the version.
+    fn channel_transmissions(
+        &self,
+        caller: &Caller,
+        channel: ChannelId,
+        filter: &ChannelTransmissionFilter,
+        version: TopicVersionSelector,
+        page: &PageRequest<ChannelTransmissionList>,
+    ) -> impl Future<Output = Result<ChannelTransmissionPage, QueryError>> + Send;
 
     /// View. For each id of `ids` that the registry knows, keyed by that
     /// id, the name of the channel it resolves to through
@@ -410,7 +447,12 @@ pub trait QueryApi {
         page: &PageRequest<DeadLetterList>,
     ) -> impl Future<Output = Result<Page<DeadLetter, DeadLetterList>, QueryError>> + Send;
 
-    /// View. Newest alert first.
+    /// View. Newest alert first, leaving out the alerts readers do not show
+    /// ([`AlertSubject::shown`]: about a hidden channel, or a transmission
+    /// whose agents have since merged into one), which an unmerge shows
+    /// again.
+    ///
+    /// [`AlertSubject::shown`]: crate::aggregates::alert::AlertSubject::shown
     fn alerts(
         &self,
         caller: &Caller,
@@ -461,8 +503,10 @@ pub trait QueryApi {
     /// the activity `topology` counts for the same window and filter
     /// ([`EdgeStore::totals`]: transmissions, matched bytes, active
     /// channels, and the resolved topic version), and the queues as of the
-    /// read (open alerts, unreviewed channels), which no window or filter
-    /// narrows. The watermark is read before anything else and governs the
+    /// read ([`QueueCounts::tally`](overview::QueueCounts::tally): open
+    /// alerts, unreviewed and unconfirmed channels), which no window
+    /// narrows and of the filter only `unconfirmed_channels` does. The
+    /// watermark is read before anything else and governs the
     /// activity; the queues have no settling point. Fails as `topology`
     /// does (`InvalidInput(UnalignedWindow)`, the topic version's errors,
     /// `Conflict(TopicsNotInVersion)`).
@@ -475,10 +519,12 @@ pub trait QueryApi {
         filter: &TopologyFilter,
     ) -> impl Future<Output = Result<Watermarked<OverviewCounts>, QueryError>> + Send;
 
-    /// View. Exactly [`EdgeStore::channel_topology`]: agents and channels as
-    /// nodes, access edges (writes nobody read included) and the same
-    /// transmission edges as `topology`, with the watermark read before the
-    /// buckets. An unaligned window is `InvalidInput(UnalignedWindow)`.
+    /// View. Exactly [`EdgeStore::channel_topology`]: agents and channels
+    /// listed as channels as nodes (unconfirmed ones marked, and left out
+    /// under `UnconfirmedChannels::Exclude`), access edges to them (writes
+    /// nobody read included) and the same transmission edges as `topology`,
+    /// with the watermark read before the buckets. An unaligned window is
+    /// `InvalidInput(UnalignedWindow)`.
     ///
     /// [`EdgeStore::channel_topology`]: crate::interfaces::l7_topology::EdgeStore::channel_topology
     fn channel_topology(
@@ -521,7 +567,12 @@ pub trait QueryApi {
 
     /// View. One [`TransmissionSummary::of`] row per transmission of
     /// `selection` (a lasso or a search's hits), newest id first; ids of no
-    /// stored transmission are left out. Topics are read under `version`,
+    /// stored transmission are left out, and so is every transmission that
+    /// does not cross agents at the read ([`Transmission::crossing`] under
+    /// the aliases the call reads is `WithinOneAgent`: its sender and
+    /// reader have since been merged into one agent), as no view and no
+    /// export ([`TransmissionRow::new`]) holds one; an unmerge lists it
+    /// again. Each row is exactly [`TransmissionSummary::listed`]. Topics are read under `version`,
     /// resolved on the first page as a linked view resolves it (errors as
     /// for any linked view; the catalog's retention decides what is
     /// retained) and pinned by the cursor. No window and no filter: the
@@ -534,6 +585,9 @@ pub trait QueryApi {
     /// `InvalidInput(TooManyIds)`.
     ///
     /// [`TransmissionSummary::of`]: summary::TransmissionSummary::of
+    /// [`TransmissionSummary::listed`]: summary::TransmissionSummary::listed
+    /// [`Transmission::crossing`]: crate::derived::flow::transmission::Transmission::crossing
+    /// [`TransmissionRow::new`]: export::rows::TransmissionRow::new
     fn transmissions_by_id(
         &self,
         caller: &Caller,

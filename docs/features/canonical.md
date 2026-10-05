@@ -94,10 +94,10 @@ with `Json::canonical`, and hashes with `Message::new`.
 | --- | --- |
 | `text` | `Text` (`citations` dropped) |
 | `image`, `document` with a `base64` source | `Media`; the decoded bytes are their own blob, hashed with BLAKE3 |
-| `tool_result` in a user turn | a `ToolResult` in a `Tool` message: `content` a string, or `text` / `image` / `document` items; `is_error: true` is `Error` |
+| `tool_result` in a user turn | a `ToolResult` in a `Tool` message: `content` a string, or `text` / `image` / `document` items; `is_error: true` is `Error`, absent or `false` is `Success` (the protocol always carries the flag, so never `Unknown`: `canonical.tool-outcome.unknown-without-flag`) |
 | `thinking` | `Reasoning::Visible`, its `signature` verbatim (an empty or missing one is `None`) |
 | `redacted_thinking` | `Reasoning::Opaque { signature: data }`, verbatim |
-| `tool_use` | `ToolCall`, `Client`, arguments the canonical JSON of `input` |
+| `tool_use` | `ToolCall`, `Client`, arguments the canonical JSON of `input`, `signature: None` (Anthropic signs no tool call) |
 | `server_tool_use`, `mcp_tool_use` | `ToolCall`, `Server` |
 | `*_tool_result` (web search, web fetch, code execution, MCP, ...) after a server call with its id in the same message | `ServerToolResult`; content a string, items, or a single object (kept as one `Unknown`; an `_error` type, or `is_error`, makes it `Error`) |
 | anything else, a known block missing a field it needs, a server result with no earlier server call, a URL or file media source | `Unknown { kind: type, raw: canonical JSON }` |
@@ -277,6 +277,11 @@ property and 60 are the spec's now ([spec_primitives](spec_primitives.md)).
 INV-48's evidence moved to the gateway, where the capture task lives, and
 passes there ([gateway](gateway.md)). Pending: 57 (cross-node secret agreement,
 L0), 66, 71, 75, 78 (other protocols and WebSocket, P8), 76 (fuzz).
+From dataset evaluation ([eval_gaps](eval_gaps.md)), pending: INV-950
+(`canonical.tool-outcome.unknown-without-flag`; this crate's Anthropic
+mapping already follows it, the OpenAI Chat half is P8), INV-951
+(`canonical.tool-call.signature-verbatim`, Gemini, P8) and INV-952
+(`canonical.opaque.outside-part-text`).
 
 ## Gaps found
 

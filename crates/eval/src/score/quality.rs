@@ -11,6 +11,7 @@
 //! `missed` counts are what it cannot see.
 
 use crosstalk_spec::aggregates::quality::DetectionQuality;
+use crosstalk_spec::aliases::NoAliases;
 use crosstalk_spec::derived::flow::transmission::Transmission;
 use crosstalk_spec::derived::flow::verdict::Verdict;
 use crosstalk_spec::support::TimeWindow;
@@ -51,7 +52,8 @@ pub fn verdicts<'t>(
 }
 
 /// `DetectionQuality::tally` over the transmissions opened in `window`, with
-/// the verdicts the truth implies.
+/// the verdicts the truth implies. The detector's agents are scored as it
+/// recorded them, with no merges applied (`NoAliases`).
 pub fn detection_quality(
     window: TimeWindow,
     world: &World,
@@ -59,5 +61,5 @@ pub fn detection_quality(
     directory: &impl Directory,
 ) -> Result<DetectionQuality, PredictError> {
     let judged = verdicts(world, transmissions, directory)?;
-    Ok(DetectionQuality::tally(window, judged))
+    Ok(DetectionQuality::tally(window, judged, NoAliases))
 }

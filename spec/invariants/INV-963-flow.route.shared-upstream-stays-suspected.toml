@@ -1,0 +1,38 @@
+[invariant]
+id = "flow.route.shared-upstream-stays-suspected"
+statement = "A ContentMatch with Carrier::ToolResult whose reader's call yielded an access on a resource, and whose origin agent has no Access with AccessOp::Write on that resource with a WriteOutcome that pairs and a time before the read, makes the correlator emit no Confirm, Extend or OpenConfirmed, unless a Delegation route applies: a channel transmission it would otherwise confirm stays AwaitingContent until its window closes and then Suspected."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+Two agents can produce the same text without communicating because both
+quote one upstream source. In SWE trajectory corpora, about 14.5% of an
+agent's novel shingles reappear in another task on the same repository,
+because both agents quote the same repository file, yet only 0.18% of
+trajectory pairs share 20 or more such shingles. A writer that reproduces a
+file it did not read in this conversation (from an earlier, compacted
+context, or from memory) produces an Originated span; a reader that then
+reads the same file gets a ToolResult match from a sender it never heard
+from. If that match confirmed the channel transmission another writer's
+co-access opened, the sender would be credited with a transmission through
+a resource it never wrote.
+
+So the match is evidence of a shared upstream source, not of a
+transmission: it confirms nothing, and whatever co-access evidence exists
+keeps the transmission Suspected. The sender's write must be one that pairs
+(flow.coaccess.write-not-rejected): a rejected write delivered nothing to
+the resource. A tool result whose call yielded no access is out of scope
+and keeps opening Direct(ToolResult) (flow.route.tool-result-without-access,
+flow.route.direct-carrier). Decided after evaluation on real agent datasets;
+the decision is reversible, and a per-agent-pair minimum of shared spans is
+a possible later configuration knob if evaluation shows this rule is not
+enough.
+"""
+
+[evidence]
+unit = "crosstalk_flow::correlator::tests::shared_upstream_match_keeps_transmission_suspected"
+property = "crosstalk_flow::correlator::tests::match_without_sender_write_confirms_nothing"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+property = { agent = "false", human = "false" }

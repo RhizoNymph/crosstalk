@@ -1,0 +1,21 @@
+[invariant]
+id = "flow.access-store.keys-within-batch"
+statement = "The keys of the map AccessStore::accesses returns are a subset of the ids of the IdBatch it was given: an access never recorded is absent, never an error and never answered with another access."
+kind = "domain"
+property = "invariant"
+requires = ["unit", "property"]
+rationale = """
+The evidence page asks for exactly the accesses a transmission's co-access
+records name and assembles them in that order; an extra key would show an
+access the transmission does not name, and a missing one is reported as
+EvidenceError::Missing. The batch is at most IdBatch::MAX distinct ids
+(canonical.batch.bounded-reads).
+"""
+
+[evidence]
+unit = "crosstalk_memory::flow::registry::tests::accesses_read_back_in_batches_with_their_resources"
+property = "crosstalk_flow::registry::tests::access_batch_keys_within_request"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+property = { agent = "false", human = "false" }

@@ -247,7 +247,7 @@ impl<V: TopologyEnv> InMemoryEdgeStore<V> {
             .values()
             .filter(|stored| {
                 stored.agent == access.agent
-                    && stored.channel == access.channel
+                    && stored.resource == access.resource
                     && stored.op == access.op
                     && bucket.contains(stored.at)
             })
@@ -256,7 +256,7 @@ impl<V: TopologyEnv> InMemoryEdgeStore<V> {
             .ok_or_else(|| no_bucket(access.at))?;
         Ok(AccessEdge {
             agent: access.agent,
-            channel: access.channel,
+            resource: access.resource,
             op: access.op,
             bucket,
             accesses,

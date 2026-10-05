@@ -369,7 +369,7 @@ with the same seeded world loaded into the memory stores.
 - [ ] `ActionRequest::into_action`, then `act`, then the audit record, inverting exactly (`AuditOutcome`).
 - [ ] The live feed: an epoch and sequence cursor, resync, heartbeat and `end`.
 - [ ] Export: plan, stream, seal and trailer, plus the audit record.
-- [ ] Implement the surface invariants (INV-362–383, 393–513, and the wave-2 and gap-list-3 ranges) and their implementation evidence.
+- [ ] Implement the surface invariants (INV-362–383, 393–513, and the wave-2 and gap-list-3 ranges) and their implementation evidence, and INV-971 (evidence in every transmission state, through the batch reads `SpanIndex::spans` and `AccessStore::accesses`).
 - [ ] Port the UI fixture's world generator into `testkit`, so the UI and the gateway share one synthetic world.
 
 ---
@@ -393,7 +393,9 @@ clock)`, and split the capture stage so a pre-normalized exchange can enter
 through `Pipeline::ingest(NormalizedExchange, at)`. `ingest` stores the blobs,
 then publishes `ExchangeCaptured`. `crosstalk-eval` (a Composer in
 `Role::of`) drives the real layers through it on dataset corpora under sim
-time. Depends on P3; P4 and P5 consume it.
+time. Depends on P3; P4 and P5 consume it. Ingested exchanges carry
+`IngressMode::Replay { corpus: CorpusId }`, which the proxy never produces
+(INV-972) and L3 keeps apart from live agents and other corpora (INV-973).
 
 - [x] `Pipeline::build(Settings, Deps, clock)` and `Pipeline::ingest`, the capture stage calling `ingest` after L1, every `serve` role built on it, and `crosstalk-eval` registered as a Composer (`docs/features/gateway.md`, [Pipeline](features/gateway.md#pipeline-the-library-entry-point)).
 - [ ] `crosstalk-eval` driving the real layers through it on dataset corpora.
@@ -407,7 +409,7 @@ streams from testkit without waiting for P3.
 - [ ] `IdentityResolver`: identity evidence scoped to credential and account; harness claims are never evidence.
 - [ ] `AgentDirectory` on Postgres: merges, unmerge restoring `prior`, vetoes and the merge log. It is model-tested against `crosstalk-memory`.
 - [ ] `Threader`: conversations, including WebSocket increment resolution.
-- [ ] Implement INV-139–190 and the merge and claim invariants.
+- [ ] Implement INV-139–190 and the merge and claim invariants, and INV-973 (replayed corpora attribute and merge only within their corpus).
 - [ ] Fixtures (read in place, never copy dataset bytes into the repo):
   - AI Village Claude Code stream: `~/Data/ai/agents/ai-village/claude_code_messages.jsonl.gz` and `claude_code_sessions.jsonl.gz`. It has 940 compact_boundary records in one resumed session; group into calls by `content.message.id`; the schema is in `SCHEMA.md` there.
   - lmcache interleaved re-runs: `~/Data/ai/agents/lmcache/data/train-0000{0..4}-of-00005.parquet`. In session `wildclaw__01_Productivity_Flow_task_1_arxiv_digest__claude`, two re-runs interleave under one session id.
@@ -416,7 +418,7 @@ streams from testkit without waiting for P3.
 - [ ] `Segmenter`, the `Decoder`s (codecs and carriers), and `Fingerprinter` (winnowing).
 - [ ] `FingerprintIndex` on Postgres (or an in-memory shard).
 - [ ] Publish `ContentMatched`. The semantic matcher is a stub until P6.2 provides embeddings.
-- [ ] Implement INV-191–235.
+- [ ] Implement INV-191–235, and from the eval spec PR (`docs/features/eval_gaps.md`) INV-953 and INV-964 (the `JsonString` and `YamlString` codecs, one level per chain), INV-954 (decoder and fingerprinter input is part text only), INV-955 (strict UTF-8 decoding) and INV-965–967 (`SpanIndex::record` and the batch read `SpanIndex::spans`, authors as recorded).
 - [ ] Escape-folded matching against AgentDojo: `~/Data/ai/agents/agentdojo/runs/<pipeline>/<suite>/<user_task>/<attack>/<injection_task>.json`. The `injections` field holds the exact text; the slots are in `src/agentdojo/data/suites/<suite>/environment.yaml`. 49% of slots need YAML/JSON un-escaping, 26% whitespace folding, and 9% are exact.
 
 ## P5 L5 flow (milestone M2)
@@ -425,10 +427,11 @@ streams from testkit without waiting for P3.
 - [ ] `ChannelRegistry` on Postgres: declare, discover, promote and supersede, policy history, and correlator shards keyed by canonical channel (INV-253).
 - [ ] `Correlator`: co-access plus content match gives a transmission. Includes suspected, confirmed, expiry and late confirmation on a canonical channel.
 - [ ] Verdict store.
-- [ ] Write outcomes, from the eval spec PR (crosstalk-rollouts, INV-950..999):
-  - Delivered and Unknown writes pair; Rejected writes are recorded but never paired; a write with no result becomes Unknown when the settle window closes.
-  - Self-relayed spans count in `Write.spans`.
-  - A ToolResult match on a resource the sender never wrote stays Suspected (shared upstream).
+- [ ] Write outcomes, from the eval spec PR (crosstalk-rollouts, INV-956..963; `docs/features/eval_gaps.md`):
+  - Delivered and Unknown writes pair; Rejected writes are recorded but never paired; a write with no result becomes Unknown at `CorrelationTiming::write_settles_at` (INV-956..960).
+  - Self-relayed spans count in `Write.spans` (INV-961, 962).
+  - A ToolResult match on a resource the sender never wrote stays Suspected (shared upstream, INV-963).
+  - `AccessStore::accesses`, the batch read of accesses with their resources (INV-968, 969).
 - [ ] Implement INV-236–290 plus the promotion and verdict ranges.
 - [ ] **M2 demo script:** two Claude Code agents and a local wiki MCP server, through the gateway. Assert the discovered channel and the confirmed transmission.
 
@@ -474,6 +477,7 @@ streams from testkit without waiting for P3.
 - [ ] pi and oh-my-pi.
 - [ ] A forward proxy with TLS interception for allowlisted hosts only, for OAuth subscription backends (Claude Pro/Max, ChatGPT/Codex, Copilot, Gemini Code Assist).
 - [ ] Each one is a corpus plus a normalizer plus framer tests. The ingress invariants are re-run per protocol.
+- [ ] OpenAI Chat tool results are `ToolOutcome::Unknown` (INV-950); Gemini tool-call signatures go to `ToolCall::signature` (INV-951); no opaque blob reaches part text (INV-952).
 
 ## P9 Cluster and operations (after M3)
 - [ ] A NATS JetStream `EventBus` adapter that passes the same conformance and DST suites as the in-process bus.

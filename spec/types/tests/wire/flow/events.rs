@@ -6,9 +6,10 @@ use serde_json::json;
 
 use super::super::harness::{assert_golden, assert_rejected};
 use super::{
-    AREA, ULID_A, ULID_D, ULID_E, co_access, coder, confirmed, content_match, operator, planner,
-    read_access, scratch, transmission_id, wiki,
+    AREA, ULID_A, ULID_D, ULID_E, co_access, coder, confirmed, content_match, operator, page,
+    planner, read_access, scratch, transmission_id, wiki,
 };
+use crate::derived::flow::channel::Seed;
 use crate::derived::flow::channel::policy::PolicyKind;
 use crate::derived::flow::channel::promotion::Promotion;
 use crate::derived::flow::resource::{Host, ResourcePattern};
@@ -75,14 +76,18 @@ fn every_event() -> Vec<(&'static str, DetectEvent)> {
             "event_access_recorded",
             DetectEvent::AccessRecorded {
                 access: read_access(),
-                channel: wiki(),
+                channel: Some(wiki()),
             },
         ),
         (
             "event_channel_discovered",
             DetectEvent::ChannelDiscovered {
                 channel: wiki(),
-                first_access: read_access().id,
+                seed: Seed {
+                    resource: page(),
+                    first_transmission: transmission_id(),
+                    opened_at: ts("2026-10-04T12:00:30.250000Z"),
+                },
             },
         ),
         (
@@ -162,6 +167,21 @@ fn detect_events_golden_in_envelopes() {
     for (name, event) in events {
         assert_golden(AREA, name, &envelope(event));
     }
+}
+
+/// An access to a resource on no channel: a resource only, until a
+/// cross-agent transmission goes through it.
+#[test]
+fn access_recorded_on_no_channel_golden() {
+    let event = DetectEvent::AccessRecorded {
+        access: read_access(),
+        channel: None,
+    };
+    assert_golden(
+        AREA,
+        "event_access_recorded_on_no_channel",
+        &envelope(event),
+    );
 }
 
 #[test]

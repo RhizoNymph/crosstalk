@@ -1,0 +1,23 @@
+[invariant]
+id = "provenance.decode.one-string-level"
+statement = "No Decoded the decode pipeline produces, and no MatchKind::Decoded chain, applies Codec::JsonString and Codec::YamlString more than once in total."
+kind = "domain"
+property = "invariant"
+requires = ["property"]
+rationale = """
+A string codec undoes one level of serialisation. Decoders otherwise run
+on their own output up to the decode depth, but unescaping twice changes
+text rather than recovering it: an escaped backslash followed by n
+(the four characters a JSON string holds for a literal backslash and n)
+would become a line break on the second pass, and the decoded text would
+match spans nobody wrote. Nested serialisation (a JSON document inside a
+JSON string) is therefore not undone. Other codecs may precede or follow
+the one string codec: base64 inside a JSON string is [JsonString,
+Base64].
+"""
+
+[evidence]
+property = "crosstalk_provenance::props::decode_chains_hold_one_string_codec"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

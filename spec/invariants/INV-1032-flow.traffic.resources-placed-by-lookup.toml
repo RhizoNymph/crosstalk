@@ -1,0 +1,27 @@
+[invariant]
+id = "flow.traffic.resources-placed-by-lookup"
+statement = "ChannelTraffic::add_resource stores a resource seen for the first time on the declared channel its lookup names, or on no channel when its lookup is NoChannel; moves a resource stored on no channel onto a declared channel its lookup now names; refuses a resource already on a channel, one on no channel whose lookup is still NoChannel, and a second resource with a stored locator, changing nothing; and so never stores a resource on a discovered or superseded channel, which holds only its seed."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+A resource counts as a channel's traffic only through a cross-agent
+transmission through it or through a pattern an operator or config
+declared. Letting the flow consumer attach other resources to a
+discovered channel would count accesses nobody communicated through as
+that channel's, which is what discovery by cross-agent transmission
+removed. The registry, not the consumer, places resources, so a racing or
+redelivered write cannot put a locator on two channels. Replaces
+flow.traffic.discover-only-new.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_memory::flow::registry::tests::traffic::resources_join_only_declared_channels",
+    "crosstalk_memory::flow::registry::tests::lookup_never_creates_a_channel",
+]
+property = "crosstalk_flow::registry::tests::registry_agrees_with_reference_model"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+property = { agent = "false", human = "false" }

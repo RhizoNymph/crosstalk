@@ -1,6 +1,6 @@
 [invariant]
 id = "flow.quality.strongest-match"
-statement = "A confirmed, classified or aggregated transmission is counted under QualityMatch::Content of the strongest MatchClass among its content matches, in the order Exact, Normalized, Decoded, Semantic."
+statement = "A confirmed, classified or aggregated transmission is counted under QualityMatch::Content whose class is the strongest MatchClass among its content matches, in the order Exact, Normalized, Decoded, Semantic, and whose carrier is the CarrierKind of its first content match of that class in stored order."
 kind = "domain"
 property = "postcondition"
 requires = ["unit"]
@@ -8,7 +8,11 @@ rationale = """
 A transmission may hold several matches of different kinds and must be
 counted once. It is as credible as its best evidence, so a Semantic row
 holds only transmissions with nothing but semantic matches, which is the
-precision an operator tuning the semantic threshold needs.
+precision an operator tuning the semantic threshold needs. The carrier of
+that same match splits the rows by how the text arrived (a tool result, a
+user turn, a system prompt, the reader's own output), so precision can be
+read per carrier; taking it from the match that decided the class keeps one
+transmission in one row.
 """
 
 [evidence]
@@ -16,6 +20,8 @@ unit = [
     "crosstalk_spec::tests::quality::match_class_drops_parameters",
     "crosstalk_spec::tests::quality::a_transmission_counts_under_its_strongest_match",
     "crosstalk_spec::tests::quality::quality_match_follows_the_judgeable_state",
+    "crosstalk_spec::tests::quality::quality_content_names_the_strongest_matchs_carrier",
+    "crosstalk_spec::tests::quality::carriers_and_direct_carriers_report_their_kind",
 ]
 
 [evidence-review]

@@ -17,7 +17,9 @@ use crosstalk_spec::interfaces::l8_surface::SinkKind;
 
 use crate::error::WorldError;
 
-/// Every channel in the world, by role.
+/// Every channel role in the world: the fifteen stored channels
+/// ([`ChannelKey::ALL`]) and [`ChannelKey::Scratch`], the channel the
+/// world never creates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum ChannelKey {
     /// Declared, sanctioned, active: `wiki.corp.internal/eng`.
@@ -30,46 +32,49 @@ pub enum ChannelKey {
     DesignDocs,
     /// Declared, sanctioned, unused: `/mnt/shared/releases` on `nfs-01`.
     ReleaseBucket,
-    /// Discovered under `notes.corp.internal/team-a`, then promoted by the
-    /// researcher with the `/team-a` prefix (sanctioned): declared, same
+    /// Discovered at `notes.corp.internal/team-a/retro`, then promoted by
+    /// the researcher with the `/team-a` prefix (sanctioned): declared, same
     /// id, active. Its promotion superseded `OldTeamNotes`.
     TeamNotes,
     /// Discovered, unreviewed, active: a public wiki page agents use to
-    /// coordinate (`wiki.example.org`).
+    /// coordinate (`wiki.example.org/wiki/Agent_Coordination`).
     HijackedWiki,
     /// Discovered, unreviewed, active: the same wiki's talk page.
     WikiTalk,
-    /// Discovered, unsanctioned, active: `paste.example.net`.
+    /// Discovered, unsanctioned, active: `paste.example.net/raw/q8Zt3LmK`.
     Pastebin,
-    /// Discovered, reset to unreviewed, active: the `memory` MCP server.
+    /// Discovered, reset to unreviewed, active: the `memory` MCP server's
+    /// `create_entities` on `project-atlas`.
     McpMemory,
-    /// Discovered, sanctioned, active: `/tmp/agent-handoff` on `devbox-3`.
+    /// Discovered, sanctioned, active: `/tmp/agent-handoff/plan.md` on
+    /// `devbox-3`.
     SharedFile,
     /// Discovered, unreviewed, dormant: `gist.example.com`.
     Gist,
-    /// Discovered, unreviewed: an S3 object one agent writes and two
-    /// others read, with no content match, so every transmission through it
-    /// is suspected (or discarded, or awaiting content). `Candidate` on
-    /// today's spec; the channel-semantics port makes it active and
-    /// unconfirmed.
+    /// Discovered, unreviewed, active and listed unconfirmed: an S3
+    /// object one agent writes and two others read, with no content match,
+    /// so every transmission through it is suspected (or discarded, or
+    /// awaiting content).
     S3Handoff,
     /// Discovered at `/home/dev/.codex/handoff.md` on `devbox-7`,
     /// unreviewed, dormant: its only cross-agent traffic is between `al1`
-    /// and `cx1`, which an operator later merged. The channel-semantics
-    /// port hides it while the merge stands.
+    /// and `cx1`, which an operator later merged, so it is hidden while the
+    /// merge stands (and would be listed again by an unmerge).
     SelfNotes,
     /// Discovered at `notes.corp.internal/team-a/standup`, unreviewed,
     /// superseded by `TeamNotes`'s promotion (detection frozen there).
     OldTeamNotes,
-    /// The key-value entry only `cc7` writes and reads. Today's spec
-    /// discovers a channel at a resource's first access, so the seed
-    /// discovers one for it; the channel-semantics port leaves it a
-    /// resource on no channel, and this key goes.
+    /// Not a channel: the id minted for a channel of the key-value entry
+    /// only `cc7` writes and reads ([`Scenario::lone_resource`]). A
+    /// resource only one agent uses carries no transmission, so no channel
+    /// is ever discovered from it and no store holds this id; the key lets
+    /// readers check that.
     Scratch,
 }
 
 impl ChannelKey {
-    pub const ALL: [Self; 16] = [
+    /// The stored channels' roles: every key but [`ChannelKey::Scratch`].
+    pub const ALL: [Self; 15] = [
         Self::InternalWiki,
         Self::Monorepo,
         Self::IssueTracker,
@@ -85,7 +90,6 @@ impl ChannelKey {
         Self::S3Handoff,
         Self::SelfNotes,
         Self::OldTeamNotes,
-        Self::Scratch,
     ];
 }
 

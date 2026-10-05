@@ -132,6 +132,7 @@ fn assistant_parts(raw: &RawMessage, text: String) -> Vec<AssistantPart> {
             name: ToolName(call.function.name.clone()),
             arguments: arguments(&call.function.arguments),
             execution: ToolExecution::Client,
+            signature: None,
         }));
     }
     parts

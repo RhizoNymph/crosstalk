@@ -1,0 +1,34 @@
+[invariant]
+id = "flow.extract.write-outcome-classified"
+statement = "Every write ResourceExtractor::extract returns is ExtractedOp::Write(WriteOutcome::Unknown) when called without a tool result, ExtractedOp::Write(WriteOutcome::Rejected) when the result's outcome is ToolOutcome::Error, and otherwise carries the outcome the tool's content rule reads from the result's content, or, for a tool with no content rule, WriteOutcome::Delivered for ToolOutcome::Success and WriteOutcome::Unknown for ToolOutcome::Unknown."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+A write is the claim that the call's arguments reached the resource. A call
+the tool rejected (a message tool refusing an over-length message, a
+permission error, a missing path) delivered nothing, so no reader can have
+received its text through that resource. In SALT, 119 of 513 sampled
+message sends were rejected; pairing each with every later read of the
+channel would open transmissions for messages never sent.
+
+The flag on the wire decides first: a flagged error is Rejected. Without a
+flag (ToolOutcome::Unknown, an OpenAI Chat harness) or with Success, a tool
+the extractor knows may still report refusal only in its text, so the
+extractor's per-tool content rule reads it (Delivered or Rejected); a tool
+it has no rule for keeps what the wire said, Success as Delivered and
+Unknown as Unknown. Without a result at all the write is Unknown: the
+consumer calls extract without one only once the write's settle window
+closed (flow.correlator.write-held-until-outcome). This replaces the
+earlier rule that a failed write yields no access: a rejected write is
+recorded (flow.access.rejected-write-recorded), never paired
+(flow.coaccess.write-not-rejected).
+"""
+
+[evidence]
+unit = "crosstalk_flow::extract::tests::message_tool_refusal_text_is_rejected"
+property = "crosstalk_flow::extract::tests::write_outcome_follows_result"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+property = { agent = "false", human = "false" }

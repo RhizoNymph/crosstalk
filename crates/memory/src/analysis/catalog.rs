@@ -30,6 +30,7 @@ use crosstalk_spec::aggregates::topic_history::{
 use crosstalk_spec::events::changed::Changed;
 use crosstalk_spec::events::insight::InsightEvent;
 use crosstalk_spec::ids::{TopicId, TransmissionId};
+use crosstalk_spec::interfaces::l3_reconstruction::AgentDirectory;
 use crosstalk_spec::interfaces::l6_analysis::lifecycle::{
     CatalogActivation, StoredAssignment, TopicLifecycle, TopicLifecycleError,
 };
@@ -37,6 +38,7 @@ use crosstalk_spec::interfaces::l6_analysis::{CatalogError, TopicCatalog};
 use crosstalk_spec::paging::{Page, PageRequest, TopicList};
 use crosstalk_spec::support::{Change, Similarity, TimeWindow, Timestamp};
 
+use super::aliases::StaticDirectory;
 use super::lineage::{LineageError, lineage_between};
 use crate::support::{CursorBook, Outbox, lock, page_after};
 
@@ -72,12 +74,16 @@ fn lineage_error(error: LineageError) -> TopicLifecycleError {
     }
 }
 
-/// The reference topic catalog. Cloning shares the store.
+/// The reference topic catalog. Cloning shares the store. `sizes` resolves
+/// each assignment's sender and reader through the agent directory it was
+/// given (none merged by default) and leaves out a transmission whose two
+/// agents have since merged into one.
 #[derive(Clone)]
 pub struct InMemoryTopicCatalog {
     config: CatalogConfig,
     outbox: Outbox,
     state: Arc<Mutex<CatalogState>>,
+    agents: Arc<dyn AgentDirectory + Send + Sync>,
 }
 
 #[derive(Debug)]
@@ -131,7 +137,14 @@ impl InMemoryTopicCatalog {
             config,
             outbox,
             state: Arc::new(Mutex::new(state)),
+            agents: Arc::new(StaticDirectory::default()),
         })
+    }
+
+    /// This catalog, resolving agents through `agents` at the read.
+    pub fn with_agents(mut self, agents: impl AgentDirectory + Send + Sync + 'static) -> Self {
+        self.agents = Arc::new(agents);
+        self
     }
 
     pub fn config(&self) -> CatalogConfig {
@@ -331,7 +344,12 @@ impl TopicLifecycle for InMemoryTopicCatalog {
         for old in &superseded {
             self.outbox.changed(Changed::TopicVersion(*old));
         }
-        let dropped = state.enforce(self.config.retention, at, &self.outbox);
+        let dropped = state.enforce(
+            self.config.retention,
+            at,
+            &self.outbox,
+            self.agents.as_ref(),
+        );
         Ok(CatalogActivation::Switched {
             superseded,
             dropped,
@@ -434,6 +452,7 @@ impl CatalogState {
         &self,
         version: TopicModelVersion,
         window: Option<TimeWindow>,
+        agents: &dyn AgentDirectory,
     ) -> Result<TopicSizes, DuplicateTopic> {
         let mut per_topic: BTreeMap<TopicId, Option<EdgeStats>> = self
             .topics
@@ -444,6 +463,11 @@ impl CatalogState {
         let assignments = self.assignments.get(&version).into_iter().flatten();
         for (_, assigned) in assignments {
             if window.is_some_and(|window| !window.contains(assigned.confirmed_at)) {
+                continue;
+            }
+            // A transmission whose agents have since merged into one counts
+            // nowhere (`analysis.sizes.match-cross-agent-assignments`).
+            if agents.canonical(assigned.from) == agents.canonical(assigned.to) {
                 continue;
             }
             let slot = match assigned.topic {
@@ -469,10 +493,11 @@ impl CatalogState {
         policy: RetentionPolicy,
         at: Timestamp,
         outbox: &Outbox,
+        agents: &dyn AgentDirectory,
     ) -> Vec<TopicModelVersion> {
         let mut dropped = Vec::new();
         for version in policy.to_drop(&self.history) {
-            let Ok(frozen) = self.count_sizes(version, None) else {
+            let Ok(frozen) = self.count_sizes(version, None, agents) else {
                 continue;
             };
             if self.history.mark_dropped(version, at, policy).is_err() {
@@ -558,9 +583,9 @@ impl TopicCatalog for InMemoryTopicCatalog {
                 .get(&version)
                 .cloned()
                 .ok_or(CatalogError::VersionNotRetained(version)),
-            (Retention::Retained { .. }, window) => {
-                state.count_sizes(version, window).map_err(duplicate_topic)
-            }
+            (Retention::Retained { .. }, window) => state
+                .count_sizes(version, window, self.agents.as_ref())
+                .map_err(duplicate_topic),
         }
     }
 
@@ -594,7 +619,12 @@ impl TopicCatalog for InMemoryTopicCatalog {
         let change = state.history.unpin(version).map_err(catalog_pin_error)?;
         if change == PinChange::Changed {
             self.outbox.changed(Changed::TopicVersion(version));
-            state.enforce(self.config.retention, at, &self.outbox);
+            state.enforce(
+                self.config.retention,
+                at,
+                &self.outbox,
+                self.agents.as_ref(),
+            );
         }
         Ok(change)
     }
@@ -604,7 +634,12 @@ impl TopicCatalog for InMemoryTopicCatalog {
         at: Timestamp,
     ) -> Result<Vec<TopicModelVersion>, CatalogError> {
         let mut state = lock(&self.state);
-        Ok(state.enforce(self.config.retention, at, &self.outbox))
+        Ok(state.enforce(
+            self.config.retention,
+            at,
+            &self.outbox,
+            self.agents.as_ref(),
+        ))
     }
 
     async fn topics(

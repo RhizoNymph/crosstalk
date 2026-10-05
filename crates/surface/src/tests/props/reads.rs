@@ -50,7 +50,14 @@ fn prop_list_pages_satisfy_filter() {
                     .build();
                 let channel = scene.ids.channel();
                 fixture
-                    .channel(channel, &resource, scene.a1, minute(1))
+                    .channel(
+                        &mut scene.ids,
+                        channel,
+                        &resource,
+                        scene.a1,
+                        scene.a2,
+                        minute(1),
+                    )
                     .await;
                 fixture.clock.set(minute(2 + n as u64));
                 let action = OperatorAction::SetPolicy {
@@ -84,7 +91,7 @@ fn prop_list_pages_satisfy_filter() {
                     .await
                     .map_err(|error| format!("channels: {error:?}"))?;
                 for row in page.value.items() {
-                    ensure(filter.matches(row.channel()), || {
+                    ensure(filter.matches(row), || {
                         format!("{:?} listed", row.channel().id)
                     })?;
                 }
@@ -264,7 +271,11 @@ fn prop_detection_quality_matches_tally() {
                     .and_then(|log| log.current());
                 pairs.push((transmission, verdict));
             }
-            let expected = DetectionQuality::tally(window, pairs.iter().map(|(t, v)| (*t, *v)));
+            let expected = DetectionQuality::tally(
+                window,
+                pairs.iter().map(|(t, v)| (*t, *v)),
+                fixture.surface.aliases(),
+            );
             let got = fixture
                 .surface
                 .detection_quality(&triager, window)

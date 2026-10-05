@@ -8,11 +8,12 @@ rationale = """
 A read means the resource's content reached the reader. A call with no
 result yet may have failed or never returned; recording a read for it would
 open transmissions on content the reader never saw. Writes need no result:
-the call's arguments are what was written.
+the call's arguments are what was written, and without a result the
+write's outcome is Unknown (flow.extract.write-outcome-classified).
 """
 
 [evidence]
 property = "crosstalk_flow::extract::tests::no_read_without_result"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

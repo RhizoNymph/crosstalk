@@ -50,7 +50,9 @@ async fn more_channels(
         .first_seen(minute(1))
         .build();
     let c2 = scene.ids.channel();
-    fixture.channel(c2, &resource, scene.a2, minute(1)).await;
+    fixture
+        .channel(&mut scene.ids, c2, &resource, scene.a2, scene.a3, minute(1))
+        .await;
     let mut registry = fixture.world.channels.clone();
     let declared = match registry
         .declare(

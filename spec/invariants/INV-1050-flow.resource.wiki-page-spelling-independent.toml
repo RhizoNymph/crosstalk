@@ -1,0 +1,18 @@
+[invariant]
+id = "flow.resource.wiki-page-spelling-independent"
+statement = "On a configured MediaWiki site, every request that names the same page (its article URL with spaces, underscores, percent-encoding or a lower-case first letter on a capital-links site, the mobile host, `index.php?title=`, an `api.php` query, parse or edit with the title in the query or the body) yields an access on one locator, the page's canonical article URL."
+kind = "domain"
+property = "metamorphic"
+requires = ["property"]
+rationale = """
+Agents that use a public wiki as a dead drop edit a page through the API
+and read it back as an article, from desktop or mobile hosts, spelling the
+title as they like. URL normalization alone keeps these apart, so the edit
+and the read would never meet on one resource.
+"""
+
+[evidence]
+property = "crosstalk_flow::extract::resource::tests::wiki_page_spellings_share_resource_id"
+
+[evidence-review]
+property = { agent = "true", human = "false" }
