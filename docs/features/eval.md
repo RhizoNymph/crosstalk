@@ -639,6 +639,10 @@ Metrics: `recall` and `precision` take a `min`; `violations` (negative
 controls predictions fell under, optionally of one `reason`) and
 `fp_per_1k` (the selected rows' false positives per 1,000 of the run's
 exchanges, `Totals::exchanges`; skipped in a run with none) take a `max`.
+A gate that names a dataset the run did not score (no row or violation of
+it) is skipped as `other_dataset` (`skip  (other dataset)`), never passed
+on an empty count: a headline swarm run lists the boilerplate gate as
+skipped.
 
 ## How to add a converter
 
