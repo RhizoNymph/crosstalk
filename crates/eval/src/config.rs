@@ -55,6 +55,18 @@ impl Default for EvalConfig {
                 path: "salt-nlp".to_owned(),
             },
         );
+        datasets.insert(
+            "collusion-wiki".to_owned(),
+            DatasetConfig {
+                path: "collusion-wiki".to_owned(),
+            },
+        );
+        datasets.insert(
+            "swarm-traces".to_owned(),
+            DatasetConfig {
+                path: "swarm-traces".to_owned(),
+            },
+        );
         Self {
             root: "~/Data/ai/agents".to_owned(),
             datasets,

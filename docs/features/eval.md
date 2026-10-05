@@ -343,3 +343,153 @@ Where the reference loses:
   mostly its `get_log` raw log. They are coincidental shared phrasing: the
   same task prompt rotates between agents across episodes, and both agents
   write the same pytest boilerplate and SQL idioms.
+
+## collusion-wiki
+
+Real AI-agent swarms that used public UseMod/ProWiki wikis as dead drops —
+the "a public wiki agents start writing to" case crosstalk was built for. The
+export (`~/Data/ai/agents/collusion-wiki`, files `revisions.jsonl.gz` and
+`pages.jsonl.gz`; the `.zip` duplicates them) records page edits, not model
+calls, so the converter (`src/datasets/wiki/`) **synthesises** every exchange
+and marks it `Fidelity::Synthetic`.
+
+### Agents, exchanges and worlds
+
+- **Agent identity** is the revision's `label` (chosen username) or, when the
+  label is blank (899 of 14,591 revisions), its `/16` address as `ip16:<a.b>`.
+  A blank username is not an identity; the `/16` is the only stable signal the
+  export keeps, so blank-label saves are attributed by address and documented
+  as such (`Revision::identity`).
+- **A write** is one revision: an `http_request` `POST` tool call whose `body`
+  argument is the lines that revision inserted (its hunks' new-line ranges), so
+  that text is originated in that exchange.
+- **A read** is synthesised just before an edit whose author differs from the
+  page's previous author: an `http_request` `GET` of the page URL whose tool
+  result is the page body as of the previous revision. This is the
+  **read-before-edit assumption** — an agent that edits a page after another
+  agent must have fetched it first. A consecutive same-author edit gets no read.
+- **A world** is one connected component of the agent–page graph (agents linked
+  by a page both edited, `plan_worlds`), so a world is a set of agents that
+  could only have reached each other through shared pages. Worlds are emitted
+  largest-first; `--limit` caps them, `--family`/`--wiki` filter pages,
+  `--min-agents` drops small worlds. The full export's giant component has 2,553
+  agents; most components are a single agent.
+
+Line provenance (`attribution.rs`) replays each page's hunks to attribute every
+body line to the revision that wrote it, so a reader's surviving view of each
+earlier author is exact. Virtual time is a global per-world counter through
+`corpus::clock::ordinal`, so reads precede edits and a sender's edit precedes
+any reader's read of it.
+
+### Labels (Heuristic tier, Channel route)
+
+- **Channel transmission** (`ToolResult` carrier): from each earlier distinct
+  author whose inserted lines are still present in the body a reader read, at
+  the read exchange, located in the read's tool result, routed through the
+  page's public `Locator::Url`. `Exact`, or `Normalized` when the surviving
+  text holds a character JSON escapes (it sits escaped inside the writer's tool
+  arguments).
+- **Relay** (`ReaderOutput` carrier): when a reader's own edit re-inserts an
+  earlier author's line verbatim (and the line needs no JSON escaping, so it
+  sits byte-identical in the write's canonical arguments). The reference
+  matcher never predicts a `ReaderOutput`, so these are deliberate misses that
+  exercise the carrier.
+
+Coverage is `Partial`: the labels are a heuristic sample (surviving lines at or
+above the reference's 24-byte / 20-alphanumeric floor), so an unlabelled
+prediction is unjudged, not a false positive. Recall validates the labels; the
+run reports channel-discovery inputs (pages written by ≥2 agents) per
+`page_family`.
+
+### The shortener and events
+
+`shortener-logs.json.gz` (499 `rmn.re` links) is a second channel in
+principle, but its only per-link activity is an aggregate click count with no
+address, so writes and reads cannot be attributed by `ip16`; it is reported,
+not converted. `events.jsonl.gz` (save/delete/probe/revert) is not needed —
+saves are the revisions, reads are not logged, and the converter's
+read-before-edit assumption supplies the reads.
+
+### M2 pipeline input contract
+
+The converter's output is a valid input to `Pipeline::ingest` (the M2 path:
+converter → ingest (Replay) → L3–L5 → a discovered wiki channel and confirmed
+transmissions). The agreed L5 `HttpTool` shape, emitted from one place
+(`wiki::tools`):
+
+- read: `http_request {"method":"GET","url":<canonical page url>}`; the
+  tool_result is the read part and holds the page body (INV-269);
+- write: `http_request {"method":"POST","url":<same url>,"body":<inserted text>}`;
+  spans come from `body`.
+
+The extractor treats a tool as `HttpTool` by name (`http_request`, `fetch`,
+`web_fetch`, `curl`) with `url` + `method`; `GET`/`HEAD` are reads,
+`POST`/`PUT`/`PATCH`/`DELETE` writes (spans from the first of
+`body`/`content`/`text`/`data`), and the locator is the canonical URL
+regardless of tool name. A write and a read of one page use the identical URL
+string, so they land on one `Locator::Url` — never an MCP-shaped tool, whose
+locator would carry the tool name and split the resource.
+
+### Files
+
+| File | Role |
+| --- | --- |
+| `src/datasets/wiki/mod.rs` | `WikiSource` (a `TraceSource`), reading, component planning, `WikiSelection` |
+| `src/datasets/wiki/schema.rs` | the revision and page records read (`Revision`, `Page`, `Hunk`, `Revision::identity`) |
+| `src/datasets/wiki/attribution.rs` | hunk replay to per-line provenance (`attribute`, `runs`, `line_byte_range`) |
+| `src/datasets/wiki/resource.rs` | the page's public URL and `Locator` (`page_url`, `page_locator`) |
+| `src/datasets/wiki/tools.rs` | the one place the read/write tool shape is defined (`TOOL`, `read_args`, `write_args`) |
+| `src/datasets/wiki/build.rs` | the two passes: exchanges, then channel and relay labels |
+| `tests/wiki.rs`, `tests/fixtures/wiki/` | synthetic fixtures and tests |
+
+## swarm-traces
+
+A decoder test corpus. The export
+(`~/Data/ai/agents/swarm-traces/redacted.jsonl.gz`, 189,579 rows of
+`{id, cite, kind ∈ {payload, recovered_text, response}, parent_id, tags,
+text}`) holds encoded payloads agents passed each other and, for many, a
+recovered-text child. **The payloads are real attack content; the converter
+treats them purely as text — it never executes any of it and never fetches any
+URL in it. No dataset bytes are committed; the fixtures are synthetic strings
+that mimic the encoding structure only.**
+
+### Decoding and worlds
+
+`codec.rs` decodes one token through a chain of codecs (base64, hex,
+URL-encoding and `\x..` byte escapes, `atob(...)` unwrapped), peeling layers
+until none applies and returning the chain it verified by actually decoding.
+Only base64/hex/URL map to a spec `Codec`; a `\x..` layer has none and is a
+reported gap.
+
+For each payload the converter (`src/datasets/swarm/`) extracts candidate
+tokens (base64/hex/URL runs, `atob` inners, `\x..` runs), and for every token
+that decodes to printable text ≥24 bytes with ≥20 alphanumerics it builds a
+two-agent `World`:
+
+- the **author** originates the decoded plaintext in its output;
+- the **reader** receives the encoded token in an `http_request` tool result.
+
+The expected transmission is a `Decoded`-class edge author → reader
+(`ToolResult` carrier), labelled `MatchNeed::Decoded { codecs }` with the
+verified chain, located at the encoded token in the reader's tool result.
+Tier is `Construction` when the payload has a recovered-text/response child
+(the recovery is corroborated) and `Structural` otherwise (decode-only, the
+property-test style). Coverage is `Complete`, so the only cross-agent content
+is the token and precision is meaningful.
+
+### What the reference shows
+
+The reference matcher decodes one base64/hex/URL layer in a reader's input and
+matches it against sender spans, so a single-layer token is found and a nested
+chain is a reported miss — the point of the corpus. The run reports the
+`Decoded`-row recall (the decoder's recall) and, from the converter's verified
+chains, codec-chain frequencies. Reports store only hashes, lengths and codec
+chains, never payload text (run with `--examples 0`).
+
+### Files
+
+| File | Role |
+| --- | --- |
+| `src/datasets/swarm/mod.rs` | `SwarmSource` (a `TraceSource`), token extraction, the two-agent decoded worlds, `SwarmSelection` |
+| `src/datasets/swarm/codec.rs` | the nested codec-chain decoder (`decode`, `Layer`, `Decoded`) |
+| `tests/swarm.rs`, `tests/fixtures/swarm/` | synthetic benign fixtures and tests |

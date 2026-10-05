@@ -18,6 +18,8 @@ use clap::{Args, Parser, Subcommand, ValueEnum};
 use crosstalk_eval::config::EvalConfig;
 use crosstalk_eval::corpus::TraceSource;
 use crosstalk_eval::datasets::salt::{SaltSource, Selection};
+use crosstalk_eval::datasets::swarm::{SwarmSelection, SwarmSource};
+use crosstalk_eval::datasets::wiki::{WikiSelection, WikiSource};
 use crosstalk_eval::gateway::PipelineDetector;
 use crosstalk_eval::pipeline::{Detector, ReferenceDetector, run};
 use crosstalk_eval::reference::ReferenceConfig;
@@ -44,12 +46,18 @@ enum Command {
 #[derive(Clone, Copy, ValueEnum)]
 enum Dataset {
     Salt,
+    /// collusion-wiki: public wikis as dead drops.
+    Wiki,
+    /// swarm-traces: the decoder corpus.
+    Swarm,
 }
 
 impl Dataset {
     fn name(self) -> &'static str {
         match self {
             Self::Salt => "salt",
+            Self::Wiki => crosstalk_eval::datasets::wiki::DATASET,
+            Self::Swarm => crosstalk_eval::datasets::swarm::DATASET,
         }
     }
 }
@@ -64,12 +72,26 @@ struct SourceArgs {
     /// The datasets config (default: the crate's `datasets.toml`).
     #[arg(long)]
     config: Option<PathBuf>,
-    /// Read at most this many trace files (stratified across conditions).
+    /// Read at most this many worlds (SALT: trace files, stratified across
+    /// conditions; wiki/swarm: worlds, largest first for wiki).
     #[arg(long)]
     limit: Option<usize>,
-    /// Keep only files whose path contains this (repeatable).
+    /// SALT: keep only files whose path contains this (repeatable).
     #[arg(long)]
     include: Vec<String>,
+    /// Wiki: keep only pages in these task clusters, e.g. relay-coordination
+    /// (repeatable).
+    #[arg(long)]
+    family: Vec<String>,
+    /// Wiki: keep only pages on these wikis, e.g. dse (repeatable).
+    #[arg(long)]
+    wiki: Vec<String>,
+    /// Wiki: keep only worlds with at least this many agents.
+    #[arg(long)]
+    min_agents: Option<usize>,
+    /// Wiki: drop worlds with more than this many agents (bounds a demo).
+    #[arg(long)]
+    max_agents: Option<usize>,
 }
 
 #[derive(Args)]
@@ -143,9 +165,9 @@ fn crate_file(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join(name)
 }
 
-fn open_source(args: &SourceArgs) -> Result<SaltSource> {
-    let root = match &args.root {
-        Some(root) => root.clone(),
+fn dataset_root(args: &SourceArgs) -> Result<PathBuf> {
+    match &args.root {
+        Some(root) => Ok(root.clone()),
         None => {
             let path = args
                 .config
@@ -157,21 +179,50 @@ fn open_source(args: &SourceArgs) -> Result<SaltSource> {
                 EvalConfig::default()
             };
             let home = std::env::var_os("HOME").map(PathBuf::from);
-            config.dataset_root(args.dataset.name(), home.as_deref())?
+            Ok(config.dataset_root(args.dataset.name(), home.as_deref())?)
         }
-    };
+    }
+}
+
+fn open_salt(args: &SourceArgs) -> Result<SaltSource> {
+    let root = dataset_root(args)?;
     let selection = Selection {
         limit: args.limit,
         include: args.include.clone(),
     };
-    match args.dataset {
-        Dataset::Salt => SaltSource::open(&root, &selection)
-            .with_context(|| format!("opening SALT at {}", root.display())),
-    }
+    SaltSource::open(&root, &selection)
+        .with_context(|| format!("opening SALT at {}", root.display()))
+}
+
+fn open_wiki(args: &SourceArgs) -> Result<WikiSource> {
+    let root = dataset_root(args)?;
+    let selection = WikiSelection {
+        families: args.family.clone(),
+        wikis: args.wiki.clone(),
+        min_agents: args.min_agents,
+        max_agents: args.max_agents,
+        limit: args.limit,
+    };
+    WikiSource::open(&root, &selection)
+        .with_context(|| format!("opening collusion-wiki at {}", root.display()))
+}
+
+fn open_swarm(args: &SourceArgs) -> Result<SwarmSource> {
+    let root = dataset_root(args)?;
+    let selection = SwarmSelection { limit: args.limit };
+    SwarmSource::open(&root, &selection)
+        .with_context(|| format!("opening swarm-traces at {}", root.display()))
 }
 
 fn run_command(args: RunArgs) -> Result<ExitCode> {
-    let mut source = open_source(&args.source)?;
+    match args.source.dataset {
+        Dataset::Salt => run_source(open_salt(&args.source)?, args),
+        Dataset::Wiki => run_source(open_wiki(&args.source)?, args),
+        Dataset::Swarm => run_source(open_swarm(&args.source)?, args),
+    }
+}
+
+fn run_source<S: TraceSource>(mut source: S, args: RunArgs) -> Result<ExitCode> {
     let gates_path = args
         .gates
         .clone()
@@ -222,7 +273,14 @@ fn run_command(args: RunArgs) -> Result<ExitCode> {
 }
 
 fn truth_command(args: TruthArgs) -> Result<ExitCode> {
-    let mut source = open_source(&args.source)?;
+    match args.source.dataset {
+        Dataset::Salt => truth_source(open_salt(&args.source)?, &args),
+        Dataset::Wiki => truth_source(open_wiki(&args.source)?, &args),
+        Dataset::Swarm => truth_source(open_swarm(&args.source)?, &args),
+    }
+}
+
+fn truth_source<S: TraceSource>(mut source: S, args: &TruthArgs) -> Result<ExitCode> {
     let mut out: Box<dyn Write> = match &args.out {
         Some(path) => Box::new(BufWriter::new(
             File::create(path).with_context(|| format!("creating {}", path.display()))?,

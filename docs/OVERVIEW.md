@@ -869,8 +869,8 @@ Features Index:
   eval:
     description: >
       crosstalk-eval and the ct-eval CLI (a composer): dataset converters
-      (SALT-NLP first) streaming worlds of checked spec
-      NormalizedExchanges on a deterministic virtual clock, with typed,
+      (SALT-NLP, collusion-wiki and swarm-traces) streaming worlds of checked
+      spec NormalizedExchanges on a deterministic virtual clock, with typed,
       JSONL-serialisable ground truth (expected transmissions, negative
       controls, agent clusters, with tiers); predictions converted from
       spec Transmissions and ContentMatches; one documented alignment rule
@@ -887,6 +887,8 @@ Features Index:
       - crates/eval/src/gateway.rs
       - crates/eval/src/score/align.rs
       - crates/eval/src/datasets/salt/mod.rs
+      - crates/eval/src/datasets/wiki/mod.rs
+      - crates/eval/src/datasets/swarm/mod.rs
       - crates/eval/src/bin/ct-eval/main.rs
     depends_on: [type_spec, gateway, transport, sim, testkit]
     doc: docs/features/eval.md
