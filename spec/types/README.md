@@ -141,8 +141,8 @@ spec/types/
 │       ├── sinks.rs       AlertSink, SinkInfo (last_delivery adjacently tagged: succeeded or failed), SinkKind, SinkError; SinkRegistry (record_delivery, sinks), SinkRegistryError
 │       ├── export/        QueryApi::export: one dataset streamed between a header and a trailer
 │       │   ├── mod.rs     module docs and re-exports
-│       │   ├── request.rs ExportRequest (checked; required_permission; a WireRequest), ExportDataset, ExportScope, ExportFormat, ExportFormats (checked: non-empty, distinct; check gives UnsupportedFormat), ExportLimits
-│       │   ├── rows.rs    ExportRow and the row of each dataset (TransmissionRow: a confirmed TransmissionSummary, quotes from the evidence; Finite topic weights), RowKey (row order), projection_rows, verdict_rows (with aliases); TransmissionRow refuses WithinOneAgent
+│       │   ├── request.rs ExportRequest (checked; required_permission; a WireRequest), ExportDataset, ExportScope, TransmissionScope (window, filter, states), ExportStates (checked; default confirmed), ExportFormat, ExportFormats (checked: non-empty, distinct; check gives UnsupportedFormat), ExportLimits
+│       │   ├── rows.rs    ExportRow and the row of each dataset (TransmissionRow: a TransmissionSummary, confirmed or, with a state column, unconfirmed; quotes from the evidence; Finite topic weights), RowKey (row order), projection_rows, verdict_rows (with aliases); TransmissionRow refuses WithinOneAgent
 │       │   ├── manifest.rs ExportHeader (checked), ExportBasis, settled_window, GatewayVersion, ExportTrailer (decode checked: InvalidTrailer), ExportEnd, ExportFailure
 │       │   ├── framing.rs ExportLine (one JSONL line: header, row or trailer), read_jsonl (the reference reader), JsonlExport, JsonlError, the Parquet footer keys
 │       │   ├── digest.rs  canonical row encoding, RowHasher, ExportDigest (format-independent)

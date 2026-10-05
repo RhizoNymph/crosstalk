@@ -150,17 +150,17 @@ fn transmission(row: &TransmissionRow) -> Value {
     });
     json!({
         "id": id(summary.id),
-        "from": id(delivery.from),
+        "from": delivery.map(|delivery| id(delivery.from)),
         "to": id(summary.to),
         "route": route_text(&summary.route),
         "route_kind": route_kind(RouteKind::from(&summary.route)),
         "opened_at": time(summary.opened_at),
-        "confirmed_at": time(delivery.confirmed_at),
+        "confirmed_at": delivery.map(|delivery| time(delivery.confirmed_at)),
         "state": state(summary.state.kind()),
-        "matched_bytes": delivery.matched_bytes.get(),
+        "matched_bytes": delivery.map(|delivery| delivery.matched_bytes.get()),
         "topic": topic_under(summary.state.topic()),
         "verdict": verdict(summary.state.verdict()),
-        "strongest": class(row.strongest()),
+        "strongest": row.strongest().map(class),
         "content": content,
     })
 }

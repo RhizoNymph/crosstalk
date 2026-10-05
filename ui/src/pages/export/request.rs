@@ -103,7 +103,7 @@ pub fn parse(
         filter: state.scope.filter.pinned(version),
     };
     let dataset = match choice {
-        DatasetChoice::Transmissions => ExportDataset::Transmissions(scope),
+        DatasetChoice::Transmissions => ExportDataset::Transmissions(scope.into()),
         DatasetChoice::Edges => ExportDataset::Edges(scope),
         DatasetChoice::Accesses => ExportDataset::Accesses(scope),
         DatasetChoice::Topics => ExportDataset::Topics(scope),
@@ -133,14 +133,18 @@ pub fn parse(
         Some("1") => true,
         Some(_) => return Err(invalid("content", "expected 1")),
     };
-    let request = ExportRequest::new(dataset, format, include_content).map_err(
-        |InvalidExportRequest::NoContentColumns { .. }| {
-            invalid(
+    let request =
+        ExportRequest::new(dataset, format, include_content).map_err(|error| match error {
+            InvalidExportRequest::NoContentColumns { .. } => invalid(
                 "content",
                 format!("{} exports have no content columns", choice.code()),
-            )
-        },
-    )?;
+            ),
+            // The form exports the default (confirmed) states only.
+            InvalidExportRequest::ContentWithUnconfirmedStates => invalid(
+                "content",
+                "unconfirmed transmissions have no content columns".to_owned(),
+            ),
+        })?;
     require(caller, request.required_permission())?;
     Ok(request)
 }
@@ -203,10 +207,13 @@ mod tests {
         .expect("request");
         assert_eq!(
             request.dataset(),
-            &ExportDataset::Transmissions(ExportScope {
-                window: state().scope.window,
-                filter: state().scope.topology_filter(),
-            })
+            &ExportDataset::Transmissions(
+                ExportScope {
+                    window: state().scope.window,
+                    filter: state().scope.topology_filter(),
+                }
+                .into()
+            )
         );
         assert_eq!(request.format(), ExportFormat::Jsonl);
         assert!(!request.include_content());

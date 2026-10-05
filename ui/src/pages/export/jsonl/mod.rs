@@ -112,8 +112,16 @@ fn filter(filter: &TopologyFilter) -> Value {
 
 fn selection(dataset: &ExportDataset) -> Value {
     match dataset {
-        ExportDataset::Transmissions(scope)
-        | ExportDataset::Edges(scope)
+        ExportDataset::Transmissions(scope) if scope.states.is_confirmed() => json!({
+            "window": window(scope.window),
+            "filter": filter(&scope.filter),
+        }),
+        ExportDataset::Transmissions(scope) => json!({
+            "window": window(scope.window),
+            "filter": filter(&scope.filter),
+            "states": scope.states.iter().collect::<Vec<_>>(),
+        }),
+        ExportDataset::Edges(scope)
         | ExportDataset::Accesses(scope)
         | ExportDataset::Topics(scope) => json!({
             "window": window(scope.window),

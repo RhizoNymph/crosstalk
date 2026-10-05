@@ -354,7 +354,12 @@ keep the digest beside the frame rather than hash 5 MB on every read.
 
 ### Export
 
-`POST /exports` takes an `ExportRequest` body.
+`POST /exports` takes an `ExportRequest` body. A transmissions export
+may name its `states` (`{"type": "transmissions", "data": {"window": ..,
+"filter": .., "states": ["discarded", "confirmed"]}}`); a body the
+`ExportStates` or `ExportRequest` checks refuse (`detected`, a repeat, an
+empty list, content with an unconfirmed state) is a 400 that reaches no
+method, as every undecodable body is.
 
 - **Refused before streaming.** A refusal (`Forbidden`, `ExportTooLarge`
   409, `UnsupportedFormat` 422, a version or projection error) is the

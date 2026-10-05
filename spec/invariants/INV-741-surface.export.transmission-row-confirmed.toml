@@ -1,11 +1,12 @@
 [invariant]
 id = "surface.export.transmission-row-confirmed"
-statement = "Every TransmissionRow holds a TransmissionSummary in the Confirmed, Classified or Aggregated state, and its delivery is that summary's delivery."
+statement = "Every TransmissionRow without a state column holds a TransmissionSummary in the Confirmed, Classified or Aggregated state; a row whose summary is confirmed has that summary's delivery, and an unconfirmed row (only with a state column, INV-1069) has none."
 kind = "representation"
 requires = ["type", "unit"]
 rationale = """
-The transmissions dataset is windowed and ordered by Confirmed::at
-(RowKey::Transmission), so a row without a delivery would have no key.
+A default transmissions export is windowed and ordered by Confirmed::at
+(RowKey::Transmission), so its rows must be confirmed; an export with
+explicit states keys an unconfirmed row by its opening instead.
 Holding the summary rather than copies of its fields keeps the row and
 transmissions_by_id from drifting apart.
 """

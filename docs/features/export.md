@@ -71,14 +71,26 @@ selection:
 
 | Dataset | Selection | Rows | Content columns |
 | --- | --- | --- | --- |
-| `Transmissions(ExportScope)` | window over `Confirmed::at`, filter as `admits` | one per confirmed transmission (`TransmissionRow`: its `TransmissionSummary` and strongest match class) | topic label and the quoted text of each match (`MatchText`: the evidence's `MatchQuotes`, origin and read) |
+| `Transmissions(TransmissionScope)` | `states` (default confirmed, classified, aggregated); window over the row time (`Confirmed::at`, or `opened_at` for an unconfirmed row), filter as `admits` | one per transmission in `states` (`TransmissionRow`: its `TransmissionSummary`, the strongest match class when confirmed, and a `state` column when `states` is explicit) | topic label and the quoted text of each match (`MatchText`: the evidence's `MatchQuotes`, origin and read); refused with an unconfirmed state |
 | `Edges(ExportScope)` | aligned window, filter as `topology` | one per resolved edge bucket (`EdgeRow`) | topic label |
 | `Accesses(ExportScope)` | aligned window, `admits_access` | one per resolved access bucket (`AccessRow`): its resource resolved to the channel holding it, kept only when that channel is listed as a channel, as `channel_topology` draws it | none |
 | `Topics(ExportScope)` | window and filter count transmissions; `topics` selects rows | one per topic of the version, zero counts included (`TopicRow`) | label and terms |
 | `Projection(ProjectionId)` | the projection's own spec | one per stored point, in frame order (`PointRow`) | topic label |
 | `Verdicts(TimeWindow)` | window over `Transmission::opened_at` | one per verdict record (`VerdictRow`) | none |
 
-`ExportScope` is the window and the shared `TopologyFilter`. A projection
+`ExportScope` is the window and the shared `TopologyFilter`.
+`TransmissionScope` adds `states`, an `ExportStates`: a non-empty set of
+`awaiting_content`, `suspected`, `confirmed`, `classified`, `aggregated`
+and `discarded` (never `detected`, which names no sender), written as a
+JSON array and left out when it is the default (`confirmed`, `classified`,
+`aggregated`), so a default request, header and rows are byte for byte what
+they were before `states` existed (INV-1068). An unconfirmed transmission
+is tested by the filter with the writer of its first co-access as its
+sender and no topic. With the watermark `evidence_window + suspected_ttl`
+behind the clock, a suspected transmission has expired into `discarded`
+before its opening is settled, so settled exports hold unconfirmed traffic
+as `awaiting_content` (never, once settled) or `discarded` rows: ask for
+`discarded` to get it (INV-1070). A projection
 is fixed by its stored spec, so it takes no scope; verdicts exist on
 suspected and discarded transmissions, which have no sender or topic for
 the filter to test, so they take a window alone, as `detection_quality`
@@ -108,7 +120,8 @@ expires; its header's basis carries the fit's own spec and watermark.
 ### Rows
 
 Each dataset's rows are sent in ascending `RowKey` order, unique per
-export: transmissions by (`Confirmed::at`, id); edges by (bucket start,
+export: transmissions by (row time, id), the row time being `Confirmed::at`
+or, for an unconfirmed row, `opened_at` (`TransmissionRow::at`); edges by (bucket start,
 sender, reader, route encoding, topic); accesses by (bucket start, agent,
 channel, write before read); topics by id; points by frame index; verdicts
 by (transmission, revision). Every agent and channel a row names is
@@ -135,11 +148,21 @@ export reproduces `DetectionQuality::tally` under the same aliases
 transmission ([read_models.md](read_models.md#transmission-rows)), built by
 the same `TransmissionSummary::of` under the export's captured aliases,
 verdict copy and header version, plus `MatchClass::strongest` of its
-matches. `TransmissionRow::new` and `TransmissionRow::of` (checked) take
-only a confirmed summary (`Confirmed`, `Classified` or `Aggregated`), since
-the dataset is windowed and keyed by `Confirmed::at`, whose delivery's
-sender is not its reader (`WithinOneAgent` otherwise); the row keeps the
-summary's `Delivery`. Its topic is a `TopicUnder` (`Topic`, `Outlier`, or
+matches. `TransmissionRow::new` and `TransmissionRow::of` (checked) build
+a default export's row and take only a confirmed summary (`Confirmed`,
+`Classified` or `Aggregated`), whose delivery's sender is not its reader
+(`WithinOneAgent` otherwise); the row keeps the summary's `Delivery`.
+`new_in_scope` and `of_in_scope` build a row of an export holding given
+`ExportStates`: a confirmed one as before, an unconfirmed one
+(`AwaitingContent`, `Suspected`, `Discarded`) with no delivery, no
+strongest class and no content; either carries the `state` column
+(`TransmissionStateKind`, `"suspected"`) when the states are not the
+default (INV-1069). The sealer refuses a transmission row outside the
+header's states, or whose state column does not match them
+(`RowRefused::StateNotInScope`). The digest encodes a row's state code
+(confirmed 0, classified 1, aggregated 2, awaiting content 3, suspected 4,
+discarded 5), its delivery and strongest class only when confirmed, and
+its state column, last, only when present. Its topic is a `TopicUnder` (`Topic`, `Outlier`, or
 `Unassigned` under the header's version), its state kind says whether it
 has been classified, and its verdict exists because every confirmed state
 is judgeable. With content, `TransmissionContent::of(evidence,
@@ -324,8 +347,8 @@ can end after it started, so it has its own record rather than a place in
 | File | Role | Key exports |
 | --- | --- | --- |
 | `spec/types/interfaces/l8_surface/export/mod.rs` | Module docs and re-exports | — |
-| `spec/types/interfaces/l8_surface/export/request.rs` | The request and its permission, the row limit | `ExportRequest` (checked), `InvalidExportRequest`, `ExportDataset`, `ExportDatasetKind` (`has_content_columns`, `is_content_only`, `code`), `ExportScope`, `ExportFormat`, `ExportFormats` (checked: non-empty, distinct; `check`), `InvalidExportFormats`, `UnsupportedFormat`, `ExportLimits` (`check`) |
-| `spec/types/interfaces/l8_surface/export/rows.rs` | Row schema per dataset, row order, reference builders | `ExportRow` (`kind`, `has_content`, `key`), `RowKey`, `TransmissionRow` (checked: `new`, `of`), `InvalidTransmissionRow`, `TransmissionContent` (`of`), `MatchText`, `LabelContent`, `EdgeRow`, `AccessRow`, `TopicRow`, `TopicContent`, `PointRow`, `VerdictRow`, `projection_rows`, `verdict_rows`, `VerdictRowsError` |
+| `spec/types/interfaces/l8_surface/export/request.rs` | The request and its permission, the row limit | `ExportRequest` (checked; `ContentWithUnconfirmedStates`), `InvalidExportRequest`, `ExportDataset` (`scope`, `states`), `ExportDatasetKind` (`has_content_columns`, `is_content_only`, `code`), `ExportScope`, `TransmissionScope`, `ExportStates` (checked: `new`, `confirmed`, `all`), `InvalidExportStates`, `ExportFormat`, `ExportFormats` (checked: non-empty, distinct; `check`), `InvalidExportFormats`, `UnsupportedFormat`, `ExportLimits` (`check`) |
+| `spec/types/interfaces/l8_surface/export/rows.rs` | Row schema per dataset, row order, reference builders | `ExportRow` (`kind`, `has_content`, `key`), `RowKey`, `TransmissionRow` (checked: `new`, `of`, `new_in_scope`, `of_in_scope`; `delivery`, `strongest`, `state`, `at`), `InvalidTransmissionRow`, `TransmissionContent` (`of`), `MatchText`, `LabelContent`, `EdgeRow`, `AccessRow`, `TopicRow`, `TopicContent`, `PointRow`, `VerdictRow`, `projection_rows`, `verdict_rows`, `VerdictRowsError` |
 | `spec/types/interfaces/l8_surface/export/manifest.rs` | Header and trailer | `ExportHeader` (checked), `ExportHeaderParts`, `InvalidHeader`, `ExportBasis`, `GatewayVersion`, `settled_window`, `ExportTrailer` (decode checked), `InvalidTrailer`, `ExportEnd`, `ExportFailure`, `SourceFailure` |
 | `spec/types/interfaces/l8_surface/export/framing.rs` | The JSONL framing and the Parquet footer keys | `ExportLine`, `read_jsonl`, `JsonlExport` (`verify`), `JsonlError`, `JsonlErrorKind`, `PARQUET_HEADER_KEY`, `PARQUET_TRAILER_KEY` |
 | `spec/types/interfaces/l8_surface/export/digest.rs` | Canonical row encoding and the digest | `ExportRow::encode`, `encode_route`, `hash_row`, `RowHasher`, `ExportDigest`, `ROW_DIGEST_CONTEXT` |

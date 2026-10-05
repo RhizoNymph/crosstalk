@@ -59,7 +59,7 @@ pub(super) fn projection_id() -> ProjectionId {
 
 fn every_dataset() -> Vec<ExportDataset> {
     vec![
-        ExportDataset::Transmissions(scope()),
+        ExportDataset::Transmissions(scope().into()),
         ExportDataset::Edges(scope()),
         ExportDataset::Accesses(scope()),
         ExportDataset::Topics(scope()),
@@ -414,7 +414,7 @@ fn header_rejects_a_filter_other_than_the_request_pinned() {
     for basis in [unpinned, altered] {
         assert_eq!(
             ExportHeader::new(parts(
-                request(ExportDataset::Transmissions(scope()), false),
+                request(ExportDataset::Transmissions(scope().into()), false),
                 basis,
                 1
             )),
@@ -462,7 +462,7 @@ fn header_with_nothing_settled_plans_no_rows() {
         settled: None,
     };
     let header = ExportHeader::new(parts(
-        request(ExportDataset::Transmissions(late), false),
+        request(ExportDataset::Transmissions(late.into()), false),
         basis,
         0,
     ))
@@ -473,7 +473,7 @@ fn header_with_nothing_settled_plans_no_rows() {
 #[test]
 fn header_rejects_a_watermark_after_its_start() {
     let mut late = parts(
-        request(ExportDataset::Transmissions(scope()), false),
+        request(ExportDataset::Transmissions(scope().into()), false),
         scoped_basis(),
         1,
     );
@@ -771,8 +771,8 @@ fn transmission_rows_are_the_listed_summary_of_a_confirmed_transmission() {
             Some(confirmed) => {
                 let row = row.expect("a confirmed transmission");
                 assert_eq!(row.summary(), &summary);
-                assert_eq!(row.strongest(), MatchClass::strongest(confirmed));
-                assert_eq!(Some(row.delivery()), summary.state.delivery());
+                assert_eq!(row.strongest(), Some(MatchClass::strongest(confirmed)));
+                assert_eq!(row.delivery(), summary.state.delivery());
             }
             None => assert_eq!(
                 row,
@@ -785,7 +785,7 @@ fn transmission_rows_are_the_listed_summary_of_a_confirmed_transmission() {
 // ── Audit records ──────────────────────────────────────────────────────────
 
 fn content_request() -> ExportRequest {
-    request(ExportDataset::Transmissions(scope()), true)
+    request(ExportDataset::Transmissions(scope().into()), true)
 }
 
 #[test]
@@ -839,7 +839,7 @@ fn export_record_is_forbidden_exactly_without_the_permission() {
 #[test]
 fn started_record_holds_the_header_of_its_request_and_caller() {
     let reader = caller(1, &[Permission::View, Permission::Content]);
-    let header = header(ExportDataset::Transmissions(scope()), true, 2);
+    let header = header(ExportDataset::Transmissions(scope().into()), true, 2);
     assert!(
         ExportRecord::new(
             reader.clone(),
@@ -848,7 +848,7 @@ fn started_record_holds_the_header_of_its_request_and_caller() {
         )
         .is_ok()
     );
-    let other_request = request(ExportDataset::Transmissions(scope()), false);
+    let other_request = request(ExportDataset::Transmissions(scope().into()), false);
     assert_eq!(
         ExportRecord::new(
             reader,
@@ -871,7 +871,7 @@ fn started_record_holds_the_header_of_its_request_and_caller() {
 #[test]
 fn export_entries_are_authored_by_the_caller_and_name_the_export() {
     let reader = caller(1, &[Permission::View, Permission::Content]);
-    let started = header(ExportDataset::Transmissions(scope()), true, 2);
+    let started = header(ExportDataset::Transmissions(scope().into()), true, 2);
     let entry = |event| AuditEntry {
         id: AuditId::from_ulid(1),
         at: at(2_000),
