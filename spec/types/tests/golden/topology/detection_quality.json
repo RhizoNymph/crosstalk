@@ -8,7 +8,10 @@
       "route_kind": "channel",
       "match_kind": {
         "type": "content",
-        "data": "exact"
+        "data": {
+          "class": "exact",
+          "carrier": "tool_result"
+        }
       },
       "genuine": 12,
       "false_detection": 1,
@@ -36,7 +39,10 @@
       "route_kind": "direct",
       "match_kind": {
         "type": "content",
-        "data": "semantic"
+        "data": {
+          "class": "semantic",
+          "carrier": "user_turn"
+        }
       },
       "genuine": 1,
       "false_detection": 2,

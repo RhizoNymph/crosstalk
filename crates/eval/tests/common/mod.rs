@@ -50,6 +50,7 @@ pub fn calls(id: &str, name: &str, arguments: &str) -> HashedMessage {
             name: ToolName(name.into()),
             arguments,
             execution: ToolExecution::Client,
+            signature: None,
         },
     )]))
 }

@@ -17,7 +17,7 @@ use std::num::NonZeroU32;
 use std::time::Duration;
 
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
-use crosstalk_spec::derived::flow::access::{Access, AccessOp, Extraction};
+use crosstalk_spec::derived::flow::access::{Access, AccessOp, Extraction, WriteOutcome};
 use crosstalk_spec::derived::flow::evidence::CoAccess;
 use crosstalk_spec::derived::flow::transmission::{
     Classification, Confirmed, DelegationDirection, DirectCarrier, Route, Transmission,
@@ -83,6 +83,7 @@ fn access(id: u128, agent: AgentId, write: bool, at: u64) -> Access {
             AccessOp::Write {
                 call: part,
                 spans: Vec::new(),
+                outcome: WriteOutcome::Delivered,
             }
         } else {
             AccessOp::Read { result: part }

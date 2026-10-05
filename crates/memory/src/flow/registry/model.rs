@@ -30,7 +30,7 @@
 use std::collections::HashSet;
 
 use crosstalk_spec::aggregates::access::ResourceUse;
-use crosstalk_spec::derived::flow::access::{Access, AccessOp, Extraction};
+use crosstalk_spec::derived::flow::access::{Access, AccessOp, Extraction, WriteOutcome};
 use crosstalk_spec::derived::flow::channel::Channel;
 use crosstalk_spec::derived::flow::channel::Declaration;
 use crosstalk_spec::derived::flow::channel::detection::TrafficDetection;
@@ -434,6 +434,7 @@ fn access(id: u128, resource: u8, agent: u8, write: bool, at: u64) -> Access {
             AccessOp::Write {
                 call: part,
                 spans: Vec::new(),
+                outcome: WriteOutcome::Delivered,
             }
         } else {
             AccessOp::Read { result: part }

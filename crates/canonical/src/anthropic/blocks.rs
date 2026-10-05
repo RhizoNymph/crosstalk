@@ -167,7 +167,10 @@ fn result_contents(block: &Json, sink: &mut MediaSink) -> Option<Vec<ToolResultC
 }
 
 /// `Error` when the block says `is_error: true`, or its content is a single
-/// object whose type ends in `_error` (a server tool's error result).
+/// object whose type ends in `_error` (a server tool's error result);
+/// otherwise `Success`. Anthropic Messages carries a failure flag on every
+/// tool result (`is_error`, `false` when absent), so its results are never
+/// `ToolOutcome::Unknown` (`canonical.tool-outcome.unknown-without-flag`).
 fn outcome(block: &Json) -> ToolOutcome {
     let flagged = matches!(block.get("is_error"), Some(Json::Bool(true)));
     let error_content = block
@@ -215,6 +218,7 @@ fn tool_call(block: &Json, arguments: ToolArguments) -> Option<ToolCall> {
         name: ToolName(block.get("name")?.as_str()?.to_owned()),
         arguments,
         execution,
+        signature: None,
     })
 }
 

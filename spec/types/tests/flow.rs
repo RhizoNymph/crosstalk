@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use crate::aggregates::alert::{AlertRule, AlertRuleKind, BuiltinRule};
 use crate::aggregates::topic::TopicModelVersion;
+use crate::derived::flow::access::WriteOutcome;
 use crate::derived::flow::channel::detection::{DeclaredDetection, TrafficDetection};
 use crate::derived::flow::channel::policy::{Decision, Policy, PolicyAuthor, TrafficVerdict};
 use crate::derived::flow::channel::{
@@ -9,6 +10,7 @@ use crate::derived::flow::channel::{
 };
 use crate::derived::flow::evidence::{CoAccess, InvalidCoAccess};
 use crate::derived::flow::resource::{Host, Locator, ResourcePattern};
+use crate::derived::flow::timing::CorrelationTiming;
 use crate::derived::flow::transmission::{
     Classification, Confirmed, MixedMatches, NotSuspected, TransmissionState,
 };
@@ -16,7 +18,7 @@ use crate::ids::{OperatorId, TransmissionId};
 use crate::observed::message::ToolName;
 use crate::support::NonEmpty;
 use crate::tests::fixtures::{
-    access, agent, at, content_match, read_access, resource, write_access,
+    access, agent, at, content_match, read_access, resource, write_access, write_with_outcome,
 };
 
 const WINDOW: Duration = Duration::from_secs(3600);
@@ -75,6 +77,43 @@ fn co_access_rejects_invalid_pairs() {
     for (read, expected) in cases {
         assert_eq!(CoAccess::new(&write, &read, WINDOW), Err(expected));
     }
+}
+
+/// A rejected write delivered nothing, so it never pairs, even where every
+/// other check passes; delivered and unknown writes pair.
+#[test]
+fn co_access_never_holds_a_rejected_write() {
+    let read = read_access(2, agent(2), resource(1), 2_000_000);
+    let rejected = write_with_outcome(1, agent(1), resource(1), 1_000_000, WriteOutcome::Rejected);
+    assert_eq!(
+        CoAccess::new(&rejected, &read, WINDOW),
+        Err(InvalidCoAccess::RejectedWrite)
+    );
+    for outcome in [WriteOutcome::Delivered, WriteOutcome::Unknown] {
+        let write = write_with_outcome(1, agent(1), resource(1), 1_000_000, outcome);
+        let co = CoAccess::new(&write, &read, WINDOW).expect("a write that pairs, then a read");
+        assert_eq!(co.write(), write.id);
+    }
+    assert!(WriteOutcome::Delivered.pairs());
+    assert!(WriteOutcome::Unknown.pairs());
+    assert!(!WriteOutcome::Rejected.pairs());
+}
+
+/// A write still waiting for its result is released at its time plus the
+/// settle window, saturating at the largest timestamp.
+#[test]
+fn a_held_write_settles_after_the_settle_window() {
+    let timing = CorrelationTiming::new(
+        Duration::from_secs(60),
+        Duration::from_secs(300),
+        Duration::from_secs(3600),
+    )
+    .expect("non-zero durations");
+    assert_eq!(
+        timing.write_settles_at(at(1_000_000)),
+        at(1_000_000 + 3_900_000_000)
+    );
+    assert_eq!(timing.write_settles_at(at(u64::MAX - 1)), at(u64::MAX));
 }
 
 #[test]

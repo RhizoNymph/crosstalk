@@ -7,6 +7,7 @@ use super::super::harness::{assert_golden, assert_rejected};
 use super::{AREA, array, at, edited, hour, object};
 use crate::aggregates::edge::RouteKind;
 use crate::aggregates::quality::{DetectionQuality, MatchClass, QualityMatch, QualityRow};
+use crate::derived::provenance::matching::CarrierKind;
 
 fn every_match_class() -> Vec<MatchClass> {
     fn declared(class: MatchClass) -> MatchClass {
@@ -33,7 +34,9 @@ fn every_match_class() -> Vec<MatchClass> {
 fn rows() -> Vec<QualityRow> {
     fn declared(call: QualityMatch) -> QualityMatch {
         match call {
-            QualityMatch::Content(_) | QualityMatch::Suspected | QualityMatch::Discarded => call,
+            QualityMatch::Content { .. } | QualityMatch::Suspected | QualityMatch::Discarded => {
+                call
+            }
         }
     }
     let row = |route_kind, call, counts: (u64, u64, u64)| QualityRow {
@@ -46,14 +49,20 @@ fn rows() -> Vec<QualityRow> {
     vec![
         row(
             RouteKind::Channel,
-            QualityMatch::Content(MatchClass::Exact),
+            QualityMatch::Content {
+                class: MatchClass::Exact,
+                carrier: CarrierKind::ToolResult,
+            },
             (12, 1, 4),
         ),
         row(RouteKind::Channel, QualityMatch::Suspected, (2, 0, 7)),
         row(RouteKind::Channel, QualityMatch::Discarded, (0, 3, 1)),
         row(
             RouteKind::Direct,
-            QualityMatch::Content(MatchClass::Semantic),
+            QualityMatch::Content {
+                class: MatchClass::Semantic,
+                carrier: CarrierKind::UserTurn,
+            },
             (1, 2, 0),
         ),
     ]
@@ -101,6 +110,6 @@ fn detection_quality_decodes_through_its_constructor() {
         *at(json, "/rows/2/match_kind") = json!({"type": "expired"});
     });
     refused("unknown variant `fuzzy`", &|json| {
-        *at(json, "/rows/0/match_kind/data") = json!("fuzzy");
+        *at(json, "/rows/0/match_kind/data/class") = json!("fuzzy");
     });
 }

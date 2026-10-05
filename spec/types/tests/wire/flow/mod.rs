@@ -21,7 +21,7 @@ use std::time::Duration;
 
 use super::{ULID_A, ULID_B, ULID_C, id, ts};
 use crate::aggregates::topic::TopicModelVersion;
-use crate::derived::flow::access::{Access, AccessOp, Extraction};
+use crate::derived::flow::access::{Access, AccessOp, Extraction, WriteOutcome};
 use crate::derived::flow::evidence::CoAccess;
 use crate::derived::flow::resource::{Host, Locator};
 use crate::derived::flow::transmission::{Classification, Confirmed};
@@ -111,6 +111,7 @@ fn write_access() -> Access {
                 index: 1,
             },
             spans: vec![id(SpanId::from_ulid_text, ULID_E)],
+            outcome: WriteOutcome::Delivered,
         },
     }
 }

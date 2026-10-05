@@ -256,3 +256,35 @@ fn export_content_needs_a_match() {
         );
     }
 }
+
+/// `surface.evidence.every-state`, at assembly: every state lists both
+/// accesses of each co-access record it holds, write first; `Detected`,
+/// with no record yet, lists none; the waiting, suspected and discarded
+/// states list theirs although they have no match.
+#[test]
+fn every_state_lists_both_accesses_of_each_co_access() {
+    for (state, _) in every_state() {
+        let records = state.co_accesses();
+        let detected = matches!(state, TransmissionState::Detected);
+        let unconfirmed = matches!(
+            state,
+            TransmissionState::AwaitingContent { .. }
+                | TransmissionState::Suspected { .. }
+                | TransmissionState::Discarded { .. }
+        );
+        let evidence =
+            TransmissionEvidence::assemble(transmission_in(1, state), |_| Ok(dropped()), detail)
+                .expect("assembles");
+        let listed: Vec<AccessId> = evidence.accesses().iter().map(|d| d.access().id).collect();
+        for record in &records {
+            let write = listed.iter().position(|id| *id == record.write());
+            let read = listed.iter().position(|id| *id == record.read());
+            assert!(write.is_some() && read.is_some() && write < read);
+        }
+        assert_eq!(detected, listed.is_empty());
+        if unconfirmed {
+            assert_eq!(listed, vec![access(1), access(2)]);
+            assert!(evidence.matches().is_empty());
+        }
+    }
+}

@@ -11,10 +11,13 @@ use crosstalk_spec::derived::flow::channel::policy::{
 };
 use crosstalk_spec::derived::flow::channel::promotion::{Promotion, PromotionCoverage};
 use crosstalk_spec::derived::flow::resource::{Locator, Resource, ResourcePattern};
+use std::collections::BTreeMap;
+
+use crosstalk_spec::batch::IdBatch;
 use crosstalk_spec::ids::{AccessId, ChannelId, TransmissionId};
 use crosstalk_spec::interfaces::l3_reconstruction::AgentDirectory;
 use crosstalk_spec::interfaces::l5_flow::channels::{
-    ChannelReads, ChannelTraffic, DetectionUpdate, TrafficError,
+    AccessReadError, AccessStore, ChannelReads, ChannelTraffic, DetectionUpdate, TrafficError,
 };
 use crosstalk_spec::interfaces::l5_flow::{
     ChannelDirectory, ChannelLookup, ChannelRegistry, PromoteError, Promoted, RegistryError,
@@ -183,6 +186,27 @@ impl<D: Send + Sync> ChannelTraffic for MemoryChannels<D> {
         let (canonical, events) = self.state.write().confirm(channel, transmission, at)?;
         self.outbox.publish(events);
         Ok(canonical)
+    }
+}
+
+/// `flow.access-store.accesses-as-recorded`,
+/// `flow.access-store.keys-within-batch`: each recorded access in the batch
+/// with its stored resource, in one snapshot; unknown ids are left out.
+impl<D: Send + Sync> AccessStore for MemoryChannels<D> {
+    async fn accesses(
+        &self,
+        ids: &IdBatch<AccessId>,
+    ) -> Result<BTreeMap<AccessId, (Access, Resource)>, AccessReadError> {
+        let table = self.state.read();
+        Ok(ids
+            .ids()
+            .iter()
+            .filter_map(|id| {
+                let access = table.accesses.get(id)?;
+                let stored = table.resources.get(&access.resource)?;
+                Some((*id, (access.clone(), stored.resource.clone())))
+            })
+            .collect())
     }
 }
 

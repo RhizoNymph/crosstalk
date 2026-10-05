@@ -1,10 +1,13 @@
 //! The store write and read traits P0.6 added, one check per trait (the
 //! traits whose methods only changed shape stay with their layer's file).
 
+use std::collections::BTreeMap;
+
 use crate::aggregates::alert::Alert;
 use crate::aggregates::alert::rules::AlertRuleDef;
 use crate::aggregates::topic::{EmbeddingModel, Topic, TopicModelVersion};
 use crate::aggregates::topic_history::TopicLineage;
+use crate::batch::IdBatch;
 use crate::derived::flow::access::Access;
 use crate::derived::flow::channel::Channel;
 use crate::derived::flow::resource::Resource;
@@ -16,7 +19,7 @@ use crate::ids::{
 };
 use crate::interfaces::l5_flow::RegistryError;
 use crate::interfaces::l5_flow::channels::{
-    ChannelReads, ChannelTraffic, DetectionUpdate, TrafficError,
+    AccessReadError, AccessStore, ChannelReads, ChannelTraffic, DetectionUpdate, TrafficError,
 };
 use crate::interfaces::l5_flow::transmissions::{TransmissionStore, TransmissionStoreError};
 use crate::interfaces::l6_analysis::RuleError;
@@ -77,6 +80,19 @@ impl ChannelTraffic for Dummy {
     ) -> Result<ChannelId, TrafficError> {
         match *self {}
     }
+}
+
+impl AccessStore for Dummy {
+    async fn accesses(
+        &self,
+        _ids: &IdBatch<AccessId>,
+    ) -> Result<BTreeMap<AccessId, (Access, Resource)>, AccessReadError> {
+        match *self {}
+    }
+}
+
+fn access_store<T: AccessStore>(x: &T, never: &Dummy) {
+    assert_send(x.accesses(arg(never)));
 }
 
 impl ChannelReads for Dummy {
@@ -333,6 +349,7 @@ fn sink_registry<T: SinkRegistry>(x: &mut T, never: &Dummy) {
 fn l5_flow_write_and_read_futures_are_send() {
     let _ = channel_traffic::<Dummy>;
     let _ = channel_reads::<Dummy>;
+    let _ = access_store::<Dummy>;
     let _ = transmission_store::<Dummy>;
 }
 

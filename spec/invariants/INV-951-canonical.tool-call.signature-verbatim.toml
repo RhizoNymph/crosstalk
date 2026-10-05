@@ -1,0 +1,28 @@
+[invariant]
+id = "canonical.tool-call.signature-verbatim"
+statement = "A provider's non-empty signature on a tool call (Gemini's thoughtSignature on a functionCall part) is carried into ToolCall::signature byte for byte, and an empty or missing one is None."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Gemini signs function calls made while thinking and refuses an echoed call
+whose thoughtSignature changed, so harnesses echo it byte for byte, as
+Anthropic thinking signatures are (canonical.reasoning.signature-verbatim).
+ToolCall::signature follows the same rule as Reasoning::Visible's
+signature: it is in the encoding, so a body still round-trips through the
+blob store with every field and an echo hashes like its response
+(canonical.normalize.echo-stable), and it is not part text
+(canonical.opaque.outside-part-text). Mapping an empty signature to None
+gives one body for "no signature" whichever way it was spelled. None is
+omitted from the canonical encoding, not written as null, so a tool call
+without a signature encodes and hashes exactly as it did before the field
+existed; the canonical decoder refuses an explicit "signature": null,
+which encode never writes. Anthropic and OpenAI tool calls carry no
+signature and are always None.
+"""
+
+[evidence]
+unit = "crosstalk_canonical::tests::gemini_tool_call_signatures_echo_like_their_responses"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

@@ -25,6 +25,7 @@ use crate::aggregates::topic::{EmbeddingModel, TopicModelVersion};
 use crate::derived::flow::access::AccessKind;
 use crate::derived::flow::transmission::Route;
 use crate::derived::flow::verdict::{Verdict, VerdictRevision};
+use crate::derived::provenance::matching::CarrierKind;
 use crate::ids::{ExportId, ProjectionId};
 use crate::interfaces::l8_surface::evidence::MatchQuotes;
 use crate::interfaces::l8_surface::excerpt::{Excerpt, ExcerptWindow, Excerpted};
@@ -450,7 +451,10 @@ fn row(kind: ExportDatasetKind) -> ExportRow {
         ExportDatasetKind::Verdicts => ExportRow::Verdict(VerdictRow {
             transmission: tx(),
             route_kind: RouteKind::Channel,
-            call: QualityMatch::Content(MatchClass::Exact),
+            call: QualityMatch::Content {
+                class: MatchClass::Exact,
+                carrier: CarrierKind::ToolResult,
+            },
             revision: VerdictRevision::FIRST,
             verdict: Some(Verdict::Genuine),
             by: operator(),
