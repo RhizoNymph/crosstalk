@@ -186,9 +186,18 @@ deploy/bench/<run>/
   healthz.json       the last /healthz body read while settling
   export.jsonl       the transmissions export (ct-eval swarm-fetch)
   evidence.jsonl     one TransmissionEvidence per exported transmission
+  exchange-log.jsonl the gateway's exchange log, copied after the export
+  blobs/             the gateway's blob store, copied after the export
   score.txt          ct-eval swarm's stdout
   report/            report.json, report.txt, diagnostics.json
 ```
+
+The exchange log and blobs make the directory self-contained: it can be
+copied elsewhere and re-scored with `ct-eval swarm --truth truth.jsonl
+--exchanges exchange-log.jsonl --blobs blobs --export export.jsonl
+--evidence evidence.jsonl`. Both accumulate across runs on the `data`
+volume, so each copy holds everything so far (blobs are content-addressed
+and small); the importer only reads the run's sessions.
 
 ### Why the data volume is mounted, not copied
 

@@ -15,6 +15,7 @@
 #   6. wait_caught_up           /healthz `live.watermark_micros` past the
 #                               swarm's end (exports are cut at the watermark)
 #   7. fetch_detections         ct-eval swarm-fetch (export + evidence)
+#      snapshot_inputs          copy the exchange log and blobs into the run dir
 #   8. score                    ct-eval swarm, headline, ct-eval's exit code
 # Nothing after step 4 may restart or recreate crosstalk: its detection
 # state is in memory. Every `compose run` here passes --no-deps for that.
@@ -227,6 +228,20 @@ fetch_detections() {
         || bench_fail "ct-eval swarm-fetch failed; the detection state is still in crosstalk until it restarts"
 }
 
+# After the export: copy the gateway's exchange log and blob store into the
+# run directory, so the run can be re-scored anywhere (ct-eval swarm needs
+# the truth, the exchange log, the blobs and the export). Both accumulate
+# across runs (blobs are content-addressed), so this copies everything so
+# far; the importer joins on the run's sessions.
+snapshot_inputs() {
+    local run="$1" id dir="${here}/bench/${run}"
+    id="$(compose ps -q crosstalk)"
+    [[ -n "$id" ]] || bench_fail "no crosstalk container to copy the exchange log and blobs from"
+    docker cp "${id}:${bench_data_dir}/exchanges/exchange-log.jsonl" "${dir}/exchange-log.jsonl" \
+        && docker cp "${id}:${bench_data_dir}/blobs" "${dir}/blobs" \
+        || bench_fail "could not copy the exchange log and blobs into ${dir}"
+}
+
 # 8. Score offline against the exchange log and blobs read in place on the
 # data volume; print the headline and return ct-eval's exit code (2: a gate
 # failed).
@@ -250,7 +265,7 @@ score() {
     if grep -q '^gates:' "${dir}/report/report.txt"; then
         sed -n '/^gates:/,/^$/p' "${dir}/report/report.txt"
     else
-        echo "gates: none apply to demo-swarm"
+        echo "gates: none defined for this dataset in ${bench_gates}"
     fi
     if ((rc == 2)); then echo "result: GATE FAILED"; else echo "result: pass"; fi
     echo "report: ${dir}/report/report.txt"
@@ -316,6 +331,7 @@ bench() {
     echo "swarm_end_unix_ms=${end_ms}" >>"${here}/bench/${run}/bench.env"
     wait_caught_up "$run" "$end_ms" "$timeout"
     fetch_detections "$run"
+    snapshot_inputs "$run"
     score "$run" || rc=$?
     exit "$rc"
 }
