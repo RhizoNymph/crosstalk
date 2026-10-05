@@ -4,7 +4,8 @@ use crosstalk_spec::derived::flow::resource::{Locator, ResourcePattern};
 use topcoat::Result;
 use topcoat::view::{View, component, view};
 
-/// A locator as one line: a URL, a path, or an MCP or tool key.
+/// A locator as one line: a URL, a path, an MCP or tool key, or a
+/// repository's `host/owner/name`.
 pub fn format_locator(locator: &Locator) -> String {
     match locator {
         Locator::Url {
@@ -32,6 +33,7 @@ pub fn format_locator(locator: &Locator) -> String {
             target: None,
         } => format!("mcp:{server}/{}", tool.0),
         Locator::Opaque { tool, key } => format!("{}: {key}", tool.0),
+        Locator::Repository { host, owner, name } => format!("{}/{owner}/{name}", host.0),
     }
 }
 
@@ -42,6 +44,7 @@ pub fn locator_kind(locator: &Locator) -> &'static str {
         Locator::File { .. } => "file",
         Locator::Mcp { .. } => "mcp",
         Locator::Opaque { .. } => "tool",
+        Locator::Repository { .. } => "repository",
     }
 }
 

@@ -514,7 +514,7 @@ fn spec_trait_reports_kinds_and_handled_tools() {
     assert_eq!(
         got,
         vec![ExtractedAccess {
-            op: ExtractedOp::Write(Rejected),
+            op: ExtractedOp::write(Rejected),
             locator: file("/a/b"),
             via: Structured,
         }],

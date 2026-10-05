@@ -8,12 +8,17 @@
 //! reaches the result unless stdout goes to a file or the command saves it
 //! (`curl -o FILE`/`-O`, `wget` without `-O -`); a saved-to file is
 //! written.
+//!
+//! Each request's accesses are judged by its output
+//! ([`CommandRule::Http`]): a 4xx/5xx status the output shows rejects
+//! them.
 
 use crosstalk_spec::derived::flow::access::Extraction;
 use crosstalk_spec::derived::flow::resource::Locator;
 
 use crate::extract::http::{self, HttpRequest, Method, form_fields};
 use crate::extract::op::Candidate;
+use crate::extract::outcome::CommandRule;
 use crate::extract::resource::url_locator;
 
 use super::commands::Shell;
@@ -178,7 +183,11 @@ impl Shell<'_> {
         }
         let mut urls: Vec<&Word> = parsed.operands.clone();
         urls.extend(parsed.values(&["--url"]));
-        self.requests(&urls, method, &form, body_to_result, found);
+        let status_written = parsed.values(&["-w", "--write-out"]).iter().any(|format| {
+            format.text.contains("http_code") || format.text.contains("response_code")
+        });
+        let rule = CommandRule::Http { status_written };
+        self.requests(&urls, method, &form, body_to_result, rule, found);
     }
 
     pub(super) fn wget(&self, args: &[Word], stdout_to_file: bool, found: &mut Vec<Candidate>) {
@@ -201,7 +210,10 @@ impl Shell<'_> {
                 found.push(Candidate::write(locator, Extraction::Parsed));
             }
         }
-        self.requests(&parsed.operands, method, &form, body_to_result, found);
+        let rule = CommandRule::Http {
+            status_written: false,
+        };
+        self.requests(&parsed.operands, method, &form, body_to_result, rule, found);
     }
 
     fn requests(
@@ -210,6 +222,7 @@ impl Shell<'_> {
         method: Method,
         form: &[(String, String)],
         body_to_result: bool,
+        rule: CommandRule,
         found: &mut Vec<Candidate>,
     ) {
         for word in urls {
@@ -221,13 +234,23 @@ impl Shell<'_> {
                 method,
                 form: form.to_vec(),
             };
-            found.extend(http::candidates(
-                &request,
-                body_to_result,
-                Extraction::Parsed,
-                self.sites,
-            ));
+            self.request(&request, body_to_result, rule, found);
         }
+    }
+
+    /// The accesses of one request, judged by `rule`.
+    pub(super) fn request(
+        &self,
+        request: &HttpRequest,
+        body_to_result: bool,
+        rule: CommandRule,
+        found: &mut Vec<Candidate>,
+    ) {
+        found.extend(
+            http::candidates(request, body_to_result, Extraction::Parsed, self.sites)
+                .into_iter()
+                .map(|candidate| candidate.judged_by(rule)),
+        );
     }
 }
 

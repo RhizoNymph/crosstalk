@@ -29,7 +29,8 @@ pub fn candidates(seed: &Locator) -> Vec<ResourcePattern> {
             }));
         }
         Locator::Mcp { server, .. } => out.push(ResourcePattern::McpServer(server.clone())),
-        Locator::Opaque { .. } => {}
+        // A repository is matched by `Exact` only.
+        Locator::Opaque { .. } | Locator::Repository { .. } => {}
     }
     out.retain(|pattern| pattern.matches(seed));
     out

@@ -29,5 +29,13 @@
       "tool": "kv_put",
       "key": "handoff/latest"
     }
+  },
+  {
+    "type": "repository",
+    "data": {
+      "host": "github.com",
+      "owner": "agentvillage",
+      "name": "atlas"
+    }
   }
 ]

@@ -117,7 +117,7 @@ fn a_writes_and_b_reads_one_file_locator() -> Result<(), Failure> {
             written.len()
         )));
     };
-    assert_eq!(write.op, ExtractedOp::Write(WriteOutcome::Delivered));
+    assert_eq!(write.op, ExtractedOp::write(WriteOutcome::Delivered));
     assert_eq!(write.locator, page());
 
     let read = accesses(by_label("b1-read")?, by_label("b2-repeat")?)?;

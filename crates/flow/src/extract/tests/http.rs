@@ -4,6 +4,7 @@
 use proptest::prelude::*;
 use serde_json::{Value, json};
 
+use crosstalk_spec::derived::flow::access::AccessKind;
 use crosstalk_spec::derived::flow::access::Extraction::Structured;
 use crosstalk_spec::derived::flow::resource::{Host, Locator};
 use crosstalk_spec::interfaces::l5_flow::{ExtractError, ResourceExtractor};
@@ -287,7 +288,7 @@ proptest! {
             }
             "POST" | "PUT" | "PATCH" | "DELETE" => {
                 prop_assert!(!accesses.is_empty());
-                prop_assert!(accesses.iter().all(|a| matches!(a.op, ExtractedOp::Write(_))));
+                prop_assert!(accesses.iter().all(|a| a.op.kind() == AccessKind::Write));
             }
             _ => prop_assert!(accesses.is_empty()),
         }

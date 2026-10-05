@@ -31,7 +31,7 @@ use crosstalk_spec::derived::provenance::span::{Origin, RelaySource, Span};
 use crosstalk_spec::ids::{AgentId, SpanId};
 use crosstalk_spec::observed::message::PartRef;
 
-use crate::extract::op::ExtractedOp;
+use crate::extract::op::{ExtractedOp, WritePayload};
 
 /// The spans a write by `writer` through the tool call at `call` carries,
 /// in the order of `spans`, each once. `source_agent` names the agent whose
@@ -74,8 +74,8 @@ pub enum AccessOpError {
 }
 
 /// The stored operation of an extracted access: a write names the call
-/// part and carries `spans` ([`write_spans`]); a read names the result
-/// part, with the write's outcome.
+/// part and carries `spans` ([`write_spans`]), none when its content is
+/// not in the call (`WritePayload::Unseen`); a read names the result part.
 pub fn access_op(
     op: ExtractedOp,
     call: PartRef,
@@ -83,9 +83,20 @@ pub fn access_op(
     spans: Vec<SpanId>,
 ) -> Result<AccessOp, AccessOpError> {
     match op {
-        ExtractedOp::Write(outcome) => Ok(AccessOp::Write {
+        ExtractedOp::Write {
+            outcome,
+            payload: WritePayload::CallArguments,
+        } => Ok(AccessOp::Write {
             call,
             spans,
+            outcome,
+        }),
+        ExtractedOp::Write {
+            outcome,
+            payload: WritePayload::Unseen,
+        } => Ok(AccessOp::Write {
+            call,
+            spans: Vec::new(),
             outcome,
         }),
         ExtractedOp::Read => result

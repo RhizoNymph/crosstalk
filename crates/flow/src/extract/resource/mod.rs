@@ -9,8 +9,9 @@
 //! - [`path`]: lexical path resolution, relative paths against the stated
 //!   working directory, `Opaque` when there is none;
 //! - [`url`]: URL normalization;
-//! - [`repo`]: files of a shared git repository, keyed by the repository
-//!   whichever clone they are touched in;
+//! - [`repo`]: a shared git repository (`Locator::Repository`) and its
+//!   files, keyed by the repository whichever clone or remote spelling
+//!   they are touched through, and its issues and pull/merge requests;
 //! - [`key`]: configured folding of MCP resource keys.
 //!
 //! Site rules ([`crate::extract::sites`]) then give the pages of known
@@ -25,7 +26,7 @@ pub mod url;
 
 pub use key::{KeyCanon, KeyError};
 pub use path::{AbsolutePath, FileScope, PathError, WrittenPath, absolute_locator, file_locator};
-pub use repo::{RepoBindings, RepoId};
+pub use repo::{ForgeRepo, ForgeStyle, RepoBindings, RepoId, ThreadKind};
 pub use url::{UrlError, scan_urls, url_locator, url_text};
 
 #[cfg(test)]

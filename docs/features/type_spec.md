@@ -440,7 +440,7 @@ The types follow data through the stack:
 | `spec/types/derived/provenance/span.rs` | Spans and their lifecycle | `Span`, `SpanLocation`, `Origin`, `RelaySource`, `SpanState`, `SpanEvent`, `OriginatedSpan` |
 | `spec/types/derived/provenance/fingerprint.rs` | Fingerprints and index hits | `Fingerprint`, `WinnowParams`, `PositionedFingerprint`, `FingerprintHit` |
 | `spec/types/derived/provenance/matching.rs` | Content matches | `ContentMatch`, `MatchKind`, `Codec` (incl. the string codecs `JsonString`, `YamlString`), `Carrier` (`kind`), `CarrierKind`, `InvalidMatch` |
-| `spec/types/derived/flow/resource.rs` | Resources and patterns | `Resource`, `Locator`, `ResourcePattern` (`matches`, `overlaps`), `Host` |
+| `spec/types/derived/flow/resource.rs` | Resources and patterns | `Resource`, `Locator` (incl. `Repository { host, owner, name }`, built canonical by `Locator::repository`, `InvalidRepository`; `repository_file_host`), `ResourcePattern` (`matches`, `overlaps`; a repository matches `Exact` only), `Host` |
 | `spec/types/derived/flow/access.rs` | Accesses | `Access`, `AccessOp` (a write's spans and `outcome`), `WriteOutcome` (`pairs`), `AccessKind`, `Extraction` |
 | `spec/types/derived/flow/evidence.rs` | Communication evidence | `Evidence`, `CoAccess` (`writer`; refuses a rejected write), `InvalidCoAccess` (incl. `RejectedWrite`) |
 | `spec/types/derived/flow/timing.rs` | The correlator's windows | `CorrelationTiming` (checked: `window_closes_at`, `expires_at`, `write_settles_at`, `settle_after`), `InvalidTiming` |

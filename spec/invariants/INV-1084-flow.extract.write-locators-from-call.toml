@@ -1,0 +1,18 @@
+[invariant]
+id = "flow.extract.write-locators-from-call"
+statement = "For any call, the Write accesses ResourceExtractor::extract returns, their locators and payloads in order, are the same without a result, with a successful result and with a failed one; only their outcomes depend on the result."
+kind = "domain"
+property = "metamorphic"
+requires = ["property"]
+rationale = """
+The gateway holds a call's writes when the call is seen, before its
+result arrives, and releases them in order when it does. A write whose
+locator came from the result (the issue URL `gh issue create` prints)
+would not line up with the held one and would be lost or misattributed.
+"""
+
+[evidence]
+property = ["crosstalk_flow::extract::tests::forges::write_locators_never_depend_on_the_result", "crosstalk_flow::extract::tests::forges::known_calls_write_the_same_locators_with_any_result"]
+
+[evidence-review]
+property = { agent = "true", human = "false" }

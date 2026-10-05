@@ -11,6 +11,7 @@
 //! | `Locator::File` | `path`, or `host:path` |
 //! | `Locator::Mcp` | `mcp:server/tool`, `/target` when it has one |
 //! | `Locator::Opaque` | `tool:key` |
+//! | `Locator::Repository` | `repo:host/owner/name` |
 //! | `ResourcePattern::Exact` | its locator's text |
 //! | `ResourcePattern::Host` | `host/*` |
 //! | `ResourcePattern::UrlPrefix` | `host/prefix*` |
@@ -49,6 +50,7 @@ pub fn locator_text(locator: &Locator) -> String {
             target: Some(target),
         } => format!("mcp:{server}/{}/{target}", tool.0),
         Locator::Opaque { tool, key } => format!("{}:{key}", tool.0),
+        Locator::Repository { host, owner, name } => format!("repo:{}/{owner}/{name}", host.0),
     }
 }
 

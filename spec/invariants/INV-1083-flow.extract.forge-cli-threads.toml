@@ -1,0 +1,19 @@
+[invariant]
+id = "flow.extract.forge-cli-threads"
+statement = "For a shell call of `gh` or `glab`, issue and pull/merge request `create` yields a Write of the repository's collection URL, `comment`, `note`, `edit`, `update` and `review` a Write of the thread URL of the number or URL operand (else the collection), `view` a Read of the thread (else the collection) and `list` a Read of the collection, where a GitHub thread is `https://<host>/<owner>/<name>/issues/<n>` for issues and pull requests alike and a GitLab thread `https://<host>/<owner>/<name>/-/issues/<n>` or `/-/merge_requests/<n>`; `gh api` and `glab api` yield the accesses of the equivalent HTTP request."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Issue and pull request comments are a forge's message board. The CLI and
+the REST API and the web page must name one thread one way, so a comment
+made through any of them and a read through any other meet. GitHub's
+issues and pull requests share a number space and a comment API, so they
+share one canonical form.
+"""
+
+[evidence]
+unit = ["crosstalk_flow::extract::tests::forges::forge_cli_threads", "crosstalk_flow::extract::tests::forges::forge_api_commands_keep_the_http_contract"]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
