@@ -23,6 +23,27 @@ models. They come from five decisions:
    transmissions all resolve within one agent after a merge is hidden at
    read time; an unmerge lists it again.
 
+## Porting decisions (decided by the user)
+
+The port onto the current spec settled these questions; the user accepted
+all of them:
+
+- **List order.** `created_at` is the opening of the channel's first
+  cross-agent transmission (`Seed.opened_at`), for unconfirmed and
+  confirmed channels alike, so confirming a channel does not reorder the
+  list. A promoted channel keeps its discovery time; a channel declared
+  before traffic uses its declaration time. Ties order by id, descending.
+- **Extra resources never join a discovered channel.** A discovered channel
+  holds only its seed resource; resources join a channel only through a
+  declared pattern (declaration or promotion). A `discover` on a resource a
+  declaration now claims stores it on the declared channel (`Existing`).
+- **Quality and the verdict export** leave out transmissions within one
+  agent, resolved at read time; topic sizes resolve merges at read time too.
+- **`ChannelDiscovered` is published by the registry**, which decides
+  Created or Existing inside its own write.
+- **`cascade.yaml`** (design/lifecycles, outside the repo) is not updated;
+  the spec README's mapping table records the difference.
+
 ## Scope
 
 - When a discovered channel is created, by whom, and what seeds it.
