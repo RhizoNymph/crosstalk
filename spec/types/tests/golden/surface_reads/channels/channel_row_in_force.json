@@ -6,7 +6,8 @@
       "data": {
         "seed": {
           "resource": "01J9Z3R7T8V9W0X1Y2Z3A4B5C6",
-          "first_access": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3"
+          "first_transmission": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3",
+          "opened_at": "2026-10-04T09:16:40.002513Z"
         },
         "detection": {
           "type": "active",
@@ -39,13 +40,19 @@
   "standing": {
     "type": "in_force",
     "data": {
-      "type": "seen",
-      "data": {
-        "last": "2026-10-04T11:42:07.531000Z",
-        "counts": {
-          "writers": 1,
-          "readers": 2,
-          "transmissions": 14
+      "traffic": {
+        "confirmed": 14,
+        "unconfirmed": 3
+      },
+      "activity": {
+        "type": "seen",
+        "data": {
+          "last": "2026-10-04T11:42:07.531000Z",
+          "counts": {
+            "writers": 1,
+            "readers": 2,
+            "transmissions": 14
+          }
         }
       }
     }

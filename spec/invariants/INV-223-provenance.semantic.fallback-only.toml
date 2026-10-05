@@ -14,4 +14,4 @@ Semantic understates how certain it is.
 unit = "crosstalk_provenance::tests::fingerprint_match_preempts_semantic"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }

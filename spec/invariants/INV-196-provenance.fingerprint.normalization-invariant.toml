@@ -15,4 +15,4 @@ values must not.
 property = "crosstalk_provenance::props::fingerprints_ignore_case_and_whitespace"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

@@ -444,7 +444,7 @@ fn scorer_and_detection_quality_agree_on_what_the_detector_opened() {
         .rows()
         .iter()
         .map(|row| {
-            let QualityMatch::Content(class) = row.match_kind else {
+            let QualityMatch::Content { class, .. } = row.match_kind else {
                 panic!("only confirmed transmissions here");
             };
             (

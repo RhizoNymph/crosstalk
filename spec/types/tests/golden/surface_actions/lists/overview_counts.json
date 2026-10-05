@@ -7,6 +7,7 @@
   },
   "queues": {
     "open_alerts": 41,
-    "unreviewed_channels": 3
+    "unreviewed_channels": 3,
+    "unconfirmed_channels": 2
   }
 }

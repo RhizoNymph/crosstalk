@@ -1,0 +1,23 @@
+[invariant]
+id = "surface.alerts.hidden-subjects-not-shown"
+statement = "QueryApi::alerts, alert counts and the live feed leave out every alert whose subject, resolved at the read, is a hidden channel or a transmission whose crossing is WithinOneAgent, and show it again once an unmerge lists the channel or makes the transmission cross."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+An alert about a channel that no longer exists as a channel, or about a
+transmission that is now one agent talking to itself, would send an
+operator to something every other view says is not there. Hiding at read
+time keeps the stored alert, its state and its revision untouched, so an
+unmerge restores it exactly.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::confirmation::alerts_about_hidden_subjects_are_not_shown_or_counted",
+]
+integration = "crosstalk_surface::integration::pg_alerts_hide_merged_subjects"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

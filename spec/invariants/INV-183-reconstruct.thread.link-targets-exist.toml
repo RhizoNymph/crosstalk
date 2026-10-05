@@ -12,7 +12,7 @@ breaks that chain and makes shared_prefix meaningless.
 """
 
 [evidence]
-property = "crosstalk_reconstruct::tests::fork_and_compaction_links_point_at_stored_conversations"
+property = "crosstalk_reconstruct::tests::thread_props::fork_and_compaction_links_point_at_stored_conversations"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

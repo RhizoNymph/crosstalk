@@ -8,6 +8,7 @@ use crate::aggregates::alert::{
 };
 use crate::aggregates::edge::{EdgeKey, TopicSlot};
 use crate::aggregates::topic::TopicModelVersion;
+use crate::derived::flow::channel::Seed;
 use crate::derived::flow::channel::policy::{Policy, PolicyKind};
 use crate::derived::flow::channel::promotion::Promotion;
 use crate::derived::flow::evidence::CoAccess;
@@ -39,7 +40,7 @@ use crate::support::TimeWindow;
 use crate::support::Watermark;
 
 use crate::tests::fixtures::{
-    access, agent, at, channel, content_match, exchange, message, read_access, resource, span,
+    agent, at, channel, content_match, exchange, message, read_access, resource, span,
     transmission, write_access,
 };
 
@@ -167,7 +168,7 @@ pub(crate) fn sample_events() -> Vec<BusEvent> {
         }),
         BusEvent::Detect(DetectEvent::AccessRecorded {
             access: write_access(1, agent(1), resource(1), 1),
-            channel: channel(1),
+            channel: Some(channel(1)),
         }),
         BusEvent::Detect(DetectEvent::ContentMatched(content_match(
             agent(1),
@@ -176,7 +177,11 @@ pub(crate) fn sample_events() -> Vec<BusEvent> {
         ))),
         BusEvent::Detect(DetectEvent::ChannelDiscovered {
             channel: channel(1),
-            first_access: access(1),
+            seed: Seed {
+                resource: resource(1),
+                first_transmission: transmission(1),
+                opened_at: at(1),
+            },
         }),
         BusEvent::Detect(DetectEvent::ChannelCrossAccessed {
             channel: channel(1),

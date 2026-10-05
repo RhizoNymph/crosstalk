@@ -11,7 +11,7 @@ condition, even when the alerts consumer is behind or replaying.
 """
 
 [evidence]
-unit = "crosstalk_analysis::tests::draft_raised_at_is_envelope_at"
+unit = "crosstalk_analysis::alerts::eval::tests::draft_raised_at_is_envelope_at"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }

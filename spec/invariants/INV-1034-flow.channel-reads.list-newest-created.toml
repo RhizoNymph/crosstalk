@@ -1,0 +1,27 @@
+[invariant]
+id = "flow.channel-reads.list-newest-created"
+statement = "A full traversal of ChannelReads::channels for a filter lists every stored channel ChannelFilter::keeps keeps (never a hidden one) exactly once, newest ChannelOrigin::created_at first and ties by id descending, each with the traffic ChannelReads::channel returns for its id; a cursor presented with another filter is InvalidCursor."
+kind = "domain"
+property = "model-based"
+requires = ["unit", "property"]
+rationale = """
+The channel list pages by when each channel came to exist, the order an
+operator reads it in: a channel discovered from a resource seen long ago
+sorts by its first cross-agent transmission, not by when the resource or
+an id was first minted. Carrying the traffic with each channel lets the
+registry apply the listing filter and the surface build rows whose
+listing agrees with the filter in one snapshot. Replaces
+flow.channel-reads.list-matches-filter, which listed newest id first and
+matched channels without their traffic.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_memory::flow::registry::tests::traffic::channels_list_newest_created_first",
+    "crosstalk_memory::flow::registry::tests::channel_reads_list_filtered_newest_first",
+]
+property = "crosstalk_flow::store::tests::model::registry_agrees_with_reference_model"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+property = { agent = "true", human = "false" }

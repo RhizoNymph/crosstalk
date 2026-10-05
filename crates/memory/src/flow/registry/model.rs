@@ -30,15 +30,17 @@
 use std::collections::HashSet;
 
 use crosstalk_spec::aggregates::access::ResourceUse;
-use crosstalk_spec::derived::flow::access::{Access, AccessOp, Extraction};
+use crosstalk_spec::derived::flow::access::{Access, AccessOp, Extraction, WriteOutcome};
 use crosstalk_spec::derived::flow::channel::Channel;
 use crosstalk_spec::derived::flow::channel::Declaration;
+use crosstalk_spec::derived::flow::channel::confirmation::Confirmation;
 use crosstalk_spec::derived::flow::channel::detection::TrafficDetection;
 use crosstalk_spec::derived::flow::channel::policy::{
     Decision, Policy, PolicyAuthor, PolicyDecision, PolicyKind,
 };
 use crosstalk_spec::derived::flow::channel::promotion::Promotion;
 use crosstalk_spec::derived::flow::resource::{Host, Locator, Resource, ResourcePattern};
+use crosstalk_spec::derived::flow::transmission::{Route, Transmission};
 use crosstalk_spec::events::BusEvent;
 use crosstalk_spec::events::changed::Changed;
 use crosstalk_spec::ids::{
@@ -49,17 +51,21 @@ use crosstalk_spec::interfaces::l3_reconstruction::lifecycle::{
     AgentLifecycle, AgentOrigin, NewAgent,
 };
 use crosstalk_spec::interfaces::l5_flow::channels::{
-    ChannelReads, ChannelTraffic, DetectionUpdate,
+    ChannelReads, ChannelTraffic, ChannelWithTraffic, DetectionUpdate,
 };
 use crosstalk_spec::interfaces::l5_flow::{ChannelDirectory, ChannelRegistry, RegistryError};
+use crosstalk_spec::interfaces::l8_surface::channel_traffic::ChannelTransmissionFilter;
 use crosstalk_spec::interfaces::l8_surface::lists::{ChannelFilter, OriginFilter};
 use crosstalk_spec::observed::agent::{MergeAuthor, MergeRequest};
 use crosstalk_spec::observed::message::{PartRef, ToolName};
-use crosstalk_spec::paging::{Cursor, PageRequest, PageSize, ResourceUseList};
+use crosstalk_spec::paging::{
+    ChannelTransmissionList, Cursor, PageRequest, PageSize, ResourceUseList,
+};
 use crosstalk_spec::support::{Blake3, NonEmpty, TimeWindow, Timestamp};
 use proptest::prelude::*;
 
 use super::MemoryChannels;
+use crate::flow::verdicts::model::{TRANSMISSIONS, state_between, transmission_id};
 use crate::model::{Divergence, HarnessConfig, ModelMismatch, run, same};
 use crate::reconstruct::MemoryAgents;
 use crate::support::{IdSequence, Outbox, drain};
@@ -69,14 +75,30 @@ pub trait ChannelStore: ChannelRegistry + ChannelTraffic + ChannelReads + Channe
 
 impl<T: ChannelRegistry + ChannelTraffic + ChannelReads + ChannelDirectory> ChannelStore for T {}
 
-/// Every stored channel, ascending by id: a full traversal of
-/// `ChannelReads::channels` with a filter that keeps every channel, in
-/// pages of 2.
-pub async fn all_channels<S: ChannelReads>(store: &S) -> Result<Vec<Channel>, RegistryError> {
-    let filter = ChannelFilter {
-        origin: OriginFilter::WithSuperseded(Vec::new()),
-        ..ChannelFilter::default()
-    };
+/// Every listed channel with its traffic, oldest created first (the
+/// reverse of the list's order): a full traversal of
+/// `ChannelReads::channels` with a filter that keeps every listed channel,
+/// superseded ones included, in pages of 2. A hidden channel is in no list.
+pub async fn all_channels<S: ChannelReads>(
+    store: &S,
+) -> Result<Vec<ChannelWithTraffic>, RegistryError> {
+    channels_under(
+        store,
+        &ChannelFilter {
+            origin: OriginFilter::WithSuperseded(Vec::new()),
+            ..ChannelFilter::default()
+        },
+    )
+    .await
+}
+
+/// A full traversal of `ChannelReads::channels` under `filter`, in pages
+/// of 2, oldest created first.
+pub async fn channels_under<S: ChannelReads>(
+    store: &S,
+    filter: &ChannelFilter,
+) -> Result<Vec<ChannelWithTraffic>, RegistryError> {
+    let filter = filter.clone();
     let size = PageSize::new(2).map_err(|error| RegistryError::Store {
         reason: format!("{error:?}"),
     })?;
@@ -246,13 +268,26 @@ pub enum RegistryOp {
         policy: Option<(u8, u64)>,
         config: bool,
     },
+    AddResource {
+        resource: u8,
+    },
     Discover {
         channel: u8,
         resource: u8,
+        transmission: u8,
+        at: u64,
     },
-    AddResource {
+    /// Record a channel transmission: routed through `channel` (a
+    /// non-channel route when `routed` is false), in state `state`, read by
+    /// agent 2 and sent by agent 1, or by agent 3 (merged into agent 2)
+    /// when `merged`.
+    Record {
+        transmission: u8,
         channel: u8,
-        resource: u8,
+        routed: bool,
+        state: u8,
+        merged: bool,
+        opened_at: u64,
     },
     Access {
         resource: u8,
@@ -285,10 +320,10 @@ pub enum RegistryOp {
         update: u8,
         at: u64,
     },
-    Confirm {
+    Transmissions {
         channel: u8,
-        transmission: u8,
-        at: u64,
+        filter: u8,
+        size: u16,
     },
     Uses {
         channel: u8,
@@ -307,10 +342,11 @@ pub fn registry_op() -> impl Strategy<Value = RegistryOp> {
     prop_oneof![
         1 => (0u8..6, proptest::option::of((0u8..3, 0u64..40)), any::<bool>())
             .prop_map(|(pattern, policy, config)| RegistryOp::Declare { pattern, policy, config }),
-        4 => (0u8..POOL, 0u8..LOCATORS)
-            .prop_map(|(channel, resource)| RegistryOp::Discover { channel, resource }),
-        2 => (slot(), 0u8..LOCATORS)
-            .prop_map(|(channel, resource)| RegistryOp::AddResource { channel, resource }),
+        2 => (0u8..LOCATORS).prop_map(|resource| RegistryOp::AddResource { resource }),
+        3 => (0u8..POOL, 0u8..LOCATORS, 0u8..TRANSMISSIONS, 0u64..60)
+            .prop_map(|(channel, resource, transmission, at)| RegistryOp::Discover { channel, resource, transmission, at }),
+        5 => (0u8..TRANSMISSIONS, slot(), proptest::bool::weighted(0.9), 0u8..7, proptest::bool::weighted(0.3), 0u64..60)
+            .prop_map(|(transmission, channel, routed, state, merged, opened_at)| RegistryOp::Record { transmission, channel, routed, state, merged, opened_at }),
         4 => (0u8..LOCATORS, 0u8..4, any::<bool>(), 0u64..60)
             .prop_map(|(resource, agent, write, at)| RegistryOp::Access { resource, agent, write, at }),
         3 => (slot(), 0u8..3, 0u64..40, any::<bool>(), any::<bool>())
@@ -321,21 +357,32 @@ pub fn registry_op() -> impl Strategy<Value = RegistryOp> {
         1 => (0u8..LOCATORS).prop_map(|locator| RegistryOp::Lookup { locator }),
         2 => (slot(), 0u8..5, 0u64..60)
             .prop_map(|(channel, update, at)| RegistryOp::Detect { channel, update, at }),
-        2 => (slot(), 0u8..4, 0u64..60)
-            .prop_map(|(channel, transmission, at)| RegistryOp::Confirm { channel, transmission, at }),
+        2 => (slot(), 0u8..3, 1u16..4)
+            .prop_map(|(channel, filter, size)| RegistryOp::Transmissions { channel, filter, size }),
         1 => (slot(), 0u64..40, 1u64..40, 1u16..4)
             .prop_map(|(channel, start, len, size)| RegistryOp::Uses { channel, start, len, size }),
     ]
 }
 
-/// The discovery of every pool channel, each seeded by a random resource
-/// (a repeat is refused), so later steps mostly act on stored channels.
+/// Every resource stored (on no channel, matching no declaration yet),
+/// then the discovery of every pool channel, each seeded by a random
+/// resource (a repeat finds the existing channel), so later steps mostly
+/// act on stored channels.
 fn population() -> impl Strategy<Value = Vec<RegistryOp>> {
     proptest::collection::vec(0u8..LOCATORS, usize::from(POOL)).prop_map(|resources| {
-        resources
-            .into_iter()
-            .zip(0..POOL)
-            .map(|(resource, channel)| RegistryOp::Discover { channel, resource })
+        (0..LOCATORS)
+            .map(|resource| RegistryOp::AddResource { resource })
+            .chain(
+                resources
+                    .into_iter()
+                    .zip(0..POOL)
+                    .map(|(resource, channel)| RegistryOp::Discover {
+                        channel,
+                        resource,
+                        transmission: channel,
+                        at: u64::from(channel),
+                    }),
+            )
             .collect()
     })
 }
@@ -396,7 +443,12 @@ impl Case {
     }
 }
 
-async fn run_case<S: ChannelStore>(
+/// One case of [`check_channel_registry`] on a subject built by the
+/// caller: for a store that needs an async or multi-threaded setup per case
+/// (a Postgres store on a fresh schema), which drives its own proptest
+/// runner over [`registry_ops`]. `sut_events` receives what `sut`
+/// publishes; `agents` is [`directory`]'s.
+pub async fn run_case<S: ChannelStore>(
     mut sut: S,
     mut sut_events: tokio::sync::mpsc::UnboundedReceiver<BusEvent>,
     agents: MemoryAgents,
@@ -434,6 +486,7 @@ fn access(id: u128, resource: u8, agent: u8, write: bool, at: u64) -> Access {
             AccessOp::Write {
                 call: part,
                 spans: Vec::new(),
+                outcome: WriteOutcome::Delivered,
             }
         } else {
             AccessOp::Read { result: part }
@@ -444,11 +497,9 @@ fn access(id: u128, resource: u8, agent: u8, write: bool, at: u64) -> Access {
 fn update(n: u8, at: u64) -> DetectionUpdate {
     let at = Timestamp::from_micros(at);
     let transmission = TransmissionId::from_ulid(0x7A00 | u128::from(n));
-    let first_access = AccessId::from_ulid(0xACC0_0000);
     match n % 5 {
         0 => DetectionUpdate::Unused { since: at },
-        1 => DetectionUpdate::Traffic(TrafficDetection::Observed { first_access }),
-        2 => DetectionUpdate::Traffic(TrafficDetection::Active {
+        1 | 2 => DetectionUpdate::Traffic(TrafficDetection::Active {
             since: at,
             last_transmission: transmission,
         }),
@@ -491,24 +542,53 @@ async fn apply<S: ChannelStore>(
             }
             same(step, "declare", &s, &m)
         }
+        RegistryOp::AddResource { resource: r } => {
+            let s = sut.add_resource(resource(*r)).await;
+            let m = model.add_resource(resource(*r)).await;
+            same(step, "add_resource", &s, &m)
+        }
         RegistryOp::Discover {
             channel: c,
             resource: r,
+            transmission,
+            at,
         } => {
-            case.accesses += 1;
-            let first = AccessId::from_ulid(0xF1A0_0000 | case.accesses);
-            let s = sut.discover(channel(*c), resource(*r), first).await;
-            let m = model.discover(channel(*c), resource(*r), first).await;
+            let id = resource(*r).id;
+            let transmission = transmission_id(*transmission);
+            let at = Timestamp::from_micros(*at);
+            let s = sut.discover(channel(*c), id, transmission, at).await;
+            let m = model.discover(channel(*c), id, transmission, at).await;
             same(step, "discover", &s, &m)
         }
-        RegistryOp::AddResource {
+        RegistryOp::Record {
+            transmission,
             channel: c,
-            resource: r,
+            routed,
+            state: n,
+            merged,
+            opened_at,
         } => {
-            let id = case.channel(*c);
-            let s = sut.add_resource(id, resource(*r)).await;
-            let m = model.add_resource(id, resource(*r)).await;
-            same(step, "add_resource", &s, &m)
+            let from = if *merged {
+                access_agent(3)
+            } else {
+                access_agent(1)
+            };
+            let state = state_between(*n, &[0, 2], from, access_agent(2))
+                .ok_or_else(|| Divergence::new(step, "state fixture"))?;
+            let recorded = Transmission {
+                id: transmission_id(*transmission),
+                to: access_agent(2),
+                route: if *routed {
+                    Route::Channel(case.channel(*c))
+                } else {
+                    Route::Unobserved
+                },
+                opened_at: Timestamp::from_micros(*opened_at),
+                state,
+            };
+            let s = sut.record_transmission(&recorded).await;
+            let m = model.record_transmission(&recorded).await;
+            same(step, "record_transmission", &s, &m)
         }
         RegistryOp::Access {
             resource: r,
@@ -583,17 +663,19 @@ async fn apply<S: ChannelStore>(
             let m = model.set_detection(id, update(*u, *at)).await;
             same(step, "set_detection", &s, &m)
         }
-        RegistryOp::Confirm {
+        RegistryOp::Transmissions {
             channel: c,
-            transmission,
-            at,
+            filter,
+            size,
         } => {
             let id = case.channel(*c);
-            let transmission = TransmissionId::from_ulid(0x7A00 | u128::from(*transmission));
-            let at = Timestamp::from_micros(*at);
-            let s = sut.confirm(id, transmission, at).await;
-            let m = model.confirm(id, transmission, at).await;
-            same(step, "confirm", &s, &m)
+            let filter = transmission_filter(*filter);
+            same(
+                step,
+                "transmissions",
+                &transmissions(sut, id, &filter, *size).await,
+                &transmissions(model, id, &filter, *size).await,
+            )
         }
         RegistryOp::Uses {
             channel: c,
@@ -636,6 +718,43 @@ pub async fn traverse<S: ChannelRegistry>(
             .await?;
         let (items, next) = page.page.into_parts();
         pages.push((page.channel, items));
+        match next {
+            Some(next) => after = Some(next),
+            None => return Ok(pages),
+        }
+    }
+}
+
+/// The channel transmission filter `n`: all, confirmed only, unconfirmed
+/// only.
+fn transmission_filter(n: u8) -> ChannelTransmissionFilter {
+    ChannelTransmissionFilter {
+        confirmation: match n % 3 {
+            0 => None,
+            1 => Some(Confirmation::Confirmed),
+            _ => Some(Confirmation::Unconfirmed),
+        },
+    }
+}
+
+/// A full `ChannelReads::transmissions` traversal in pages of `size`.
+pub async fn transmissions<S: ChannelReads>(
+    store: &S,
+    channel: ChannelId,
+    filter: &ChannelTransmissionFilter,
+    size: u16,
+) -> Result<Vec<Vec<Transmission>>, RegistryError> {
+    let size = PageSize::new(size).map_err(|error| RegistryError::Store {
+        reason: format!("{error:?}"),
+    })?;
+    let mut pages = Vec::new();
+    let mut after: Option<Cursor<ChannelTransmissionList>> = None;
+    loop {
+        let page = store
+            .transmissions(channel, filter, &PageRequest { size, after })
+            .await?;
+        let (items, next) = page.into_parts();
+        pages.push(items);
         match next {
             Some(next) => after = Some(next),
             None => return Ok(pages),
@@ -710,6 +829,13 @@ async fn observe<S: ChannelStore>(
             &traverse(sut, id, all_time, 2).await,
             &traverse(model, id, all_time, 2).await,
         )?;
+        let every = ChannelTransmissionFilter::default();
+        same(
+            step,
+            "transmissions traversal",
+            &transmissions(sut, id, &every, 2).await,
+            &transmissions(model, id, &every, 2).await,
+        )?;
     }
     for n in 0..LOCATORS {
         same(
@@ -729,7 +855,10 @@ async fn check_invariants<S: ChannelStore>(
 ) -> Result<(), Divergence> {
     let channels: Vec<Channel> = all_channels(sut)
         .await
-        .map_err(|error| Divergence::new(step, format!("channels: {error:?}")))?;
+        .map_err(|error| Divergence::new(step, format!("channels: {error:?}")))?
+        .into_iter()
+        .map(|read| read.into_parts().0)
+        .collect();
     let declared: Vec<(&Channel, &ResourcePattern)> = channels
         .iter()
         .filter_map(|channel| channel.origin.pattern().map(|pattern| (channel, pattern)))

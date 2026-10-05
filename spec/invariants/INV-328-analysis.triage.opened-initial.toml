@@ -11,7 +11,7 @@ the triggering event, which is what replays reproduce.
 """
 
 [evidence]
-unit = "crosstalk_analysis::tests::opened_alert_copies_draft_and_starts_open"
+unit = "crosstalk_analysis::alerts::tests::triage::opened_alert_copies_draft_and_starts_open"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }

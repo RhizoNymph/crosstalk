@@ -13,7 +13,7 @@ showing the merge.
 """
 
 [evidence]
-property = "crosstalk_topology::tests::unmerge_restores_graph"
+property = "crosstalk_topology::tests::verdict_props::unmerge_restores_graph"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

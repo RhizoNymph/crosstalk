@@ -1,0 +1,21 @@
+[invariant]
+id = "flow.correlator.retry-after-rejected-write-confirms"
+statement = "When an agent's write on a resource is WriteOutcome::Rejected and its later write on the same resource, whose arguments relay the rejected write's span s, is Delivered or Unknown, a ContentMatch on s in another agent's later read of that resource confirms one channel transmission whose CoAccesses name the later write and none names the rejected one."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+The scenario the self-relay rule exists for, end to end: a message tool
+refuses an over-length message, the agent shortens or resends it, and the
+reader receives the resend. The reader's match is on the first attempt's
+span, because the resend relays it. The transmission must be found, and
+must rest on the write that delivered, so an operator reading the evidence
+sees the delivered call, not the refused one; the refused attempt is still
+on record as an access (flow.access.rejected-write-recorded).
+"""
+
+[evidence]
+unit = "crosstalk_flow::correlator::tests::retry_after_rejected_write_confirms_through_the_retry"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

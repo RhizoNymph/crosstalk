@@ -1,0 +1,25 @@
+[invariant]
+id = "flow.channel.traffic-detection-transitions"
+statement = "Apart from staying in its state, every transition applied to a TrafficDetection is Active or Dormant to Active on a cross-agent transmission recorded through the channel (opened by a co-access or confirmed), keeping since when it was Active and naming that transmission as last_transmission, or Active to Dormant on the idle timeout; a suspected, discarded or detected state moves nothing, and a superseded channel's detection does not change."
+kind = "domain"
+property = "invariant"
+requires = ["unit", "property"]
+rationale = """
+A channel exists only because of a cross-agent transmission, so its
+detection starts Active and only says when traffic last flowed. Whether
+that traffic is confirmed is Confirmation, read from the transmissions at
+query time, so the states that encoded it (Observed, Candidate) are gone
+and cannot drift from the traffic. Replaces
+flow.channel.traffic-detection-model.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_memory::flow::registry::tests::late_confirmation_on_a_superseded_channel_advances_its_superseder",
+    "crosstalk_memory::flow::registry::tests::traffic::a_declared_channel_is_in_use_from_its_first_cross_agent_transmission",
+]
+property = "crosstalk_flow::store::tests::detection::traffic_detection_transitions"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+property = { agent = "true", human = "false" }

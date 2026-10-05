@@ -28,7 +28,10 @@
 //! a transmission is as credible as its best evidence, so a row's
 //! `false_detection` count is the false positives of transmissions whose best
 //! evidence was of that class, and `Semantic` rows hold only transmissions
-//! with nothing but semantic matches.
+//! with nothing but semantic matches. The row also names that match's
+//! carrier ([`CarrierKind`]): the first match of the strongest class, in
+//! stored order, decides both, so precision can be read per carrier (a tool
+//! result, a user turn, a system prompt, the reader's own output).
 //!
 //! **Which state and verdict.** Both are read at query time: a transmission
 //! judged while suspected and confirmed since is counted as confirmed, and a
@@ -39,9 +42,10 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 use crate::aggregates::edge::RouteKind;
-use crate::derived::flow::transmission::{Confirmed, Transmission};
+use crate::aliases::Aliases;
+use crate::derived::flow::transmission::{Confirmed, Crossing, Transmission};
 use crate::derived::flow::verdict::{Judgeable, Verdict};
-use crate::derived::provenance::matching::MatchKind;
+use crate::derived::provenance::matching::{CarrierKind, ContentMatch, MatchKind};
 use crate::support::TimeWindow;
 use crate::wire::Rejected;
 
@@ -80,6 +84,16 @@ impl MatchClass {
             .map(|content| Self::from(content.kind()))
             .fold(first, Self::min)
     }
+
+    /// The first match, in stored order, of the strongest class.
+    pub fn strongest_match(confirmed: &Confirmed) -> &ContentMatch {
+        let strongest = Self::strongest(confirmed);
+        confirmed
+            .content()
+            .iter()
+            .find(|content| Self::from(content.kind()) == strongest)
+            .unwrap_or_else(|| confirmed.content().first())
+    }
 }
 
 /// The detector's call on a transmission, as a quality row sees it.
@@ -91,8 +105,12 @@ impl MatchClass {
     deny_unknown_fields
 )]
 pub enum QualityMatch {
-    /// Confirmed (or classified, or aggregated), by its strongest match.
-    Content(MatchClass),
+    /// Confirmed (or classified, or aggregated), by its strongest match:
+    /// that match's class and carrier ([`MatchClass::strongest_match`]).
+    Content {
+        class: MatchClass,
+        carrier: CarrierKind,
+    },
     /// Access-pattern evidence only.
     Suspected,
     /// Suspected, then discarded.
@@ -104,7 +122,13 @@ impl From<Judgeable<'_>> for QualityMatch {
         match judgeable {
             Judgeable::Suspected(_) => Self::Suspected,
             Judgeable::Discarded(_) => Self::Discarded,
-            Judgeable::Confirmed(confirmed) => Self::Content(MatchClass::strongest(confirmed)),
+            Judgeable::Confirmed(confirmed) => {
+                let strongest = MatchClass::strongest_match(confirmed);
+                Self::Content {
+                    class: MatchClass::from(strongest.kind()),
+                    carrier: strongest.carrier().kind(),
+                }
+            }
         }
     }
 }
@@ -202,16 +226,24 @@ impl DetectionQuality {
     }
 
     /// The reference tally: each transmission with its current verdict.
-    /// Keeps those opened in `window` whose state is judgeable, and counts
-    /// each once in its row under its verdict. An implementation's query
-    /// returns exactly this for the stored transmissions and verdict logs.
+    /// Keeps those opened in `window` whose state is judgeable and that
+    /// still cross agents under `aliases` (a transmission whose sender and
+    /// reader have since merged into one agent, [`Crossing::WithinOneAgent`],
+    /// is a transmission nowhere, so it is no detector call to count either;
+    /// an unmerge counts it again), and counts each once in its row under
+    /// its verdict. An implementation's query returns exactly this for the
+    /// stored transmissions and verdict logs, with agents resolved at the
+    /// read.
     pub fn tally<'a>(
         window: TimeWindow,
         transmissions: impl IntoIterator<Item = (&'a Transmission, Option<Verdict>)>,
+        aliases: impl Aliases + Copy,
     ) -> Self {
         let mut rows: BTreeMap<(u8, QualityMatch), QualityRow> = BTreeMap::new();
         for (transmission, verdict) in transmissions {
-            if !window.contains(transmission.opened_at) {
+            if !window.contains(transmission.opened_at)
+                || transmission.crossing(aliases) == Crossing::WithinOneAgent
+            {
                 continue;
             }
             let Ok(judgeable) = transmission.state.judgeable() else {

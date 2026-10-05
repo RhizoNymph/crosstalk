@@ -1,0 +1,21 @@
+[invariant]
+id = "flow.registry.directory-never-wrong"
+statement = "PgChannelRegistry's ChannelDirectory::canonical returns either the id itself or the declared channel that superseded it; it returns the superseding channel as soon as the registry's own promote returns, and on another registry on the same database once refresh_directory has run after the promotion committed."
+kind = "coordination"
+requires = ["integration", "unit"]
+rationale = """
+canonical is synchronous, so a Postgres registry answers it from an
+in-memory copy of the supersession table. Supersession only grows (a
+superseded channel stays superseded by the same declared channel), so the
+copy can lag but never name a wrong channel; the correlator keys its shards
+by it (flow.correlator.shard-affinity), so a lagging copy must catch up
+before a promoted channel's later evidence is routed.
+"""
+
+[evidence]
+integration = "crosstalk_flow::store::tests::registry::pg_promote_publishes_after_commit"
+unit = "crosstalk_flow::store::directory::tests::a_superseded_channel_keys_the_shard_of_its_superseder"
+
+[evidence-review]
+integration = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

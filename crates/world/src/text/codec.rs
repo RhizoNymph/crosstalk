@@ -19,7 +19,31 @@ pub fn encode(text: &str, codec: Codec) -> String {
         Codec::Hex => hex(text.as_bytes()),
         Codec::UrlEncoding => url_encode(text),
         Codec::UnicodeNormalization => obfuscate_unicode(text),
+        Codec::JsonString => json_string(text),
+        Codec::YamlString => yaml_string(text),
     }
+}
+
+/// The text as the body of a JSON string literal (escaped, without quotes).
+pub fn json_string(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if u32::from(c) < 0x20 => out.push_str(&format!("\\u{:04x}", u32::from(c))),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
+/// The text as a single-quoted YAML scalar's body (quotes doubled).
+pub fn yaml_string(text: &str) -> String {
+    text.replace('\'', "''")
 }
 
 pub fn base64(bytes: &[u8]) -> String {

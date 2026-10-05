@@ -7,7 +7,7 @@ use std::num::NonZeroU32;
 
 use super::harness::{assert_golden, assert_rejected};
 use super::{ULID_A, ULID_B, ULID_C, id};
-use crate::derived::provenance::matching::{Carrier, Codec, ContentMatch, MatchKind};
+use crate::derived::provenance::matching::{Carrier, CarrierKind, Codec, ContentMatch, MatchKind};
 use crate::derived::provenance::span::{RelaySource, SpanLocation};
 use crate::ids::{AgentId, ExchangeId, MessageHash, SpanId};
 use crate::observed::message::{PartRef, ToolCallId};
@@ -88,10 +88,39 @@ fn every_carrier() -> Vec<Carrier> {
     .to_vec()
 }
 
+/// Every carrier kind, in declaration order, each the kind of the carrier
+/// at the same position in [`every_carrier`].
+fn every_carrier_kind() -> Vec<CarrierKind> {
+    fn declared(kind: CarrierKind) -> CarrierKind {
+        match kind {
+            CarrierKind::ToolResult
+            | CarrierKind::UserTurn
+            | CarrierKind::SystemPrompt
+            | CarrierKind::ReaderOutput => kind,
+        }
+    }
+    let kinds: Vec<CarrierKind> = every_carrier().iter().map(Carrier::kind).collect();
+    let declared_kinds = [
+        CarrierKind::ToolResult,
+        CarrierKind::UserTurn,
+        CarrierKind::SystemPrompt,
+        CarrierKind::ReaderOutput,
+    ]
+    .map(declared)
+    .to_vec();
+    assert_eq!(kinds, declared_kinds, "every carrier has its own kind");
+    declared_kinds
+}
+
 fn every_codec() -> Vec<Codec> {
     fn declared(codec: Codec) -> Codec {
         match codec {
-            Codec::Base64 | Codec::Hex | Codec::UrlEncoding | Codec::UnicodeNormalization => codec,
+            Codec::Base64
+            | Codec::Hex
+            | Codec::UrlEncoding
+            | Codec::UnicodeNormalization
+            | Codec::JsonString
+            | Codec::YamlString => codec,
         }
     }
     [
@@ -99,6 +128,8 @@ fn every_codec() -> Vec<Codec> {
         Codec::Hex,
         Codec::UrlEncoding,
         Codec::UnicodeNormalization,
+        Codec::JsonString,
+        Codec::YamlString,
     ]
     .map(declared)
     .to_vec()
@@ -144,6 +175,7 @@ fn provenance_goldens() {
     assert_golden(AREA, "span_location", &location());
     assert_golden(AREA, "relay_sources", &every_relay_source());
     assert_golden(AREA, "carriers", &every_carrier());
+    assert_golden(AREA, "carrier_kinds", &every_carrier_kind());
     assert_golden(AREA, "codecs", &every_codec());
     assert_golden(AREA, "match_kinds", &every_kind());
     assert_golden(

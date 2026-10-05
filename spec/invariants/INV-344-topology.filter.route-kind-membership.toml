@@ -17,8 +17,8 @@ topology.graph.matches-fold-model covers.
 
 [evidence]
 unit = "crosstalk_topology::tests::route_kind_filter_maps_each_route_variant"
-property = "crosstalk_topology::props::route_kind_filter_keeps_only_listed_kinds"
+property = "crosstalk_topology::props::graph::route_kind_filter_keeps_only_listed_kinds"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
-property = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }
+property = { agent = "true", human = "false" }

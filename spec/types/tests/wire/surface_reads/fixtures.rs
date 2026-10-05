@@ -9,7 +9,7 @@ use serde::Serialize;
 use serde_json::Value;
 
 use super::super::{ULID_A, ULID_B, ULID_C, id, ts};
-use crate::derived::flow::access::{Access, AccessOp, Extraction};
+use crate::derived::flow::access::{Access, AccessOp, Extraction, WriteOutcome};
 use crate::derived::flow::evidence::CoAccess;
 use crate::derived::flow::resource::{Host, Locator, Resource, ResourcePattern};
 use crate::derived::flow::transmission::{Confirmed, Route, Transmission, TransmissionState};
@@ -139,6 +139,7 @@ pub fn write() -> Access {
                 index: 1,
             },
             spans: Vec::new(),
+            outcome: WriteOutcome::Delivered,
         },
     }
 }

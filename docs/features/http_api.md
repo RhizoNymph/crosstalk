@@ -150,6 +150,7 @@ Arguments column, `?` marks an optional argument, `q` a query parameter,
 | POST | `/query/channel-names` | body `IdBatch<ChannelId>` | 200 JSON | View | `channel_names` |
 | GET | `/channels/{id}/promotion-preview` | id p, pattern q | 200 JSON | View | `promotion_preview` |
 | GET | `/channels/{id}/resources` | id p, window q, page q | 200 JSON | View | `channel_resources` |
+| GET | `/channels/{id}/transmissions` | id p, filter q, version q, page q | 200 JSON | View | `channel_transmissions` |
 | GET | `/agents` | filter q, window q, page q | 200 JSON | View | `agents` |
 | GET | `/agents/{id}` | id p, window q | 200 JSON | View | `agent` |
 | POST | `/query/agent-names` | body `IdBatch<AgentId>` | 200 JSON | View | `agent_names` |
@@ -191,6 +192,14 @@ The kind comes from the body's `type`, and each row's permission is
 `ActionKind::required_permission`. `OperatorAction::required_permission`
 now returns that same value, so the route and the action agree by
 construction.
+
+`GET /channels/{id}/transmissions` (`Route::ChannelTransmissions`, at
+index 6, right after `channel_resources`) lists a channel's cross-agent
+transmissions; its `filter` is a `ChannelTransmissionFilter` and its
+`version` a `TopicVersionSelector`, both JSON query parameters. Without
+View it is a `403` that reads nothing
+(`surface.query.channel-transmissions-need-view`); an unknown channel is
+`404`.
 
 Path parameters at one position share a name (`/channels/{id}/...`), as
 axum's router requires. That is why `policy_history(channel)` reads `id`

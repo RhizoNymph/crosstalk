@@ -18,9 +18,9 @@ then.
 """
 
 [evidence]
-unit = ["crosstalk_analysis::tests::watched_rule_remaps_to_most_similar_centroid", "crosstalk_analysis::tests::watched_rule_keeps_old_version_until_version_ready"]
-property = "crosstalk_analysis::tests::remapped_topics_are_argmax_centroids_of_new_version"
+unit = ["crosstalk_analysis::alerts::tests::rules::watched_rule_remaps_to_most_similar_centroid", "crosstalk_analysis::alerts::tests::rules::watched_rule_keeps_old_version_until_version_ready"]
+property = "crosstalk_analysis::alerts::tests::model::rule_store_matches_the_reference"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

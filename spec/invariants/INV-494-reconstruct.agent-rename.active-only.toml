@@ -13,8 +13,8 @@ agent to rename instead.
 
 [evidence]
 unit = "crosstalk_spec::tests::agents::rename_refuses_a_merged_agent_and_keeps_its_label"
-integration = "crosstalk_reconstruct::tests::pg_rename_refuses_merged_agent"
+integration = "crosstalk_reconstruct::tests::pg_agents::pg_rename_refuses_merged_agent"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }
-integration = { agent = "false", human = "false" }
+integration = { agent = "true", human = "false" }

@@ -21,7 +21,8 @@
 //!   (`reconstruct.agent-merge.record-agreement`), and every state change
 //!   follows the lifecycle (`reconstruct.agent-state.legal-transitions`).
 //!
-//! The store under test is built by `make` from the [`IdSequence`] it must
+//! The store under test is built by `make` (or, asynchronously, by
+//! [`check_agent_store_with`]'s) from the [`IdSequence`] it must
 //! draw merge record ids from (one id per accepted merge, nothing else) and
 //! the [`Outbox`] it must publish its events to, so that ids and events can
 //! be compared without translation.
@@ -316,10 +317,27 @@ where
     S: AgentStore,
     F: Fn(IdSequence, Outbox) -> S,
 {
+    check_agent_store_with(config, |ids, outbox| std::future::ready(make(ids, outbox)))
+}
+
+/// [`check_agent_store`] with a store built asynchronously, inside the
+/// case's runtime: a Postgres store connects (and empties its tables)
+/// there, so its connections live and die with the case.
+pub fn check_agent_store_with<S, F, Fut>(
+    config: HarnessConfig,
+    make: F,
+) -> Result<(), ModelMismatch>
+where
+    S: AgentStore,
+    F: Fn(IdSequence, Outbox) -> Fut,
+    Fut: Future<Output = S>,
+{
     run(config, agent_ops(config.max_ops), |runtime, ops| {
-        let (sut_outbox, sut_events) = Outbox::channel();
-        let sut = make(IdSequence::default(), sut_outbox);
-        runtime.block_on(run_case(sut, sut_events, ops))
+        runtime.block_on(async {
+            let (sut_outbox, sut_events) = Outbox::channel();
+            let sut = make(IdSequence::default(), sut_outbox).await;
+            run_case(sut, sut_events, ops).await
+        })
     })
 }
 

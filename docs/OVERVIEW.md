@@ -25,7 +25,20 @@ Overview:
     unchanged and every generation exchange is normalized, its bodies
     stored, ExchangeCaptured published and the exchange persisted
     (gateway). L2's in-process bus and blob store (transport) are
-    implemented; L3 to L7 are not started. The L8 surface service
+    implemented. L3 (crosstalk-reconstruct) attributes and threads
+    exchanges: evidence derivation, the agent store on Postgres, the
+    threader over in-memory or Postgres conversations, and a bus consumer
+    of ExchangeCaptured not yet wired into the pipeline (reconstruct). L4
+    provenance (crosstalk-provenance: winnowing, decoders with escape
+    folding, the segmenter, the scanner and its bus consumer publishing
+    ContentMatched, the fingerprint index and L4's records on Postgres) is
+    implemented but not yet wired into the gateway (provenance). L5 flow
+    has its extractors, correlator and consumer (flow_extract,
+    flow_correlator) and its Postgres stores (flow_store); L7 has its
+    Postgres edge store and bus consumer (topology_store); L6 has its
+    remote adapters (analysis) and Postgres search and alerts
+    (search_alerts).
+    The L8 surface service
     (crosstalk-surface: QueryApi, OperatorActions, LiveFeed, export and
     the graphs' node facts, generic over the spec's store traits) is
     implemented and runs in process over the reference stores through
@@ -100,10 +113,15 @@ Overview:
       as their wire JSON and are decoded strictly on delivery.
     detect: >
       Crates crosstalk-provenance and crosstalk-flow. L4 provenance (span extraction, novelty classification, fingerprint
-      index, content matching) and L5 flow detection (resource extraction,
-      channel registry with promotion and supersession, write/read
-      correlation into transmissions, and the operator verdict log kept
-      beside each transmission).
+      index, content matching over part text only, strict decoding,
+      escape-folded normalization) and L5 flow detection (resource
+      extraction with write outcomes, channel registry with promotion and
+      supersession, in which a channel exists only once a transmission
+      between different agents goes through it, write/read correlation
+      into transmissions, in which rejected writes are recorded but never
+      paired and a match on a resource its sender never wrote stays
+      suspected, and the operator verdict log kept beside each
+      transmission).
     insight: >
       Crates crosstalk-analysis, crosstalk-topology and crosstalk-surface.
       L6 analysis (embeddings, topics, the topic-model version history with
@@ -187,12 +205,17 @@ Overview:
     records its harness claim and threads the conversation, publishes
     ConversationDelta → L4 indexes the agent's originated spans and matches
     new inputs against other agents' spans (ContentMatched); L5 turns tool
-    calls into accesses on canonical channels (AccessRecorded), resolves
-    channels and correlates cross-agent accesses and content matches into
-    transmissions (TransmissionConfirmed / Suspected) → L6 embeds (an
-    OpenAI-compatible endpoint) and classifies transmissions (topic fits
-    and projection layouts are computed by the Python topics sidecar over
-    HTTP; assignment to the current topics is local), records topic-model versions and their
+    calls into accesses on resources, on a canonical channel or on none
+    (AccessRecorded; a write once its result settles its outcome),
+    correlates cross-agent accesses and content matches
+    into transmissions (TransmissionConfirmed / Suspected), and discovers
+    a channel from a resource only when the first transmission between
+    two different agents goes through it (ChannelDiscovered, from the
+    registry; a resource only one agent touches is never a channel) → L6
+    embeds (an OpenAI-compatible endpoint) and classifies transmissions
+    (topic fits and projection layouts are computed by the Python topics
+    sidecar over HTTP; assignment to the current topics is local), records
+    topic-model versions and their
     lineage, and evaluates alert rules → L7 aggregates edges and access
     buckets, advances the watermark from the correlator's ticks and the
     oldest unprocessed input, and announces topic-version activation back
@@ -203,15 +226,22 @@ Overview:
     topic history, search, projections, verdicts, detection quality,
     lists, alerts, and the read models: agent rows (L3's profiles joined
     with L7's traffic in the window) and details following merged ids;
-    channel rows (writers and readers from L5's resource use, transmissions
-    from the same graph the overview counts, over the channel and every
-    channel it superseded, in an optional window that never changes which
-    rows are listed); promotion previews (the registry's promotion plan run
+    channel rows (newest created first, each with its cross-agent traffic
+    tallied at the read and the listing that follows from it: a confirmed
+    or unconfirmed channel, a declaration without traffic, or hidden once
+    every transmission through it is within one merged agent; writers and
+    readers from L5's resource use, transmissions from the same graph the
+    overview counts, over the channel and every channel it superseded, in
+    an optional window that never changes which rows are listed); a
+    channel's cross-agent transmissions (the review list of an
+    unconfirmed channel); promotion previews (the registry's promotion plan run
     without effect, so a preview and the promotion agree); agent and
-    channel names; transmission rows by id; the evidence page, which cuts
-    excerpts of both sides of each content match from the blob store's
-    bodies through the spans' and matches' locations (a body content
-    retention dropped is reported, not an error); and the overview's
+    channel names; transmission rows by id; the evidence page, which reads
+    span records (L4's SpanIndex::spans) and accesses with their resources
+    (L5's AccessStore::accesses) in batches, in every transmission state,
+    and cuts excerpts of both sides of each content match from the blob
+    store's bodies through the spans' and matches' locations (a body
+    content retention dropped is reported, not an error); and the overview's
     counts. Exports stream one dataset between a header naming the
     request, resolved version, watermark, embedding model and gateway
     version and a trailer with the row count, a digest and whether it
@@ -271,7 +301,8 @@ Features Index:
     description: >
       The gateway's data model as type-checked Rust: observed facts
       (including clients, upstreams, credentials, the merge log and harness
-      claims), derived inferences (including channel promotion with
+      claims), derived inferences (including channels that exist only
+      once agents communicate through them, channel promotion with
       supersession and operator verdicts beside the detector's state),
       aggregates (including edge and access buckets, time series, topic
       history with retention, and the watermark that marks buckets final),
@@ -284,7 +315,8 @@ Features Index:
       store, the sink registry), so in-memory and Postgres stores
       implement the same traits; a store publishes the events of the
       decisions it takes from the transaction that makes them (the topic
-      catalog owns TopicVersionDropped), and every store method that
+      catalog owns TopicVersionDropped, the channel registry
+      ChannelDiscovered), and every store method that
       depends on the time takes it as an argument (the types are also the
       JSON wire format: wire_contract), with tests for the invariants
       checked at runtime and one TOML file per invariant in
@@ -325,10 +357,12 @@ Features Index:
       The rows and pages the UI shows on the query surface: canonical agent
       rows with claims, last seen and windowed traffic, and a detail with
       aliases, children, merges and vetoes that follows merged ids; channel
-      rows with activity or their supersession, the channel list filter,
-      and the promotion preview computed by the promotion's own plan; agent
-      and channel names over one bounded IdBatch; transmission rows by id
-      with a per-state shape; the evidence behind a transmission with
+      rows with their cross-agent traffic, listing and activity or their
+      supersession, newest created first, the channel list filter (listings
+      included), a channel's cross-agent transmissions, and the promotion
+      preview computed by the promotion's own plan; agent and channel names
+      over one bounded IdBatch; transmission rows by id with a per-state
+      shape, never a transmission within one agent; the evidence behind a transmission with
       bounded excerpts; the overview's counts, which agree with the channel
       and agent rows; and one alert by id. An agent's detail finds each
       alias's merge record (when and by whom it was merged).
@@ -340,8 +374,36 @@ Features Index:
       - spec/types/interfaces/l8_surface/evidence.rs
       - spec/types/interfaces/l8_surface/excerpt.rs
       - spec/types/interfaces/l8_surface/overview.rs
-    depends_on: [query_surface, type_spec]
+      - spec/types/interfaces/l8_surface/channel_traffic.rs
+    depends_on: [query_surface, type_spec, channel_semantics]
     doc: docs/features/read_models.md
+  channel_semantics:
+    description: >
+      What counts as a channel and as a transmission, applied by every
+      layer. A transmission exists only between different agents
+      (Transmission::crossing, with merges resolved at the read), so one
+      between two ids of a merged agent counts in no filter, graph, row,
+      count, projection, topic size, quality figure, export or alert. A
+      discovered channel exists only once such a transmission goes through
+      a resource on no channel (ChannelTraffic::discover, seeded by the
+      resource and that transmission; the registry publishes
+      ChannelDiscovered, which raises NewChannel); before that a resource
+      is only a resource. A channel's cross-agent traffic, confirmation
+      (Confirmed, or Unconfirmed while all its traffic is suspected) and
+      listing (a channel, a declaration without traffic, or hidden after a
+      merge, which an unmerge undoes) are read, never stored. Unconfirmed
+      channels are listed and drawn marked and can be filtered out
+      (ChannelFilter::listings, TopologyFilter::unconfirmed_channels).
+      Access buckets are kept by resource and resolved to the channel
+      holding it at read time. Channel lists are newest created first.
+    entry_points:
+      - spec/types/derived/flow/channel/confirmation.rs
+      - spec/types/derived/flow/transmission.rs
+      - spec/types/interfaces/l5_flow/channels.rs
+      - spec/types/interfaces/l8_surface/channel_traffic.rs
+      - crates/memory/src/flow/registry/traffic.rs
+    depends_on: [type_spec, query_surface]
+    doc: docs/features/channel_semantics.md
   export:
     description: >
       QueryApi::export: one dataset (transmissions, edge or access buckets,
@@ -463,9 +525,14 @@ Features Index:
       heartbeats, session ends, a bus consumer that appends before it
       acks); export (refusals, plan, limits, header, sealed BLAKE3 rows,
       trailer, Started/Ended/Abandoned audit) with SpecExportSource
-      planning rows from the spec's read traits; and NodeCache, the spec's
-      NodeFacts, kept by NodeFeeder from L3's and L5's events and rebuilt
-      from the stores on start. crosstalk-api's InProcess builds it over
+      planning rows from the spec's read traits; channel_transmissions
+      (a channel's crossing transmissions under a surface cursor wrapping
+      the registry's); cross-agent semantics at every read (listings from
+      each channel's traffic, hidden channels and transmissions within one
+      agent left out of lists, counts, alerts and rows by id); and
+      NodeCache, the spec's NodeFacts (listings and the channel holding
+      each resource included), kept by NodeFeeder from L3's and L5's events
+      and rebuilt from the stores on start. crosstalk-api's InProcess builds it over
       the reference stores with a relay from their outbox to the node
       facts and the feed. The HTTP server (P7.1) is not part of it.
     entry_points:
@@ -478,7 +545,7 @@ Features Index:
       - crates/surface/src/export/mod.rs
       - crates/surface/src/nodes/mod.rs
       - crates/api/src/in_process/mod.rs
-    depends_on: [query_surface, read_models, export, memory, transport, sim, testkit, workspace]
+    depends_on: [query_surface, read_models, export, channel_semantics, memory, transport, sim, testkit, workspace]
     doc: docs/features/surface_service.md
   store:
     description: >
@@ -506,6 +573,59 @@ Features Index:
       - scripts/test-db.sh
     depends_on: [workspace]
     doc: docs/features/store.md
+  flow_store:
+    description: >
+      The L5 stores on Postgres in crosstalk-flow (crates/flow/src/store,
+      roadmap P5) with the flow layer's migrations (schema flow).
+      PgChannelRegistry implements ChannelRegistry, ChannelTraffic,
+      ChannelReads and ChannelDirectory (lookups, declarations, policy
+      history, promotion and supersession, resources, accesses, discovery,
+      recorded channel traffic and the reads that tally it at query time);
+      PgTransmissionStore implements TransmissionStore and
+      TransmissionVerdicts. Every write is one SERIALIZABLE transaction under
+      the store harness's retry, so concurrent discoveries from one resource
+      commit one channel. Stores publish what they decide through a
+      transactional outbox relayed to an EventSink after commit (at least
+      once). The directory caches supersessions for the synchronous
+      canonical(); ShardKey keys correlator shards by canonical channel and
+      PgShardTicks keeps the shards' tick checkpoints. Model-tested against
+      crosstalk-memory's reference stores with the reference harnesses'
+      proptest strategies.
+    entry_points:
+      - crates/flow/src/store/mod.rs
+      - crates/flow/src/store/registry/mod.rs
+      - crates/flow/src/store/transmissions.rs
+      - crates/flow/migrations/0001_flow_store.sql
+    depends_on: [store, memory, channel_semantics]
+    doc: docs/features/flow_store.md
+  topology_store:
+    description: >
+      crosstalk-topology (roadmap P6.1): the spec's EdgeStore on plain
+      Postgres (decision D3) as PgEdgeStore, and the topology bus consumer.
+      Edge buckets per topic version and access buckets per resource live in
+      range-partitioned tables (partitions made on demand); one row per
+      applied contribution and access makes applies idempotent and backs
+      the drill-down and FalseDetections::Exclude. Writes lock one state
+      row (FOR SHARE for applies, FOR UPDATE for activation, retention and
+      the watermark), so no bucket the exposed watermark finalizes changes;
+      reads run in one REPEATABLE READ snapshot and resolve agents,
+      channels, node facts and the topic version (spec TopicCatalog) at
+      query time, folding in Rust. Events the store decides go to a
+      transactional outbox, relayed after commit; traffic rows coalesce
+      into one window per drain for Changed::Traffic (a marked hook until
+      the follow-mode spec lands). consumer::run (group "topology") applies
+      TransmissionClassified, AccessRecorded, VerdictSet and the version
+      events to any EdgeStore, publishes EdgeUpdated before acking, and
+      recomputes the watermark every bucket width. Model-tested against
+      crosstalk-memory's InMemoryEdgeStore.
+    entry_points:
+      - crates/topology/src/lib.rs
+      - crates/topology/src/store/mod.rs
+      - crates/topology/src/consumer.rs
+      - crates/topology/src/outbox.rs
+      - crates/topology/migrations/0001_topology.sql
+    depends_on: [type_spec, store, memory, transport, channel_semantics]
+    doc: docs/features/topology_store.md
   sim:
     description: >
       crosstalk-sim, the deterministic simulation kit for every dst
@@ -604,20 +724,27 @@ Features Index:
       evidence lookup behind resolve, AgentLifecycle, ClaimStore,
       ActivityStore, AgentReads), MemoryFingerprintIndex (FingerprintIndex
       with cutoff, retention measured from the now each call is given, and
-      shards), MemoryChannels (ChannelRegistry, ChannelTraffic,
-      ChannelReads and ChannelDirectory: lookups, declarations, policy
-      history, promotion by promotion::plan and its coverage, supersession,
-      resource use, traffic writes and stored channels) and MemoryVerdicts
-      (TransmissionStore and TransmissionVerdicts); state sits behind a std
+      shards; SpanIndex, the span records read in batches), MemoryChannels
+      (ChannelRegistry, ChannelTraffic, ChannelReads, AccessStore and
+      ChannelDirectory: lookups that create nothing, resources on a channel
+      or on none, discovery by a cross-agent transmission, the recorded
+      state of every channel transmission and the cross-agent traffic,
+      listing and order read from it, declarations, policy history,
+      promotion by promotion::plan and its coverage, supersession, resource
+      use, accesses read back in batches) and MemoryVerdicts
+      (TransmissionStore and TransmissionVerdicts, its quality leaving out
+      transmissions within one merged agent); state sits behind a std
       RwLock per store. The insight and surface half (L6 to L8): the topic
       catalog (TopicCatalog and TopicLifecycle: fit lifecycle, lineage,
-      assignments, sizes, pins and retention, publishing its drops), exact
+      assignments, sizes of cross-agent assignments, pins and retention,
+      publishing its drops), exact
       search and projection sampling (SearchIndex, SearchCorpus,
       ProjectionSource), projection jobs with leases and frame retention,
       the alert store (AlertRuleStore, AlertTriage, AlertRuleMaintenance,
       AlertActions, AlertReads) in one transaction scope, the edge store
       computed from stored contributions (activation, watermark, drops,
-      graph, totals, channel-centred graph, drill-down, agent traffic,
+      graph, totals, channel-centred graph drawing listed channels only
+      from access buckets kept by resource, drill-down, agent traffic,
       series), the append-only audit log, the OperatorStore and the
       SinkRegistry, and Fake* doubles of the computational traits. Every
       store shares one id sequence, one mpsc outbox, one cursor book and
@@ -720,8 +847,8 @@ Features Index:
       overlaps; the ULID generator over the injected Clock and a
       RandomSource, monotonic per generator (stamping the clock's reading
       or a given time). TokenUsage gained cache_write
-      (checked: cache counts within input) and Reasoning::Visible a hashed
-      signature.
+      (checked: cache counts within input), Reasoning::Visible a hashed
+      signature, and later ToolCall one too (Gemini's thoughtSignature).
     entry_points:
       - spec/types/observed/message/encoding.rs
       - spec/types/observed/message/json.rs
@@ -730,6 +857,40 @@ Features Index:
       - spec/types/interfaces/l1_canonical.rs
     depends_on: [type_spec, wire_contract, sim]
     doc: docs/features/spec_primitives.md
+  eval_gaps:
+    description: >
+      Detection rules from evaluating on real agent datasets (INV-950..973):
+      ToolOutcome::Unknown for protocols without a failure flag; write
+      outcomes (AccessOp::Write carries WriteOutcome Delivered, Rejected or
+      Unknown, classified per known tool), with a writing call held until
+      its result arrives or CorrelationTiming::write_settles_at passes
+      (then Unknown), every write recorded and only Delivered and Unknown
+      writes paired (CoAccess::new refuses a rejected one); a write's spans
+      include the writer's own relayed spans, so a retry after a rejected
+      write confirms; a ToolResult match on a resource its sender never
+      wrote is a shared upstream source and keeps the transmission
+      Suspected; ToolCall::signature hashed and never part text; decoders
+      and the fingerprinter read part text only and decode strictly as
+      UTF-8, and string serialisation is undone by two codecs
+      (Codec::JsonString, Codec::YamlString, one level per chain). Batch
+      reads shared by evaluation, the evidence page, the conversation view
+      and the UI's world seed: SpanIndex::spans (span records with their
+      author as recorded) and AccessStore::accesses (accesses with their
+      resources), so evidence exists in every transmission state;
+      CarrierKind splits quality rows by carrier; IngressMode::Replay {
+      corpus: CorpusId } marks replayed datasets, which L3 keeps apart.
+    entry_points:
+      - spec/types/derived/flow/access.rs
+      - spec/types/derived/flow/evidence.rs
+      - spec/types/derived/flow/timing.rs
+      - spec/types/interfaces/l5_flow.rs
+      - spec/types/interfaces/l4_provenance.rs
+      - spec/types/interfaces/l5_flow/channels.rs
+      - spec/types/derived/provenance/matching.rs
+      - spec/types/observed/message.rs
+      - spec/types/observed/client.rs
+    depends_on: [type_spec, spec_primitives, wire_contract, read_models]
+    doc: docs/features/eval_gaps.md
   gateway:
     description: >
       crosstalk-gateway, the crosstalk binary (P3, milestone M1), on the
@@ -782,8 +943,8 @@ Features Index:
     doc: docs/features/gateway.md
   analysis:
     description: >
-      crosstalk-analysis, the L6 layer crate (P6.2/P6.3). So far its
-      remote module: SidecarTopicModel (TopicModel: fits the catalog's
+      crosstalk-analysis, the L6 layer crate (P6.2/P6.3). Its Postgres
+      search and alert stores are search_alerts. Its remote module: SidecarTopicModel (TopicModel: fits the catalog's
       version over documents at a given time through the sidecar, computes
       centroids as normalized member means and derives topic ids from the
       fit time, version and cluster; assigns locally to the nearest
@@ -824,6 +985,67 @@ Features Index:
       - deploy/topics.Dockerfile
     depends_on: [wire_contract]
     doc: docs/features/topics_sidecar.md
+  reconstruct:
+    description: >
+      crosstalk-reconstruct, L3 (P4.1). Evidence derivers (credential by
+      stability, account, scoped harness ids, prompt fingerprint, their
+      chain) with the identity scope decided in one place
+      (evidence::scope, ready for per-corpus replay scoping); PgAgents,
+      every L3 agent store trait on Postgres (merge log with exact unmerges,
+      vetoes, renames, resolve, lifecycle, claims, activity, reads; an
+      outbox; an in-process directory cache), model-tested against
+      crosstalk-memory; ConversationThreader over MemoryConversations or
+      PgConversations (prefix chains, forks, compaction from summary
+      turns, WebSocket increment resolution scoped by upstream and identity
+      scope, system turns anywhere, every message kept in order under an
+      ordinal); and the reconstruct consumer (ExchangeCaptured in;
+      AgentSeen and ConversationDelta out under envelope ids derived from
+      the exchange). Replays AI Village's Claude Code stream and lmcache's
+      interleaved re-runs as ignored fixture tests.
+    entry_points:
+      - crates/reconstruct/src/lib.rs
+      - crates/reconstruct/src/agents/mod.rs
+      - crates/reconstruct/src/thread/mod.rs
+      - crates/reconstruct/src/consumer/mod.rs
+      - crates/reconstruct/src/evidence/mod.rs
+    depends_on: [type_spec, store, memory, transport, sim, testkit]
+    doc: docs/features/reconstruct.md
+  provenance:
+    description: >
+      crosstalk-provenance, L4 (P4.2). Winnowing (the spec's
+      Fingerprinter) over whitespace- and case-normalized shingles with a
+      stable rolling hash pinned by golden vectors; base64, hex, URL and
+      Unicode decoders (the spec's Decoders) plus JSON and YAML string
+      unescapes, run depth-bounded with byte maps back to the part text;
+      the NovelRunSegmenter, which follows copied runs through every
+      decode layer of the exchange's inputs (relayed) and leaves the rest
+      originated; the scanner, which looks up new inputs, the new system
+      prompt and the output, resolves originated text against the index
+      (hidden relays become ReaderOutput matches, boilerplate Common) and
+      picks carrier, kind, read range and matched bytes; the engine, which
+      records exchanges from ExchangeCaptured and scans each
+      ConversationDelta, writes the index, republishes the stored outcome
+      with deterministic ids on redelivery and evicts after retention;
+      the bus consumer (group provenance) publishing SpanOriginated,
+      SpanRelayed and ContentMatched; PgFingerprintIndex model-tested
+      against crosstalk-memory's reference; L4's records (exchanges with
+      per-exchange and per-message scan status, spans by id, matches by
+      reader message and by origin span) in memory and on Postgres; a
+      semantic matcher stub until P6.2. Validated on AgentDojo: 9948 of
+      9949 exposed injection slots matched.
+    entry_points:
+      - crates/provenance/src/lib.rs
+      - crates/provenance/src/engine.rs
+      - crates/provenance/src/consumer.rs
+      - crates/provenance/src/scan/mod.rs
+      - crates/provenance/src/segment/mod.rs
+      - crates/provenance/src/decode/mod.rs
+      - crates/provenance/src/fingerprint/mod.rs
+      - crates/provenance/src/index/pg.rs
+      - crates/provenance/src/store/mod.rs
+      - crates/provenance/migrations/0001_provenance.sql
+    depends_on: [type_spec, spec_primitives, store, memory, transport, sim, testkit, workspace]
+    doc: docs/features/provenance.md
   deploy:
     description: >
       Single-machine deployment: images for the gateway and the UI, a docker
@@ -858,8 +1080,9 @@ Features Index:
       ChannelKey, MergeKey, RuleKey, JobKey). Deterministic per seed,
       anchor and store implementation; ids are ULIDs minted at their
       entity's time. Tests seed the memory stores and assert every scenario
-      through the read traits; four channel-semantics tests wait for that
-      port. The feature doc lists the divergences from the UI fixture and
+      through the read traits, the channel semantics included (discovery
+      at the first cross-agent transmission, the scratch entry on no
+      channel, an unconfirmed and a hidden channel). The feature doc lists the divergences from the UI fixture and
       the gap list: fixture reads no store or spec trait answers.
     entry_points:
       - crates/world/src/lib.rs
@@ -893,6 +1116,8 @@ Features Index:
       - crates/eval/src/score/align.rs
       - crates/eval/src/datasets/salt/mod.rs
       - crates/eval/src/bin/ct-eval/main.rs
+      - crates/eval/src/datasets/agentdojo/mod.rs
+      - crates/eval/src/datasets/tau2/mod.rs
     depends_on: [type_spec, gateway, transport, sim, testkit]
     doc: docs/features/eval.md
   e2e_smoke:
@@ -920,4 +1145,87 @@ Features Index:
       - crates/e2e/tests/smoke/main.rs
     depends_on: [gateway, ingress, canonical, surface_service, memory, workspace]
     doc: docs/features/e2e_smoke.md
+  flow_extract:
+    description: >
+      crosstalk-flow's extract module, L5 (P5): the spec's
+      ResourceExtractor over every known tool (Claude Code's file, fetch
+      and Bash tools and their OpenCode, pi, Gemini CLI, Codex and text
+      editor equivalents; HTTP tools such as http_request {method, url,
+      body?}, the method deciding the op; MCP tools mapped by typed JSON
+      configuration of tool name and argument paths to a resource and an
+      op). Every locator is canonical, so agents touching one thing meet
+      on one resource: lexical paths, relative paths against the stated
+      or tracked working directory (Opaque without one), normalized URLs,
+      folded MCP keys, MediaWiki pages as their canonical article URL
+      whatever URL or API reaches them, GitHub files and files of known
+      clones as the repository's file. A conservative shell lexer and
+      interpreter reads redirections, file readers, tee, curl, wget, cd,
+      git and gh. Each write carries its outcome (Delivered, Rejected,
+      Unknown), judged per tool in one place; reads need a delivered
+      result. ConversationContext learns the persistent shell's directory
+      and clones from shell calls. Builds the stored AccessOp with the
+      write's spans (originated plus self-relayed sources).
+    entry_points:
+      - crates/flow/src/extract/mod.rs
+      - crates/flow/src/extract/context.rs
+      - crates/flow/src/extract/outcome.rs
+      - crates/flow/src/extract/mcp/config.rs
+      - crates/flow/src/extract/spans.rs
+    depends_on: [type_spec, channel_semantics, workspace]
+    doc: docs/features/flow_extract.md
+  flow_correlator:
+    description: >
+      The L5 correlator and flow consumer in crosstalk-flow (P5, the M2
+      path). WindowedCorrelator (the spec's Correlator, one per shard)
+      pairs a write and a later read of one resource by another agent into
+      a CoAccess, opens the channel transmission, and at the close of the
+      read's evidence window confirms it with every held tool-result match
+      a write of the sender explains (origin span among the write's
+      spans), else suspects it; late matches confirm a suspicion, later
+      ones extend, expiry discards, content after a discard opens a new
+      transmission; a match no sender write explains (shared upstream)
+      confirms nothing. Delegation (parent links read through AgentReads),
+      Direct and Unobserved matches open confirmed at their exchange's
+      window close. Every pairing rule lives in correlate/pairing.rs, ready
+      for the eval PR's WriteOutcome. Shards are keyed by medium (canonical
+      channel or resource); a medium's evidence moves on discovery,
+      ChannelDiscovered, ChannelPromoted and any access resolved to a
+      channel. The flow consumer (group flow) records accesses
+      (add_resource, record_access, AccessRecorded), holds writes until
+      their outcome or settle time, feeds the shards, and applies each
+      decision through discover, TransmissionStore::save and
+      record_transmission before publishing ChannelCrossAccessed,
+      TransmissionConfirmed and TransmissionSuspected, one ordered step
+      queue with retries. Time is only input event times and ticks of the
+      injected clock, so replayed corpora settle on the replay clock. Its
+      input from extraction is a local type until the spec has an event
+      for it.
+    entry_points:
+      - crates/flow/src/correlate/windowed.rs
+      - crates/flow/src/correlate/pairing.rs
+      - crates/flow/src/consumer/mod.rs
+      - crates/flow/src/consumer/shards.rs
+      - crates/flow/src/consumer/apply.rs
+    depends_on: [type_spec, channel_semantics, memory, sim, testkit, transport]
+    doc: docs/features/flow_correlator.md
+  search_alerts:
+    description: >
+      crosstalk-analysis (crates/analysis, L6, P6.2) on Postgres. PgSearchIndex
+      implements SearchIndex and SearchCorpus (full-text tsvector terms plus
+      pgvector embeddings, scores computed in SQL exactly as the reference,
+      the filter applied in Rust before the page is cut, keyed cursors), and
+      PgProjectionSource samples the same documents. PgAlertStore implements
+      AlertRuleStore, AlertTriage, AlertRuleMaintenance, AlertActions and
+      AlertReads in SERIALIZABLE transactions with an outbox published after
+      commit; RuleEvaluator is AlertRuleEval for every rule kind; AlertsStage
+      is the alerts consumer group, built like the gateway pipeline's
+      stages. Model-tested against crosstalk-memory's harnesses.
+    entry_points:
+      - crates/analysis/src/search/mod.rs
+      - crates/analysis/src/alerts/mod.rs
+      - crates/analysis/src/alerts/eval/mod.rs
+      - crates/analysis/src/alerts/consumer.rs
+      - crates/analysis/src/pg/mod.rs
+    depends_on: [type_spec, store, memory, gateway]
+    doc: docs/features/search_alerts.md
 ```

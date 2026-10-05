@@ -1,0 +1,19 @@
+[invariant]
+id = "flow.resource.http-url-tool-independent"
+statement = "HTTP tool calls whose URLs normalize to the same URL, on a host no site rule recognizes, yield accesses on the same locator, the normalized URL itself, whatever the tool name, method and body."
+kind = "domain"
+property = "metamorphic"
+requires = ["property"]
+rationale = """
+A dead drop works because the writer and the reader name the same thing.
+Agents reach one URL through different tools (`http_request`, `fetch`,
+`curl`) with different spellings; if the tool name or the method entered the
+locator, a POST by one agent and a GET by another would land on two
+resources and never pair into a co-access.
+"""
+
+[evidence]
+property = "crosstalk_flow::extract::tests::http::same_url_same_resource_across_tools"
+
+[evidence-review]
+property = { agent = "true", human = "false" }

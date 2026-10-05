@@ -6,6 +6,7 @@ use super::super::harness::{assert_golden, assert_rejected, assert_request_golde
 use super::super::{ULID_A, ULID_B};
 use super::{AREA, a, b, topic, version, wiki};
 use crate::aggregates::edge::{EdgeSelector, RouteKind, Weighting};
+use crate::aggregates::filter::UnconfirmedChannels;
 use crate::aggregates::filter::{FalseDetections, TopicVersionSelector, TopologyFilter};
 use crate::derived::flow::transmission::{DelegationDirection, Route};
 
@@ -51,6 +52,7 @@ fn full_filter() -> TopologyFilter {
         topics: vec![topic()],
         topic_version: TopicVersionSelector::Pinned(version()),
         false_detections: FalseDetections::Exclude,
+        unconfirmed_channels: UnconfirmedChannels::Exclude,
     }
 }
 
@@ -108,7 +110,8 @@ fn edge_selector_golden() {
 }
 
 const DEFAULT_FILTER: &str = r#""agents": [], "channels": [], "route_kinds": [], "topics": [],
-    "topic_version": {"type": "current"}, "false_detections": "include""#;
+    "topic_version": {"type": "current"}, "false_detections": "include",
+    "unconfirmed_channels": "include""#;
 
 #[test]
 fn topology_filters_refuse_unknown_fields_and_variants() {
@@ -146,6 +149,16 @@ fn topology_filters_refuse_unknown_fields_and_variants() {
             DEFAULT_FILTER.replace(r#""include""#, r#""only""#)
         ),
         "unknown variant `only`",
+    );
+    assert_rejected::<TopologyFilter>(
+        &format!(
+            r#"{{{}}}"#,
+            DEFAULT_FILTER.replace(
+                r#""unconfirmed_channels": "include""#,
+                r#""unconfirmed_channels": "hide""#
+            )
+        ),
+        "unknown variant `hide`",
     );
     assert_rejected::<RouteKind>(r#""Channel""#, "unknown variant `Channel`");
 }

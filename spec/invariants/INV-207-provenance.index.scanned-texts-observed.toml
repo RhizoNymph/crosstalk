@@ -15,4 +15,4 @@ and matched as if it were novel.
 unit = ["crosstalk_provenance::tests::every_span_origin_is_observed", "crosstalk_provenance::tests::scanned_input_parts_are_observed"]
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }

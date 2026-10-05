@@ -17,5 +17,5 @@ unit = "crosstalk_provenance::tests::span_with_one_rare_fingerprint_is_not_commo
 property = "crosstalk_provenance::props::common_spans_have_only_frequent_fingerprints"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
-property = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }
+property = { agent = "true", human = "false" }

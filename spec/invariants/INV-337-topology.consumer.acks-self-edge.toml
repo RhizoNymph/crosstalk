@@ -16,4 +16,4 @@ transient and are nacked for retry.
 dst = "crosstalk_topology::dst::self_edge_delivery_is_acked_once_and_not_redelivered"
 
 [evidence-review]
-dst = { agent = "false", human = "false" }
+dst = { agent = "true", human = "false" }

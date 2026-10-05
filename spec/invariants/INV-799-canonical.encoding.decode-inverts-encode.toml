@@ -20,7 +20,10 @@ accepted candidate re-encodes to itself.
 """
 
 [evidence]
-unit = "crosstalk_spec::tests::encoding::decode_refuses_bytes_encode_never_writes"
+unit = [
+    "crosstalk_spec::tests::encoding::decode_refuses_bytes_encode_never_writes",
+    "crosstalk_spec::tests::encoding::tool_call_signature_is_omitted_when_absent",
+]
 property = "crosstalk_spec::tests::encoding::decode_accepts_only_what_encode_writes"
 
 [evidence-review]

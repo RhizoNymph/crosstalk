@@ -18,7 +18,7 @@ changing kind, so matching on it would cut conversations the same way.
 """
 
 [evidence]
-property = "crosstalk_reconstruct::tests::system_change_keeps_outcome_and_conversation"
+property = "crosstalk_reconstruct::tests::thread_props::system_change_keeps_outcome_and_conversation"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

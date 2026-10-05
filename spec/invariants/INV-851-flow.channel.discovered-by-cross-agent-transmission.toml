@@ -1,0 +1,30 @@
+[invariant]
+id = "flow.channel.discovered-by-cross-agent-transmission"
+statement = "ChannelTraffic::discover creates a discovered channel only for a resource on no channel whose lookup is NoChannel, for the channel transmission a co-access between two different agents opened on it, seeded by that resource, that transmission and its opening time, TrafficDetection::Active since the transmission opened with it as last_transmission, Unreviewed and holding the resource, and publishes ChannelDiscovered with that seed exactly then; it returns Existing with the resource's canonical channel, changing nothing, when the resource is already on one, and Existing with the declared channel a pattern now claims it for, after storing it there, publishing no ChannelDiscovered in either case."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+A channel is a medium two agents communicated through, so a discovered
+channel exists only once a transmission between different agents went
+through its resource, and that transmission and resource are the evidence
+for it: the NewChannel alert and the operator's review point at them. Every
+channel transmission is opened by a co-access, which CoAccess::new builds
+only for a write and a later read by two different agents, so the
+discovering transmission always crosses agents when recorded. A discovered
+channel therefore starts Active and unconfirmed (no content match yet) and
+becomes confirmed when content arrives. Whether a channel is created is
+decided inside the registry's transaction (a concurrent discovery may have
+won), so the registry publishes ChannelDiscovered, from that transaction.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_memory::flow::registry::tests::traffic::discovered_by_first_cross_agent_transmission",
+    "crosstalk_memory::flow::registry::tests::traffic::resources_join_only_declared_channels",
+]
+integration = "crosstalk_flow::store::tests::registry::pg_discover_seeds_channel"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "true", human = "false" }

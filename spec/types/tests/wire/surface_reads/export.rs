@@ -18,13 +18,15 @@ use super::fixtures::{
 use crate::aggregates::edge::{EdgeSelector, RouteKind, TopologyFilter};
 use crate::aggregates::filter::TopicVersionSelector;
 use crate::aggregates::projection::{
-    Fitted, PointRoute, ProjectedPoint, ProjectionLimit, ProjectionParams, ProjectionSpec,
+    Fitted, PointParts, PointRoute, ProjectedPoint, ProjectionLimit, ProjectionParams,
+    ProjectionSpec,
 };
 use crate::aggregates::quality::{MatchClass, QualityMatch};
 use crate::aggregates::topic::{EmbeddingModel, TopicModelVersion};
 use crate::derived::flow::access::AccessKind;
 use crate::derived::flow::transmission::Route;
 use crate::derived::flow::verdict::{Verdict, VerdictRevision};
+use crate::derived::provenance::matching::CarrierKind;
 use crate::ids::{ExportId, ProjectionId};
 use crate::interfaces::l8_surface::evidence::MatchQuotes;
 use crate::interfaces::l8_surface::excerpt::{Excerpt, ExcerptWindow, Excerpted};
@@ -435,7 +437,7 @@ fn row(kind: ExportDatasetKind) -> ExportRow {
         }),
         ExportDatasetKind::Projection => ExportRow::Point(PointRow {
             index: 0,
-            point: ProjectedPoint {
+            point: ProjectedPoint::new(PointParts {
                 transmission: tx(),
                 from: planner(),
                 to: coder(),
@@ -444,13 +446,17 @@ fn row(kind: ExportDatasetKind) -> ExportRow {
                 confirmed_at: confirmed_at(),
                 x: Finite::new(3.25).expect("finite"),
                 y: Finite::new(-1.5).expect("finite"),
-            },
+            })
+            .expect("a point between two agents"),
             content: None,
         }),
         ExportDatasetKind::Verdicts => ExportRow::Verdict(VerdictRow {
             transmission: tx(),
             route_kind: RouteKind::Channel,
-            call: QualityMatch::Content(MatchClass::Exact),
+            call: QualityMatch::Content {
+                class: MatchClass::Exact,
+                carrier: CarrierKind::ToolResult,
+            },
             revision: VerdictRevision::FIRST,
             verdict: Some(Verdict::Genuine),
             by: operator(),

@@ -14,7 +14,7 @@ detections included) leaves one counting rule to implement and test.
 """
 
 [evidence]
-property = "crosstalk_topology::tests::prop_agent_traffic_equals_graph_node_counts"
+property = "crosstalk_topology::tests::verdict_props::prop_agent_traffic_equals_graph_node_counts"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

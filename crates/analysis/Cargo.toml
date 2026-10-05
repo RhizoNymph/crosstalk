@@ -10,6 +10,7 @@ workspace = true
 
 [dependencies]
 crosstalk-spec = { path = "../../spec" }
+crosstalk-store = { path = "../store" }
 blake3.workspace = true
 bytes.workspace = true
 http-body-util.workspace = true
@@ -18,11 +19,14 @@ hyper-rustls = { workspace = true, features = ["http1", "ring", "tls12", "webpki
 hyper-util = { workspace = true, features = ["client-legacy", "http1", "tokio"] }
 serde.workspace = true
 serde_json.workspace = true
+sqlx.workspace = true
 thiserror.workspace = true
-tokio = { workspace = true, features = ["sync", "time"] }
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
 tracing.workspace = true
 
 [dev-dependencies]
+crosstalk-memory = { path = "../memory" }
 crosstalk-testkit = { path = "../testkit" }
+crosstalk-transport = { path = "../transport" }
 proptest.workspace = true
-tokio = { workspace = true, features = ["macros", "net", "rt", "rt-multi-thread", "sync", "time"] }
+tokio = { workspace = true, features = ["macros", "net", "rt", "rt-multi-thread", "sync", "test-util", "time"] }

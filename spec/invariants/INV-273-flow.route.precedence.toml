@@ -12,7 +12,7 @@ and whether policy applies, deterministic.
 """
 
 [evidence]
-property = "crosstalk_flow::correlator::tests::route_precedence"
+property = "crosstalk_flow::correlate::tests::props::route_precedence"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

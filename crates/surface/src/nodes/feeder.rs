@@ -4,17 +4,18 @@
 use std::collections::HashMap;
 
 use crosstalk_spec::aggregates::node::CanonicalOriginKind;
-use crosstalk_spec::derived::flow::channel::{Channel, ChannelOrigin, DeclaredHistory};
+use crosstalk_spec::derived::flow::channel::{ChannelOrigin, DeclaredHistory};
+use crosstalk_spec::derived::flow::resource::Locator;
 use crosstalk_spec::events::BusEvent;
 use crosstalk_spec::events::changed::Changed;
 use crosstalk_spec::events::detect::DetectEvent;
 use crosstalk_spec::events::ingest::IngestEvent;
 use crosstalk_spec::events::insight::InsightEvent;
-use crosstalk_spec::ids::{AgentId, ChannelId};
+use crosstalk_spec::ids::{AgentId, ChannelId, ResourceId};
 use crosstalk_spec::interfaces::l2_transport::Subscription;
 use crosstalk_spec::interfaces::l3_reconstruction::AgentDirectory;
 use crosstalk_spec::interfaces::l3_reconstruction::agents::{AgentReadError, AgentReads};
-use crosstalk_spec::interfaces::l5_flow::channels::ChannelReads;
+use crosstalk_spec::interfaces::l5_flow::channels::{ChannelReads, ChannelWithTraffic};
 use crosstalk_spec::interfaces::l5_flow::{ChannelDirectory, ChannelRegistry, RegistryError};
 use crosstalk_spec::interfaces::l7_topology::{AgentFacts, ChannelFacts};
 use crosstalk_spec::interfaces::l8_surface::lists::{AgentFilter, ChannelFilter};
@@ -52,6 +53,10 @@ impl From<RegistryError> for NodeFeedError {
 struct Refresh {
     agents: Vec<AgentId>,
     channels: Vec<ChannelId>,
+    /// A merge or an unmerge: every channel's listing may have changed.
+    all_channels: bool,
+    /// A resource the event places on a channel.
+    placed: Option<(ResourceId, ChannelId)>,
 }
 
 impl Refresh {
@@ -61,7 +66,9 @@ impl Refresh {
     /// announced by `Changed::Agent`, so `ConversationDelta` refreshes its
     /// agent. A policy decision is announced by the registry's
     /// `Changed::Channel` once recorded; `PolicyChanged` is the request, and
-    /// refreshes its channel too.
+    /// refreshes its channel too. A merge or an unmerge changes no stored
+    /// channel but can hide a channel or list it again, so it re-reads
+    /// every listed channel.
     fn of(event: &BusEvent) -> Self {
         let mut refresh = Self::default();
         match event {
@@ -90,6 +97,7 @@ impl Refresh {
             }) => {
                 refresh.agents.extend([*from, *into]);
                 refresh.agents.extend(repointed.iter().copied());
+                refresh.all_channels = true;
             }
             BusEvent::Ingest(IngestEvent::AgentUnmerged {
                 agent,
@@ -99,11 +107,21 @@ impl Refresh {
             }) => {
                 refresh.agents.extend([*agent, *was_into]);
                 refresh.agents.extend(restored.iter().copied());
+                refresh.all_channels = true;
             }
             BusEvent::Ingest(IngestEvent::ExchangeCaptured(_)) => {}
-            BusEvent::Detect(DetectEvent::ChannelDiscovered { channel, .. })
-            | BusEvent::Detect(DetectEvent::DeclaredChannelUnused { channel, .. }) => {
+            BusEvent::Detect(DetectEvent::ChannelDiscovered { channel, seed }) => {
                 refresh.channels.push(*channel);
+                refresh.placed = Some((seed.resource, *channel));
+            }
+            BusEvent::Detect(DetectEvent::DeclaredChannelUnused { channel, .. }) => {
+                refresh.channels.push(*channel);
+            }
+            BusEvent::Detect(DetectEvent::AccessRecorded {
+                access,
+                channel: Some(channel),
+            }) => {
+                refresh.placed = Some((access.resource, *channel));
             }
             BusEvent::Detect(DetectEvent::ChannelPromoted {
                 channel,
@@ -120,6 +138,12 @@ impl Refresh {
         }
         refresh
     }
+}
+
+/// A channel's facts and the resources it holds, as read together.
+struct ChannelRead {
+    facts: ChannelFacts,
+    held: Vec<ResourceId>,
 }
 
 /// Re-reads what events name into a [`NodeCache`]. Reads only: `A` is L3's
@@ -167,11 +191,20 @@ where
     /// Re-read everything `event` names.
     pub async fn apply(&self, event: &BusEvent) -> Result<(), NodeFeedError> {
         let refresh = Refresh::of(event);
+        if let Some((resource, channel)) = refresh.placed {
+            let canonical = ChannelDirectory::canonical(&self.channels, channel);
+            self.cache.write(|tables| {
+                tables.resources.insert(resource, canonical);
+            });
+        }
         for agent in refresh.agents {
             self.refresh_agent(agent).await?;
         }
         for channel in refresh.channels {
             self.refresh_channel(channel).await?;
+        }
+        if refresh.all_channels {
+            self.reread_channels().await?;
         }
         Ok(())
     }
@@ -198,6 +231,41 @@ where
                 None => break,
             }
         }
+        let (channels, resources) = self.listed_channels().await?;
+        tables.channels = channels;
+        tables.resources = resources;
+        let (agents, channels) = (tables.agents.len(), tables.channels.len());
+        self.cache.write(|current| *current = tables);
+        tracing::info!(agents, channels, "node facts rebuilt");
+        Ok(())
+    }
+
+    /// Replace the channel facts and the resources they hold with every
+    /// listed channel's, read now: after a merge or an unmerge, which can
+    /// hide a channel or list one again without naming it.
+    async fn reread_channels(&self) -> Result<(), NodeFeedError> {
+        let (channels, resources) = self.listed_channels().await?;
+        self.cache.write(|tables| {
+            tables.channels = channels;
+            tables.resources = resources;
+        });
+        Ok(())
+    }
+
+    /// The facts of every listed channel in force (`ChannelReads::channels`
+    /// under the default filter: never a hidden or superseded one) and the
+    /// channel holding each of their resources.
+    async fn listed_channels(
+        &self,
+    ) -> Result<
+        (
+            HashMap<ChannelId, ChannelFacts>,
+            HashMap<ResourceId, ChannelId>,
+        ),
+        NodeFeedError,
+    > {
+        let mut channels = HashMap::new();
+        let mut resources = HashMap::new();
         let mut request = PageRequest {
             size: largest()?,
             after: None,
@@ -207,21 +275,19 @@ where
                 .channels
                 .channels(&ChannelFilter::default(), &request)
                 .await?;
-            let (channels, next) = page.into_parts();
-            for channel in channels {
-                if let Some(facts) = self.channel_facts(&channel).await? {
-                    tables.channels.insert(channel.id, facts);
+            let (listed, next) = page.into_parts();
+            for read in listed {
+                let id = read.channel().id;
+                if let Some(ChannelRead { facts, held }) = self.channel_read(&read).await? {
+                    channels.insert(id, facts);
+                    resources.extend(held.into_iter().map(|resource| (resource, id)));
                 }
             }
             match next {
                 Some(next) => request.after = Some(next),
-                None => break,
+                None => return Ok((channels, resources)),
             }
         }
-        let (agents, channels) = (tables.agents.len(), tables.channels.len());
-        self.cache.write(|current| *current = tables);
-        tracing::info!(agents, channels, "node facts rebuilt");
-        Ok(())
     }
 
     /// Apply every event delivered on `subscription`, acking each once it
@@ -293,76 +359,90 @@ where
 
     async fn refresh_channel(&self, channel: ChannelId) -> Result<(), NodeFeedError> {
         let stored = self.channels.channel(channel).await?;
-        let facts = match &stored {
-            Some(channel) => self.channel_facts(channel).await?,
+        let read = match &stored {
+            Some(read) => self.channel_read(read).await?,
             None => None,
         };
-        self.cache.write(|tables| match facts {
-            Some(facts) => tables.channels.insert(channel, facts),
-            None => tables.channels.remove(&channel),
-        });
+        self.store_channel(channel, read);
         // A superseded channel's resources now count on its superseding
         // channel: refresh that one too.
-        if let Some(by) = stored.and_then(|channel| channel.origin.supersession()) {
-            let superseding = self.channels.channel(by.by).await?;
-            if let Some(superseding) = superseding {
-                let facts = self.channel_facts(&superseding).await?;
-                self.cache.write(|tables| {
-                    if let Some(facts) = facts {
-                        tables.channels.insert(by.by, facts);
-                    }
-                });
-            }
+        if let Some(by) = stored.and_then(|read| read.channel().origin.supersession())
+            && let Some(superseding) = self.channels.channel(by.by).await?
+        {
+            let read = self.channel_read(&superseding).await?;
+            self.store_channel(by.by, read);
         }
         Ok(())
     }
 
-    /// The facts of `channel` when it is in force: its origin, detection
-    /// and policy kinds, and its pattern (declared before traffic) or seed
-    /// locator with the count of the further resources it holds.
-    async fn channel_facts(
+    /// Record `read` as `channel`'s facts and resources, or remove the
+    /// channel's facts when it is not in force.
+    fn store_channel(&self, channel: ChannelId, read: Option<ChannelRead>) {
+        self.cache.write(|tables| match read {
+            Some(ChannelRead { facts, held }) => {
+                tables.channels.insert(channel, facts);
+                for resource in held {
+                    tables.resources.insert(resource, channel);
+                }
+            }
+            None => {
+                tables.channels.remove(&channel);
+            }
+        });
+    }
+
+    /// The facts of `read`'s channel when it is in force (its origin,
+    /// detection and policy kinds, its listing, and its pattern (declared
+    /// before traffic) or seed locator with the count of the further
+    /// resources it holds), with the resources it holds.
+    async fn channel_read(
         &self,
-        channel: &Channel,
-    ) -> Result<Option<ChannelFacts>, NodeFeedError> {
-        let Some(origin) = CanonicalOriginKind::of(&channel.origin) else {
+        read: &ChannelWithTraffic,
+    ) -> Result<Option<ChannelRead>, NodeFeedError> {
+        let channel = read.channel();
+        let (Some(origin), Some(listing)) =
+            (CanonicalOriginKind::of(&channel.origin), read.listing())
+        else {
             return Ok(None);
         };
+        let held = self.held_resources(channel.id).await?;
+        let further = |count: usize| u64::try_from(count).unwrap_or(u64::MAX);
         let locator_summary = match &channel.origin {
             ChannelOrigin::Declared {
                 declaration,
                 history: DeclaredHistory::BeforeTraffic(_),
-            } => {
-                let held = self.held_resources(channel.id).await?;
-                summary(
-                    channel.id,
-                    &pattern_text(&declaration.pattern),
-                    u64::try_from(held.len()).unwrap_or(u64::MAX),
-                )
-            }
+            } => summary(
+                channel.id,
+                &pattern_text(&declaration.pattern),
+                further(held.len()),
+            ),
             ChannelOrigin::Declared { .. }
             | ChannelOrigin::Discovered { .. }
             | ChannelOrigin::Superseded { .. } => {
-                let held = self.held_resources(channel.id).await?;
                 let seed = channel
                     .origin
                     .seed()
                     .and_then(|seed| held.get(&seed.resource).map(locator_text));
                 match seed {
-                    Some(text) => {
-                        let further =
-                            u64::try_from(held.len().saturating_sub(1)).unwrap_or(u64::MAX);
-                        summary(channel.id, &text, further)
-                    }
+                    Some(text) => summary(channel.id, &text, further(held.len().saturating_sub(1))),
                     None => id_summary(channel.id),
                 }
             }
         };
-        Ok(Some(ChannelFacts {
-            label: None,
-            origin,
-            detection: channel.origin.detection_kind(),
-            policy: channel.policy.kind(),
-            locator_summary,
+        let mut resources: Vec<ResourceId> = held.into_keys().collect();
+        if let Some(seed) = channel.origin.seed() {
+            resources.push(seed.resource);
+        }
+        Ok(Some(ChannelRead {
+            facts: ChannelFacts {
+                label: None,
+                origin,
+                detection: channel.origin.detection_kind(),
+                policy: channel.policy.kind(),
+                locator_summary,
+                listing,
+            },
+            held: resources,
         }))
     }
 
@@ -371,10 +451,7 @@ where
     async fn held_resources(
         &self,
         channel: ChannelId,
-    ) -> Result<
-        HashMap<crosstalk_spec::ids::ResourceId, crosstalk_spec::derived::flow::resource::Locator>,
-        NodeFeedError,
-    > {
+    ) -> Result<HashMap<ResourceId, Locator>, NodeFeedError> {
         let window = all_time()?;
         let mut request = PageRequest {
             size: largest()?,

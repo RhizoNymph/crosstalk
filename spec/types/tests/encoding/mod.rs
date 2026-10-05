@@ -28,6 +28,14 @@ fn decode_refuses_bytes_encode_never_writes() {
     vectors::decode_accepts_only_encodings();
 }
 
+/// `canonical.encoding.decode-inverts-encode` and
+/// `canonical.tool-call.signature-verbatim`: an absent tool-call signature
+/// is omitted, a present one round-trips, an explicit `null` is refused.
+#[test]
+fn tool_call_signature_is_omitted_when_absent() {
+    vectors::tool_call_signature_omitted_when_absent();
+}
+
 /// `canonical.json.rfc8785-form`.
 #[test]
 fn rfc8785_structure_vectors() {

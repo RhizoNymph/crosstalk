@@ -45,15 +45,17 @@ the spec's `Clock` for tests that need one to move.
 | Store | Spec traits | Module |
 | --- | --- | --- |
 | `MemoryAgents` | `AgentDirectory`, `IdentityResolver` (`merge`, `unmerge`, `rename`, `resolve`), `AgentLifecycle`, `ClaimStore`, `ActivityStore`, `AgentReads` | `reconstruct` |
-| `MemoryFingerprintIndex` | `FingerprintIndex` | `provenance` |
-| `MemoryChannels<D>` | `ChannelRegistry`, `ChannelTraffic`, `ChannelReads`, `ChannelDirectory` | `flow::registry` |
+| `MemoryFingerprintIndex` | `FingerprintIndex`, `SpanIndex` (span records written by `record`, read in batches by `spans`, kept through eviction) | `provenance` |
+| `MemoryChannels<D>` | `ChannelRegistry`, `ChannelTraffic`, `ChannelReads`, `AccessStore`, `ChannelDirectory` | `flow::registry` |
 | `MemoryVerdicts` | `TransmissionStore`, `TransmissionVerdicts` | `flow::verdicts` |
 
 The writes the layer consumers make (P4.1, P5) are spec traits:
 `AgentLifecycle` (create an agent, move it Registered to Provisional to
-Established, attach evidence), `ChannelTraffic` (discover a channel, add a
-resource, record an access, set a detection, apply a confirmation) with
-`ChannelReads` (a channel by id, filtered pages of them), and
+Established, attach evidence), `ChannelTraffic` (store a resource where
+its lookup puts it, record an access, discover a channel by a cross-agent
+transmission, record each channel transmission's state, set a detection)
+with `ChannelReads` (a channel by id and filtered pages of them, each with
+its cross-agent traffic; a channel's crossing transmissions), and
 `TransmissionStore` (save a transmission, read it back).
 
 ### Non-scope
@@ -153,11 +155,19 @@ fingerprint of a shard the node does not own, naming the first. Writes
 drop aged observations; `evict` drops a span's postings.
 
 **L5 registry (`flow::registry`).** `ChannelTable` holds channels, policy
-histories, resources (each on one channel) and accesses.
+histories, resources (each on at most one channel, or on none), accesses
+and the state of every channel transmission as last recorded. A channel
+exists only once a cross-agent transmission goes through it
+([channel_semantics.md](channel_semantics.md)); its cross-agent traffic is
+never stored but tallied at each read (`CrossTraffic::tally` over the
+recorded transmissions routed through it and every channel it superseded,
+agents resolved through `D: AgentDirectory`), so a merge hides a
+discovered channel and an unmerge lists it again with nothing rewritten.
 
 - `lookup`: `Known` (the canonical channel of the stored resource with
-  that locator), else `Declared` (the declared channel whose pattern
-  matches), else `New`.
+  that locator, when it is on one), else `Declared` (the declared channel
+  whose pattern matches, a resource stored on no channel included), else
+  `NoChannel`. It creates nothing.
 - `declare` refuses a pattern overlapping a declared one, dates the
   declaration by the time it is given, and records the policy's decision,
   if any, as the history's first entry.
@@ -175,18 +185,44 @@ histories, resources (each on one channel) and accesses.
   every channel it superseded, counts accesses in the window by canonical
   agent (through `D: AgentDirectory`) and kind, and pages newest resource
   first with a cursor bound to (canonical channel, window).
-- `ChannelTraffic`: `discover` creates a channel only for an unstored
-  resource whose lookup is `New`; `add_resource` stores a resource on the
-  channel its lookup names (any channel for `New`), never on a superseded
-  one; `record_access` needs a stored resource and a new access id;
-  `set_detection` returns `Applied` or `Unchanged` and refuses a frozen
-  (superseded) channel and `Unused` off `AwaitingTraffic`; `confirm`
+- `ChannelTraffic` (`flow/registry/traffic.rs`): `add_resource` stores a
+  first sighting on the declared channel its lookup names or on no channel
+  (`NoChannel`), moves a resource on no channel onto a declaration made
+  since, and refuses a resource already on a channel and a second resource
+  with a stored locator (`DuplicateLocator`); a discovered channel holds
+  only its seed. `record_access` needs a stored resource (on a channel or
+  not) and a new access id, and stores a write whatever its
+  `WriteOutcome`, so a rejected write counts as a write in `resource_use`
+  (`flow.access.rejected-write-recorded`; pairing is the correlator's, in
+  `crosstalk-flow`). `discover` creates the discovered channel for
+  a resource on no channel whose lookup is `NoChannel` (seed: the
+  resource, the transmission and its opening time; `Active` since then;
+  `Unreviewed(None)`; an empty history), moves the resource onto it and
+  publishes `ChannelDiscovered` and `Changed::Channel`; for a resource
+  already on a channel it returns `Existing` and changes nothing, and for
+  one a declared pattern now claims it stores the resource there and
+  returns `Existing` with that channel. `record_transmission` keeps the
+  latest state of a `Route::Channel` transmission (refusing any other
+  route) and, for an opened (`AwaitingContent`) or confirmed state,
   advances the canonical channel's detection to `Active` (keeping `since`
-  when already active) and leaves a superseded channel's frozen. Each
-  refusal is a `TrafficError` and changes nothing.
-- `ChannelReads`: `channel` returns the stored record (a superseded
-  channel as itself); `channels` pages the channels `ChannelFilter::matches`
-  keeps, newest id first, its cursor bound to the filter.
+  when already active, else since the opening or `Confirmed::at`; a
+  declared channel awaiting traffic or unused goes `InUse`), leaving a
+  superseded channel's frozen; `Applied` publishes `Changed::Channel` for
+  the canonical channel, a state already recorded is `Unchanged`.
+  `set_detection` returns `Applied` or `Unchanged` and refuses a frozen
+  (superseded) channel and `Unused` off `AwaitingTraffic`. Each refusal is
+  a `TrafficError` and changes nothing.
+- `ChannelReads`: `channel` returns the stored record with its traffic
+  (`ChannelWithTraffic`; a superseded channel as itself, without traffic;
+  a hidden channel too); `channels` pages the channels
+  `ChannelFilter::keeps` keeps (never a hidden one), newest
+  `ChannelOrigin::created_at` first and ties by id descending, its cursor
+  bound to the filter; `transmissions` pages the transmissions routed
+  through the canonical channel and every channel it superseded that cross
+  agents at the read and pass the confirmation filter, newest opened
+  first, its cursor bound to the canonical channel and the filter.
+- `AccessStore::accesses` reads a batch of recorded accesses with their
+  stored resources in one snapshot, leaving out unknown ids.
 
 **L5 transmissions (`flow::verdicts`).** `VerdictTable` holds
 transmissions and one `VerdictLog` each. `TransmissionStore::save`
@@ -194,7 +230,10 @@ replaces the stored transmission and keeps its log. `set` refuses an unknown tra
 state is not judgeable, appends through `VerdictLog::record`, and on
 `Appended(r)` publishes `VerdictSet` with revision `r` and
 `Changed::Verdict`. `quality` is `DetectionQuality::tally` over every
-stored transmission with its current verdict.
+stored transmission with its current verdict, agents resolved through the
+directory `MemoryVerdicts::with_agents` was given (none merged for
+`new`), so a transmission whose agents have since merged into one is not
+counted (`flow.quality.cross-agent-only`).
 
 ### The property harnesses
 
@@ -208,10 +247,10 @@ cursors; unordered results (fingerprint hits) as multisets.
 
 | Harness | Store under test is built by | Observes after each step | Also checks on the store under test |
 | --- | --- | --- | --- |
-| `reconstruct::model::check_agent_store(config, make)` | `make(IdSequence, Outbox) -> S` where `S: AgentStore` (`AgentDirectory + IdentityResolver + AgentLifecycle + ClaimStore + ActivityStore + AgentReads`) | `canonical`, `claims`, `last_seen`, `cluster` of every id; `names`; the unfiltered list in pages of 2; a foreign cursor | merge chains flat; merged exactly when one unreverted record names the agent; every state change legal |
+| `reconstruct::model::check_agent_store(config, make)`, `check_agent_store_with(config, make)` | `make(IdSequence, Outbox) -> S` where `S: AgentStore` (`AgentDirectory + IdentityResolver + AgentLifecycle + ClaimStore + ActivityStore + AgentReads`), or (`_with`) a future of one, built inside the case's runtime so a Postgres store connects there | `canonical`, `claims`, `last_seen`, `cluster` of every id; `names`; the unfiltered list in pages of 2; a foreign cursor | merge chains flat; merged exactly when one unreverted record names the agent; every state change legal |
 | `provenance::model::check_fingerprint_index(config, make)` | `make(IndexConfig) -> S` where `S: FingerprintIndex`; run for a single node and for one of two shards, both stores given the same `now` | `frequency` and `lookup` of every fingerprint | — |
-| `flow::registry::model::check_channel_registry(config, make)` | `make(MemoryAgents, IdSequence, Outbox) -> S` where `S: ChannelStore` (`ChannelRegistry + ChannelTraffic + ChannelReads + ChannelDirectory`) | every channel (a full `ChannelReads::channels` traversal); `channel`, `canonical` and `policy_history` of every id; `lookup` of every locator; a full `resource_use` traversal of every channel | declared patterns disjoint; policy is the history's current; supersession one step, to a declared channel |
-| `flow::verdicts::model::check_transmission_verdicts(config, make)` | `make(Outbox) -> S` where `S: VerdictStore` (`TransmissionVerdicts + TransmissionStore`) | every log and every stored transmission; the all-time quality | `set` never changes the stored transmission |
+| `flow::registry::model::check_channel_registry(config, make)` | `make(MemoryAgents, IdSequence, Outbox) -> S` where `S: ChannelStore` (`ChannelRegistry + ChannelTraffic + ChannelReads + ChannelDirectory`); every resource stored, then discoveries by transmission, then random steps that record channel transmissions sent by agent 1 or by agent 3 (merged into the reader) | every listed channel with its traffic (a full `ChannelReads::channels` traversal); `channel`, `canonical` and `policy_history` of every id; `lookup` of every locator; a full `resource_use` and `transmissions` traversal of every channel | declared patterns disjoint; policy is the history's current; supersession one step, to a declared channel |
+| `flow::verdicts::model::check_transmission_verdicts(config, make)` | `make(MemoryAgents, Outbox) -> S` where `S: VerdictStore` (`TransmissionVerdicts + TransmissionStore`); some transmissions are sent by agent 3, merged into the reader | every log and every stored transmission; the all-time quality | `set` never changes the stored transmission |
 
 Ids the store creates come from the `IdSequence` it is given, so the two
 stores create equal ids and results compare without translation. Each
@@ -248,18 +287,19 @@ caught (the harness returns `ModelMismatch::Failed`).
 | `crates/memory/src/reconstruct/table.rs` | L3 state and operations | (crate) `AgentTable` |
 | `crates/memory/src/reconstruct/store.rs` | L3 trait impls, `AgentLifecycle` included | — |
 | `crates/memory/src/reconstruct/resolve.rs` | The lookup behind `resolve`; the client context's evidence | `context_evidence` |
-| `crates/memory/src/reconstruct/model.rs` | L3 harness | `check_agent_store`, `AgentStore`, `AgentOp`, `agent_ops`, `traverse` |
+| `crates/memory/src/reconstruct/model.rs` | L3 harness | `check_agent_store`, `check_agent_store_with`, `AgentStore`, `AgentOp`, `agent_ops`, `traverse` |
 | `crates/memory/src/reconstruct/tests/` | L3 reference tests | — |
-| `crates/memory/src/provenance/index.rs` | The fingerprint index | `MemoryFingerprintIndex`, `IndexConfig`, `InvalidIndexConfig` |
+| `crates/memory/src/provenance/index.rs` | The fingerprint index; `IndexConfig` exposes its cutoff, retention, shards and owned shards, so a store under test is built with the same settings | `MemoryFingerprintIndex`, `IndexConfig`, `InvalidIndexConfig` |
 | `crates/memory/src/provenance/model.rs` | L4 harness | `check_fingerprint_index`, `IndexOp`, `configs` |
 | `crates/memory/src/provenance/tests.rs` | L4 reference tests | — |
 | `crates/memory/src/flow/registry/mod.rs` | The L5 registry | `MemoryChannels` |
-| `crates/memory/src/flow/registry/table.rs` | Registry state and operations | (crate) `ChannelTable` |
+| `crates/memory/src/flow/registry/table.rs` | Registry state and its declaration, policy, promotion and resource-use operations | (crate) `ChannelTable`, `StoredResource` |
+| `crates/memory/src/flow/registry/traffic.rs` | `ChannelTraffic` and `ChannelReads` on the table: placing resources, discovery, recorded transmissions, cross-agent traffic and listings | (crate) `ChannelKey`, `TransmissionKey` |
 | `crates/memory/src/flow/registry/store.rs` | Registry trait impls: `ChannelRegistry`, `ChannelTraffic`, `ChannelReads`, `ChannelDirectory` | — |
-| `crates/memory/src/flow/registry/model.rs` | Registry harness | `check_channel_registry`, `ChannelStore`, `RegistryOp`, `traverse`, `all_channels` |
-| `crates/memory/src/flow/registry/tests.rs` | Registry reference tests | — |
+| `crates/memory/src/flow/registry/model.rs` | Registry harness | `check_channel_registry`, `run_case` (one case on a caller-built subject, for stores that need an async, multi-threaded setup), `ChannelStore`, `RegistryOp`, `traverse`, `transmissions`, `all_channels`, `channels_under` |
+| `crates/memory/src/flow/registry/tests/mod.rs`, `tests/traffic.rs` | Registry reference tests; `traffic` covers discovery, resources on no channel, listings, merges hiding channels, the list order and a channel's transmissions | — |
 | `crates/memory/src/flow/verdicts/mod.rs` | The transmission and verdict store | `MemoryVerdicts` |
-| `crates/memory/src/flow/verdicts/model.rs` | Verdict harness | `check_transmission_verdicts`, `VerdictStore`, `VerdictOp` |
+| `crates/memory/src/flow/verdicts/model.rs` | Verdict harness, and the transmission fixtures the registry harness shares | `check_transmission_verdicts`, `run_case`, `VerdictStore`, `VerdictOp`, `state`, `state_between`, `co_access_between`, `content_between` |
 | `crates/memory/src/flow/verdicts/tests.rs` | Verdict reference tests | — |
 
 ## Insight and surface stores (L6–L8)
@@ -323,7 +363,8 @@ caught (the harness returns `ModelMismatch::Failed`).
   `.await`: the only awaiting store call, embedding a semantic rule's query,
   runs before the lock is taken. Stores that read another store take their
   own lock first and never the reverse (index → catalog, edge store →
-  catalog, directory, nodes; alerts → directory; operators → audit log), so
+  catalog, directory, nodes; catalog → directory; alerts → directory;
+  operators → audit log), so
   there is no lock cycle. Every store is `Send + Sync`.
 - **Paging.** Every list pages with a `CursorBook`
   (`support`): a token is a key into the issuing store's book,
@@ -342,9 +383,13 @@ caught (the harness returns `ModelMismatch::Failed`).
   `mark_active` supersedes every older version not yet superseded, then
   enforces retention, which freezes the all-time sizes, deletes the
   assignments and publishes `TopicVersionDropped` for each dropped
-  version: the catalog is the event's one publisher.
+  version: the catalog is the event's one publisher. Sizes count an assignment only when its
+  sender and reader resolve to different agents through the directory
+  `InMemoryTopicCatalog::with_agents` was given (none merged by default),
+  at the read; frozen sizes apply the merges in force at the drop.
 - **Edge store.** It stores contributions keyed by (version,
-  transmission) and accesses keyed by id, never buckets. `apply` checks, in
+  transmission) and accesses keyed by id (each on its resource, as
+  `AccessContribution` names it), never buckets. `apply` checks, in
   order: dropped version, self-edge, already applied (returns the stored
   key), late (activated version, bucket final under the watermark). A
   version activates (`activate` returns `Switched` and publishes
@@ -357,7 +402,10 @@ caught (the harness returns `ModelMismatch::Failed`).
   self-edges dropped, routes resolved, the filter admitted (false
   detections from the store's verdict copy). Graph, totals
   (`EdgeTotals::of` the graph), the channel-centred graph (plus access
-  buckets), the drill-down, agent traffic (the graph's node counts) and
+  buckets, each resource resolved to the canonical channel `NodeFacts`
+  holds it on now and kept only when that channel's facts list it as a
+  channel, with its confirmation; a channel node is `Confirmed` when a
+  transmission edge routes through it), the drill-down, agent traffic (the graph's node counts) and
   series (the fold cut into grid steps) are all built from it, and the
   results pass the spec's checked constructors (`TopologyGraph::new`,
   `BipartiteGraph::new`, `TopologySeries::new`).
@@ -417,8 +465,9 @@ tokio runtime, so `make` may be async (a Postgres pool). A failure is a
 | `model::surface::check_operator_store` | `OperatorStoreSubject`: `OperatorStore + AuditLog` (config entries read back through `AuditLog::query`) | nothing |
 
 Beyond equality, the harnesses keep their own oracles: the catalog's
-sizes against a count of the assignments (`analysis.sizes.match-
-assignments`); the queue bound (`analysis.projection.queue-bounded`); at
+sizes against a count of the assignments
+(`analysis.sizes.match-cross-agent-assignments`; no agent is merged in
+that harness, so the reference tests cover merges); the queue bound (`analysis.projection.queue-bounded`); at
 most one active alert per (rule, subject); every graph against an
 independent fold over the contributions the harness applied, with
 the graph's parts re-checked by `TopologyGraph::new` and shares summing to 1, and every series' total
@@ -434,7 +483,7 @@ harness catches it, so none is vacuous.
 
 | File | Role | Key exports |
 | --- | --- | --- |
-| `analysis/catalog.rs` | The topic catalog: `TopicCatalog` and `TopicLifecycle` (history, topics, lineage, assignments, retention) | `InMemoryTopicCatalog`, `CatalogConfig`, `TopicVersions` |
+| `analysis/catalog.rs` | The topic catalog: `TopicCatalog` and `TopicLifecycle` (history, topics, lineage, assignments, retention; sizes of cross-agent assignments) | `InMemoryTopicCatalog` (`with_agents`), `CatalogConfig`, `TopicVersions` |
 | `analysis/lineage.rs` | The lineage stored when a fit returns | `lineage_between`, `LineageError` |
 | `analysis/search.rs` | Exact search and `SearchCorpus`, the verdict copy, projection sampling | `InMemorySearchIndex`, `InMemoryProjectionSource`, `FixedWatermark`, `ManualWatermark` (spec `WatermarkRead`s), `text_score`, `terms`, `sample_key` |
 | `analysis/projection.rs` | Projection jobs, leases and frames (`FrameMismatch` for a frame of another job) | `InMemoryProjectionStore`, `ProjectionConfig`, `plus` |
@@ -492,9 +541,12 @@ bugs in `model/mutants.rs`.
   newest id first (`analysis::alerts::rule_list_order`; a cursor resumes
   after the last rule served in that order).
 - An agent `NodeFacts` has not seen is drawn provisional, top-level,
-  unlabelled and without claims; a channel, discovered, observed,
-  unreviewed and summarized by its id (the spec fixes these defaults;
-  `StaticNodes` returns `None` for what it was never told).
+  unlabelled and without claims; a channel, which only a transmission
+  edge can draw, discovered, active, unreviewed and confirmed and
+  summarized by its id, and no access to it is drawn
+  (`topology.node-facts.unknown-channel-defaults`; `StaticNodes` returns
+  `None` for what it was never told, and `StaticNodes::set_resource` sets
+  which channel holds a resource).
 - `TopicSizes` lists topics in ascending id; graph edges and nodes, access
   edges and grouped series come sorted by key.
 - A text hit needs at least one shared term; a semantic or hybrid hit

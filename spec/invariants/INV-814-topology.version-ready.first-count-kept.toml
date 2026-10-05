@@ -15,4 +15,4 @@ fixed for the life of the version.
 unit = "crosstalk_topology::tests::version_ready_keeps_first_count"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }

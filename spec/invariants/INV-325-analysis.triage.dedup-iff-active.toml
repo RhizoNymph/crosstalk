@@ -17,9 +17,9 @@ channel.
 """
 
 [evidence]
-unit = ["crosstalk_analysis::tests::draft_folds_into_open_alert", "crosstalk_analysis::tests::draft_folds_into_acknowledged_alert", "crosstalk_analysis::tests::draft_after_resolved_opens_new_alert", "crosstalk_analysis::tests::draft_after_suppressed_opens_new_alert"]
-property = "crosstalk_analysis::tests::triage_outcome_matches_active_alert_model"
+unit = ["crosstalk_analysis::alerts::tests::triage::draft_folds_into_open_alert", "crosstalk_analysis::alerts::tests::triage::draft_folds_into_acknowledged_alert", "crosstalk_analysis::alerts::tests::triage::draft_after_resolved_opens_new_alert", "crosstalk_analysis::alerts::tests::triage::draft_after_suppressed_opens_new_alert"]
+property = "crosstalk_analysis::alerts::tests::model::triage_matches_the_reference"
 
 [evidence-review]
 unit = { agent = "false", human = "false" }
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

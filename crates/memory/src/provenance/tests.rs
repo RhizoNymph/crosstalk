@@ -1,15 +1,19 @@
 //! Reference tests for the fingerprint index, one or more per invariant
 //! that names `FingerprintIndex`. Each test's doc names the invariant.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU16;
 use std::time::Duration;
 
+use crosstalk_spec::batch::IdBatch;
 use crosstalk_spec::derived::provenance::fingerprint::{
     Fingerprint, FingerprintHit, PositionedFingerprint,
 };
 use crosstalk_spec::derived::provenance::span::OriginatedSpan;
-use crosstalk_spec::interfaces::l4_provenance::{FingerprintIndex, IndexError};
+use crosstalk_spec::ids::SpanId;
+use crosstalk_spec::interfaces::l4_provenance::{
+    FingerprintIndex, IndexError, IndexedSpan, SpanIndex,
+};
 use crosstalk_spec::support::Timestamp;
 use proptest::prelude::*;
 
@@ -167,6 +171,58 @@ async fn lookup_after_evict_has_no_hits() {
     };
     assert!(hits.iter().all(|hit| hit.span != span_id(0)));
     assert_eq!(hits.len(), 1);
+}
+
+fn batch(ids: impl IntoIterator<Item = u8>) -> IdBatch<SpanId> {
+    IdBatch::new(ids.into_iter().map(span_id)).unwrap_or_else(|error| panic!("{error:?}"))
+}
+
+/// `provenance.span-index.spans-as-recorded`,
+/// `provenance.span-index.author-as-recorded` and
+/// `provenance.span-index.keys-within-batch`: `spans` reads back the
+/// exchange, author and location each span was recorded with, keeps the
+/// first record of a span recorded twice, keeps records through eviction,
+/// and leaves out ids never recorded.
+#[tokio::test]
+async fn spans_read_back_as_recorded_through_eviction() {
+    let mut index = index();
+    assert_eq!(index.spans(&batch([0, 1, 2])).await, Ok(BTreeMap::new()));
+    assert_eq!(index.record(&span(0)).await, Ok(()));
+    assert_eq!(index.record(&span(1)).await, Ok(()));
+    assert_eq!(
+        index.insert(&span(0), &[positioned(1, 0)], T0).await,
+        Ok(())
+    );
+    let first = IndexedSpan {
+        exchange: span(0).span().exchange,
+        author: span(0).span().agent,
+        location: span(0).span().location,
+    };
+    assert_eq!(IndexedSpan::of(&span(0)), first);
+    let mut changed = span(0).span().clone();
+    changed.agent = span(1).span().agent;
+    let Some(other_author) = OriginatedSpan::new(changed) else {
+        panic!("still originated");
+    };
+    assert_eq!(index.record(&other_author).await, Ok(()));
+    assert_eq!(index.evict(&[span_id(0)], T0).await, Ok(()));
+    let expected = BTreeMap::from([(span_id(0), first), (span_id(1), IndexedSpan::of(&span(1)))]);
+    assert_eq!(index.spans(&batch([0, 1, 2])).await, Ok(expected));
+    assert_eq!(
+        index.spans(&batch([1])).await,
+        Ok(BTreeMap::from([(span_id(1), IndexedSpan::of(&span(1)))]))
+    );
+}
+
+/// Indexing fingerprints records no span: only `SpanIndex::record` does.
+#[tokio::test]
+async fn inserting_fingerprints_records_no_span() {
+    let mut index = index();
+    assert_eq!(
+        index.insert(&span(3), &[positioned(1, 0)], T0).await,
+        Ok(())
+    );
+    assert_eq!(index.spans(&batch([3])).await, Ok(BTreeMap::new()));
 }
 
 /// `provenance.index.retention-bound`, at the index: observations age out

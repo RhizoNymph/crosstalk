@@ -93,6 +93,20 @@ impl CorrelationTiming {
         add(since, self.suspected_ttl)
     }
 
+    /// When a write made at `write_at` whose tool result has not arrived
+    /// stops being held: `write_at + settle_after`. At the first tick at or
+    /// after it, the flow consumer records the write as
+    /// `WriteOutcome::Unknown` and hands it to the correlator. A result
+    /// normally arrives in the writer's next request, so a write still held
+    /// then is one whose conversation had no later exchange carrying the
+    /// result. Releasing by this time keeps every confirmation a released
+    /// write leads to within the bound `settle_after` puts on the
+    /// watermark: its read is after the write, and the write is after the
+    /// previous tick minus `settle_after`.
+    pub fn write_settles_at(self, write_at: Timestamp) -> Timestamp {
+        add(write_at, self.settle_after())
+    }
+
     /// `evidence_window + suspected_ttl`: after a tick at `τ`, the
     /// correlator holds open no transmission whose time is before
     /// `τ − settle_after`, so it can confirm one only from input it has not

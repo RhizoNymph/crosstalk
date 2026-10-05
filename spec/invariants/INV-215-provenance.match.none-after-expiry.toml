@@ -19,5 +19,5 @@ dst = "crosstalk_provenance::dst::expired_span_never_matched"
 integration = "crosstalk_provenance::integration::pg_lookup_after_evict_has_no_hits"
 
 [evidence-review]
-dst = { agent = "false", human = "false" }
-integration = { agent = "false", human = "false" }
+dst = { agent = "true", human = "false" }
+integration = { agent = "true", human = "false" }

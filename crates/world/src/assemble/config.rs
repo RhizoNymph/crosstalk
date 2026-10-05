@@ -40,7 +40,7 @@ pub fn assemble(
 
     let mut loads: BTreeMap<_, Vec<ConfigChange>> = BTreeMap::new();
     for draft in drafts(times) {
-        let DraftOrigin::Declared { pattern, at } = draft.origin else {
+        let DraftOrigin::Declared { pattern, at, .. } = draft.origin else {
             continue;
         };
         let channel = *declared

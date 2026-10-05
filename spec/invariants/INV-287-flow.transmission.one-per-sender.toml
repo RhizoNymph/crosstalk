@@ -11,7 +11,7 @@ instead of failing or dropping all but one sender.
 """
 
 [evidence]
-property = "crosstalk_flow::correlator::tests::matches_partitioned_by_origin"
+property = "crosstalk_flow::correlate::tests::props::matches_partitioned_by_origin"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

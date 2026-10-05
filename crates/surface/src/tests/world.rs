@@ -28,10 +28,12 @@ use crosstalk_spec::aggregates::projection::FrameRetention;
 use crosstalk_spec::aggregates::series::{BucketWidth, SeriesGrid, SeriesStep};
 use crosstalk_spec::aggregates::topic::Topic;
 use crosstalk_spec::aggregates::watermark::{PipelineFrontier, Watermark};
-use crosstalk_spec::derived::flow::access::{Access, AccessKind, AccessOp, Extraction};
+use crosstalk_spec::derived::flow::access::{
+    Access, AccessKind, AccessOp, Extraction, WriteOutcome,
+};
 use crosstalk_spec::derived::flow::resource::Resource;
 use crosstalk_spec::derived::flow::timing::CorrelationTiming;
-use crosstalk_spec::derived::flow::transmission::{Route, Transmission};
+use crosstalk_spec::derived::flow::transmission::{Route, Transmission, TransmissionState};
 use crosstalk_spec::events::BusEvent;
 use crosstalk_spec::events::insight::ClassificationCause;
 use crosstalk_spec::ids::{
@@ -42,9 +44,9 @@ use crosstalk_spec::interfaces::l3_reconstruction::AgentDirectory;
 use crosstalk_spec::interfaces::l3_reconstruction::lifecycle::{
     AgentLifecycle, AgentOrigin, NewAgent,
 };
-use crosstalk_spec::interfaces::l5_flow::ChannelDirectory;
-use crosstalk_spec::interfaces::l5_flow::channels::ChannelTraffic;
+use crosstalk_spec::interfaces::l5_flow::channels::{ChannelReads, ChannelTraffic};
 use crosstalk_spec::interfaces::l5_flow::transmissions::TransmissionStore;
+use crosstalk_spec::interfaces::l5_flow::{ChannelDirectory, Discovery};
 use crosstalk_spec::interfaces::l6_analysis::AlertTriage;
 use crosstalk_spec::interfaces::l6_analysis::lifecycle::TopicLifecycle;
 use crosstalk_spec::interfaces::l7_topology::{AccessContribution, EdgeContribution, EdgeStore};
@@ -58,7 +60,8 @@ use crosstalk_spec::interfaces::l8_surface::operators::{
 use crosstalk_spec::interfaces::l8_surface::{Caller, Permission, PermissionSet, SinkKind};
 use crosstalk_spec::observed::message::PartRef;
 use crosstalk_spec::support::{Blake3, NonEmpty, Similarity, TimeWindow, Timestamp};
-use crosstalk_testkit::time::T0;
+use crosstalk_testkit::build::provenance::LAG;
+use crosstalk_testkit::time::{T0, after};
 use crosstalk_transport::blob::MemoryBlobStore;
 use crosstalk_transport::{BusConfig, DeadLetters, MpscBus};
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -527,26 +530,73 @@ impl Fixture {
         }
     }
 
-    /// Discover `channel` from `resource`, first written by `writer` at
-    /// `at`. Returns the first access.
+    /// Store `resource` where its lookup puts it (on no channel, unless a
+    /// declared pattern claims it), as its first sighting does.
+    pub async fn resource(&self, resource: &Resource) -> Option<ChannelId> {
+        let mut registry = self.world.channels.clone();
+        match registry.add_resource(resource.clone()).await {
+            Ok(channel) => channel,
+            Err(error) => panic!("resource {:?}: {error:?}", resource.id),
+        }
+    }
+
+    /// Discover `channel` from `resource`, as the flow consumer does: store
+    /// the resource, record a write by `writer` at `at` and a read by
+    /// `reader` [`LAG`] later, and discover the channel by the transmission
+    /// that co-access opens (awaiting content, so the channel is listed
+    /// unconfirmed). Returns that transmission and its evidence.
     pub async fn channel(
         &self,
+        ids: &mut Ids,
         channel: ChannelId,
         resource: &Resource,
         writer: AgentId,
+        reader: AgentId,
         at: Timestamp,
-    ) -> Access {
-        let first = access(resource, writer, AccessKind::Write, at);
-        let mut registry = self.world.channels.clone();
-        if let Err(error) = registry.discover(channel, resource.clone(), first.id).await {
-            panic!("discover {channel:?}: {error:?}");
-        }
-        self.record(&first, channel).await;
-        first
+    ) -> TransmissionParts {
+        let parts = match TransmissionBuilder::new(ids)
+            .between(writer, reader)
+            .channel(channel)
+            .opened_at(after(at, LAG))
+            .accesses(|cross| cross.resource(resource.id))
+            .awaiting_content()
+            .build_parts()
+        {
+            Ok(parts) => parts,
+            Err(error) => panic!("transmission: {error:?}"),
+        };
+        self.discover(channel, resource, &parts).await;
+        parts
     }
 
-    /// Record `access` on its resource, counted into `channel`'s buckets.
-    pub async fn record(&self, access: &Access, channel: ChannelId) {
+    /// Discover `channel` from `resource` by `parts`' transmission: store
+    /// the resource, record its write and read, discover the channel seeded
+    /// by the transmission, then store and record the transmission as it
+    /// is now ([`Fixture::transmission`]).
+    pub async fn discover(
+        &self,
+        channel: ChannelId,
+        resource: &Resource,
+        parts: &TransmissionParts,
+    ) {
+        self.resource(resource).await;
+        self.record(&parts.write).await;
+        self.record(&parts.read).await;
+        let mut registry = self.world.channels.clone();
+        let opened = parts.transmission.opened_at;
+        match registry
+            .discover(channel, resource.id, parts.transmission.id, opened)
+            .await
+        {
+            Ok(Discovery::Created(created)) if created == channel => {}
+            other => panic!("discover {channel:?}: {other:?}"),
+        }
+        self.transmission(&parts.transmission).await;
+    }
+
+    /// Record `access` on its resource, counted into its resource's access
+    /// buckets.
+    pub async fn record(&self, access: &Access) {
         let mut registry = self.world.channels.clone();
         if let Err(error) = registry.record_access(access.clone()).await {
             panic!("access {:?}: {error:?}", access.id);
@@ -555,7 +605,7 @@ impl Fixture {
         let contribution = AccessContribution {
             access: access.id,
             agent: access.agent,
-            channel,
+            resource: access.resource,
             op: access.op.kind(),
             at: access.at,
         };
@@ -564,34 +614,37 @@ impl Fixture {
         }
     }
 
-    /// Store `transmission`, and count it into its edge when it is
-    /// classified (under its classification's version).
+    /// Store `transmission`, record a channel-routed one as its channel's
+    /// traffic, and count it into its edge when it is classified (under its
+    /// classification's version).
     pub async fn transmission(&self, transmission: &Transmission) {
         let mut store = self.world.transmissions.clone();
         if let Err(error) = store.save(transmission.clone()).await {
             panic!("save {:?}: {error:?}", transmission.id);
         }
+        if let Route::Channel(channel) = transmission.route
+            && !matches!(transmission.state, TransmissionState::Detected)
+            && self
+                .world
+                .channels
+                .channel(channel)
+                .await
+                .ok()
+                .flatten()
+                .is_some()
+        {
+            // A transmission on no stored channel is only stored.
+            let mut registry = self.world.channels.clone();
+            if let Err(error) = registry.record_transmission(transmission).await {
+                panic!("record {:?}: {error:?}", transmission.id);
+            }
+        }
         let Some(confirmed) = transmission.state.confirmed() else {
             return;
         };
-        if let Route::Channel(channel) = transmission.route {
-            let mut registry = self.world.channels.clone();
-            if let Err(error) = registry
-                .confirm(channel, transmission.id, confirmed.at())
-                .await
-            {
-                panic!("confirm {:?}: {error:?}", transmission.id);
-            }
-        }
         let classification = match &transmission.state {
-            crosstalk_spec::derived::flow::transmission::TransmissionState::Classified {
-                classification,
-                ..
-            }
-            | crosstalk_spec::derived::flow::transmission::TransmissionState::Aggregated {
-                classification,
-                ..
-            } => classification.clone(),
+            TransmissionState::Classified { classification, .. }
+            | TransmissionState::Aggregated { classification, .. } => classification.clone(),
             _ => return,
         };
         let contribution = EdgeContribution {
@@ -669,7 +722,6 @@ impl Fixture {
             .first_seen(minute(0))
             .build();
         let c1 = ids.channel();
-        self.channel(c1, &r1, a1, minute(0)).await;
         let t1 = match TransmissionBuilder::new(&mut ids)
             .between(a1, a2)
             .channel(c1)
@@ -681,9 +733,7 @@ impl Fixture {
             Ok(parts) => parts,
             Err(error) => panic!("transmission: {error:?}"),
         };
-        self.record(&t1.write, c1).await;
-        self.record(&t1.read, c1).await;
-        self.transmission(&t1.transmission).await;
+        self.discover(c1, &r1, &t1).await;
         let alert = self
             .alert(
                 BuiltinRule::NewChannel,
@@ -801,6 +851,7 @@ pub fn access(resource: &Resource, agent: AgentId, kind: AccessKind, at: Timesta
             AccessKind::Write => AccessOp::Write {
                 call: part,
                 spans: Vec::new(),
+                outcome: WriteOutcome::Delivered,
             },
             AccessKind::Read => AccessOp::Read { result: part },
         },

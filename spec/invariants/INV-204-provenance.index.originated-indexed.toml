@@ -16,5 +16,5 @@ unit = "crosstalk_provenance::tests::originated_span_fingerprints_are_indexed"
 property = "crosstalk_provenance::props::originated_span_is_found_by_its_own_text"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
-property = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }
+property = { agent = "true", human = "false" }

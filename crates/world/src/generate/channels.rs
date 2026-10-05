@@ -22,7 +22,8 @@ pub struct ChannelSpec {
     pub id: ChannelId,
     pub origin: DraftOrigin,
     pub target: Target,
-    /// Resources, as locators with their ids.
+    /// Resources, as locators with their ids: a declared channel's, or a
+    /// discovered channel's one seed.
     pub resources: Vec<(ResourceId, Locator)>,
     /// When the channel carries traffic.
     pub from: Timestamp,
@@ -75,10 +76,11 @@ pub fn plan(
             DraftOrigin::Declared { .. } => *declared
                 .get(&draft.key)
                 .ok_or_else(|| WorldError::missing(format!("declared channel {:?}", draft.key)))?,
-            DraftOrigin::Discovered => mint.at(draft.created)?,
+            DraftOrigin::Discovered { .. } => mint.at(draft.created)?,
         };
         let resources = draft
-            .locators
+            .origin
+            .locators()
             .into_iter()
             .map(|l| Ok((mint.at(draft.window.0)?, l)))
             .collect::<Result<Vec<_>, WorldError>>()?;

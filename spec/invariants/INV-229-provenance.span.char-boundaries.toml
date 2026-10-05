@@ -17,5 +17,5 @@ property = "crosstalk_provenance::props::segment_spans_on_char_boundaries"
 fuzz = "crosstalk_provenance::fuzz::segment_arbitrary_output"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }
 fuzz = { agent = "false", human = "false" }
