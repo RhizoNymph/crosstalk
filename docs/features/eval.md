@@ -11,8 +11,8 @@ The crate is `crosstalk-eval` (`crates/eval`). Its binary is `ct-eval`. It
 is a composer in the workspace's dependency rule
 (`crates/gateway/tests/architecture.rs`), so it may depend on
 `crosstalk-gateway` and the layer crates; today it uses the gateway's
-pipeline and transport's bus and blob store, with sim and testkit as
-dev-dependencies.
+pipeline and transport's bus and blob store, with sim, testkit and memory
+as dev-dependencies.
 
 ## Scope
 
@@ -22,13 +22,17 @@ dev-dependencies.
 - **Labels.** Expected transmissions, negative controls and agent clusters,
   with tiers, as JSONL.
 - **Predictions.** The eval-side view of a detector's output, converted
-  from spec `Transmission`s and their `ContentMatch`es.
+  from spec `Transmission`s: their `ContentMatch`es, and the `CoAccess`
+  records of suspected and discarded ones, read through the spec's read
+  traits (`SpanIndex`, `AccessStore`, `ChannelReads`/`resource_use`).
 - **Scoring.** One alignment rule, TP/FP/FN broken down by dataset × route
   kind × carrier × match class × tier, negative-control violations, and a
   bridge to the spec's `DetectionQuality`.
 - **Detectors.** A naive reference matcher (span/shingle matching with
-  escape-aware normalization and decoding), and the gateway pipeline
-  itself (`Pipeline::ingest`), unscored until its detection layers exist.
+  escape-aware normalization and decoding), the gateway pipeline itself
+  (`Pipeline::ingest`, unscored: it has no detection consumers), and the
+  `LiveBackend` seam that scores the gateway's live composition
+  (`crosstalk_gateway::live::Live`, L3–L7) once it merges.
 - **Reports and gates.** A table, a JSON report, and regression gates in
   `gates.toml`.
 - **The SALT converter.**
@@ -49,16 +53,21 @@ dev-dependencies.
 
 ```text
 dataset files ──▶ TraceSource::worlds()          (one World at a time; e.g. SaltSource, one trace file each)
-                    │  WorldBuilder: agents (synthetic ClientContext), exchanges (ExchangeDraft → spec Exchange
-                    │  → checked NormalizedExchange → CorpusExchange), labels, coverage
+                    │  WorldBuilder: agents (synthetic ClientContext, IngressMode::Replay { corpus }),
+                    │  exchanges (ExchangeDraft → spec Exchange → checked NormalizedExchange → CorpusExchange),
+                    │  labels, coverage
                     ▼
                   World { agents, exchanges (time order), truth, coverage }
                     │
-                    ├──▶ Detector::detect(&World) ─▶ Detection { transmissions, channels, spans }
-                    │        ReferenceDetector, or PipelineDetector (below)
+                    ├──▶ Detector::detect(&World) ─▶ Detection { transmissions, agents: AgentMap, resolved }
+                    │        ReferenceDetector, PipelineDetector or LiveDetector (below)
+                    │        resolved = Resolved::gather(transmissions, Reads { spans, accesses, channels })
+                    │                   SpanIndex::spans · AccessStore::accesses · ChannelResources (ChannelReads +
+                    │                   ChannelRegistry::resource_use), by IdBatch
                     │                 │
                     │                 ▼
                     │        predict::from_transmission (via WorldDirectory) ─▶ Vec<Prediction>
+                    │          confirmed: one per ContentMatch · suspected/discarded: one per CoAccess
                     ▼                 ▼
                   score::Judge (alignment rule) ─▶ Scorer::add_world ─▶ Score
                                                          │
@@ -76,6 +85,22 @@ bounded by the largest world, never the dataset.
 detector plugs in. Everything after it is detector-agnostic: predictions,
 scoring, reports and gates.
 
+A `Detection` holds the spec `Transmission`s, an `AgentMap` (the
+detector's agent ids as corpus agents) and a `Resolved` snapshot: every
+span, access and channel the transmissions name, read through the spec's
+read traits by `Resolved::gather` (`predict/reads.rs`), in batches of at
+most `IdBatch::MAX`. That one code path serves every detector:
+
+- the reference matcher, over eval-owned tables (`predict/memory.rs`:
+  `SpanTable: SpanIndex`, `AccessTable: AccessStore`,
+  `ChannelTable: ChannelResources`), whose reads never suspend and run
+  without a runtime (`reads::ready`);
+- crosstalk-memory's `MemoryFingerprintIndex` (`SpanIndex`) and
+  `MemoryChannels` (`AccessStore`, and `ChannelReads` +
+  `ChannelRegistry::resource_use` through `RegistryResources`), as the
+  live test backend uses;
+- the gateway's own stores, through `LiveBackend`.
+
 - `ReferenceDetector` runs the reference matcher.
 - `gateway::PipelineDetector` runs the gateway's own composition behind
   the proxy, per world, on a fresh in-process bus and memory blob store:
@@ -90,18 +115,110 @@ scoring, reports and gates.
      the envelope read back and checked: it names the exchange, carries the
      id `ingest` returned and is stamped at the corpus time;
   4. `pipeline.shutdown(deadline)`.
-- L3–L5 have no bus consumers yet, so no transmissions come back. The
-  detection says `DetectionStatus::NoConsumers { ingested }`; the run
-  counts the world as unscored (`RunSummary::unscored`), and the report
-  says "no detector consumers yet" instead of scoring zero. When the
-  consumers land, `PipelineDetector` reads their transmissions, channels
-  and spans back into a `Detection` and the rest of the run is unchanged.
+- `Pipeline` alone has no detection consumers, so no transmissions come
+  back. The detection says `DetectionStatus::NoConsumers { ingested }`;
+  the run counts the world as unscored (`RunSummary::unscored`), and the
+  report says "no detector consumers yet" instead of scoring zero. The
+  detection layers are scored through `LiveDetector` instead.
 - `gateway::ingest_world` is the same loop over any spec `BlobStore` and
   `EventBus`. The smoke test (`tests/pipeline.rs`) runs it under
   crosstalk-sim's clock (its default epoch is the corpus clock's,
   2026-01-01), advancing paused time to each exchange's corpus time.
 
 `ct-eval run --detector pipeline` runs the pipeline path.
+
+### The live seam (`detect::live`)
+
+`LiveDetector<B: LiveBackend>` scores the gateway's live composition. The
+seam is two traits with exactly the operations the composition offers
+(agreed with the implementation session; `Live` is WIP on
+`feat/live-composition` and not merged):
+
+```rust
+pub trait LiveBackend {
+    type World: LiveWorld;
+    /// A fresh composition: empty stores, clock at `start`, correlator under `settings.timing`.
+    fn build(&mut self, settings: &LiveSettings, start: Timestamp)
+        -> impl Future<Output = Result<Self::World, BackendError>>;
+}
+
+pub trait LiveWorld {
+    type Spans: SpanIndex + Sync;
+    type Accesses: AccessStore + Sync;
+    type Channels: ChannelResources + Sync;
+    /// Pipeline::ingest(exchange, at), the clock moved to `at` first.
+    fn ingest(&mut self, exchange: NormalizedExchange, at: Timestamp) -> impl Future<Output = Result<(), BackendError>>;
+    /// Live::settle(until): clock advanced, correlator ticked, drained to a fixpoint.
+    fn settle(&mut self, until: Timestamp) -> impl Future<Output = Result<(), BackendError>>;
+    /// TransmissionStore::list(TransmissionQuery { window, states: all, channel: None }), every page.
+    fn transmissions(&self, window: TimeWindow) -> impl Future<Output = Result<Vec<Transmission>, BackendError>>;
+    fn spans(&self) -> &Self::Spans;
+    fn accesses(&self) -> &Self::Accesses;
+    fn channels(&self) -> &Self::Channels;
+    /// L3: the agent and conversation of each exchange.
+    fn attribution(&self, exchanges: &IdBatch<ExchangeId>)
+        -> impl Future<Output = Result<BTreeMap<ExchangeId, Attribution>, BackendError>>;
+    fn shutdown(self) -> impl Future<Output = ()>;
+}
+```
+
+Per world, on a current-thread runtime:
+
+1. `build(settings, first exchange's time)`: a fresh composition. One is
+   never reused across worlds: resources canonicalize by URL or path, so
+   two worlds would cross-link through one.
+2. `ingest` each exchange in world order at its corpus time.
+3. `settle(last exchange + settle_after)`, where `settle_after` is
+   `CorrelationTiming::settle_after` (evidence window + suspected TTL).
+   The eval's timing (`LiveSettings::short`) is a 60 s correlation
+   window, a 10 s evidence window and a 60 s suspected TTL, so a world
+   settles 70 s of virtual time after its last exchange and every
+   transmission is final. Any still `Detected` or `AwaitingContent` is
+   logged and makes no prediction.
+4. `transmissions(all_time())`, sorted by id (the final set is
+   deterministic; its listing order need not be).
+5. `attribution` of every world exchange, in batches, into an `AgentMap`:
+   each detector agent stands for the corpus agent whose exchanges it
+   holds. Several detector agents for one corpus agent (a split) are fine;
+   one detector agent holding two corpus agents' exchanges (a merge) fails
+   the world (`AgentMapError::Merged`), since its evidence cannot be told
+   apart.
+6. `Resolved::gather` over `spans()`, `accesses()` and `channels()`, then
+   `shutdown`.
+
+Predictions (`predict::from_transmission`):
+
+- confirmed, classified or aggregated: one per `ContentMatch`, of its match
+  class and carrier kind, with `origin_at` from the span's `IndexedSpan`;
+- suspected or discarded: one per `CoAccess`, aligned through its two
+  accesses: the sender is the write access's agent, the reader the read
+  access's agent at the read's exchange, `read_at` the whole tool result
+  the read returned (`AccessOp::Read::result`), `origin_at` the whole
+  write call; class `suspected` or `discarded`, carrier `tool_result`;
+- detected or awaiting content: none.
+
+Each prediction carries its transmission's `QualityMatch`, so the scorer's
+transmission rows are the spec's `DetectionQuality` rows (tested), with
+verdicts the truth implies (`score::quality`).
+
+`gateway_backend()` returns the real adapter once `Live` merges; until
+then it returns `BackendError::Unavailable`, and `ct-eval run --detector
+live` prints "live backend unavailable" and exits 1. The adapter is
+written, wiring only, in `src/detect/live/gateway.rs.in`, which no `mod`
+names, so it stays out of the build: it does not compile against the
+unmerged API. Its `AGREED` markers name what it expects that
+`feat/live-composition` (40cb34c) does not have yet:
+
+| Agreed | On the branch |
+| --- | --- |
+| `Live::settle(until)` | absent; `Live::shutdown(deadline)` only drains |
+| a `FlowConfig` for `Live` (short timing for eval) | `crosstalk_flow::consumer::FlowConfig` exists; `LiveConfig` has no flow field, and L5 is not wired (`wire_l5` is a TODO) |
+| `Live::ingest(exchange, at)` | `live.pipeline().ingest(exchange, at)` |
+| `Live::stores() -> LiveStores` | `stores() -> &LiveStores` (`MemoryStores<LiveBlobs>`): `agents`, `channels` (`MemoryChannels`: `AccessStore`, `ChannelReads`, `resource_use`), `transmissions` (`MemoryVerdicts`) |
+| `TransmissionStore::list(TransmissionQuery { window, states, channel }, page)` (P0.10) | absent: `TransmissionStore` has `save` and `transmission(id)` only |
+| `SpanIndex::spans` on the live stores | absent: spans reach `MemoryEvidence` through `EvidenceRecords::span` one at a time, and the evidence feeder uses `NoSpans` |
+| an L3 read of an exchange's agent and conversation | absent from the spec and the branch |
+| a fresh `Live` per world, built with `Live::start(LiveConfig)` | `Live::start` exists; the clock is the `surface.clock` (`ManualClock` in e2e), set through e2e's `options::in_process` |
 
 ## Files
 
@@ -115,24 +232,29 @@ scoring, reports and gates.
 | `src/corpus/exchange.rs` | one exchange | `CorpusExchange` (checked), `HashedMessage`, `Fidelity`, `normalized` (the checked `NormalizedExchange` builder), `CorpusError` |
 | `src/corpus/builder.rs` | how converters build worlds | `WorldBuilder`, `ExchangeDraft` |
 | `src/corpus/clock.rs` | the virtual clock | `compose(major, minor, sub)`, `ordinal`, `EPOCH_MICROS` |
-| `src/corpus/client.rs` | per-agent client context | `synthetic_client`, `vendor_of` |
+| `src/corpus/client.rs` | per-agent client context, replayed | `synthetic_client`, `corpus_id`, `vendor_of` |
 | `src/corpus/delta.rs` | new inputs of an exchange | `new_inputs` |
 | `src/truth/mod.rs` | labels | `Expectation`, `ExpectedTransmission`/`TransmissionLabel`, `NegativeControl`/`NegativeLabel`, `NegativeReason`, `AgentCluster`, `RouteExpectation`, `ExpectedContent`, `InvalidLabel` |
-| `src/truth/kinds.rs` | label dimensions the spec lacks, helpers over spec ones | `Tier`, `CarrierKind`, `MatchNeed` (with spec `Codec`s), `route_rank`/`cmp_route` (order for spec `RouteKind`), `locator_key` (a spec `Locator` as one string) |
+| `src/truth/kinds.rs` | label dimensions the spec lacks, helpers over spec ones | `Tier`, `CarrierKind` (the spec's, re-exported), `MatchNeed` (with spec `Codec`s; `json_string`, `yaml_string`), `route_rank`/`cmp_route` (order for spec `RouteKind`), `locator_key` (a spec `Locator` as one string) |
 | `src/truth/jsonl.rs` | truth as JSONL | `write`, `read` |
-| `src/predict/mod.rs` | predictions | `Prediction`, `PredictedRoute`, `Directory`, `WorldDirectory`, `from_transmission` |
+| `src/predict/mod.rs` | predictions | `Prediction`, `PredictedRoute`, `EvidenceClass`, `AgentMap`, `AgentMapError`, `Directory`, `WorldDirectory`, `from_transmission`, `PredictError` |
+| `src/predict/reads.rs` | the read seam: the spec's read traits, batched | `ChannelResources`, `RegistryResources`, `Reads`, `Resolved` (`gather`), `ReadError`, `ready` |
+| `src/predict/memory.rs` | eval-owned stores behind the seam | `SpanTable` (`SpanIndex`), `AccessTable` (`AccessStore`), `ChannelTable` (`ChannelResources`) |
 | `src/score/align.rs` | **the alignment rule** | `aligns`, `violates`, `specificity` |
 | `src/score/judge.rs` | judging one prediction | `Judge`, `Outcome` |
-| `src/score/mod.rs` | counts and breakdown | `Scorer`, `Score`, `RowKey`, `Counts`, `Selector`, `TransmissionRow` |
+| `src/score/mod.rs` | counts and breakdown | `Scorer`, `Score`, `RowKey`, `Counts`, `Selector`, `TransmissionKey` (by spec `QualityMatch`), `TransmissionRow` |
 | `src/score/quality.rs` | spec `DetectionQuality` from truth | `verdicts`, `detection_quality` |
 | `src/reference/mod.rs` | the reference matcher | `run`, `ReferenceConfig`, `ReferenceOutput`, `SpanRecord` |
-| `src/reference/fold.rs` | normalization with offset maps | `fold`, `Folded` |
+| `src/reference/fold.rs` | folding with offset maps | `fold`, `Folded`, `fold_plain`, `string_codec` |
+| `src/reference/classify.rs` | a hit's match class | `classify` |
 | `src/reference/opaque.rs` | opaque blobs | `opaque_ranges`, `segments` |
 | `src/reference/decode.rs` | base64, hex, URL decoding | `decode_candidates` |
 | `src/reference/shingle.rs` | k-gram rolling hashes | `shingles`, `covered` |
 | `src/reference/route.rs` | carrier and route | `find_call`, `extract_resource`, `parse_url`, `normalize_path` |
 | `src/pipeline.rs` | the run loop and the detector seam | `Detector`, `Detection`, `DetectionStatus`, `ReferenceDetector`, `run`, `predictions`, `RunSummary`, `Unscored`, `WorldError` |
 | `src/gateway.rs` | the gateway pipeline as a detector | `PipelineDetector`, `ingest_world`, `subscribe`, `capture_group`, `CorpusClock`, `Captured`, `PipelineError` |
+| `src/detect/live/mod.rs` | the live seam | `LiveBackend`, `LiveWorld`, `LiveDetector`, `LiveSettings`, `Attribution`, `BackendError`, `LiveError`, `LiveRead`, `Unavailable`, `gateway_backend`, `all_time` |
+| `src/detect/live/gateway.rs.in` | the `Live` adapter, out of the build until `Live` merges | `GatewayBackend`, `GatewayWorld` |
 | `src/report/mod.rs`, `table.rs` | reports | `Report`, `Summary`, `ReportRow`, `table::render` |
 | `src/report/gates.rs` | regression gates | `Gates`, `Gate`, `Check`, `GateOutcome`, `GateStatus` |
 | `src/config.rs` | dataset locations | `EvalConfig`, `DatasetConfig`, `expand` |
@@ -145,7 +267,7 @@ scoring, reports and gates.
 | `src/bin/ct-eval/main.rs` | CLI | `run`, `truth` |
 | `datasets.toml` | dataset root and paths | |
 | `gates.toml` | regression gates | |
-| `tests/` | integration tests (`pipeline.rs` is the sim smoke test of `Pipeline::ingest`); `tests/fixtures/salt/` holds synthetic SALT-shaped traces | |
+| `tests/` | integration tests (`pipeline.rs` is the sim smoke test of `Pipeline::ingest`; `live.rs` drives `LiveDetector` over a scripted backend on crosstalk-memory's stores, with transmissions in every state); `tests/fixtures/salt/` holds synthetic SALT-shaped traces | |
 
 ## Invariants and constraints
 
@@ -162,6 +284,13 @@ prediction meets a label. They align when all of these hold:
 
 Match class and carrier never decide alignment; they only pick the row.
 
+**Only content finds a label.** A suspected or discarded prediction (a
+co-access with no content match) is judged by the same rule and counted in
+its own row (class `suspected` or `discarded`), but a label it aligns with
+that no content prediction does stays `missed` and is also counted
+`suspected`. Selectors, gates and the overall summary read content rows
+unless they name an access class.
+
 - A label is found when any prediction aligns with it. Several predictions
   aligned with one label are each correct.
 - A prediction that aligns with nothing is checked against negative
@@ -172,10 +301,12 @@ Match class and carrier never decide alignment; they only pick the row.
 
 **`DetectionQuality` agrees.** `score::quality` builds the spec's
 `DetectionQuality::tally` from the detector's transmissions with verdicts
-implied by the same judgements: genuine if any match is correct, false if
-none is and one is false, unlabeled otherwise. The scorer's transmission
-rows equal its rows (tested). `DetectionQuality` cannot see total misses;
-the scorer's `missed` can.
+implied by the same judgements: genuine if any prediction is correct,
+false if none is and one is false, unlabeled otherwise. The scorer's
+transmission rows are keyed by the spec's `QualityMatch` (confirmed by
+the strongest match's class and carrier, suspected, discarded) and equal
+its rows (tested, for every state). `DetectionQuality` cannot see total
+misses; the scorer's `missed` can.
 
 **Determinism.**
 - Every id derives from the dataset id and a source reference
@@ -191,8 +322,18 @@ real trace files).
 
 **Spec types, not mirrors.** Labels, predictions and reports use the
 spec's serde types directly (`SpanLocation`, `Locator`,
-`DelegationDirection`, `RouteKind`, `MatchClass`, `Codec`, `ExchangeId`,
-`TransmissionId`, `MessageHash`). Message hashing, canonical JSON and the
+`DelegationDirection`, `RouteKind`, `MatchClass`, `CarrierKind`,
+`QualityMatch`, `Codec`, `ExchangeId`, `TransmissionId`, `MessageHash`),
+and read a detector's evidence through the spec's read traits
+(`SpanIndex`, `AccessStore`, `ChannelReads`, `ChannelRegistry`).
+
+**Replayed corpora.** Every corpus exchange's ingress is
+`IngressMode::Replay { corpus }`, one `CorpusId` per dataset
+(`eval-<dataset>`), which only `Pipeline::ingest`'s callers set
+(INV-972). Each agent keeps one stable synthetic API-key credential (a
+digest of its key); under `Replay` it is scoped to the corpus, since L3
+attributes and merges replayed exchanges only within their corpus
+(INV-973). Message hashing, canonical JSON and the
 normalized-exchange invariants are the spec's (`encoding`, `json`,
 `NormalizedExchange::check`). `HashedMessage` can only be built by hashing
 its body through the spec's encoding.
@@ -224,7 +365,7 @@ its body through the spec's encoding.
 The SALT converter maps signatures and encrypted reasoning to
 `Reasoning::Opaque`, which has no part text.
 
-**Escapes.** Folding (`reference/fold.rs`) unfolds JSON and YAML string
+**Escapes.** Matching folds (`reference/fold.rs`) JSON and YAML string
 escapes at any nesting depth:
 - `\n`, `\t`, `\r`, `\b`, `\f` become whitespace;
 - `\uXXXX` and surrogate pairs become the character they name;
@@ -233,8 +374,16 @@ escapes at any nesting depth:
 
 It then folds case and collapses whitespace. Content one agent writes
 inside JSON tool arguments therefore matches the same content delivered
-raw. A SALT label needs `Normalized` exactly when its content holds a
-character JSON escapes.
+raw. Undoing escapes is decoding, not normalization (spec #58), so a hit
+is then classified (`reference/classify.rs`): `Exact` when the span holds
+the read bytes, `Normalized` when case and whitespace folding alone make
+them equal (`fold_plain`), and otherwise `Decoded([JsonString])` or
+`Decoded([YamlString])`, by the escapes the text holds (`string_codec`:
+an escaped line break or space, `\x`, `\0`, `\a`, `\e`, `\v`, `\N`,
+`\_`, `\L`, `\P` or `\U` is YAML's). A SALT label needs
+`Decoded([JsonString])` exactly when its content holds a character JSON
+escapes; AgentDojo's `JsonString` and `YamlString` arrivals need
+`Decoded([JsonString])` and `Decoded([YamlString])`.
 
 **The virtual clock.** `compose(major, minor, sub)` gives
 `EPOCH + major·1000 s + minor·1 ms + sub·1 µs`, with bounded components, so
@@ -261,25 +410,28 @@ exchange that first carries the delivered message (tested).
 - **Negative controls.**
   - `RejectedSend`: failed `send_message` events. The origin is the failed
     call's arguments, so a violation is a prediction whose evidence is text
-    that was never delivered.
+    that was never delivered. The converter gives the failed call's result
+    `ToolOutcome::Error`, so a gateway's L5 records it as a
+    `WriteOutcome::Rejected` write that never pairs; the label checks that
+    no detector credits it anyway. Wherever the eval builds spec `Access`es
+    (the live test backend), a rejected send is `WriteOutcome::Rejected`.
   - `NoSenderExchange`: scripted Bob's deliveries.
   - `SharedSource`: system prompts, and results of `inspect_database`,
     `query_database`, `read_code`, `read_source` and `resolve_records`.
   - `Boilerplate`: harness user turns.
 
-## Shortcuts that in-flight spec changes replace
+## Spec #58 in the eval
 
-`docs/spec-eval-gaps` adds spec types the eval works around today. The eval
-does not depend on them yet; when they land:
+Every shortcut the eval took before spec #58 (`docs/spec-eval-gaps`) is
+gone:
 
-| Spec change | Replaces |
+| Spec change | What the eval does now |
 | --- | --- |
-| `IngressMode::Replay { corpus: CorpusId }` | the fabricated `ClientContext` (`corpus/client.rs`: a reverse-proxy route named after the dataset); corpus-ingested exchanges must use `Replay` |
-| `SpanIndex::span` | the span directory (`Detection::spans`, `Directory::span`, `ReferenceOutput::spans`) the eval keeps to locate a match's origin |
-| `CarrierKind` | the eval's own `truth::CarrierKind` and its mapping from `Carrier` |
-| `WriteOutcome` (on `AccessOp::Write`), `ToolOutcome::Unknown` | the eval-only `NegativeReason::RejectedSend` label for failed `send_message` calls, which becomes a rejected write the detector itself sees |
-| `Codec::JsonString`, `Codec::YamlString` | the JSON/YAML escape class folded into `Normalized` (`MatchNeed::Normalized` for escaped deliveries, the reference matcher's escape unfolding) |
-| an access-by-id read | channel-route alignment's dependence on the detector reporting each channel's resources (`Directory::channel`) |
+| `IngressMode::Replay { corpus: CorpusId }` | corpus exchanges are replayed under one corpus per dataset (`corpus::client::corpus_id`), with one stable synthetic credential per agent, corpus-scoped (INV-973) |
+| `SpanIndex::spans`, `AccessStore::accesses`, `ChannelReads` / `resource_use` | predictions read a detector's spans, accesses and channel resources through them (`predict/reads.rs`); the eval's private span directory and channel lookups are gone |
+| `CarrierKind` | score rows and `DetectionQuality` use the spec's (`Carrier::kind`); `QualityMatch::Content { class, carrier }` keys the scorer's transmission rows |
+| `WriteOutcome` (on `AccessOp::Write`) | SALT keeps its `RejectedSend` truth label; a failed send's result is `ToolOutcome::Error`, and the eval builds rejected sends as `WriteOutcome::Rejected` accesses |
+| `Codec::JsonString`, `Codec::YamlString` | escaped text is `Decoded([JsonString])` or `Decoded([YamlString])` in labels and in the reference matcher; `Normalized` is whitespace and case only |
 
 ## How to add a converter
 
@@ -319,12 +471,21 @@ ct-eval run --dataset salt --limit 53
 | route | carrier | class | tier | expected | found | recall | predicted | correct | false | precision |
 | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | direct | user_turn | exact | construction | 2806 | 2722 | 0.970 | 7046 | 7024 | 22 | 0.997 |
-| direct | user_turn | normalized | construction | 1044 | 842 | 0.807 | 2015 | 2015 | 0 | 1.000 |
+| direct | user_turn | normalized | construction | 0 | 0 | - | 347 | 347 | 0 | 1.000 |
+| direct | user_turn | decoded | construction | 1044 | 842 | 0.807 | 1668 | 1668 | 0 | 1.000 |
 | direct | tool_result | exact | construction | 0 | 0 | - | 1678 | 0 | 1678 | 0.000 |
-| direct | tool_result | normalized | construction | 0 | 0 | - | 3032 | 0 | 3032 | 0.000 |
+| direct | tool_result | normalized | construction | 0 | 0 | - | 457 | 0 | 457 | 0.000 |
+| direct | tool_result | decoded | construction | 0 | 0 | - | 2575 | 0 | 2575 | 0.000 |
 | direct | user_turn | exact / normalized | structural | 0 | 0 | - | 89 | 0 | 89 | 0.000 |
-| direct | tool_result | normalized | structural | 0 | 0 | - | 12 | 0 | 12 | 0.000 |
+| direct | tool_result | decoded | structural | 0 | 0 | - | 12 | 0 | 12 | 0.000 |
 
+- With the string codecs (spec #58), escaped deliveries need
+  `Decoded([JsonString])`: their 1,044 labels moved from the `normalized`
+  row to `decoded` with the same 842 found. The matcher finds exactly what
+  it found before; only its classes changed: of the 2,015 user-turn
+  predictions it called `normalized`, 1,668 needed a JSON string decoded
+  and 347 only whitespace or case (pieces of an escaped delivery between
+  its escapes). Totals, violations and gates are unchanged.
 - Overall recall is 0.926; overall precision is 0.652 (0.988 on user
   turns).
 - Violations: `rejected_send` 171, `boilerplate` 89, `shared_source` 12,
@@ -381,9 +542,9 @@ Where the reference loses:
     - `JsonString` (`\n`, `\"`, `\uXXXX`);
     - `YamlString` (`\`-newline continuations, `\ `, `\xXX`, `''`).
 
-    Every decoding is followed by whitespace folding. Until spec PR #58's
-    `Codec::JsonString`/`YamlString` land, all but `Exact` map to
-    `Normalized` (`Arrival::need`, TODO(#58)).
+    Every decoding is followed by whitespace folding. `Whitespace` needs
+    `Normalized`, `JsonString` `Decoded([JsonString])` and `YamlString`
+    `Decoded([YamlString])` (`Arrival::need`, spec #58).
   - **Absent.** An injection in no output the victim read (the tool was
     never called, or a defense such as `transformers_pi_detector` replaced
     it with "Data omitted") gets no label.
@@ -488,10 +649,13 @@ ct-eval run --dataset agentdojo --include pipeline=gpt-4o-2024-05-13 \
 | --- | --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
 | channel | tool_result | normalized | construction | 359 | 87 | 0.242 | 87 | 87 | 0 | 1.000 |
 | direct | tool_result | exact | construction | 0 | 0 | - | 328 | 142 | 186 | 0.433 |
-| direct | tool_result | normalized | construction | 2324 | 2324 | 1.000 | 3549 | 3030 | 519 | 0.854 |
+| direct | tool_result | normalized | construction | 294 | 294 | 1.000 | 1736 | 1289 | 447 | 0.743 |
+| direct | tool_result | decoded | construction | 2030 | 2030 | 1.000 | 1813 | 1741 | 72 | 0.960 |
 | direct | user_turn | exact / normalized | structural | 0 | 0 | - | 45 | 0 | 45 | 0.000 |
 
-Overall recall is 0.899 and precision 0.813.
+Overall recall is 0.899 and precision 0.813. Before the string codecs the
+two direct `normalized` and `decoded` rows were one `normalized` row
+(2,324 labels, 3,549 predictions); the totals are unchanged.
 
 Arrival classes:
 
