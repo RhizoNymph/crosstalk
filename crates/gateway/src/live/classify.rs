@@ -4,7 +4,8 @@
 //!
 //! On `TransmissionConfirmed` it reads the active version from the
 //! catalog, stores the transmission's assignment under it
-//! (`TopicLifecycle::assign`, so topic sizes count it) and publishes
+//! (`TopicLifecycle::assign`, so topic sizes count it), saves the
+//! transmission as `Classified` (`TransmissionStore::save`) and publishes
 //! `TransmissionClassified { cause: Confirmation, .. }` with the
 //! confirmation's facts.
 //!
@@ -14,10 +15,13 @@
 //! When `crosstalk-analysis` has a consumer, it takes this slot.
 
 use crosstalk_memory::analysis::catalog::InMemoryTopicCatalog;
-use crosstalk_spec::derived::flow::transmission::Classification;
+use crosstalk_memory::flow::MemoryVerdicts;
+use crosstalk_spec::derived::flow::transmission::{Classification, TransmissionState};
 use crosstalk_spec::events::detect::DetectEvent;
 use crosstalk_spec::events::insight::{ClassificationCause, InsightEvent};
 use crosstalk_spec::events::{BusEvent, Envelope, Subject};
+use crosstalk_spec::ids::TransmissionId;
+use crosstalk_spec::interfaces::l5_flow::transmissions::TransmissionStore;
 use crosstalk_spec::interfaces::l6_analysis::TopicCatalog;
 use crosstalk_spec::interfaces::l6_analysis::lifecycle::{
     StoredAssignment, TopicLifecycle, TopicLifecycleError,
@@ -29,12 +33,56 @@ use super::stage::{Publisher, Stage, StageError};
 /// The L6 slot's stage.
 pub struct Classifier {
     catalog: InMemoryTopicCatalog,
+    transmissions: MemoryVerdicts,
     publisher: Publisher,
 }
 
 impl Classifier {
-    pub fn new(catalog: InMemoryTopicCatalog, publisher: Publisher) -> Self {
-        Self { catalog, publisher }
+    pub fn new(
+        catalog: InMemoryTopicCatalog,
+        transmissions: MemoryVerdicts,
+        publisher: Publisher,
+    ) -> Self {
+        Self {
+            catalog,
+            transmissions,
+            publisher,
+        }
+    }
+
+    /// Store the confirmed transmission as classified: `TransmissionStore`
+    /// holds the latest state, and analysis saves each classification. A
+    /// transmission already past `Confirmed` (classified before, or
+    /// aggregated) keeps its state.
+    async fn store_state(
+        &mut self,
+        id: TransmissionId,
+        classification: &Classification,
+    ) -> Result<(), StageError> {
+        let stored =
+            self.transmissions
+                .transmission(id)
+                .await
+                .map_err(|error| StageError::Retry {
+                    reason: format!("reading the transmission: {error:?}"),
+                })?;
+        let Some(mut transmission) = stored else {
+            tracing::warn!(transmission = %id.ulid_text(), "confirmed transmission not stored; classified without a state");
+            return Ok(());
+        };
+        let TransmissionState::Confirmed(confirmed) = &transmission.state else {
+            return Ok(());
+        };
+        transmission.state = TransmissionState::Classified {
+            confirmed: confirmed.clone(),
+            classification: classification.clone(),
+        };
+        self.transmissions
+            .save(transmission)
+            .await
+            .map_err(|error| StageError::Retry {
+                reason: format!("saving the classified transmission: {error:?}"),
+            })
     }
 }
 
@@ -67,6 +115,8 @@ impl Stage for Classifier {
             topic: None,
             confirmed_at: *at,
             matched_bytes: *matched_bytes,
+            from: *from,
+            to: *to,
         };
         match self.catalog.assign(*transmission, version, stored).await {
             Ok(Change::Applied | Change::Unchanged) => {}
@@ -87,6 +137,12 @@ impl Stage for Classifier {
                 });
             }
         }
+        let classification = Classification {
+            version,
+            topic: None,
+            watched: false,
+        };
+        self.store_state(*transmission, &classification).await?;
         let classified = InsightEvent::TransmissionClassified {
             cause: ClassificationCause::Confirmation,
             transmission: *transmission,
@@ -95,11 +151,7 @@ impl Stage for Classifier {
             route: route.clone(),
             at: *at,
             matched_bytes: *matched_bytes,
-            classification: Classification {
-                version,
-                topic: None,
-                watched: false,
-            },
+            classification,
         };
         self.publisher
             .publish(BusEvent::Insight(classified))

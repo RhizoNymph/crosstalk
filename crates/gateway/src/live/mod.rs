@@ -1,30 +1,36 @@
 //! `Live`: the whole detection path and the L8 surface in one process,
-//! over one set of in-memory stores. What the UI binary hosts.
+//! over one set of in-memory stores. What the UI binary hosts, and what
+//! the e2e smoke and the eval harness drive.
 //!
 //! ```text
 //!  proxy capture (optional) ─▶ CaptureStage (L1) ─┐
 //!  replay / caller ─▶ pipeline().ingest(exchange, at) ─▶ blobs + ExchangeCaptured
 //!                                                  ▼
-//!   MpscBus ── group per slot ──▶ L3 ▶ L4 ▶ L5 ▶ L6 classify ▶ L7   (stages; see `stage`)
-//!      ▲            │                 └──── write ───▶ LiveStores (crosstalk-memory)
-//!      │            ├──▶ evidence feeder ─▶ MemoryEvidence                │ Outbox
-//!      │            └──▶ surface relay ─▶ node facts, live feed           ▼
-//!      └────────────────────── forward_outbox ◀──────────────────────────┘
+//!   MpscBus ── one group per slot ──▶ L3 reconstruct ─ ConversationDelta ─▶ L4 provenance ─┬─ ContentMatched ─▶ L5 flow
+//!      ▲                                                                   extraction step ─┘ (Extracted, local) ─▶ L5 flow
+//!      │                L5 ─ TransmissionConfirmed ─▶ L6 classify ─ TransmissionClassified ─▶ L7 topology
+//!      │            ├──▶ evidence feeder ─▶ MemoryEvidence
+//!      │            └──▶ surface relay ─▶ node facts, live feed
+//!      └── forward_outbox ◀── Outbox ◀── LiveStores (crosstalk-memory), written by every stage
 //!   Surface<LiveStores> (crosstalk-api's InProcess, over the same stores, bus and blobs)
 //! ```
 //!
 //! [`Live::start`] opens the blob store and starts the bus, builds the
 //! surface over them with `InProcess::start_with`, builds the pipeline,
-//! fills the slots ([`wiring::wire_all`]), subscribes every slot's group,
-//! and only then starts publishing: the outbox forwarder, the stages and
-//! the capture stage. Everything time-dependent reads the configured
-//! clock, so a corpus or simulation clock replays a dataset through the
-//! same path live capture takes.
+//! fills every slot ([`wiring::wire_all`]), subscribes every slot's group,
+//! and only then starts publishing: the outbox forwarder, the stages, the
+//! ticker and the capture stage. Everything time-dependent reads the
+//! configured [`LiveClock`], so a corpus or simulation clock replays a
+//! dataset through the same path live capture takes, and
+//! [`Live::settle`] drives it to a fixed point.
 
 mod blobs;
 mod classify;
+mod clock;
 mod evidence;
+pub mod layers;
 mod relay;
+mod settle;
 mod stage;
 pub mod wiring;
 
@@ -35,10 +41,12 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crosstalk_api::{Backbone, InProcess, InProcessError, InProcessOptions};
+use crosstalk_flow::consumer::{FlowConfig, InvalidFlowConfig, Settings as FlowSettings};
 use crosstalk_memory::support::Outbox;
+use crosstalk_provenance::config::ProvenanceConfig;
 use crosstalk_spec::ids::SeededRandom;
 use crosstalk_spec::interfaces::l0_ingress::RawExchange;
-use crosstalk_spec::interfaces::l2_transport::{BusError, ConsumerGroup, EventBus};
+use crosstalk_spec::interfaces::l2_transport::{BusError, EventBus};
 use crosstalk_spec::interfaces::l8_surface::Caller;
 use crosstalk_spec::interfaces::l8_surface::operators::{CallerError, RequestIdentity};
 use crosstalk_surface::Surface;
@@ -50,10 +58,12 @@ use tokio::time::Instant;
 
 pub use self::blobs::{BlobConfig, LiveBlobs};
 pub use self::classify::Classifier;
-pub use self::evidence::{EvidenceFeeder, NoSpans, SpanSource, SpanSourceError};
+pub use self::clock::LiveClock;
+pub use self::evidence::{EvidenceFeeder, ProvenanceSpans, SpanSource, SpanSourceError};
+pub use self::settle::{SettleError, Settled};
 pub use self::stage::{
-    DERIVED_SUBJECTS, LiveStores, Publisher, Slot, SlotTaken, Stage, StageContext, StageError,
-    Stages,
+    Activity, Command, Control, DERIVED_SUBJECTS, LayerStores, LiveStores, Publisher, RunFuture,
+    Slot, SlotTaken, Stage, StageContext, StageError, Stages, settle_delivery,
 };
 use crate::capture::CaptureStage;
 use crate::pipeline::{BuildError, Deps, Pipeline, Settings};
@@ -61,17 +71,38 @@ use crate::pipeline::{BuildError, Deps, Pipeline, Settings};
 /// The pipeline a live process ingests through.
 pub type LivePipeline = Pipeline<LiveBlobs, MpscBus>;
 
+/// When the stages' ticks run.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Ticking {
+    /// Every `flow.tick_ms` of elapsed (tokio) time, reading the clock, and
+    /// on every [`Live::settle`]: for a process serving live traffic, or a
+    /// harness that polls.
+    Periodic,
+    /// Only on [`Live::settle`]: nothing time-driven happens between two
+    /// settles, so a replay is reproducible.
+    OnSettle,
+}
+
 /// How a live process is configured.
 pub struct LiveConfig {
-    /// The surface and its stores; `surface.clock` is the clock every
-    /// stage reads.
+    /// The surface and its stores. Its `clock` and `timing` are replaced by
+    /// [`LiveConfig::clock`] and [`LiveConfig::flow`]'s timing, so every
+    /// layer reads one clock and one correlation timing.
     pub surface: InProcessOptions,
+    /// The clock every stage reads.
+    pub clock: LiveClock,
     pub blobs: BlobConfig,
     pub bus: BusConfig,
     /// Put retries; `consumer_retry` is every slot's group retry policy.
     pub pipeline: Settings,
-    /// Seeds the random part of envelope ids.
-    pub id_entropy: SeededRandom,
+    /// L5's correlation windows, shards and tick (durations in ms).
+    pub flow: FlowConfig,
+    /// L4's winnowing, decoding and index settings.
+    pub provenance: ProvenanceConfig,
+    pub ticking: Ticking,
+    /// Seeds every id generator (envelope, agent, conversation ids), so two
+    /// runs over the same input mint the same ids.
+    pub seed: u64,
     /// The proxy's capture channel, for a process that serves the L0
     /// listener; `None` to ingest only through [`Live::pipeline`].
     pub capture: Option<mpsc::Receiver<RawExchange>>,
@@ -81,6 +112,8 @@ pub struct LiveConfig {
 /// except what an `InProcess` that started leaves until it is dropped.
 #[derive(Debug, thiserror::Error)]
 pub enum LiveError {
+    #[error("the flow config is invalid: {0}")]
+    Flow(#[from] InvalidFlowConfig),
     #[error("the blob store did not open: {0}")]
     Blobs(#[from] OpenError),
     #[error("the bus did not start: {0:?}")]
@@ -105,14 +138,24 @@ pub struct LiveDrained {
     pub stages: bool,
 }
 
+/// A running stage: its task and where its commands go.
+struct Running {
+    slot: Slot,
+    task: JoinHandle<()>,
+    commands: mpsc::UnboundedSender<Command>,
+}
+
 /// A running live process.
 pub struct Live {
     pipeline: Arc<LivePipeline>,
     backend: InProcess<LiveBlobs>,
     context: StageContext,
-    filled: Vec<Slot>,
-    stages: Vec<(Slot, JoinHandle<()>)>,
+    clock: LiveClock,
+    activity: Activity,
+    stages: Vec<Running>,
     outbox: JoinHandle<()>,
+    flushes: mpsc::UnboundedSender<relay::Flush>,
+    ticker: Option<JoinHandle<()>>,
     capture: Option<JoinHandle<()>>,
 }
 
@@ -121,14 +164,21 @@ impl Live {
     /// runtime.
     pub async fn start(config: LiveConfig) -> Result<Self, LiveError> {
         let LiveConfig {
-            surface,
+            mut surface,
+            clock,
             blobs,
             bus,
             pipeline,
-            id_entropy,
+            flow,
+            provenance,
+            ticking,
+            seed,
             capture,
         } = config;
-        let clock = Arc::clone(&surface.clock);
+        let flow = FlowSettings::try_from(flow)?;
+        let reader = clock.reader();
+        surface.clock = Arc::clone(&reader);
+        surface.timing = flow.timing;
         let blobs = LiveBlobs::open(&blobs).await?;
         let bus = MpscBus::start(bus).map_err(LiveError::Bus)?;
         let (outbox, outboxed) = Outbox::channel();
@@ -145,23 +195,26 @@ impl Live {
         .await?;
         let built = Pipeline::build(
             pipeline,
-            Deps::stores(blobs, bus.clone(), id_entropy),
-            Arc::clone(&clock),
+            Deps::stores(blobs, bus.clone(), SeededRandom::new(seed)),
+            Arc::clone(&reader),
         )
         .await?;
         let publisher = Publisher::new(built.ingester());
+        let activity = Activity::default();
         let context = StageContext {
             stores: backend.stores.clone(),
+            layers: LayerStores::default(),
             publisher: publisher.clone(),
-            clock,
+            clock: reader,
+            flow,
+            seed,
         };
         let mut stages = Stages::default();
-        wiring::wire_all(&mut stages, &context)?;
+        wiring::wire_all(&mut stages, &context, &provenance)?;
         stages.fill(Slot::SurfaceRelay, relay::SurfaceRelay::new(relay_events))?;
         for slot in stages.unfilled() {
             tracing::warn!(slot = slot.name(), "slot unfilled: its layer does not run");
         }
-        let filled = stages.filled();
         // Every group subscribes before anything below can publish.
         let mut subscribed = Vec::new();
         for (slot, plug) in stages.into_plugs() {
@@ -171,30 +224,56 @@ impl Live {
                 .map_err(|error| LiveError::Subscribe { slot, error })?;
             subscribed.push((slot, plug, subscription));
         }
-        let stages = subscribed
+        let stages: Vec<Running> = subscribed
             .into_iter()
             .map(|(slot, plug, subscription)| {
-                (
+                let (commands, received) = mpsc::unbounded_channel();
+                let control = Control {
+                    retry: pipeline.consumer_retry,
+                    commands: received,
+                    activity: activity.clone(),
                     slot,
-                    tokio::spawn((plug.run)(subscription, pipeline.consumer_retry)),
-                )
+                };
+                Running {
+                    slot,
+                    task: tokio::spawn((plug.run)(subscription, control)),
+                    commands,
+                }
             })
             .collect();
-        let outbox = tokio::spawn(relay::forward_outbox(outboxed, publisher));
+        let (flushes, flush_requests) = mpsc::unbounded_channel();
+        let outbox = tokio::spawn(relay::forward_outbox(
+            outboxed,
+            publisher,
+            flush_requests,
+            activity.clone(),
+        ));
+        let ticker = match ticking {
+            Ticking::Periodic => Some(tokio::spawn(settle::tick_periodically(
+                settle::commands_of(&stages),
+                clock.clone(),
+                flow.tick_every,
+            ))),
+            Ticking::OnSettle => None,
+        };
         let capture =
             capture.map(|captured| tokio::spawn(CaptureStage::new(built.ingester()).run(captured)));
         tracing::info!(
-            filled = ?filled.iter().map(|slot| slot.name()).collect::<Vec<_>>(),
+            stages = ?stages.iter().map(|running| running.slot.name()).collect::<Vec<_>>(),
             capture = capture.is_some(),
+            ticking = ?ticking,
             "live process started"
         );
         Ok(Self {
             pipeline: Arc::new(built),
             backend,
             context,
-            filled,
+            clock,
+            activity,
             stages,
             outbox,
+            flushes,
+            ticker,
             capture,
         })
     }
@@ -210,9 +289,16 @@ impl Live {
         &self.backend.surface
     }
 
-    /// The stores every stage and the surface share.
+    /// The stores every stage and the surface share: read them through the
+    /// spec's traits (`TransmissionStore::list` on `transmissions`, ...).
     pub fn stores(&self) -> &LiveStores {
         &self.backend.stores
+    }
+
+    /// The layer stores only the stages read: L3's conversations
+    /// (`ExchangePlacements::placement`) and L4's provenance records.
+    pub fn layers(&self) -> &LayerStores {
+        &self.context.layers
     }
 
     /// The stores, publisher and clock the stages were built from.
@@ -220,9 +306,14 @@ impl Live {
         &self.context
     }
 
+    /// The clock every stage reads.
+    pub fn clock(&self) -> &LiveClock {
+        &self.clock
+    }
+
     /// The slots that run, in slot order.
-    pub fn filled(&self) -> &[Slot] {
-        &self.filled
+    pub fn filled(&self) -> Vec<Slot> {
+        self.stages.iter().map(|running| running.slot).collect()
     }
 
     /// The caller of one request, from the loaded access config.
@@ -235,16 +326,29 @@ impl Live {
     /// group empties, the bus stops, the stages end, the surface's relay
     /// and live feed stop.
     pub async fn shutdown(self, deadline: Instant) -> LiveDrained {
+        if let Some(ticker) = &self.ticker {
+            ticker.abort();
+        }
         let capture = match self.capture {
             Some(task) => join_by("capture stage", task, deadline).await,
             None => true,
         };
         let bus = self.backend.stores.bus.clone();
-        let groups: Vec<ConsumerGroup> = self.stages.iter().map(|(slot, _)| slot.group()).collect();
-        let drained = wait_for_groups(&bus, &groups, deadline).await;
+        let slots: Vec<Slot> = self.stages.iter().map(|running| running.slot).collect();
+        let drained = match tokio::time::timeout_at(deadline, settle::idle(&bus, &slots)).await {
+            Ok(Ok(())) => true,
+            Ok(Err(error)) => {
+                tracing::warn!(error = %error, "reading the stages' groups failed");
+                false
+            }
+            Err(_) => {
+                tracing::warn!("the stages did not catch up before the deadline");
+                false
+            }
+        };
         bus.shutdown().await;
-        for (slot, task) in self.stages {
-            join_by(slot.name(), task, deadline).await;
+        for running in self.stages {
+            join_by(running.slot.name(), running.task, deadline).await;
         }
         self.outbox.abort();
         self.backend.shutdown().await;
@@ -276,39 +380,5 @@ async fn join_by(name: &'static str, mut task: JoinHandle<()>, deadline: Instant
     }
 }
 
-/// Wait until every group in `groups` holds nothing at once, until
-/// `deadline`.
-async fn wait_for_groups(bus: &MpscBus, groups: &[ConsumerGroup], deadline: Instant) -> bool {
-    let empty = async {
-        'poll: loop {
-            for group in groups {
-                match bus.depth(group).await {
-                    Ok(Some(depth))
-                        if depth.ready
-                            + depth.delayed
-                            + depth.held
-                            + depth.exhausted
-                            + depth.waiting
-                            > 0 =>
-                    {
-                        tokio::time::sleep(Duration::from_millis(10)).await;
-                        continue 'poll;
-                    }
-                    Ok(_) => {}
-                    Err(error) => {
-                        tracing::warn!(group = %group.0, error = ?error, "reading a group's depth failed");
-                        return false;
-                    }
-                }
-            }
-            return true;
-        }
-    };
-    match tokio::time::timeout_at(deadline, empty).await {
-        Ok(drained) => drained,
-        Err(_) => {
-            tracing::warn!("the stages did not catch up before the deadline");
-            false
-        }
-    }
-}
+/// How long the idle checks wait between two reads of the groups.
+const POLL: Duration = Duration::from_millis(1);

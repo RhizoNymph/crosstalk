@@ -1,27 +1,32 @@
-//! A live process end to end, without the layer consumers: the slots that
-//! run, the outbox onto the bus, the surface relay, the L6 classifier and
-//! the evidence feeder.
+//! A live process's own machinery, without traffic: every slot runs, the
+//! outbox reaches the bus, the surface relay, the L6 classifier, the
+//! evidence feeder, settling and the blob store choice. Traffic end to end
+//! is crosstalk-e2e's smoke.
 
 use std::num::{NonZeroU32, NonZeroU64};
 use std::sync::Arc;
 use std::time::Duration;
 
 use crosstalk_api::InProcessOptions;
+use crosstalk_flow::consumer::FlowConfig;
 use crosstalk_memory::analysis::catalog::RetentionPolicy;
 use crosstalk_memory::model::build::test_model;
 use crosstalk_memory::support::ManualClock;
+use crosstalk_provenance::config::ProvenanceConfig;
 use crosstalk_spec::aggregates::projection::FrameRetention;
 use crosstalk_spec::aggregates::series::BucketWidth;
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::derived::flow::timing::CorrelationTiming;
-use crosstalk_spec::derived::flow::transmission::{Classification, Route};
+use crosstalk_spec::derived::flow::transmission::{Classification, Route, TransmissionState};
 use crosstalk_spec::events::changed::Changed;
 use crosstalk_spec::events::detect::DetectEvent;
 use crosstalk_spec::events::insight::{ClassificationCause, InsightEvent};
 use crosstalk_spec::events::{BusEvent, Envelope, Subject};
-use crosstalk_spec::ids::{OperatorId, SeededRandom};
+use crosstalk_spec::ids::OperatorId;
 use crosstalk_spec::interfaces::l2_transport::{BlobStore, ConsumerGroup, EventBus, Subscription};
+use crosstalk_spec::interfaces::l5_flow::Discovery;
 use crosstalk_spec::interfaces::l5_flow::channels::ChannelTraffic;
+use crosstalk_spec::interfaces::l5_flow::transmissions::TransmissionStore;
 use crosstalk_spec::interfaces::l8_surface::export::{
     ExportFormat, ExportFormats, ExportLimits, GatewayVersion,
 };
@@ -31,16 +36,19 @@ use crosstalk_spec::interfaces::l8_surface::live::{
 use crosstalk_spec::interfaces::l8_surface::operators::{
     AccessConfig, OperatorName, RequestIdentity, TrustedOperator,
 };
-use crosstalk_spec::support::Similarity;
+use crosstalk_spec::support::{Similarity, Timestamp};
 use crosstalk_surface::{EvidenceRecords, SurfaceConfig};
-use crosstalk_testkit::build::{AccessBuilder, ResourceBuilder};
+use crosstalk_testkit::build::{AccessBuilder, ResourceBuilder, TransmissionBuilder};
 use crosstalk_testkit::ids::Ids;
 use crosstalk_testkit::time::T0;
 use crosstalk_transport::BusConfig;
 use crosstalk_transport::MpscSubscription;
 use tokio::time::Instant;
 
-use super::{BlobConfig, Live, LiveBlobs, LiveConfig, LiveDrained, Slot, SlotTaken, Stages};
+use super::{
+    BlobConfig, Live, LiveBlobs, LiveClock, LiveConfig, LiveDrained, Slot, SlotTaken, Stages,
+    Ticking,
+};
 use crate::live::classify::Classifier;
 use crate::pipeline::Settings;
 
@@ -104,12 +112,17 @@ fn surface_options(clock: ManualClock) -> InProcessOptions {
 }
 
 fn config(blobs: BlobConfig) -> LiveConfig {
+    let clock = ManualClock::at(T0);
     LiveConfig {
-        surface: surface_options(ManualClock::at(T0)),
+        surface: surface_options(clock.clone()),
+        clock: LiveClock::Manual(clock),
         blobs,
         bus: BusConfig::default(),
         pipeline: Settings::default(),
-        id_entropy: SeededRandom::new(7),
+        flow: FlowConfig::default(),
+        provenance: ProvenanceConfig::default(),
+        ticking: Ticking::OnSettle,
+        seed: 7,
         capture: None,
     }
 }
@@ -159,12 +172,9 @@ async fn first<T>(
 }
 
 #[tokio::test]
-async fn the_gateway_owned_slots_run_and_the_layer_slots_wait_for_their_crates() {
+async fn every_slot_runs_and_shutdown_drains() {
     let live = start().await;
-    assert_eq!(
-        live.filled(),
-        [Slot::L6Classify, Slot::Evidence, Slot::SurfaceRelay]
-    );
+    assert_eq!(live.filled(), Slot::ALL);
     let drained = live.shutdown(Instant::now() + PATIENCE).await;
     assert_eq!(
         drained,
@@ -175,21 +185,35 @@ async fn the_gateway_owned_slots_run_and_the_layer_slots_wait_for_their_crates()
     );
 }
 
+/// `settle` moves a manual clock forwards only, and returns once a pass
+/// changed nothing.
+#[tokio::test]
+async fn settle_moves_the_clock_forwards_and_reaches_a_fixed_point() {
+    let live = start().await;
+    let later = Timestamp::from_micros(T0.as_micros() + MINUTE);
+    let settled = live.settle(later).await;
+    let Ok(settled) = settled else {
+        panic!("settle: {settled:?}");
+    };
+    assert_eq!(settled.at, later);
+    assert!(settled.passes >= 1);
+    assert_eq!(live.clock().now(), later);
+    let again = live.settle(T0).await;
+    assert_eq!(again.map(|settled| settled.at), Ok(later));
+    live.shutdown(Instant::now() + PATIENCE).await;
+}
+
 #[tokio::test]
 async fn a_slot_is_filled_once() {
     let live = start().await;
     let publisher = live.context().publisher.clone();
     let catalog = live.stores().catalog.clone();
+    let transmissions = live.stores().transmissions.clone();
+    let classifier = || Classifier::new(catalog.clone(), transmissions.clone(), publisher.clone());
     let mut stages = Stages::default();
+    assert_eq!(stages.fill(Slot::L6Classify, classifier()), Ok(()));
     assert_eq!(
-        stages.fill(
-            Slot::L6Classify,
-            Classifier::new(catalog.clone(), publisher.clone())
-        ),
-        Ok(())
-    );
-    assert_eq!(
-        stages.fill(Slot::L6Classify, Classifier::new(catalog, publisher)),
+        stages.fill(Slot::L6Classify, classifier()),
         Err(SlotTaken(Slot::L6Classify))
     );
     assert_eq!(stages.filled(), [Slot::L6Classify]);
@@ -224,9 +248,13 @@ async fn a_store_event_reaches_the_bus_and_the_live_feed() {
         .build();
     let channel = ids.channel();
     let mut registry = live.stores().channels.clone();
+    assert_eq!(registry.add_resource(resource.clone()).await, Ok(None));
+    assert_eq!(registry.record_access(access).await, Ok(()));
     assert_eq!(
-        registry.discover(channel, resource, access.id).await,
-        Ok(())
+        registry
+            .discover(channel, resource.id, ids.transmission(), T0)
+            .await,
+        Ok(Discovery::Created(channel))
     );
 
     first(&mut observer, |envelope| match &envelope.event {
@@ -253,15 +281,29 @@ async fn a_confirmed_transmission_is_classified_under_the_active_version() {
     let live = start().await;
     let mut observer = observe(&live, &[Subject::TransmissionClassified]).await;
     let mut ids = Ids::seeded(12);
-    let (transmission, from, to, channel) =
-        (ids.transmission(), ids.agent(), ids.agent(), ids.channel());
+    let (from, to, channel) = (ids.agent(), ids.agent(), ids.channel());
+    let Ok(stored) = TransmissionBuilder::new(&mut ids)
+        .between(from, to)
+        .channel(channel)
+        .opened_at(T0)
+        .confirmed()
+        .build()
+    else {
+        panic!("transmission fixture");
+    };
+    let transmission = stored.id;
+    let Some(at) = stored.state.confirmed().map(|confirmed| confirmed.at()) else {
+        panic!("not confirmed");
+    };
+    let mut transmissions = live.stores().transmissions.clone();
+    assert_eq!(transmissions.save(stored).await, Ok(()));
     let matched_bytes = NonZeroU64::new(42).unwrap_or(NonZeroU64::MIN);
     let confirmed = DetectEvent::TransmissionConfirmed {
         transmission,
         from,
         to,
         route: Route::Channel(channel),
-        at: T0,
+        at,
         matched_bytes,
     };
     let published = live
@@ -286,7 +328,7 @@ async fn a_confirmed_transmission_is_classified_under_the_active_version() {
             from,
             to,
             route: Route::Channel(channel),
-            at: T0,
+            at,
             matched_bytes,
             classification: Classification {
                 version: TopicModelVersion(0),
@@ -300,6 +342,14 @@ async fn a_confirmed_transmission_is_classified_under_the_active_version() {
         .catalog
         .assignment(TopicModelVersion(0), transmission);
     assert_eq!(stored.map(|stored| stored.topic), Some(None));
+    let saved = transmissions.transmission(transmission).await;
+    assert!(
+        matches!(
+            &saved,
+            Ok(Some(saved)) if matches!(saved.state, TransmissionState::Classified { .. })
+        ),
+        "{saved:?}"
+    );
     live.shutdown(Instant::now() + PATIENCE).await;
 }
 
@@ -317,21 +367,15 @@ async fn an_access_and_its_resource_reach_the_evidence_records() {
         .at(T0)
         .write()
         .build();
-    let channel = ids.channel();
     let mut registry = live.stores().channels.clone();
-    assert_eq!(
-        registry
-            .discover(channel, resource.clone(), access.id)
-            .await,
-        Ok(())
-    );
+    assert_eq!(registry.add_resource(resource.clone()).await, Ok(None));
     assert_eq!(registry.record_access(access.clone()).await, Ok(()));
     let published = live
         .context()
         .publisher
         .publish(BusEvent::Detect(DetectEvent::AccessRecorded {
             access: access.clone(),
-            channel,
+            channel: None,
         }))
         .await;
     assert!(published.is_ok(), "{published:?}");

@@ -9,13 +9,18 @@ description = "The crosstalk gateway: configuration, wiring and process roles be
 workspace = true
 
 [dependencies]
+blake3.workspace = true
 crosstalk-spec = { path = "../../spec" }
 crosstalk-api = { path = "../api" }
 crosstalk-canonical = { path = "../canonical" }
+crosstalk-flow = { path = "../flow" }
 crosstalk-ingress = { path = "../ingress" }
 crosstalk-memory = { path = "../memory" }
+crosstalk-provenance = { path = "../provenance" }
+crosstalk-reconstruct = { path = "../reconstruct" }
 crosstalk-store = { path = "../store" }
 crosstalk-surface = { path = "../surface" }
+crosstalk-topology = { path = "../topology" }
 crosstalk-transport = { path = "../transport" }
 bytes.workspace = true
 http-body-util.workspace = true

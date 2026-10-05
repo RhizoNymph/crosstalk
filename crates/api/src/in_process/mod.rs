@@ -182,7 +182,8 @@ where
             agents: agents.clone(),
             channels: channels.clone(),
         };
-        let transmissions = MemoryVerdicts::new(outbox.clone());
+        let transmissions =
+            MemoryVerdicts::with_directories(directory.clone(), directory.clone(), outbox.clone());
         let catalog = InMemoryTopicCatalog::new(
             CatalogConfig {
                 retention: options.retention,

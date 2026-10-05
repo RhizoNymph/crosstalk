@@ -11,19 +11,53 @@
 
 use crosstalk_spec::events::{BusEvent, Envelope, Subject};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender};
+use tokio::sync::oneshot;
 
-use super::stage::{DERIVED_SUBJECTS, Publisher, Stage, StageError};
+use super::stage::{Activity, DERIVED_SUBJECTS, Publisher, Stage, StageError};
+
+/// A request to forward everything already in the outbox now, answered
+/// with how many events that was.
+#[derive(Debug)]
+pub(crate) struct Flush(pub(crate) oneshot::Sender<u64>);
 
 /// Publish every event the stores put in their outbox, in order, stamped
-/// with the clock's reading. Ends when every outbox handle is dropped.
-pub(crate) async fn forward_outbox(mut outbox: UnboundedReceiver<BusEvent>, publisher: Publisher) {
-    while let Some(event) = outbox.recv().await {
-        let subject = event.subject();
-        if let Err(error) = publisher.publish(event).await {
-            tracing::warn!(subject = ?subject, error = %error, "outbox event not forwarded to the bus");
+/// with the clock's reading; on a [`Flush`], forward what is queued first.
+/// Ends when every outbox handle is dropped.
+pub(crate) async fn forward_outbox(
+    mut outbox: UnboundedReceiver<BusEvent>,
+    publisher: Publisher,
+    mut flushes: UnboundedReceiver<Flush>,
+    activity: Activity,
+) {
+    loop {
+        tokio::select! {
+            biased;
+            Some(Flush(done)) = flushes.recv() => {
+                let mut forwarded = 0;
+                while let Ok(event) = outbox.try_recv() {
+                    forward(&publisher, event).await;
+                    forwarded += 1;
+                }
+                activity.add(forwarded);
+                let _ = done.send(forwarded);
+            }
+            event = outbox.recv() => match event {
+                Some(event) => {
+                    forward(&publisher, event).await;
+                    activity.bump();
+                }
+                None => break,
+            },
         }
     }
     tracing::debug!("outbox closed; forwarding stopped");
+}
+
+async fn forward(publisher: &Publisher, event: BusEvent) {
+    let subject = event.subject();
+    if let Err(error) = publisher.publish(event).await {
+        tracing::warn!(subject = ?subject, error = %error, "outbox event not forwarded to the bus");
+    }
 }
 
 /// The surface relay's stage: hands every derived event to the in-process

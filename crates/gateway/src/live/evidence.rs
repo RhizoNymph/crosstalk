@@ -1,32 +1,30 @@
 //! Feeding the surface's evidence records from the bus.
 //!
 //! The evidence page reads spans, accesses and resources by id
-//! ([`MemoryEvidence`]), which no reference store keeps. This stage fills
-//! it from what L4 and L5 announce:
+//! ([`MemoryEvidence`]). This stage copies them in as L4 and L5 announce
+//! them, reading each record from the store that wrote it:
 //!
-//! - `SpanOriginated` / `SpanRelayed` name a span by id; its record comes
-//!   from the [`SpanSource`] the L4 wiring supplies ([`NoSpans`] until
-//!   then, so spans stay missing);
-//! - `AccessRecorded` carries the access whole; its resource is read back
-//!   from the channel registry's `resource_use` at the access's instant.
+//! - `SpanOriginated` / `SpanRelayed`: the span from L4's provenance store
+//!   ([`SpanSource`], [`ProvenanceSpans`]); provenance commits a span
+//!   before it publishes the event naming it;
+//! - `AccessRecorded`: the access and its resource from the registry's
+//!   batch read (`AccessStore::accesses`), as recorded.
 //!
-//! Kept to this one module so it can switch to batch reads by id
-//! (`SpanIndex::spans`, `AccessStore::accesses`) once those traits land,
-//! instead of copying records here.
+//! Kept to this one module: once the surface reads `SpanIndex` and
+//! `AccessStore` itself, this stage goes away.
 
 use std::future::Future;
 
 use crosstalk_api::in_process::MemoryEvidence;
 use crosstalk_memory::flow::MemoryChannels;
 use crosstalk_memory::reconstruct::MemoryAgents;
-use crosstalk_spec::derived::flow::access::Access;
+use crosstalk_provenance::store::{MemoryProvenanceStore, ProvenanceStore};
+use crosstalk_spec::batch::IdBatch;
 use crosstalk_spec::derived::provenance::span::Span;
 use crosstalk_spec::events::detect::DetectEvent;
 use crosstalk_spec::events::{BusEvent, Envelope, Subject};
-use crosstalk_spec::ids::{ChannelId, SpanId};
-use crosstalk_spec::interfaces::l5_flow::ChannelRegistry;
-use crosstalk_spec::paging::{PageRequest, PageSize};
-use crosstalk_spec::support::{TimeWindow, Timestamp};
+use crosstalk_spec::ids::{AccessId, SpanId};
+use crosstalk_spec::interfaces::l5_flow::channels::AccessStore;
 
 use super::stage::{Stage, StageError};
 
@@ -45,28 +43,36 @@ pub trait SpanSource: Send + Sync + 'static {
     ) -> impl Future<Output = Result<Option<Span>, SpanSourceError>> + Send;
 }
 
-/// No span store yet: every span is missing.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct NoSpans;
+/// Spans as provenance's store holds them: every classified span
+/// (originated, relayed, common), not only the originated ones a
+/// `SpanIndex` records, since the evidence page shows relayed spans too.
+#[derive(Debug, Clone, Default)]
+pub struct ProvenanceSpans(pub MemoryProvenanceStore);
 
-impl SpanSource for NoSpans {
-    async fn span(&self, _id: SpanId) -> Result<Option<Span>, SpanSourceError> {
-        Ok(None)
+impl SpanSource for ProvenanceSpans {
+    async fn span(&self, id: SpanId) -> Result<Option<Span>, SpanSourceError> {
+        self.0
+            .span(id)
+            .await
+            .map(|record| record.map(|record| record.span))
+            .map_err(|error| SpanSourceError {
+                reason: format!("{error:?}"),
+            })
     }
 }
 
 /// The evidence slot's stage.
 pub struct EvidenceFeeder<S> {
     evidence: MemoryEvidence,
-    channels: MemoryChannels<MemoryAgents>,
+    accesses: MemoryChannels<MemoryAgents>,
     spans: S,
 }
 
 impl<S: SpanSource> EvidenceFeeder<S> {
-    pub fn new(evidence: MemoryEvidence, channels: MemoryChannels<MemoryAgents>, spans: S) -> Self {
+    pub fn new(evidence: MemoryEvidence, accesses: MemoryChannels<MemoryAgents>, spans: S) -> Self {
         Self {
             evidence,
-            channels,
+            accesses,
             spans,
         }
     }
@@ -78,7 +84,7 @@ impl<S: SpanSource> EvidenceFeeder<S> {
                 Ok(())
             }
             Ok(None) => {
-                tracing::debug!(span = %id.ulid_text(), "span not in the span source");
+                tracing::warn!(span = %id.ulid_text(), "announced span not in the span source");
                 Ok(())
             }
             Err(error) => Err(StageError::Retry {
@@ -87,49 +93,28 @@ impl<S: SpanSource> EvidenceFeeder<S> {
         }
     }
 
-    async fn access(&self, access: &Access, channel: ChannelId) -> Result<(), StageError> {
-        self.evidence.insert_access(access.clone());
-        let window = instant(access.at)?;
-        let size = PageSize::new(PageSize::MAX).map_err(|error| StageError::Reject {
-            reason: format!("page size: {error:?}"),
+    async fn access(&self, id: AccessId) -> Result<(), StageError> {
+        let batch = IdBatch::new([id]).map_err(|error| StageError::Reject {
+            reason: format!("one id is a batch: {error:?}"),
         })?;
-        let mut request = PageRequest { size, after: None };
-        loop {
-            let page = self
-                .channels
-                .resource_use(channel, window, &request)
-                .await
-                .map_err(|error| StageError::Retry {
-                    reason: format!("reading the resources of the access's channel: {error:?}"),
-                })?;
-            let (uses, next) = page.page.into_parts();
-            if let Some(found) = uses
-                .into_iter()
-                .find(|used| used.resource().id == access.resource)
-            {
-                self.evidence.insert_resource(found.resource().clone());
-                return Ok(());
+        let read = self
+            .accesses
+            .accesses(&batch)
+            .await
+            .map_err(|error| StageError::Retry {
+                reason: format!("reading the access: {error:?}"),
+            })?;
+        match read.get(&id) {
+            Some((access, resource)) => {
+                self.evidence.insert_access(access.clone());
+                self.evidence.insert_resource(resource.clone());
             }
-            match next {
-                Some(next) => request.after = Some(next),
-                None => break,
+            None => {
+                tracing::warn!(access = %id.ulid_text(), "announced access not recorded");
             }
         }
-        tracing::warn!(
-            access = %access.id.ulid_text(),
-            resource = %access.resource.ulid_text(),
-            "the access's resource is not in the registry"
-        );
         Ok(())
     }
-}
-
-/// The one-microsecond window holding `at`.
-fn instant(at: Timestamp) -> Result<TimeWindow, StageError> {
-    let end = Timestamp::from_micros(at.as_micros().saturating_add(1));
-    TimeWindow::new(at, end).map_err(|_| StageError::Reject {
-        reason: "the access is at the last representable instant".to_owned(),
-    })
 }
 
 impl<S: SpanSource> Stage for EvidenceFeeder<S> {
@@ -145,8 +130,8 @@ impl<S: SpanSource> Stage for EvidenceFeeder<S> {
         match &envelope.event {
             BusEvent::Detect(DetectEvent::SpanOriginated { span, .. })
             | BusEvent::Detect(DetectEvent::SpanRelayed { span, .. }) => self.span(*span).await,
-            BusEvent::Detect(DetectEvent::AccessRecorded { access, channel }) => {
-                self.access(access, *channel).await
+            BusEvent::Detect(DetectEvent::AccessRecorded { access, .. }) => {
+                self.access(access.id).await
             }
             _ => Ok(()),
         }

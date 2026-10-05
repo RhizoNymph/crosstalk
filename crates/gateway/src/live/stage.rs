@@ -1,40 +1,61 @@
 //! The consumer slots: where each layer's bus consumer plugs into a
 //! [`Live`](super::Live) process.
 //!
-//! A layer consumer is a [`Stage`]: the subjects it reads, and a `handle`
-//! for one envelope. It is built from a [`StageContext`] (the shared
-//! stores, the publish path, the clock) and put in its [`Slot`] with
-//! [`Stages::fill`]. `Live::start` subscribes every filled slot's consumer
-//! group (named after the slot) before anything is published, then runs
-//! each stage on its own task:
+//! A layer consumer is a [`Stage`]: the subjects it reads, a `handle` for
+//! one envelope, and a `tick` for the time-driven part of its work. It is
+//! built from a [`StageContext`] (the shared stores, the publish path, the
+//! clock) and put in its [`Slot`] with [`Stages::fill`]; a consumer with
+//! inputs besides the bus takes a whole task with [`Stages::fill_task`].
+//! `Live::start` subscribes every filled slot's consumer group (named
+//! after the slot) before anything is published, then runs each stage on
+//! its own task:
 //!
 //! ```text
 //! bus ── group <slot> ──▶ Stage::handle(&envelope) ─ Ok ──────────▶ ack
 //!                                                  ─ Err(Retry) ──▶ nack (redelivered, then dead-lettered)
 //!                                                  ─ Err(Reject) ─▶ ack, logged at error
+//! Command::Tick(now) ───▶ Stage::tick(now) ──▶ done
+//! Command::Drain     ───▶ (side inputs only) ──▶ done(how many it handled)
 //! ```
 //!
 //! A stage writes the stores through the spec's write traits on
 //! [`StageContext::stores`] (whose own events reach the bus through the
-//! outbox) and publishes what it decides through [`Publisher`].
+//! outbox) and publishes what it decides through [`Publisher`]. Every
+//! delivery and side input handled bumps the process's [`Activity`], which
+//! `Live::settle` watches to know when a pass changed nothing.
 
 use std::collections::BTreeMap;
 use std::future::Future;
 use std::pin::Pin;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crosstalk_api::MemoryStores;
+use crosstalk_flow::consumer::Settings as FlowSettings;
+use crosstalk_provenance::store::MemoryProvenanceStore;
+use crosstalk_reconstruct::thread::MemoryConversations;
 use crosstalk_spec::events::{BusEvent, Envelope, Subject};
 use crosstalk_spec::ids::EventId;
-use crosstalk_spec::interfaces::l2_transport::{ConsumerGroup, RetryPolicy, Subscription};
+use crosstalk_spec::interfaces::l2_transport::{
+    ConsumerGroup, Delivery, RetryPolicy, Subscription,
+};
 use crosstalk_spec::support::{Clock, Timestamp};
 use crosstalk_transport::{MpscBus, MpscSubscription};
+use tokio::sync::{mpsc, oneshot};
 
 use super::blobs::LiveBlobs;
 use crate::pipeline::{Ingester, PublishError};
 
 /// The stores a live process shares between its stages and its surface.
 pub type LiveStores = MemoryStores<LiveBlobs>;
+
+/// The layer stores the surface does not read: L3's conversations and
+/// L4's spans, matches and scan records. Clones share the stores.
+#[derive(Debug, Clone, Default)]
+pub struct LayerStores {
+    pub conversations: MemoryConversations,
+    pub provenance: MemoryProvenanceStore,
+}
 
 /// Where a stage publishes the events it decides: the pipeline's own
 /// publish path, so every envelope gets an id from the one generator.
@@ -63,15 +84,40 @@ impl Publisher {
     }
 }
 
+/// How much work the stages have done: every delivery and side input
+/// handled adds one. Clones share the count.
+#[derive(Debug, Clone, Default)]
+pub struct Activity(Arc<AtomicU64>);
+
+impl Activity {
+    pub fn bump(&self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
+
+    pub fn add(&self, count: u64) {
+        self.0.fetch_add(count, Ordering::SeqCst);
+    }
+
+    pub fn read(&self) -> u64 {
+        self.0.load(Ordering::SeqCst)
+    }
+}
+
 /// What every stage is built from. Clones share everything.
 #[derive(Clone)]
 pub struct StageContext {
     /// The stores the surface reads: write them through the spec's traits.
     pub stores: LiveStores,
+    /// The layer stores only the stages read.
+    pub layers: LayerStores,
     pub publisher: Publisher,
     /// The clock the pipeline stamps with (a corpus or sim clock under
     /// replay).
     pub clock: Arc<dyn Clock>,
+    /// L5's checked settings.
+    pub flow: FlowSettings,
+    /// Seeds every stage's id entropy, so a run is reproducible.
+    pub seed: u64,
 }
 
 /// Why a stage did not handle an envelope.
@@ -97,6 +143,33 @@ pub trait Stage: Send + 'static {
         &mut self,
         envelope: &Envelope,
     ) -> impl Future<Output = Result<(), StageError>> + Send;
+
+    /// The clock reads `now`: close windows, evict, recompute. Nothing by
+    /// default.
+    fn tick(&mut self, now: Timestamp) -> impl Future<Output = ()> + Send {
+        let _ = now;
+        async {}
+    }
+}
+
+/// What a stage's task is told besides its deliveries.
+#[derive(Debug)]
+pub enum Command {
+    /// Run the stage's tick at `now`, then answer.
+    Tick {
+        now: Timestamp,
+        done: oneshot::Sender<()>,
+    },
+    /// Handle every side input already queued, then answer with how many.
+    Drain { done: oneshot::Sender<u64> },
+}
+
+/// What a stage's task runs with besides its subscription.
+pub struct Control {
+    pub retry: RetryPolicy,
+    pub commands: mpsc::UnboundedReceiver<Command>,
+    pub activity: Activity,
+    pub slot: Slot,
 }
 
 /// Each place a consumer plugs in. Its consumer group is
@@ -105,9 +178,10 @@ pub trait Stage: Send + 'static {
 pub enum Slot {
     /// L3 identity and threading (`crosstalk-reconstruct`).
     L3Reconstruct,
-    /// L4 provenance (`crosstalk-provenance`).
+    /// L4 provenance (`crosstalk-provenance`), then L5's extraction step
+    /// over what it found.
     L4Provenance,
-    /// L5 extraction and correlation (`crosstalk-flow`).
+    /// L5 correlation (`crosstalk-flow`).
     L5Flow,
     /// L6 classification (the gateway's minimal classifier, until
     /// `crosstalk-analysis` has a consumer).
@@ -155,8 +229,9 @@ impl Slot {
 #[error("the {} slot is already filled", .0.name())]
 pub struct SlotTaken(pub Slot);
 
-type Run = Box<dyn FnOnce(MpscSubscription, RetryPolicy) -> RunFuture + Send>;
-type RunFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
+/// A stage's task, given its subscription and control.
+pub type RunFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
+type Run = Box<dyn FnOnce(MpscSubscription, Control) -> RunFuture + Send>;
 
 /// A stage, type-erased for its slot.
 pub(crate) struct Plug {
@@ -180,16 +255,33 @@ impl std::fmt::Debug for Stages {
 }
 
 impl Stages {
-    /// Put `stage` in `slot`.
+    /// Put `stage` in `slot`, run by the generic stage loop.
     pub fn fill<S: Stage>(&mut self, slot: Slot, stage: S) -> Result<(), SlotTaken> {
+        let subjects = stage.subjects();
+        self.fill_task(slot, subjects, move |subscription, control| {
+            run(stage, subscription, control)
+        })
+    }
+
+    /// Put a whole task in `slot`: for a consumer with inputs besides the
+    /// bus. It must answer every [`Command`] and end when the bus shuts
+    /// down.
+    pub fn fill_task<F, Fut>(
+        &mut self,
+        slot: Slot,
+        subjects: Vec<Subject>,
+        task: F,
+    ) -> Result<(), SlotTaken>
+    where
+        F: FnOnce(MpscSubscription, Control) -> Fut + Send + 'static,
+        Fut: Future<Output = ()> + Send + 'static,
+    {
         if self.slots.contains_key(&slot) {
             return Err(SlotTaken(slot));
         }
         let plug = Plug {
-            subjects: stage.subjects(),
-            run: Box::new(move |subscription, retry| {
-                Box::pin(run(slot, stage, subscription, retry))
-            }),
+            subjects,
+            run: Box::new(move |subscription, control| Box::pin(task(subscription, control))),
         };
         self.slots.insert(slot, plug);
         Ok(())
@@ -244,50 +336,80 @@ pub const DERIVED_SUBJECTS: [Subject; 27] = [
     Subject::Changed,
 ];
 
-/// Handle every delivery of `subscription` with `stage` until the bus
-/// shuts down.
-async fn run<S: Stage>(
+/// Settle one delivery on the bus by how it was handled. Shared by the
+/// generic loop and custom stage tasks.
+pub async fn settle_delivery(
     slot: Slot,
-    mut stage: S,
-    mut subscription: MpscSubscription,
+    subscription: &mut MpscSubscription,
     retry: RetryPolicy,
+    delivery: &Delivery,
+    outcome: Result<(), StageError>,
 ) {
+    let event = delivery.envelope.id.ulid_text();
+    let settled = match outcome {
+        Ok(()) => subscription.ack(delivery.id).await,
+        Err(StageError::Retry { reason }) => {
+            tracing::warn!(
+                stage = slot.name(),
+                event = %event,
+                attempt = delivery.attempt.get(),
+                reason = %reason,
+                "stage will retry"
+            );
+            subscription
+                .nack(delivery.id, retry.initial_backoff(), reason)
+                .await
+        }
+        Err(StageError::Reject { reason }) => {
+            tracing::error!(
+                stage = slot.name(),
+                event = %event,
+                reason = %reason,
+                "stage rejected an event"
+            );
+            subscription.ack(delivery.id).await
+        }
+    };
+    if let Err(error) = settled {
+        tracing::warn!(stage = slot.name(), event = %event, error = ?error, "delivery not settled");
+    }
+}
+
+/// The generic stage loop: commands first, then deliveries, until the bus
+/// shuts down.
+async fn run<S: Stage>(mut stage: S, mut subscription: MpscSubscription, control: Control) {
+    let Control {
+        retry,
+        mut commands,
+        activity,
+        slot,
+    } = control;
     tracing::debug!(stage = slot.name(), "stage running");
-    while let Some(next) = subscription.next().await {
-        let delivery = match next {
-            Ok(delivery) => delivery,
-            Err(error) => {
-                tracing::warn!(stage = slot.name(), error = ?error, "delivery failed");
-                continue;
+    loop {
+        tokio::select! {
+            biased;
+            Some(command) = commands.recv() => match command {
+                Command::Tick { now, done } => {
+                    stage.tick(now).await;
+                    let _ = done.send(());
+                }
+                Command::Drain { done } => {
+                    let _ = done.send(0);
+                }
+            },
+            next = subscription.next() => {
+                let Some(next) = next else { break };
+                let delivery = match next {
+                    Ok(delivery) => delivery,
+                    Err(error) => {
+                        tracing::warn!(stage = slot.name(), error = ?error, "delivery failed");
+                        continue;
+                    }
+                };
+                let outcome = stage.handle(&delivery.envelope).await;
+                activity.bump();
+                settle_delivery(slot, &mut subscription, retry, &delivery, outcome).await;
             }
-        };
-        let event = delivery.envelope.id.ulid_text();
-        let settled = match stage.handle(&delivery.envelope).await {
-            Ok(()) => subscription.ack(delivery.id).await,
-            Err(StageError::Retry { reason }) => {
-                tracing::warn!(
-                    stage = slot.name(),
-                    event = %event,
-                    attempt = delivery.attempt.get(),
-                    reason = %reason,
-                    "stage will retry"
-                );
-                subscription
-                    .nack(delivery.id, retry.initial_backoff(), reason)
-                    .await
-            }
-            Err(StageError::Reject { reason }) => {
-                tracing::error!(
-                    stage = slot.name(),
-                    event = %event,
-                    reason = %reason,
-                    "stage rejected an event"
-                );
-                subscription.ack(delivery.id).await
-            }
-        };
-        if let Err(error) = settled {
-            tracing::warn!(stage = slot.name(), event = %event, error = ?error, "delivery not settled");
         }
     }
     tracing::debug!(stage = slot.name(), "stage stopped: the bus shut down");
