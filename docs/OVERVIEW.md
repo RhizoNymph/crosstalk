@@ -193,6 +193,9 @@ Overview:
       and the infrastructure observability stack (Prometheus, Grafana, Loki,
       Alloy, node-exporter, cAdvisor, postgres-exporter). Where things are
       stored, how they run and how they scale is in docs/infrastructure.md.
+      run.sh bench drives one scored detection benchmark on that stack: the
+      demo swarm through the real gateway, its detections exported over the
+      L8 API, and ct-eval (shipped in the demo image) scoring them.
 
     ui: >
       Crate crosstalk-ui (ui/, a workspace member; Topcoat): the operator
@@ -1064,8 +1067,9 @@ Features Index:
       content's hashes and its exact message/block in the reader's request),
       which ct-eval scores against.
       healthcheck serves the distroless image. deploy/compose.demo.yaml,
-      deploy/demo.Dockerfile, deploy/demo/crosstalk.demo.json and run.sh
-      demo up|run|down|logs run the demo on the compose stack. It reuses
+      deploy/demo.Dockerfile (which also ships ct-eval for run.sh bench),
+      deploy/demo/crosstalk.demo.json and run.sh demo up|run|down|logs run
+      the demo on the compose stack. It reuses
       testkit's harness client and SSE parser and the spec's seeded random
       source.
     entry_points:
@@ -1078,6 +1082,30 @@ Features Index:
       - deploy/run.sh
     depends_on: [testkit, deploy, gateway, workspace]
     doc: docs/features/demo.md
+  bench:
+    description: >
+      The live detection benchmark on the single-machine compose
+      deployment (bash deploy/run.sh bench, implemented in deploy/bench.sh).
+      One run: restart wiki and crosstalk at the start (fresh world, empty
+      in-memory detection state), run the demo swarm through the real
+      gateway writing ground truth v2 to deploy/bench/<run>/ (gitignored,
+      run id a UTC timestamp), wait until /healthz capture.captured and
+      pipeline.published hold still over one evidence window, export the
+      gateway's detections with ct-eval swarm-fetch over the L8 API, and
+      score them with ct-eval swarm against the exchange log and blobs read
+      in place from the data volume (mounted read-only into the bench
+      service). Prints precision, recall and the gate result and passes
+      ct-eval's exit code through (2 = a gate failed). Fails fast when
+      http://crosstalk:8081 does not answer. ct-eval ships in the
+      crosstalk-demo image. Pending gateway work is behind TODO(live-http),
+      TODO(live-serve), TODO(live-flow-config) and TODO(live-lag).
+    entry_points:
+      - deploy/run.sh
+      - deploy/bench.sh
+      - deploy/compose.demo.yaml
+      - deploy/demo.Dockerfile
+    depends_on: [demo, eval, deploy, gateway, http_api]
+    doc: docs/features/bench.md
   conformance:
     description: >
       crosstalk-conformance (crates/conformance, TestSupport): the L8

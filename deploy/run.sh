@@ -14,6 +14,13 @@
 #   bash deploy/run.sh demo run [opts]    one swarm run (crosstalk-demo swarm options)
 #   bash deploy/run.sh demo down          stop the demo stack (volumes are kept)
 #   bash deploy/run.sh demo logs [service...]
+#
+#   bash deploy/run.sh bench [--agents N] [--duration D] [--seed N] [--claude-code-shape]
+#                            [--settle SECS] [--settle-timeout SECS] [--yes] [-- swarm options...]
+#       one scored detection benchmark on the demo stack: restarts wiki and
+#       crosstalk, runs the swarm with ground truth, waits for the gateway to
+#       settle, exports its detections and scores them with ct-eval into
+#       deploy/bench/<run>/ (exit 2 = a gate failed). See docs/features/bench.md.
 set -euo pipefail
 
 here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -90,9 +97,13 @@ demo() {
     esac
 }
 
+# shellcheck source=deploy/bench.sh
+source "${here}/bench.sh"
+
 case "${1:-}" in
     init) init ;;
     demo) shift; demo "$@" ;;
+    bench) shift; bench "$@" ;;
     up) need_env; compose up -d --build ;;
     infra) need_env; compose up -d "${infra_services[@]}" ;;
     down) need_env; compose down ;;
@@ -118,7 +129,7 @@ postgres         postgres://crosstalk@${local_host}:${POSTGRES_PORT:-5432}/cross
 URLS
         ;;
     *)
-        sed -n '2,16p' "$0" >&2
+        sed -n '2,23p' "$0" >&2
         exit 2
         ;;
 esac
