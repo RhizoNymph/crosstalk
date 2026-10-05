@@ -15,8 +15,9 @@
 //! trajectories of one repository and a `Boilerplate` control otherwise.
 //!
 //! **Clock.** Traces have no times. Trajectory slot `t` of a world makes its
-//! call `i` at `compose(i, t, 0)`: every trajectory starts together and
-//! they interleave call by call.
+//! call `i` at `pace.at(i, t, 0)` (one paced step per call, 1 to 5 s by
+//! default, [`Pace`]): every trajectory starts together and they interleave
+//! call by call.
 
 pub mod files;
 pub mod schema;
@@ -29,7 +30,7 @@ use crosstalk_spec::support::Timestamp;
 pub use files::Shard;
 pub use schema::OpenSweRow;
 
-use crate::corpus::clock::{ClockError, compose};
+use crate::corpus::clock::{ClockError, Pace};
 use crate::corpus::{Fidelity, SourceError, TraceSource, World};
 use crate::datasets::background::{BackgroundError, BackgroundWorld, Call, Trajectory, stop_for};
 use crate::datasets::chat::{ChatError, ChatMessage, convert};
@@ -131,22 +132,27 @@ pub fn trajectory(
     row: usize,
     record: &OpenSweRow,
     slot: u64,
+    pace: Pace,
 ) -> Result<Trajectory, OpenSweError> {
     Ok(Trajectory {
         name: agent_name(shard, row),
         model: shard.model.clone(),
         group: record.repo.clone(),
         calls: calls(&record.messages, &shard.relative, row, |call| {
-            compose(call, slot, 0)
+            pace.at(call, slot, 0)
         })?,
     })
 }
 
-/// Builds one world from rows, in slot order.
-pub fn mix(key: WorldKey, rows: &[(Shard, usize, OpenSweRow)]) -> Result<World, OpenSweError> {
+/// Builds one world from rows, in slot order, calls `pace` apart.
+pub fn mix(
+    key: WorldKey,
+    rows: &[(Shard, usize, OpenSweRow)],
+    pace: Pace,
+) -> Result<World, OpenSweError> {
     let mut world = BackgroundWorld::new(DatasetId::new(DATASET), key);
     for (slot, (shard, row, record)) in rows.iter().enumerate() {
-        world.add(trajectory(shard, *row, record, slot as u64)?)?;
+        world.add(trajectory(shard, *row, record, slot as u64, pace)?)?;
     }
     Ok(world.finish()?)
 }
@@ -228,6 +234,7 @@ pub struct OpenSweSource {
     root: PathBuf,
     shards: Vec<Shard>,
     mixing: Mixing,
+    pace: Pace,
 }
 
 impl OpenSweSource {
@@ -236,7 +243,14 @@ impl OpenSweSource {
             root: root.to_path_buf(),
             shards: files::discover(root, selection)?,
             mixing,
+            pace: Pace::DEFAULT,
         })
+    }
+
+    /// These worlds with calls `pace` apart.
+    pub fn with_pace(mut self, pace: Pace) -> Self {
+        self.pace = pace;
+        self
     }
 
     pub fn shards(&self) -> &[Shard] {
@@ -254,6 +268,7 @@ impl TraceSource for OpenSweSource {
         let mut rows = RoundRobin::new(&self.root, self.shards.clone(), self.mixing.per_shard);
         let mut pending: VecDeque<OpenSweError> = VecDeque::new();
         let mut number = 0usize;
+        let pace = self.pace;
         std::iter::from_fn(move || {
             if let Some(error) = pending.pop_front() {
                 return Some(Err(SourceError::from(error)));
@@ -272,7 +287,7 @@ impl TraceSource for OpenSweSource {
             let key = WorldKey::new(format!("mix-{number:05}"));
             number += 1;
             tracing::debug!(world = %key, trajectories = batch.len(), "mixing open-swe world");
-            Some(mix(key, &batch).map_err(SourceError::from))
+            Some(mix(key, &batch, pace).map_err(SourceError::from))
         })
     }
 }

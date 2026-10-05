@@ -22,9 +22,10 @@ pub enum Tier {
     Heuristic,
     /// A human or model judge said so.
     Judged,
-    /// The construction guarantees it, but finding it needs a decoding no
-    /// detector is required to have (a cipher the spec's `Codec` cannot
-    /// name). Reported apart, as missed by design, not as a real miss.
+    /// The construction guarantees it, but no detector is required to find
+    /// it: it needs a decoding the spec's `Codec` cannot name, or it arrived
+    /// through a medium its sender never wrote (INV-963). Reported apart, as
+    /// missed by design, not as a real miss.
     OutOfReach,
 }
 
@@ -53,6 +54,16 @@ pub enum MatchNeed {
     /// [`OutOfReach`](Tier::OutOfReach) label needs it.
     Undecodable {
         codec: String,
+    },
+    /// Arrives in a way no detector can observe: the reader read it from a
+    /// medium its sender never wrote, so no co-access exists and the match
+    /// confirms nothing (INV-963, `flow.route.shared-upstream-stays-suspected`;
+    /// every suspected state needs a co-access). Named by `reason`; only an
+    /// [`OutOfReach`](Tier::OutOfReach) label needs it. `arrival` is the
+    /// class the text would match by, which picks its row.
+    Unobserved {
+        reason: String,
+        arrival: MatchClass,
     },
 }
 
@@ -93,13 +104,29 @@ impl MatchNeed {
         }
     }
 
-    /// The tier a label with this need gets: `OutOfReach` when it is
-    /// undecodable, `in_reach` otherwise (`ExpectedTransmission::new`
-    /// refuses any other pairing).
+    /// Content read from a medium its sender never wrote, arriving as
+    /// `arrival` would: out of reach (INV-963).
+    pub fn sender_medium_unobserved(arrival: MatchClass) -> Self {
+        Self::Unobserved {
+            reason: SENDER_MEDIUM_UNOBSERVED.to_owned(),
+            arrival,
+        }
+    }
+
+    /// Whether no detector is required to find a label with this need: it
+    /// is undecodable or unobserved.
+    pub fn out_of_reach(&self) -> bool {
+        matches!(self, Self::Undecodable { .. } | Self::Unobserved { .. })
+    }
+
+    /// The tier a label with this need gets: `OutOfReach` when it is out
+    /// of reach ([`MatchNeed::out_of_reach`]), `in_reach` otherwise
+    /// (`ExpectedTransmission::new` refuses any other pairing).
     pub fn tier(&self, in_reach: Tier) -> Tier {
-        match self {
-            Self::Undecodable { .. } => Tier::OutOfReach,
-            _ => in_reach,
+        if self.out_of_reach() {
+            Tier::OutOfReach
+        } else {
+            in_reach
         }
     }
 
@@ -109,9 +136,14 @@ impl MatchNeed {
             Self::Normalized => MatchClass::Normalized,
             Self::Decoded { .. } | Self::Undecodable { .. } => MatchClass::Decoded,
             Self::Semantic => MatchClass::Semantic,
+            Self::Unobserved { arrival, .. } => *arrival,
         }
     }
 }
+
+/// The `Unobserved` reason of content read from a medium its sender never
+/// wrote.
+pub const SENDER_MEDIUM_UNOBSERVED: &str = "sender medium unobserved (INV-963)";
 
 /// The `Undecodable` codec name of text escaped two string levels deep.
 pub const TWO_STRING_LEVELS: &str = "json_string+json_string";

@@ -24,14 +24,14 @@ use flate2::read::GzDecoder;
 
 pub use files::Selection;
 
-use crate::corpus::clock::ClockError;
+use crate::corpus::clock::{ClockError, Pace};
 use crate::corpus::{
     CorpusError, Coverage, Driven, ExchangeDraft, SourceError, TraceSource, World, WorldBuilder,
 };
 use crate::keys::{DatasetId, SourceRef, WorldKey};
 use crate::location::LocationError;
 use crate::truth::{InvalidLabel, Tier};
-use episode::{AgentEpisode, reconstruct, stop_reason, token_usage};
+use episode::{AgentEpisode, EpisodeClock, episode_steps, reconstruct, stop_reason, token_usage};
 use schema::Trace;
 use truth::{EpisodeLabels, Labelled};
 
@@ -70,6 +70,7 @@ pub enum SaltError {
 pub struct SaltSource {
     root: PathBuf,
     files: Vec<PathBuf>,
+    pace: Pace,
 }
 
 impl SaltSource {
@@ -80,7 +81,14 @@ impl SaltSource {
         Ok(Self {
             root: root.to_path_buf(),
             files,
+            pace: Pace::DEFAULT,
         })
+    }
+
+    /// These worlds with calls `pace` apart.
+    pub fn with_pace(mut self, pace: Pace) -> Self {
+        self.pace = pace;
+        self
     }
 
     pub fn files(&self) -> &[PathBuf] {
@@ -95,14 +103,20 @@ impl TraceSource for SaltSource {
 
     fn worlds(&mut self) -> impl Iterator<Item = Result<World, SourceError>> + '_ {
         let root = self.root.clone();
+        let pace = self.pace;
         self.files
             .iter()
-            .map(move |relative| load_world(&root, relative).map_err(SourceError::from))
+            .map(move |relative| load_world_paced(&root, relative, pace).map_err(SourceError::from))
     }
 }
 
-/// Reads and converts one trace file.
+/// Reads and converts one trace file, calls [`Pace::DEFAULT`] apart.
 pub fn load_world(root: &Path, relative: &Path) -> Result<World, SaltError> {
+    load_world_paced(root, relative, Pace::DEFAULT)
+}
+
+/// Reads and converts one trace file, calls `pace` apart.
+pub fn load_world_paced(root: &Path, relative: &Path, pace: Pace) -> Result<World, SaltError> {
     let path = root.join(relative);
     let bytes = read(&path)?;
     let trace: Trace = serde_json::from_slice(&bytes).map_err(|source| SaltError::Json {
@@ -110,7 +124,7 @@ pub fn load_world(root: &Path, relative: &Path) -> Result<World, SaltError> {
         source,
     })?;
     let file = relative.to_string_lossy().replace('\\', "/");
-    convert_trace(&trace, &file)
+    convert_trace_paced(&trace, &file, pace)
 }
 
 fn read(path: &Path) -> Result<Vec<u8>, SaltError> {
@@ -130,8 +144,15 @@ fn read(path: &Path) -> Result<Vec<u8>, SaltError> {
     }
 }
 
-/// Converts a parsed trace into a world named after `file`.
+/// Converts a parsed trace into a world named after `file`, calls
+/// [`Pace::DEFAULT`] apart.
 pub fn convert_trace(trace: &Trace, file: &str) -> Result<World, SaltError> {
+    convert_trace_paced(trace, file, Pace::DEFAULT)
+}
+
+/// Converts a parsed trace into a world named after `file`, calls `pace`
+/// apart.
+pub fn convert_trace_paced(trace: &Trace, file: &str, pace: Pace) -> Result<World, SaltError> {
     let dataset = DatasetId::new(DATASET);
     let mut builder = WorldBuilder::new(dataset, WorldKey::new(files::world_name(Path::new(file))));
     let mut names: BTreeSet<&str> = BTreeSet::new();
@@ -158,12 +179,22 @@ pub fn convert_trace(trace: &Trace, file: &str) -> Result<World, SaltError> {
         keys.insert(*name, (builder.agent(name, driven, model)?, driven));
     }
     let mut seen_system = BTreeSet::new();
+    let mut episode_start = 0u64;
     for (position, episode) in trace.results.iter().enumerate() {
         let mut reconstructed: Vec<(String, AgentEpisode, Driven)> = Vec::new();
         for (name, (_, driven)) in &keys {
             reconstructed.push((
                 name.to_string(),
-                reconstruct(name, episode, file, *driven == Driven::Scripted)?,
+                reconstruct(
+                    name,
+                    episode,
+                    file,
+                    *driven == Driven::Scripted,
+                    EpisodeClock {
+                        pace,
+                        start: episode_start,
+                    },
+                )?,
                 *driven,
             ));
         }
@@ -209,6 +240,7 @@ pub fn convert_trace(trace: &Trace, file: &str) -> Result<World, SaltError> {
                 scripted: *driven == Driven::Scripted,
             });
         }
+        episode_start = episode_start.saturating_add(episode_steps(episode));
         let labels = EpisodeLabels {
             file,
             position,

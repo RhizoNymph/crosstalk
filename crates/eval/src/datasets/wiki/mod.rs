@@ -15,6 +15,10 @@
 //!   of the same URL whose tool result is the page body as of the previous
 //!   revision. This is the read-before-edit assumption: an agent that edits
 //!   a page after another agent must have fetched it first.
+//! - Exchanges take the shape a real harness gives them ([`build`]): each
+//!   agent is one continuous conversation, a call is the response of one
+//!   exchange and its tool result arrives in the agent's next request, and
+//!   calls are one paced step apart ([`Pace`]).
 //!
 //! One [`World`] is one connected component of the agent–page graph (agents
 //! linked by a page they both edited), so a world is a set of agents that
@@ -45,6 +49,7 @@ use std::path::Path;
 
 use flate2::read::GzDecoder;
 
+use crate::corpus::clock::Pace;
 use crate::corpus::{CorpusError, SourceError, TraceSource, World};
 use crate::keys::{DatasetId, WorldKey};
 use attribution::AttributionError;
@@ -140,6 +145,7 @@ pub struct WikiSource {
     revisions: Vec<Revision>,
     worlds: Vec<WorldSpec>,
     families: FamilyTally,
+    pace: Pace,
 }
 
 impl WikiSource {
@@ -162,7 +168,14 @@ impl WikiSource {
             revisions,
             worlds,
             families,
+            pace: Pace::DEFAULT,
         })
+    }
+
+    /// These worlds with calls `pace` apart.
+    pub fn with_pace(mut self, pace: Pace) -> Self {
+        self.pace = pace;
+        self
     }
 
     /// Pages and multi-author pages per `page_family`, over the selected
@@ -184,9 +197,10 @@ impl TraceSource for WikiSource {
 
     fn worlds(&mut self) -> impl Iterator<Item = Result<World, SourceError>> + '_ {
         let revisions = &self.revisions;
+        let pace = self.pace;
         self.worlds.iter().map(move |spec| {
             let revs: Vec<&Revision> = spec.revisions.iter().map(|&at| &revisions[at]).collect();
-            build::world(spec.key.clone(), &revs)
+            build::world(spec.key.clone(), &revs, pace)
                 .map_err(|error| SourceError::from(Box::new(error)))
         })
     }

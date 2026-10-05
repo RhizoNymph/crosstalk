@@ -184,7 +184,7 @@ fn hashed_messages_hash_their_body() {
 fn clock_orders_components_and_bounds_them() {
     let ok =
         |major, minor, sub| clock::compose(major, minor, sub).unwrap_or_else(|e| panic!("{e}"));
-    assert!(ok(0, 999_999, 999) < ok(1, 0, 0));
+    assert!(ok(0, clock::MINOR_LIMIT - 1, clock::SUB_LIMIT - 1) < ok(1, 0, 0));
     assert!(ok(3, 5, 999) < ok(3, 6, 0));
     assert_eq!(ok(0, 0, 0).as_micros(), clock::EPOCH_MICROS);
     assert!(clock::compose(0, clock::MINOR_LIMIT, 0).is_err());

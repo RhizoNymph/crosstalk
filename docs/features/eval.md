@@ -264,11 +264,20 @@ Provenance eviction happens once, at the settle tick: a world is never
 evicted mid-replay.
 
 **The correlation window is corpus time.** `LiveSettings::short` keeps
-the agreed 60 s correlation window, but the corpus clock steps one
-`compose` major (1,000 s) per call on SALT, the SWE corpora and splices, so
-a write and a read two calls apart never co-access under it. `ct-eval run
---correlation-window S` (and `--evidence-window`, `--suspected-ttl`)
-override the windows; splices need about a day (`86400`) to be reachable.
+the agreed 60 s correlation window. Datasets without times step their
+calls 1 to 5 s apart (`corpus::clock::Pace`, below), as a real swarm's
+calls are, so a write and a read a few calls apart co-access under it;
+the first live run's 1,000 s step put every such pair out of reach
+(finding 9). `ct-eval run --correlation-window S` (and
+`--evidence-window`, `--suspected-ttl`) still override the windows, and
+`--pace-min-ms` / `--pace-max-ms` (default 1000 / 5000, seeded by
+`--corpus-seed`) the step.
+
+**Fetch tools.** AgentDojo's `get_webpage` reads a page by its `url`, but
+it is not one of L5's built-in HTTP tools. `crates/eval/extract/agentdojo.json`
+(`{"fetch_tools": ["get_webpage"]}`) is the extract config that makes L5
+read it as a fetch, for `ct-eval run --extract-config` once the gateway's
+`ExtractConfig.fetch_tools` is merged into this branch's base.
 
 ## Files
 
@@ -281,7 +290,7 @@ override the windows; splices need about a day (`86400`) to be reachable.
 | `src/corpus/mod.rs` | streaming model | `TraceSource`, `World`, `CorpusAgent`, `Driven`, `Coverage`, `SourceError`, `InMemory` |
 | `src/corpus/exchange.rs` | one exchange | `CorpusExchange` (checked), `HashedMessage`, `Fidelity`, `normalized` (the checked `NormalizedExchange` builder), `CorpusError` |
 | `src/corpus/builder.rs` | how converters build worlds | `WorldBuilder`, `ExchangeDraft` |
-| `src/corpus/clock.rs` | the virtual clock | `compose(major, minor, sub)`, `ordinal`, `EPOCH_MICROS` |
+| `src/corpus/clock.rs` | the virtual clock | `Pace` (`DEFAULT`, `new`, `at`, `min`, `max`), `compose(major, minor, sub)` (the default pace), `ordinal` (ordering only, for fixtures), `EPOCH_MICROS`, `MIN_STEP` |
 | `src/corpus/client.rs` | per-agent client context, replayed | `synthetic_client`, `corpus_id`, `vendor_of` |
 | `src/corpus/delta.rs` | new inputs of an exchange | `new_inputs` |
 | `src/truth/mod.rs` | labels | `Expectation`, `ExpectedTransmission`/`TransmissionLabel`, `NegativeControl`/`NegativeLabel`, `NegativeReason`, `Exemption`/`ExemptionReason`, `AgentCluster`, `RouteExpectation`, `ExpectedContent`, `InvalidLabel` |
@@ -309,18 +318,18 @@ override the windows; splices need about a day (`86400`) to be reachable.
 | `src/report/mod.rs`, `table.rs` | reports | `Report` (`overall` without out-of-reach rows, `out_of_reach`, `access_only`, `background`), `Summary`, `AccessOnly`, `Background`, `ReportRow`, `table::render` |
 | `src/report/gates.rs` | regression gates and where they are found | `Gates`, `Gate`, `Check`, `GateOutcome`, `GateStatus`, `GateSearch` (`new`, `from_env`, `locate`, `load`), `GatesLocation`, `GatesFrom`, `GATES_ENV`, `INSTALLED_GATES`, `GateError` (`Missing`) |
 | `src/config.rs` | dataset locations | `EvalConfig`, `DatasetConfig`, `expand` |
-| `src/datasets/salt/mod.rs` | SALT as a `TraceSource` | `SaltSource`, `load_world`, `convert_trace`, `SaltError`, `DATASET` |
+| `src/datasets/salt/mod.rs` | SALT as a `TraceSource` | `SaltSource` (`with_pace`), `load_world`, `load_world_paced`, `convert_trace`, `convert_trace_paced`, `SaltError`, `DATASET` |
 | `src/datasets/salt/files.rs` | trace discovery | `discover`, `Selection`, `world_name` |
 | `src/datasets/salt/schema.rs` | the trace JSON read | `Trace`, `Episode`, `RawMessage`, `Delivery`, `Event`, `Usage` |
 | `src/datasets/salt/messages.rs` | SALT messages to canonical | `convert`, `content_text`, `arguments` |
-| `src/datasets/salt/episode.rs` | exchange reconstruction and clock | `reconstruct`, `AgentEpisode`, `Turn`, `delivered_turn` |
+| `src/datasets/salt/episode.rs` | exchange reconstruction and clock | `reconstruct`, `AgentEpisode`, `Turn`, `delivered_turn`, `EpisodeClock`, `episode_steps` |
 | `src/datasets/salt/truth.rs` | SALT labels | `EpisodeLabels`, `Labelled`, `SHARED_TOOLS` |
 | `src/datasets/wiki/` | collusion-wiki as a `TraceSource` (see below) | `WikiSource`, `WikiSelection` (`demo`), `tools`, `DATASET` |
 | `src/datasets/swarm/` | swarm-traces as a `TraceSource` (see below) | `SwarmSource`, `SwarmSelection`, `codec::decode`, `ChainTally`, `DATASET` |
 | `src/bin/ct-eval/main.rs` | CLI | `run`, `truth` |
 | `datasets.toml` | dataset root and paths | |
 | `gates.toml` | regression gates | |
-| `tests/` | integration tests (`gates_search.rs` is the gates file lookup; `pipeline.rs` is the sim smoke test of `Pipeline::ingest`; `live.rs` drives `LiveDetector` over a scripted backend on crosstalk-memory's stores, with transmissions in every state; `live_gateway.rs` runs `--detector live` over the real `Live` on the SALT, wiki and splice fixtures and checks two runs are byte-identical; `gates_detector.rs` is gates by detector; `score_many_labels.rs` is one prediction finding several labels); `tests/fixtures/salt/` holds synthetic SALT-shaped traces | |
+| `tests/` | integration tests (`gates_search.rs` is the gates file lookup; `pipeline.rs` is the sim smoke test of `Pipeline::ingest`; `live.rs` drives `LiveDetector` over a scripted backend on crosstalk-memory's stores, with transmissions in every state; `live_gateway.rs` runs `--detector live` over the real `Live` on the SALT, wiki and splice fixtures and checks two runs are byte-identical; `gates_detector.rs` is gates by detector; `score_many_labels.rs` is one prediction finding several labels; `clock.rs` is the pace; `unobserved.rs` is the unobserved out-of-reach need); `tests/fixtures/salt/` holds synthetic SALT-shaped traces | |
 
 ## Invariants and constraints
 
@@ -383,7 +392,8 @@ misses; the scorer's `missed` can.
   bits.
 - Message hashes are the spec's (`observed::message::encoding`): BLAKE3 of
   the canonical encoding.
-- The virtual clock is a pure function of the dataset's ordering.
+- The virtual clock is a pure function of the dataset's ordering and the
+  pace (its bounds and seed).
 - Every map that reaches output is ordered.
 
 A re-run produces a byte-identical `report.json` (tested, and checked on 53
@@ -502,16 +512,34 @@ channel labels, swarm-truth transmissions). AgentDojo's `JsonString` and
 `Decoded([YamlString])`. A label whose text only arrives two string
 levels deep needs `MatchNeed::two_string_levels()`
 (`Undecodable { codec: "json_string+json_string" }`) and is
-`Tier::OutOfReach` (`MatchNeed::tier`): the splice generator's JSON
-string file read through a shell, and AI Village text that two string
-levels undone tie to its sender.
+`Tier::OutOfReach` (`MatchNeed::tier`): AI Village text that two string
+levels undone, beyond the raw part text, tie to its sender. So is content
+read from a medium its sender never wrote (`MatchNeed::Unobserved`,
+AgentDojo's page and file copies, INV-963). `MatchNeed::out_of_reach` is
+the rule `ExpectedTransmission::new` checks against the tier. Reach is the
+spec's, not the reference matcher's: L4 cuts a writer's spans per decoded
+argument value (INV-1057), so a splice's JSON-string file read through a
+shell needs one level on the reader's side and is in reach
+(`Decoded([JsonString])`, Construction). The reference undoes both levels
+on the reader's side and misses it: a reference miss, not out of reach.
+Only rotN, binary8 and substitution ciphers stay out of reach by design.
 
-**The virtual clock.** `compose(major, minor, sub)` gives
-`EPOCH + major·1000 s + minor·1 ms + sub·1 µs`, with bounded components, so
-tuple order is time order. SALT uses (episode, event id + 1, 0) for a call
-whose response makes a tool call, and (latest input event + 1, 1) for any
-other call. A sender's exchange therefore always precedes the reader's
-exchange that first carries the delivered message (tested).
+**The virtual clock.** `Pace::at(major, minor, sub)` gives
+`EPOCH + pace(major) + minor·1 ms + sub·1 µs`: `major` counts calls, and
+consecutive majors are one step apart, drawn deterministically from the
+pace's seed and the step's index between its bounds (1 to 5 s by default,
+`Pace::DEFAULT`; `compose` is that pace). `minor < 1,000` and
+`sub < 1,000` stay under the smallest step a pace may take (1 s), so tuple
+order is time order. SALT gives each episode-global event a step,
+episodes back to back (`episode_steps`): (event id + 1, sub 0) for a call
+whose response makes a tool call, and (latest input event + 1, sub 1) for
+any other call. A sender's exchange therefore always precedes the
+reader's exchange that first carries the delivered message (tested).
+AgentDojo's victim message `i` is step `i + 1` (the attacker step 0);
+open-swe's trajectory slot `t` makes call `i` at `(i, t, 0)`; splices,
+wiki worlds, swarm-traces and cipher pairs count calls per world. τ²-bench,
+AI Village and LMCache keep their recorded times. `tests/clock.rs` checks
+the bounds, the order and the determinism.
 
 ## SALT specifics
 
@@ -553,20 +581,20 @@ gone:
 | `CarrierKind` | score rows and `DetectionQuality` use the spec's (`Carrier::kind`); `QualityMatch::Content { class, carrier }` keys the scorer's transmission rows |
 | `WriteOutcome` (on `AccessOp::Write`) | SALT keeps its `RejectedSend` truth label; a failed send's result is `ToolOutcome::Error`, and the eval builds rejected sends as `WriteOutcome::Rejected` accesses |
 | `Codec::JsonString`, `Codec::YamlString` | escaped text is `Decoded([JsonString])` or `Decoded([YamlString])` in labels and in the reference matcher; `Normalized` is whitespace and case only |
-| one string level (`provenance.decode.one-string-level`) | the matcher classifies every hit through `reference/classify.rs` and reports no match for one only two string levels explain (`ReferenceOutput::out_of_reach`); a label whose text arrives two levels deep is `Undecodable { "json_string+json_string" }`, `Tier::OutOfReach` |
+| one string level (`provenance.decode.one-string-level`) | the matcher classifies every hit through `reference/classify.rs` and reports no match for one only two string levels explain (`ReferenceOutput::out_of_reach`); a label whose text arrives two levels deep on the reader's side is `Undecodable { "json_string+json_string" }`, `Tier::OutOfReach`, unless one level is the writer's argument encoding L4 undoes (INV-1057) |
 
 Every converter is on these types:
 
 | Converter | Ingress | Carrier | Escaped text |
 | --- | --- | --- | --- |
 | SALT | `Replay { corpus: eval-salt }` | `UserTurn` | `through_json_string` |
-| AgentDojo | `Replay { corpus: eval-agentdojo }` | `ToolResult` | `JsonString` / `YamlString` arrivals |
+| AgentDojo | `Replay { corpus: eval-agentdojo }` | `ToolResult` (channel copies out of reach, INV-963) | `JsonString` / `YamlString` arrivals |
 | τ²-bench | `Replay { corpus: eval-tau2 }` | `UserTurn` | none (labels are exact turns) |
 | collusion-wiki | `Replay { corpus: eval-collusion-wiki }` | `ToolResult`, `ReaderOutput` (relays) | `through_json_string` (was `Normalized`) |
 | swarm-traces | `Replay { corpus: eval-swarm-traces }` | `ToolResult` | base64 / hex / URL chains only |
 | demo swarm (swarm-truth) | the gateway's own captures | `ToolResult` | `through_json_string` (was `Normalized`) |
 | open-swe, lmcache | `Replay { corpus: eval-open_swe / eval-lmcache }` | none (negative controls only) | none |
-| swe-splice | `Replay { corpus: eval-swe_splice }` | `ToolResult` | `JsonString`; two levels out of reach |
+| swe-splice | `Replay { corpus: eval-swe_splice }` | `ToolResult` | `JsonString` (a JSON-string file through a shell too: in reach by INV-1057) |
 | cipher | `Replay { corpus: eval-cipher }` | `UserTurn`, `ToolResult` | base64 / hex / URL chains; ciphers the spec cannot name out of reach |
 | AI Village | `Replay { corpus: eval-ai-village }` | `UserTurn`, `ToolResult` | `JsonString` one level; two levels out of reach (was `Normalized`) |
 
@@ -709,6 +737,20 @@ Where the reference loses:
     gives `Channel(File)`, rooted at `/` because the suite's file system is
     flat. Every other tool is opaque-keyed (email, event, channel, review)
     and gives `Direct`.
+  - **Channel copies are out of reach by design.** The synthetic
+    attacker's one exchange writes text, never the page or file the victim
+    reads, so no write pairs with the read and no co-access exists. By
+    INV-963 (`flow.route.shared-upstream-stays-suspected`) a match
+    explained by no write of its sender confirms nothing, and every
+    suspected state needs a co-access (INV-249, INV-958), so no
+    transmission opens at all. The communication is real but cannot be
+    observed: a channel copy needs `MatchNeed::Unobserved { reason:
+    "sender medium unobserved (INV-963)", arrival }`
+    (`MatchNeed::sender_medium_unobserved`) and is `Tier::OutOfReach`,
+    reported with the missed-by-design rows, never as a miss and never as
+    a negative control. `arrival` keeps the class the copy would match by.
+    Copies read through keyed tools, which record no access, stay
+    `Direct(ToolResult)` construction labels from the attacker's exchange.
   - **Match need** (`classify.rs`). The converter tests each injection,
     trimmed, against the actual output and labels it with the weakest
     arrival that finds it:
@@ -742,13 +784,14 @@ Where the reference loses:
 
 | File | Role | Key exports |
 | --- | --- | --- |
-| `src/datasets/agentdojo/mod.rs` | AgentDojo as a `TraceSource` | `AgentDojoSource` (`tally()`), `load_world`, `convert_run`, `Loaded`, `model_of`, `AgentDojoError`, `DATASET`, `VICTIM`, `ATTACKER` |
+| `src/datasets/agentdojo/mod.rs` | AgentDojo as a `TraceSource` | `AgentDojoSource` (`tally()`, `with_pace`), `load_world`, `load_world_paced`, `convert_run`, `convert_run_paced`, `Loaded`, `model_of`, `AgentDojoError`, `DATASET`, `VICTIM`, `ATTACKER` |
+| `extract/agentdojo.json` | L5 extract config: `get_webpage` as a fetch tool | |
 | `src/datasets/agentdojo/files.rs` | run discovery and filters | `discover`, `Selection`, `RunFile`, `world_name` |
 | `src/datasets/agentdojo/schema.rs` | the run JSON | `Run`, `RawMessage`, `Content`, `RawCall` |
 | `src/datasets/agentdojo/messages.rs` | messages to canonical, call ids | `convert`, `Conversation` |
 | `src/datasets/agentdojo/classify.rs` | how an injection arrived | `Arrival`, `Occurrence`, `Output`, `occurrences` |
 | `src/datasets/agentdojo/route.rs` | expected route of a read | `expected_route` |
-| `src/datasets/agentdojo/truth.rs` | labels | `RunLabels`, `Attacker`, `indicators` |
+| `src/datasets/agentdojo/truth.rs` | labels (channel copies out of reach, INV-963) | `RunLabels`, `Attacker`, `indicators` |
 | `src/datasets/agentdojo/tally.rs` | arrival and second-hop counts | `Tally`, `ArrivalCounts`, `SecondHop` |
 | `tests/agentdojo.rs`, `tests/fixtures/agentdojo/` | synthetic runs (generated, not copied) | |
 
@@ -1136,6 +1179,18 @@ and marks it `Fidelity::Synthetic`.
   result is the page body as of the previous revision. This is the
   **read-before-edit assumption** — an agent that edits a page after another
   agent must have fetched it first. A consecutive same-author edit gets no read.
+- **The shape of a harness** (`build.rs`). Each agent is one conversation
+  that only grows: every request is its previous request and response plus
+  the new inputs, so L3 threads it into one conversation. A call is the
+  response of one exchange and its result arrives in the agent's next
+  request. One revision is one turn of its author: `user "Update P."` →
+  `GET` call; the page body as its result → the `POST` call (this exchange
+  is both the read exchange and the edit exchange); `"Saved P."` as the
+  POST's result → `"Updated P."`. Without a read the turn starts at the
+  `POST`. So each write has a success outcome one call later, and each read
+  result sits in the exchange after the GET (finding 1 of the first live
+  run: a call and its result in one request, with every exchange in a new
+  conversation, left L5 with no read and every write without an outcome).
 - **A world** is one connected component of the agent–page graph (agents linked
   by a page both edited, `plan_worlds`), so a world is a set of agents that
   could only have reached each other through shared pages. Worlds are emitted
@@ -1145,13 +1200,13 @@ and marks it `Fidelity::Synthetic`.
 - **The demo subset** (`WikiSelection::demo`, `--demo`) is the five largest
   relay-coordination worlds of 2 to 12 agents. It is the M2 "undeclared public
   wiki channel" case at a size a demo can show end to end: 5 worlds, 33
-  agents, 98 exchanges and 197 labels, in 0.25 s and 85 MB.
+  agents, 156 exchanges and 197 labels, in 0.7 s and 88 MB.
 
 Line provenance (`attribution.rs`) replays each page's hunks to attribute every
 body line to the revision that wrote it, so a reader's surviving view of each
-earlier author is exact. Virtual time is a global per-world counter through
-`corpus::clock::ordinal`, so reads precede edits and a sender's edit precedes
-any reader's read of it.
+earlier author is exact. Virtual time is a per-world call counter on the
+pace (`Pace::at`, 1 to 5 s per call by default), in revision order, so
+reads precede edits and a sender's edit precedes any reader's read of it.
 
 ### Labels (Heuristic tier, Channel route)
 
@@ -1178,8 +1233,10 @@ two or more agents wrote, and revisions (`WikiSource::families`,
 
 The whole export (`ct-eval run --dataset wiki --examples 0`) has 14,591
 revisions on 4,579 pages. It has 3,216 identities, 114 of them `ip16:`
-fallbacks (899 blank-label revisions). It converts to 591 worlds and 23,691
-exchanges: 14,591 writes and 9,100 synthesised reads. All 41,202 labels are
+fallbacks (899 blank-label revisions). It converted, before the
+harness-shaped exchanges, to 591 worlds and 23,691 exchanges: 14,591
+writes and 9,100 synthesised reads (each revision is now a turn of two or
+three exchanges: the read call, the write, its acknowledgement). All 41,202 labels are
 Heuristic tier: 40,394 Channel/`ToolResult` and 808 relays (`ReaderOutput`).
 1,268 pages have two or more authors. The largest families are:
 
@@ -1202,6 +1259,11 @@ Reference matcher, channel route:
 | whole export | 50 (default) | 41,202 | 0.941 | 0.922 | 0.971 | 0 / 808 | 713,792 / 6,057,952 | 45 s | 6.2 GB |
 | whole export | 16 | 41,202 | 0.938 | 0.919 | 0.967 | 0 / 808 | 408,698 / 1,844,139 | 20 s | 2.1 GB |
 | `--demo` | 50 or 16 | 197 | 0.975 | 1.000 | 0.970 | none | 247 / 458 | 0.2 s | 80 MB |
+
+(Measured before the harness-shaped exchanges; on 2026-10-05 after them
+`--demo` has 156 exchanges and recall 1.000, and the whole export was not
+rerun. Each read now repeats the agent's history in its request, so memory
+per exchange grows with an agent's turns.)
 
 (`--wiki dse` and `--wiki fractal` were 0.938 and 0.944 at the old cutoff
 of 16.) The escaped labels were the `normalized` column before spec #58's
@@ -1245,10 +1307,12 @@ identity. The agreed L5 `HttpTool` shape, emitted from one place
 (`wiki::tools`, tested by `reads_and_writes_take_the_http_tool_shape` and
 `channel_labels_sit_in_the_read_tool_result`):
 
-- read: `http_request {"method":"GET","url":<canonical page url>}`; the
-  tool_result is the read part and holds the page body (INV-269);
-- write: `http_request {"method":"POST","url":<same url>,"body":<inserted text>}`;
-  spans come from `body`.
+- read: `http_request {"method":"GET","url":<canonical page url>}`, the
+  response of one exchange; its tool_result, in the agent's next request,
+  is the read part and holds the page body (INV-269);
+- write: `http_request {"method":"POST","url":<same url>,"body":<inserted text>}`,
+  the response of one exchange; spans come from `body`, and its result
+  (`Saved <page>.`, success) arrives in the agent's next request.
 
 The extractor treats a tool as `HttpTool` by name (`http_request`, `fetch`,
 `web_fetch`, `curl`) with `url` + `method`; `GET`/`HEAD` are reads,
@@ -1267,9 +1331,9 @@ locator would carry the tool name and split the resource.
 | `src/datasets/wiki/attribution.rs` | hunk replay to per-line provenance (`attribute`, `runs`, `line_byte_range`) |
 | `src/datasets/wiki/resource.rs` | the page's public URL and `Locator` (`page_url`, `page_locator`) |
 | `src/datasets/wiki/tools.rs` | the one place the read/write tool shape is defined (`TOOL`, `read_args`, `write_args`) |
-| `src/datasets/wiki/build.rs` | the two passes: exchanges, then channel and relay labels |
+| `src/datasets/wiki/build.rs` | the two passes: exchanges (one growing conversation per agent, `Turns`), then channel and relay labels |
 | `src/datasets/wiki/tally.rs` | channel-discovery inputs per `page_family` (`FamilyTally`, `FamilyStats`) |
-| `tests/wiki.rs`, `tests/fixtures/wiki/` | synthetic fixtures and tests |
+| `tests/wiki.rs`, `tests/fixtures/wiki/` | synthetic fixtures and tests (the harness shape: `each_agent_is_one_growing_conversation`, `a_call_is_answered_in_the_next_request`, `calls_are_seconds_apart`) |
 
 ## swarm-traces
 
@@ -1296,8 +1360,10 @@ that decodes to printable text ≥24 bytes with ≥20 alphanumerics it builds a
 two-agent `World`:
 
 - the **author** originates the decoded plaintext in its output;
-- the **reader** receives the encoded token in a `fetch_drop` tool result. The
-  call names no resource, so the route is `Direct`.
+- the **reader** calls `fetch_drop` in one exchange and receives the encoded
+  token as its result in the next (the label's reader exchange), the shape a
+  harness gives a tool call. The call names no resource, so the route is
+  `Direct`. The three calls are one paced step apart.
 
 The expected transmission is a `Decoded`-class edge author → reader
 (`ToolResult` carrier), labelled `MatchNeed::Decoded { codecs }` with the
@@ -1448,18 +1514,92 @@ Reading it:
   input-relayed spans (INV-1112), so "A forwards a document to B through
   a channel" links once L4 indexes those spans as the relayer's.
 
+### Rescore after the eval-side fixes (2026-10-05)
+
+The eval-side findings (1, 2, 9, 10) are fixed in the eval:
+
+- **Finding 1 (wiki shape).** Each agent is one growing conversation; a
+  call is one exchange's response and its result arrives in the agent's
+  next request (reads: the page body; writes: a success acknowledgement).
+  swarm-traces and cipher pairs had the same shape and take the same fix.
+  SALT, AgentDojo, splices and AI Village already had it.
+- **Finding 9 (clock).** Calls of datasets without times are 1 to 5 s
+  apart (`Pace`), so splice writes and reads fall inside the 60 s window.
+  `LiveSettings::short` is unchanged.
+- **Finding 2 (AgentDojo).** Copies read through a page or file the
+  attacker never wrote are out of reach by design (INV-963:
+  `MatchNeed::Unobserved`, "sender medium unobserved"), so 359 labels
+  leave `overall` for the out-of-reach summary. `extract/agentdojo.json`
+  makes `get_webpage` a fetch tool for live runs.
+- **Finding 10 (reach).** A JSON-string splice read through a shell needs
+  one level (INV-1057) and is in reach: 6 more in-reach splice labels.
+
+Three live columns on the same selections: the #83 baseline (above),
+these eval fixes alone, and these plus the L5 pairing fixes (cf71f43:
+results paired with history calls, INV-1110/1111; fetch tools, INV-1113;
+forwarded input as written, INV-1112). Recall / precision; AgentDojo with
+`--extract-config extract/agentdojo.json` in the third column. Each run
+alone or a few at a time on 16 cores.
+
+| dataset | labels in reach (out of reach) | #83 baseline | eval fixes | eval fixes + cf71f43 | time (last) | peak RSS |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| SALT `--limit 53` | 3850 | 0.722 / 0.622 | 0.722 / 0.622 | 0.722 / 0.622 | 16.2 min | 329 MB |
+| AgentDojo (documented selection) | 2324 (359) | 0.866 / 0.846 (2683 labels) | 1.000 / 0.846 | 1.000 / 0.883 (0.846 without the extract config) | 96 s | 32 MB |
+| wiki `--demo` | 197 | 0.000 / - | 0.614 / 1.000 | 0.614 / 1.000 | 1 s | 88 MB |
+| wiki `--max-agents 100` | 101 | 0.000 / - | 0.891 / 1.000 | 0.891 / 1.000 | 13 s | 88 MB |
+| splice `--count 80` | 80 (74 in #83) | 0.000 / 0.000 | 0.925 / 0.618 | 0.925 / 0.618 | 12.9 min | 3.6 GB |
+| cipher `--count 50` | 200 (200) | 0.245 / 1.000 | 0.245 / 1.000 | 0.245 / 1.000 | 8 s | 15 MB |
+| swarm-traces | 629 | 0.981 / 1.000 | 0.981 / 1.000 | 0.981 / 1.000 | 15 s | 197 MB |
+
+Reference on the same selections: SALT 0.925 / 0.664 (unchanged),
+AgentDojo 1.000 / 0.811 on the in-reach labels (87 of the 359 out of reach
+matched), wiki `--demo` 1.000 / 1.000 and `--max-agents 100` 1.000 /
+1.000, splice 0.738 / 0.685 (59 of 80: the 15 shell reads it routes
+`Direct` and the 6 JSON-string shell reads it cannot decode), cipher
+0.430 / 1.000, swarm-traces 0.997 / 1.000. Exchange counts grew where
+the shape changed: wiki `--demo` 98 → 156, `--max-agents 100` 1030 →
+1982, swarm-traces 1258 → 1887, cipher 800 → 1000.
+
+Reading it:
+
+- **wiki** goes from 0 to 0.614 (`--demo`) and 0.891 (`--max-agents
+  100`) with precision 1.000. Of the 50 cited `--demo` misses, 46 are
+  content written 62 to 150 s of corpus time before the read: beyond the
+  60 s correlation window, as the window intends. The other 4 (8.5 to
+  9.5 s) are lines each author re-saves with growing mojibake, so the
+  reader's matched text is relayed input of the sender (forwarding,
+  INV-1112, pending L4), e.g. world `dse/BridgeLAProd1782007689`, sender
+  `01KDVDRBKE2B70D9C1WY9SFYS7`, reader `01KDVDRMCFYMKHN80ZHFQ7KTXR`.
+  `--max-agents 100`'s 11 misses: 2 beyond the window, 5 shorter than
+  L4's 32-character shingle (finding 4), 4 URL lines not traced.
+- **splice** goes from 0 to 0.925 under the agreed window, channel
+  precision 1.000. All 6 misses are finding 8 (the OpenHands write to
+  `/tmp/test_indent.py` is not recorded): sender
+  `01KDVDQ7DW29GW9HFM1QJ96H2M`, reader `01KDVDQD4HKV4YFVFS7HN5QAXW`,
+  worlds `splice-0012`, `-0027`, `-0034`, `-0049`, `-0056`, `-0078`.
+- **AgentDojo**: every in-reach label is found. The extract config removes
+  179 `Direct` false positives (the `get_webpage` reads become accesses
+  and, unwritten, confirm nothing). 25 of the 50 cited remaining false
+  positives are `get_webpage` reads of a scheme-less URL that are still
+  routed `Direct` (world
+  `gemini-1.5-pro-002/slack/user_task_0/important_instructions/injection_task_1`,
+  reader `01KDVDNS0AQM6ZHG034J016RJE`, `url: "www.informations.com"`);
+  20 are the banking IBAN echoed back in `send_money` results (the second
+  hop, also a reference false positive).
+- **SALT, cipher, swarm-traces** do not move: their deliveries are direct,
+  so neither the window nor the pairing touches them (findings 3 to 7).
+
 ### Gates
 
 `gates.toml` gates the live detector (`detector = "live"`) a little below
-these numbers on SALT, AgentDojo's direct rows, τ², swarm-traces and AI
-Village. Left ungated on purpose:
+these numbers on SALT, AgentDojo's direct rows, τ², swarm-traces, AI
+Village, and now collusion-wiki (channel recall 0.58, precision 0.99:
+both `--demo` and `--max-agents 100` pass; not tuned on the whole export)
+and swe-splice (channel recall 0.90, precision 0.99). Left ungated on
+purpose:
 
-- **wiki, AgentDojo's channel rows**: 0 by findings 1 and 2; a gate would
-  only pin a known gap.
-- **splice**: 0 under the agreed window and 0.919 at a day's window; which
-  window the eval should default to is open (finding 9).
 - **cipher**: 0.245, dominated by payloads under L4's 32-character
   shingle (finding 4); stable, but it measures the k tuning, not a
   regression.
 - **open-swe, lmcache**: background-only; gates have no false-positive
-  rate metric yet.
+  rate metric yet. Their calls are paced now too; not rescored.
