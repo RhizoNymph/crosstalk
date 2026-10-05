@@ -12,7 +12,7 @@
 //! | `blobs` | [`BlobsConfig`]: the blob store's root, whose parent is the data directory |
 //! | `embeddings` | [`EmbeddingsConfig`], optional; checked, unused until P6 |
 //! | `bus`, `pipeline`, `shutdown` | optional tuning: transport's [`BusConfig`], [`PipelineConfig`], [`ShutdownConfig`] |
-//! | `flow` | optional: L5's [`FlowConfig`] (`correlation_window_ms`, `evidence_window_ms`, `suspected_ttl_ms`, `shards`, `tick_ms`), each key defaulted |
+//! | `flow` | optional: L5's [`FlowConfig`] (`correlation_window_ms`, `evidence_window_ms`, `suspected_ttl_ms`, `content_retention_ms`, `shards`, `tick_ms`), each key defaulted |
 //! | `extract` | optional: L5's extractors, [`ExtractConfig`] (`mcp_servers`, `http_tools`, `fetch_tools`, `sites`), each key defaulted |
 //!
 //! A relative `blobs.root` is resolved against the directory of the config

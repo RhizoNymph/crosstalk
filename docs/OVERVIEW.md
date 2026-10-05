@@ -1080,7 +1080,7 @@ Features Index:
       the e2e smoke drives and eval builds against): Live::start(LiveConfig
       { surface, clock: LiveClock, blobs (memory or fs), bus, pipeline,
       flow: FlowConfig (correlation_window_ms, evidence_window_ms,
-      suspected_ttl_ms, shards, tick_ms), provenance, extract:
+      suspected_ttl_ms, content_retention_ms, shards, tick_ms), provenance, extract:
       ExtractConfig (the gateway config's extract section), ticking, seed,
       capture }) fills one consumer slot per layer (L3
       ReconstructConsumer; L4 Provenance then the extraction step feeding
@@ -1496,7 +1496,8 @@ Features Index:
       and Bash tools and their OpenCode, pi, Gemini CLI, Codex and text
       editor equivalents; HTTP tools such as http_request {method, url,
       body?}, the method deciding the op; fetch tools configured by name,
-      fetch_tools, such as AgentDojo's get_webpage; MCP tools mapped by
+      fetch_tools, such as AgentDojo's get_webpage, a scheme-less
+      host[:port][/path] url read as https://; MCP tools mapped by
       typed JSON configuration of tool name and argument paths to a
       resource and an op). Every locator is canonical, so agents touching one thing meet
       on one resource: lexical paths, relative paths against the stated
@@ -1534,7 +1535,13 @@ Features Index:
       The L5 correlator and flow consumer in crosstalk-flow (P5, the M2
       path). WindowedCorrelator (the spec's Correlator, one per shard)
       pairs a write and a later read of one resource by another agent into
-      a CoAccess, opens the channel transmission, and at the close of the
+      a CoAccess (within the correlation window on access alone, within
+      FlowConfig::content_retention_ms, default L4's 30-day index
+      retention, when a held match the write explains backs it, so a
+      dead drop read days later confirms; a reread of a span already
+      delivered to the same reader on the medium refreshes that delivery
+      and confirms nothing new), opens the channel
+      transmission, and at the close of the
       read's evidence window confirms it with every held tool-result match
       a write of the sender explains (origin span among the write's
       spans), else suspects it; late matches confirm a suspicion, later

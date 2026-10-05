@@ -1,0 +1,34 @@
+[invariant]
+id = "flow.correlator.content-confirms-past-window"
+statement = "A tool-result content match in a read by agent B, whose origin span is carried by a pairing write by a different agent A of the same resource before the read, confirms a channel transmission from A to B whenever the write-to-read lag is within FlowConfig::content_retention_ms, however far past the correlation window; past the retention it confirms nothing, and a write and a read with no such match still pair only within the correlation window."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+The correlation window bounds access-only pairing: without content, any
+read of a long-lived resource would pair with every earlier write. Content
+is evidence on its own: the sender's text in the reader's tool result. A
+dead-drop wiki is read hours or days after it is written (eval found 46
+of 50 wiki demo misses 62 to 150 s apart under a 60 s window). The bound
+for content is L4's span index: a span still indexed can still be
+matched, so the correlator keeps each write with spans per medium for
+content_retention_ms (default 30 days, L4's index retention) and prunes
+it after; the co-access it records is built with that retention as its
+window. Retention may not be shorter than the correlation window.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_flow::correlate::tests::content_age::content_confirms_long_after_the_write",
+    "crosstalk_flow::correlate::tests::content_age::content_past_retention_does_not_confirm",
+    "crosstalk_flow::correlate::tests::content_age::configured_retention_bounds_content",
+    "crosstalk_flow::correlate::tests::content_age::access_only_pairing_respects_the_window",
+    "crosstalk_flow::correlate::tests::content_age::retention_defaults_to_the_index_and_covers_the_window",
+    "crosstalk_flow::consumer::tests::wiki::a_dead_drop_read_a_day_later_confirms",
+    "crosstalk_flow::consumer::tests::rules::content_retention_is_configured",
+    "crosstalk_flow::correlate::tests::content_age::content_past_the_window_is_order_insensitive",
+    "crosstalk_flow::correlate::tests::content_age::old_content_joins_a_recent_co_access_in_any_order",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

@@ -97,7 +97,7 @@ against the config file's directory.
 | `bus` | no | transport's `BusConfig` (defaults) |
 | `pipeline` | no | `{"blob_put_attempts": 3, "blob_put_backoff_ms": 100}` |
 | `shutdown` | no | `{"drain_timeout_ms": 45000, "flush_timeout_ms": 10000}`; together under compose's 60 s grace period |
-| `flow` | no | crosstalk-flow's `FlowConfig`, each key defaulted: `{"correlation_window_ms": 600000, "evidence_window_ms": 120000, "suspected_ttl_ms": 1800000, "shards": 1, "tick_ms": 1000}`; checked at start (`LiveError::Flow`) |
+| `flow` | no | crosstalk-flow's `FlowConfig`, each key defaulted: `{"correlation_window_ms": 600000, "evidence_window_ms": 120000, "suspected_ttl_ms": 1800000, "content_retention_ms": 2592000000, "shards": 1, "tick_ms": 1000}`; checked at start (`LiveError::Flow`) |
 | `extract` | no | crosstalk-flow's `ExtractConfig` (L5's extractors), each key defaulted: `mcp_servers` (none), `http_tools` (`http_request`, `fetch`, `web_fetch`, `curl`), `fetch_tools` (none; names of tools whose `url` argument names the page they read, such as AgentDojo's `get_webpage`), `sites` (the built-in MediaWiki and GitHub rules); unknown keys, empty names and a name both an HTTP and a fetch tool are refused at parse |
 
 Checked values: environment variable names are non-empty without `=` or
@@ -367,7 +367,7 @@ let live = Live::start(LiveConfig {
     blobs: BlobConfig::Memory,     // or BlobConfig::Fs { root }
     bus: BusConfig::default(),
     pipeline: Settings::default(), // put retry; consumer_retry is every slot group's policy
-    flow: FlowConfig::default(),   // correlation_window_ms, evidence_window_ms, suspected_ttl_ms, shards, tick_ms
+    flow: FlowConfig::default(),   // correlation_window_ms, evidence_window_ms, suspected_ttl_ms, content_retention_ms, shards, tick_ms
     provenance: ProvenanceConfig::default(),
     threading: ThreadConfig::default(), // L3's seen-message retention (30 days)
     ticking: Ticking::OnSettle,    // or Ticking::Periodic (every flow.tick_ms, plus settle)

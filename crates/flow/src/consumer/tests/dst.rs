@@ -609,7 +609,7 @@ sim_test! {
     fn discovery_moves_resource_evidence(ctx) with config() => {
         let base = ctx.clock().now();
         let shards = 4;
-        let probe = crate::consumer::Shards::new(super::harness::settings(shards).timing, super::harness::settings(shards).shards);
+        let probe = crate::consumer::Shards::new(super::harness::settings(shards).timing, super::harness::settings(shards).content_retention, super::harness::settings(shards).shards);
         // A page whose resource and channel hash to different shards.
         let name = (0..64).map(|n| format!("Handoff_{n}")).find(|name| {
             let resource = resource_id(&wiki_page(name), base);

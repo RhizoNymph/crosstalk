@@ -1,0 +1,25 @@
+[invariant]
+id = "flow.extract.bare-host-url-is-https"
+statement = "A fetch tool's or HTTP tool's url argument that does not parse as a URL but is a bare host[:port][/path] (no scheme, no whitespace, a host that is a domain with at least one dot and an alphabetic top-level label, an optional numeric port, and not a lone file name such as README.md) is read as the https:// URL of the same text; anything else, such as a file name or plain words, stays an Arguments error."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Models leave the scheme off (AgentDojo's get_webpage {"url":
+"www.informations.com"}), and the tool fetches the page all the same. A
+URL that fails to parse records no read, so content the page carried
+routes Direct instead of through the channel. Normalizing only text that
+looks like a hostname keeps file names and words from becoming web
+resources; https is what a browser or fetch tool assumes.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_flow::extract::tests::bare_url::agentdojo_bare_host_reads_https",
+    "crosstalk_flow::extract::tests::bare_url::builtin_fetch_and_http_tools_read_a_bare_host",
+    "crosstalk_flow::extract::tests::bare_url::file_names_and_words_are_not_hosts",
+    "crosstalk_flow::extract::tests::bare_url::bare_host_matches_the_https_spelling",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

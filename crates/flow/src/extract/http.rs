@@ -10,7 +10,9 @@
 //!
 //! **HTTP tools** (`tool_candidates`) are the contract for a tool whose
 //! call names its `url` and `method` (`http_request {method, url, body?}`,
-//! which the eval converter emits). The method alone decides the op: `GET`
+//! which the eval converter emits; a `url` with no scheme that names a host
+//! is read as `https://`, `flow.extract.bare-host-url-is-https`). The
+//! method alone decides the op: `GET`
 //! and `HEAD` read (the tool result is the read part), `POST`, `PUT`,
 //! `PATCH` and `DELETE` write (the body argument, the first of `body`,
 //! `content`, `text` and `data`, is what is written), and any other method
@@ -30,7 +32,7 @@ use crate::extract::args::{ArgError, Args};
 use crate::extract::catalog::HttpTool;
 use crate::extract::fetch;
 use crate::extract::op::Candidate;
-use crate::extract::resource::url_locator;
+use crate::extract::resource::tool_url_locator;
 use crate::extract::sites::{SiteAccess, SitesConfig};
 
 /// The arguments an HTTP tool's body may be in; the first present is the
@@ -152,7 +154,7 @@ pub(crate) fn tool_candidates(
             None => Err(ArgError::Missing("url and method".to_owned())),
         };
     };
-    let url = url_locator(url).map_err(|error| ArgError::invalid("url", error))?;
+    let url = tool_url_locator(url).map_err(|error| ArgError::invalid("url", error))?;
     let method = Method::parse(method);
     let kind = if method.reads() {
         AccessKind::Read

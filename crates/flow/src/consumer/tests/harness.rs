@@ -130,6 +130,7 @@ fn first_page<L>() -> PageRequest<L> {
 pub(crate) fn settings(shards: usize) -> Settings {
     Settings {
         timing: timing(),
+        content_retention: crate::correlate::ContentRetention::default_for(timing()),
         shards: NonZeroUsize::new(shards).unwrap_or(NonZeroUsize::MIN),
         tick_every: Duration::from_secs(1),
     }

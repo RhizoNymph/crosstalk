@@ -18,7 +18,10 @@ pub enum Evidence {
 }
 
 /// Agent A wrote a resource, then a different agent B read the same
-/// resource, within the correlation window. A's write is one that pairs: a
+/// resource, within the window it was built with: the correlation window
+/// for an access-only pairing, the flow correlator's content retention when
+/// a content match A's write explains backs it
+/// (`flow.correlator.content-confirms-past-window`). A's write is one that pairs: a
 /// rejected write never becomes a co-access (`flow.coaccess.write-not-rejected`);
 /// an `Unknown` one does, at the lower confidence its outcome records.
 ///

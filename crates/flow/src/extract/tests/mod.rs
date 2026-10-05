@@ -2,6 +2,7 @@
 //! tool family (`claude_code`, `bash`, `mcp`, `sites`, `repos`), the write
 //! spans (`spans`), and here the invariants' evidence.
 
+mod bare_url;
 mod bash;
 mod claude_code;
 mod fetch_config;
