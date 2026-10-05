@@ -104,8 +104,8 @@ Agents / cc3 / Conversations / 01J…X          [refresh]
 ```
 
 - **Replayed traffic.** A conversation whose traffic came from a dataset
-  replay (`TrafficSource::Replay { corpus }`, from the eval PR's
-  `IngressMode::Replay`) carries a "replayed: <corpus>" badge on its list
+  replay (`TrafficSource::Replay { corpus }`, from
+  `IngressMode::Replay { corpus: CorpusId }`) carries a "replayed: <corpus>" badge on its list
   row, its head and each turn header, and the list filters on it (`replay`
   key). Live conversations carry no badge.
 - **Head.** Agent (canonical, named), claims shown with the existing
@@ -119,8 +119,8 @@ Agents / cc3 / Conversations / 01J…X          [refresh]
   harness claim as a claim, and provenance status (`pending` greys every
   mark row with "scan in progress").
 - **Messages.** A turn lists its new inputs in request order, any role (a
-  system message appears wherever the request put it, labelled "system
-  prompt changed" after turn 0), then its output. Each part is a row: kind
+  system message appears wherever the request put it, labelled "system"
+  and, after turn 0, "system turn"), then its output. Each part is a row: kind
   (text, reasoning, tool call with name, tool result with its call's tool
   name and outcome, media kind, unknown block type) and size.
 - **Inbound marks** (`⟵`) under the part they were read in: "from agent B"

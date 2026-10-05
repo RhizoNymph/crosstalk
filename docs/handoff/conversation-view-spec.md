@@ -33,6 +33,28 @@ P4.1 (ordered messages across roles) and P4.2 (persisted scan status, match
 indexes by reader and by origin) were passed to their agents. The sections
 that depend on them stay marked until crosstalk-impl reconciles them.
 
+**Revision 3** (accepted in principle by crosstalk-impl; scheduled after
+the e2e detection proof) aligns with what landed on `origin/staging`
+(79dd38b):
+- **L3:** `crates/reconstruct` keeps every conversation message in order
+  under an ordinal, system turns included (`ConversationStore::transcript`,
+  `TranscriptEntry`). `ConversationReads` is now the spec lift of that store
+  with a paged turn read. The P4.1 ask (ordered messages across roles) is
+  met by the transcript, so the proposed `ConversationDelta::new_messages`
+  is withdrawn and the delta stays as it is.
+- **L4:** `SpanIndex::spans(&IdBatch<SpanId>) -> BTreeMap<SpanId,
+  IndexedSpan>`, where `IndexedSpan { exchange, author, location }` and the
+  author is as recorded; `record(&OriginatedSpan)` writes it.
+  `ProvenanceReads` extends it. Per-exchange and per-message scan status and
+  the match indexes by reader message and by origin span come with the
+  provenance merge, and the method names below defer to its final shape.
+- **L5:** `AccessStore::accesses(&IdBatch<AccessId>)` in
+  `interfaces::l5_flow::channels`.
+- **Replay:** `observed::client::CorpusId` (a `String` newtype) in
+  `IngressMode::Replay { corpus }`.
+- **L1:** `ExchangeReads` and `ExchangeStore` are still not in the spec, so
+  this proposal of them stands.
+
 ## Why
 
 The operator UI wants a view of one agent's conversation: its exchanges in
@@ -64,11 +86,10 @@ span records" but no trait names them.
 | `interfaces/l8_surface/query_errors.rs` | `From<ConversationReadError>`, `From<ProvenanceReadError>`, `From<ExchangeReadError>`, `From<TextError>` for `QueryError` |
 | `paging.rs` | Markers `ConversationList` (key `ConversationId`), `SpanReaderList` (key (`ExchangeId`, `SpanId`)), `ExchangeList` (key (`ExchangeMeta::started_at`, `ExchangeId`)) |
 | `interfaces/l1_canonical.rs` | `ExchangeReads`: the spec's L1 exchange store and read (records by id, paged by conversation or by time), replacing the JSONL stopgap |
-| `interfaces/l3_reconstruction/conversations.rs` (new) | `ConversationReads` |
-| `interfaces/l4_provenance/reads.rs` (new) | `ProvenanceReads: SpanIndex`: extends the eval PR's `SpanIndex::span`; one L4 read trait once crosstalk-impl merges them |
-| `interfaces/l5_flow/transmissions.rs` | `TransmissionStore::holding(matches)` lookup, beside the eval PR's `AccessStore::access` |
+| `interfaces/l3_reconstruction/conversations.rs` (new) | `ConversationReads`: the spec lift of `crates/reconstruct`'s `ConversationStore` (`conversation`, `transcript`), adding list, successors, a paged turn read and locate |
+| `interfaces/l4_provenance/reads.rs` (new) | `ProvenanceReads: SpanIndex`: extends `SpanIndex::spans` (batch `IndexedSpan`s) with output spans of an exchange, matches by reader and by origin, and scan status, as the provenance merge shapes them |
+| `interfaces/l5_flow/transmissions.rs` | `TransmissionStore::holding(matches)` lookup; co-access details come from `AccessStore::accesses` (`l5_flow::channels`), not redefined |
 | `observed/message.rs` | `Serialize`/`Deserialize` (snake_case strings) on `Role`, `MediaKind`, `ToolExecution`, `ToolOutcome` |
-| `events/ingest.rs` (**depends on P4.1**) | The delta must keep the order of its new messages across roles (see "System messages mid-conversation") |
 | `spec/invariants/` | INV-1000..1029 |
 
 ## QueryApi methods
@@ -221,7 +242,7 @@ pub enum ReplayFilter {
     #[default]
     Include,
     Exclude,
-    Only { corpus: Option<CorpusName> },
+    Only { corpus: Option<CorpusId> },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -297,14 +318,14 @@ pub struct ConversationRow {
     pub source: TrafficSource,
 }
 
-/// Where a conversation's traffic came from. `CorpusName` is whatever type
-/// the eval PR gives `IngressMode::Replay { corpus }`.
+/// Where a conversation's traffic came from. `CorpusId` is
+/// `observed::client::CorpusId`, as in `IngressMode::Replay { corpus }`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "data", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TrafficSource {
     /// Through the gateway as reverse or forward proxy.
     Live,
-    Replay { corpus: CorpusName },
+    Replay { corpus: CorpusId },
 }
 
 /// Distinct transmissions, any state but `Discarded`, counted once each.
@@ -400,7 +421,7 @@ pub struct TurnPoint {
 pub struct SpanPoint {
     pub span: SpanId,
     /// The span's author: the agent recorded when it was indexed
-    /// (`SpanLocation`'s author from `SpanIndex::span`), resolved through
+    /// (`IndexedSpan::author` from `SpanIndex::spans`), resolved through
     /// `AgentDirectory::canonical` at read time. Never stored resolved.
     pub agent: AgentId,
     pub exchange: ExchangeId,
@@ -441,10 +462,12 @@ pub struct Turn {
     pub continuation: TurnContinuation,
     pub outcome: TurnOutcome,
     /// The request's messages new to the conversation, in request order,
-    /// any role: user turns, tool results, and a system message where it is
-    /// new (first turn, or the harness changed it), wherever the request
-    /// placed it. A compaction's first turn also lists its carried-over
-    /// messages, flagged.
+    /// any role: user turns, tool results, and every system message the
+    /// transcript records for this exchange (a new or changed top-level
+    /// prompt, or a system turn inside the history), where the request
+    /// placed it. These are the exchange's transcript entries other than
+    /// its output, by ordinal. A compaction's first turn also lists its
+    /// carried-over messages, flagged.
     pub inputs: Vec<TurnMessage>,
     /// The response, or a failed exchange's partial response.
     pub output: Option<TurnMessage>,
@@ -709,19 +732,19 @@ a fault and becomes `Store`, as `EvidenceError` does.
 | Read model field | Source | Status |
 | --- | --- | --- |
 | Conversation list by canonical agent, origin, successors | L3 conversation table (`Conversation`, `ConversationOrigin`) and `AgentDirectory` | **Missing:** no read trait. New `ConversationReads` (below). Successors need an index on `origin.parent`/`origin.predecessor`. |
-| Turn sequence, `TurnIndex` | L3: the deltas in threading order | **Missing:** deltas are only published, not stored. `ConversationReads` must store each delta with its index (the Postgres threader already writes the conversation row in the same transaction; the delta row goes with it). |
-| `inputs` in request order across roles, `Placement::CarriedOver` | L3 delta + the exchange's request | **Depends on P4.1:** today's `ConversationDelta` has `new_system` apart from `new_inputs`, so a system message's position among the new inputs is lost. See below. Carried-over messages are the first request's messages whose hash is in the predecessor's history, which L3 computes when threading; store them with the delta (`carried_over: Vec<MessageHash>`) rather than recompute. |
+| Turn sequence, `TurnIndex` | L3: `ConversationStore::transcript` (every message by ordinal, each with its exchange) and the stored threading outcomes | **Partly there** (`crates/reconstruct`, not the spec). A turn is one of the conversation's own exchanges in transcript order; a fork's inherited entries (those carrying the parent's exchange) are its base, not turns. Missing: a read of one turn window without loading the whole transcript, which needs an index (conversation, turn index) → first ordinal; and the read in the spec. |
+| `inputs` in request order across roles, `Placement::CarriedOver` | L3 transcript entries of the turn's exchange (`role`, `output`, ordinal order) | **Order: covered** by the transcript, mid-conversation system turns included. **Carried over:** not flagged in `TranscriptEntry`. Either the store flags it (preferred: L3 already decides it when threading the compaction) or the read computes it as the compaction's turn-0 entries whose hash is in the predecessor's history. |
 | Exchange meta, continuation, outcome, harness claim, ingress | L1: the `Exchange` record (`ExchangeCaptured`) | **Missing:** exchanges only go to a stopgap JSONL log. New `ExchangeReads` (L1 store and read, Postgres behind it), shaped like `NormalizedExchange` without the bodies (they stay in the blob store). |
 | Message bodies, part kinds, `text_bytes`, text | Blob store (`BlobStore::get`, `Message::part_text`) | Exists. Part shapes are computed from the body at read time (View reads bodies but returns no text). |
-| `IncrementHistory` | L3 `ResponsesStateThreader` outcome | **Depends on P4.1:** record on the stored delta whether the increment's previous response resolved. |
-| Output spans and their state | L4 span records | **Missing:** no span read trait. The eval PR adds `SpanIndex::span(SpanId)`; `ProvenanceReads` extends it with `spans_of(exchange)` and each span's state. |
-| `Inbound` marks | L4 `ContentMatched` by `reader_exchange` | **Missing, asked of P4.2:** `ProvenanceReads::matches_read_in(exchange)` over the match index by reader message (an exchange's messages are known from its record, so either key serves). |
-| `ReadBy`, `span_readers` | L4 `ContentMatched` by `origin` | **Missing, asked of P4.2:** `ProvenanceReads::readers(span, page)` and a count over the match index by origin span. |
-| `TrafficSource`, `Turn::ingress`, `ReplayFilter` | `ClientContext::ingress` (`IngressMode::Replay { corpus }` from the eval PR) | Read from the exchange record. Filtering the list by source needs the conversation table to record its first turn's source (or join to L1). |
-| `ProvenanceStatus` | L4: per-delta completion | **Missing, depends on P4.2:** L4 must record when it committed a delta's spans and matches (one row per exchange). |
-| `TransmissionMark` | L5: the transmission holding a content match | **Missing:** transmissions are read by id only. New `TransmissionStore::holding`, beside the eval PR's `AccessStore::access`. A mark links to the evidence page in every state, `Suspected` and `Discarded` included, which that PR's evidence read covers. |
+| `IncrementHistory` | L1 `Continuation` + L3 stored outcome | **Derivable:** an `Increment` exchange whose stored outcome is `Starts` had an unseen previous response (`reconstruct.thread.unknown-previous-starts`); otherwise `Resolved`. |
+| Output spans and their state | L4 span records | **Partly there:** `SpanIndex` records originated spans only (relayed and common ones are absent). `spans_of(exchange)` needs every non-common span of an output with its current state, relayed ones and their `RelaySource` included, so L4 must keep relayed spans too (from `SpanRelayed`). **Depends on the provenance merge.** |
+| `Inbound` marks | L4 `ContentMatched` by reader | **Landing with the provenance merge:** the match index by reader message. `matches_read_in` reads it for the turn's input and output messages. |
+| `ReadBy`, `span_readers` | L4 `ContentMatched` by `origin` | **Landing with the provenance merge:** the match index by origin span. `readers(span, page)` needs a paged read and a count over it. |
+| `TrafficSource`, `Turn::ingress`, `ReplayFilter` | `ClientContext::ingress` (`IngressMode::Replay { corpus: CorpusId }`, on staging) | Read from the exchange record. Filtering the list by source needs the conversation table to record its first turn's source (or join to L1). |
+| `ProvenanceStatus` | L4: per-exchange scan status | **Landing with the provenance merge** (per exchange and per message). `Scanned { at }` is the per-exchange status; per-message status is not needed by the view. |
+| `TransmissionMark` | L5: the transmission holding a content match | **Missing:** transmissions are read by id only. New `TransmissionStore::holding`. Co-access details stay with `AccessStore::accesses`. A mark links to the evidence page in every state, `Suspected` and `Discarded` included (`surface.evidence.every-state`). |
 | `ConversationTraffic` | L5 + L4 + L3 joined | **Missing:** needs the two lookups above per conversation; a materialized `(conversation, direction, transmission)` table in the surface's read side, or computed per page with the indexes. Acceptable to ship it as two counts recomputed on read at first. |
-| `SpanPoint` | `SpanIndex::span` (exchange, message, part, range, recorded author) + `AgentDirectory` + L3 `locate` | Covered: crosstalk-impl is asking the eval PR to put the recorded author in `SpanLocation`. The surface resolves it to the canonical agent at read time, as it does every stored agent id, so a later merge or unmerge shows on the next read. |
+| `SpanPoint` | `SpanIndex::spans` (`IndexedSpan { exchange, author, location }`) + `AgentDirectory` + L3 `locate` | **Covered.** The author is as recorded (`provenance.span-index.author-as-recorded`); the surface resolves it to the canonical agent at read time, so a later merge or unmerge shows on the next read. Only originated spans are recorded, which is all a `SpanPoint` ever names (inbound origins, relay sources and `/spans/{id}` links are originated spans). |
 | Claims | `ClientContext::harness` per exchange; `ClaimSet` per conversation | Computed from exchange records; no new store. |
 
 ### New store traits
@@ -778,17 +801,40 @@ pub trait ExchangeReads {
 }
 pub enum ExchangeReadError { Store { reason: String }, InvalidCursor }
 
-// interfaces/l3_reconstruction/conversations.rs
-/// One stored delta and its position.
+// interfaces/l3_reconstruction/conversations.rs: the spec lift of
+// crates/reconstruct's `ConversationStore` reads (`conversation`,
+// `transcript`), which already keep every message by ordinal.
+
+/// `crates/reconstruct`'s `TranscriptEntry`, lifted into the spec, plus
+/// the carried-over flag.
+pub struct TranscriptEntry {
+    /// From 0, counting every message, system turns included.
+    pub ordinal: u32,
+    pub message: MessageHash,
+    pub role: Role,
+    /// The exchange that added it (the parent's, for a fork's inherited
+    /// messages).
+    pub exchange: ExchangeId,
+    /// Its place in the non-system history; `None` for a system message.
+    pub history_index: Option<u32>,
+    pub output: bool,
+    /// A compaction's turn 0: its hash is in the predecessor's history.
+    pub carried_over: bool,
+}
+
+/// One of the conversation's own exchanges and its messages.
 pub struct StoredTurn {
     pub index: TurnIndex,
-    /// As published, plus what the read needs that the delta drops.
-    pub delta: ConversationDelta,
-    /// The new messages in request order, every role (see below).
-    pub ordered_inputs: Vec<MessageHash>,
-    /// A compaction's first turn: carried-over messages, in request order.
-    pub carried_over: Vec<MessageHash>,
-    pub increment: Option<IncrementHistory>,
+    pub exchange: ExchangeId,
+    /// The attributed agent, as recorded.
+    pub agent: AgentId,
+    /// The exchange's transcript entries, by ordinal: its new messages in
+    /// request order (any role), then its output.
+    pub entries: Vec<TranscriptEntry>,
+    /// The stored threading outcome's kind (`Starts`, `Extends`, `Forks`,
+    /// `Compacts`); with the exchange's `Continuation` it gives
+    /// `IncrementHistory`.
+    pub outcome: OutcomeKind,
 }
 
 pub trait ConversationReads {
@@ -811,7 +857,8 @@ pub trait ConversationReads {
         id: ConversationId,
     ) -> impl Future<Output = Result<Vec<Conversation>, ConversationReadError>> + Send;
 
-    /// How many turns `id` has, and the turns of `window` (contiguous).
+    /// How many turns `id` has, and the turns of `window` (contiguous),
+    /// read without loading the whole transcript.
     fn turns(
         &self,
         id: ConversationId,
@@ -827,33 +874,35 @@ pub trait ConversationReads {
 pub enum ConversationReadError { Store { reason: String }, InvalidCursor }
 
 // interfaces/l4_provenance/reads.rs
-// Extends the eval PR's `SpanIndex` (`span(SpanId) -> Option<SpanLocation>`
-// with exchange, message, PartRef and ByteRange); crosstalk-impl merges the
-// two into one L4 read trait. No second span lookup: `span_points` uses
-// `SpanIndex::span`, whose `SpanLocation` carries the author agent as
-// recorded when the span was indexed. L4 never resolves it; the surface
-// resolves it through `AgentDirectory` at read time.
+// Extends `SpanIndex` (on staging): `spans(&IdBatch<SpanId>)` returns
+// `IndexedSpan { exchange, author, location }` for originated spans, the
+// author as recorded. No second span lookup: `span_points` is
+// `SpanIndex::spans` plus `AgentDirectory` for the author. The methods
+// below read the scan status and match indexes the provenance merge adds;
+// their names and signatures defer to that merge's final shape.
 pub trait ProvenanceReads: SpanIndex {
-    /// The spans of `exchange`'s output, with their recorded author and
-    /// current state.
+    /// Every non-common span of `exchange`'s output, relayed ones included,
+    /// with its recorded author and current state.
     fn spans_of(&self, exchange: ExchangeId)
         -> impl Future<Output = Result<Vec<Span>, ProvenanceReadError>> + Send;
-    /// Every content match whose `reader_exchange` is `exchange`.
+    /// Every content match read in `exchange`'s messages (the index by
+    /// reader message, over the exchange's input and output messages).
     fn matches_read_in(&self, exchange: ExchangeId)
         -> impl Future<Output = Result<Vec<ContentMatch>, ProvenanceReadError>> + Send;
     /// Matches whose origin is `span`, newest reader exchange first, and
     /// their total.
     fn readers(&self, span: SpanId, page: &PageRequest<SpanReaderList>)
         -> impl Future<Output = Result<(u32, Page<ContentMatch, SpanReaderList>), ProvenanceReadError>> + Send;
-    /// When L4 committed `exchange`'s delta, if it has.
+    /// The per-exchange scan status: when L4 committed `exchange`'s delta,
+    /// if it has.
     fn scanned(&self, exchange: ExchangeId)
         -> impl Future<Output = Result<Option<Timestamp>, ProvenanceReadError>> + Send;
 }
 pub enum ProvenanceReadError { Store { reason: String }, InvalidCursor }
 
 // interfaces/l5_flow/transmissions.rs
-// Beside the eval PR's `AccessStore::access(AccessId)`, which this relies
-// on for co-access details rather than redefining.
+// Co-access details come from `AccessStore::accesses(&IdBatch<AccessId>)`
+// in `l5_flow::channels`, not redefined here.
 pub trait TransmissionStore {
     // ...save, transmission...
     /// For each match of `matches` (by origin span and reader exchange) the
@@ -868,21 +917,15 @@ Every method is `Send` like the rest. `query_errors.rs` maps each
 `Store` to `QueryError::Store` and each `InvalidCursor` to
 `QueryError::InvalidCursor`.
 
-### System messages mid-conversation (depends on P4.1)
+### System messages mid-conversation
 
 The view lists a turn's new messages of any role in the order the request
-held them, because a harness can now put a system message mid-conversation,
-not only first. `ConversationDelta` keeps the system message apart
-(`new_system`) and `Conversation::messages` leaves system messages out, so
-the order is lost at the delta. Either form works for the read; please pick
-the one that fits P4.1:
-
-1. **Recommended:** the delta gains `new_messages: Vec<MessageHash>`, every
-   new message in request order with system ones in place, and
-   `new_inputs`/`new_system` become derived accessors (non-system ones;
-   the last system one), so L4 and existing invariants are unchanged.
-2. L3 stores the ordered list beside the delta (`StoredTurn::ordered_inputs`
-   above) and the delta stays as it is.
+held them, because a harness can put a system message mid-conversation.
+`ConversationDelta::new_system` carries only the request's first system
+message, but `crates/reconstruct` keeps every message by ordinal, system
+turns included, so the transcript gives the order and the delta stays as
+it is. (Revision 1 asked for `ConversationDelta::new_messages`; that is
+withdrawn.)
 
 ## Permissions
 
@@ -911,7 +954,7 @@ Ids follow the `surface.conversation.*` pattern; `reconstruct.*` and
 | 1004 | `reconstruct.conversation.turn-index-stable` | Once threaded, a turn's index and exchange never change, and a redelivered exchange adds no turn. |
 | 1005 | `surface.conversation.turns-rebuild-history` | Over turns `0 .. total`, concatenating each turn's non-system `inputs` (any placement) then `output` gives the stored history after the base (empty for `Root` and `Compaction`, the shared prefix for `Fork`); restates INV-152 and INV-390 on the read model. |
 | 1006 | `surface.conversation.inputs-request-order` | A turn's `inputs` are in the order its request held them, across roles. |
-| 1007 | `surface.conversation.system-when-new` | A system message is among a turn's inputs iff the delta records it as new (first turn, or changed). |
+| 1007 | `surface.conversation.inputs-are-transcript` | A turn's inputs, then its output, are exactly the transcript entries `ConversationStore::transcript` holds for the turn's exchange, in ordinal order, system ones included; no message appears in two turns of one conversation. |
 | 1008 | `surface.conversation.carried-over` | `Placement::CarriedOver` appears only on a `Compaction` conversation's turn 0, exactly on the request's messages whose hash is in the predecessor's stored history; `OriginLink::Compaction::carried_over` counts them. |
 | 1009 | `surface.conversation.output-is-response` | A turn's `output` is the exchange's response when `Completed`, its partial response when `Failed`, `None` otherwise; `Placement::Output` appears only there. |
 | 1010 | `surface.conversation.origin-resolved` | `OriginLink` is the stored `ConversationOrigin` with its links resolved; a `Fork`'s `branch_turn` is the greatest parent turn whose cumulative history count is at most `shared_prefix`. |
