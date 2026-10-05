@@ -1,0 +1,28 @@
+[invariant]
+id = "surface.http.client-export-verified"
+statement = "An export the HTTP client streams through QueryApi::export yields only rows the binding's ExportSealer accepts for its header, and ends with a Complete trailer only when that trailer is the surface's for the same export and verify_export of the rows yielded against the header and it holds; a body that is cut, misframed, miscounted or misdigested ends with a Failed trailer that counts and digests exactly the rows yielded, and a Failed trailer of the surface is passed on as sent."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+An export's 200 is sent before its first row, so the status cannot report
+a failure (surface.http.export-download); only the trailer can. A client
+that passed on the surface's Complete trailer without checking it would
+let a truncated or corrupted stream through as complete. Running every
+row through the same sealer the surface uses, and comparing its count
+and digest with the trailer, makes a stream that ends Complete exactly
+the export the surface sealed.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_client::tests::export::the_golden_export_reads_back_complete",
+    "crosstalk_client::tests::export::a_blake3_export_verifies_with_the_default_hasher",
+    "crosstalk_client::tests::export::a_failed_trailer_is_passed_on",
+    "crosstalk_client::tests::export::a_cut_export_ends_failed",
+    "crosstalk_client::tests::export::a_trailer_that_does_not_verify_ends_failed",
+    "crosstalk_client::tests::export::a_bad_line_ends_failed",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
