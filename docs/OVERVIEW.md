@@ -245,7 +245,8 @@ Overview:
     turn) → RawExchange (in-process) → L1 normalizes, writes message bodies
     to the blob store, publishes ExchangeCaptured → L3 resolves the agent,
     records its harness claim and threads the conversation, publishes
-    ConversationDelta → L4 indexes the agent's originated spans and matches
+    ConversationDelta (new inputs exclude what the agent already saw in
+    another conversation) → L4 indexes the agent's originated spans and matches
     new inputs against other agents' spans (ContentMatched); L5 turns tool
     calls into accesses on resources, on a canonical channel or on none
     (AccessRecorded; a write once its result settles its outcome),
@@ -1175,7 +1176,9 @@ Features Index:
       PgConversations (prefix chains, forks, compaction from summary
       turns, WebSocket increment resolution scoped by upstream and identity
       scope, system turns anywhere, every message kept in order under an
-      ordinal); and the reconstruct consumer (ExchangeCaptured in;
+      ordinal, a per-agent seen-message set within a configured retention
+      that keeps history replayed from another conversation out of a
+      delta's new inputs, INV-1100); and the reconstruct consumer (ExchangeCaptured in;
       AgentSeen and ConversationDelta out under envelope ids derived from
       the exchange). Replays AI Village's Claude Code stream and lmcache's
       interleaved re-runs as ignored fixture tests.

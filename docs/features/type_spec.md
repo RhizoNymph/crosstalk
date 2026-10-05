@@ -128,7 +128,11 @@ The types follow data through the stack:
    history starts with its first request's non-system messages in request
    order (carried-over messages included) and that exchange's output, and
    its first delta's new inputs are those messages minus the ones whose hash
-   is in the predecessor's history.
+   is in the predecessor's history. Every delta's new inputs also leave out
+   messages the agent's cluster saw in another conversation within the
+   store's seen-message retention, so replayed history is not scanned as
+   newly received (`reconstruct.delta.excludes-seen-elsewhere`); the stored
+   history keeps them in place.
 5. **L4 provenance.** The `Segmenter` cuts the delta's output into
    `SpanDraft`s classified by `Origin`. Originated spans are fingerprinted
    and inserted into the `FingerprintIndex` (which accepts only an
@@ -529,6 +533,11 @@ The types follow data through the stack:
   exchange's output, then each later delta's `new_inputs` and output. Its
   first delta's `new_inputs` are that request's non-system messages minus
   the carried-over ones (hash in the predecessor's history), in order.
+- A delta's `new_inputs` never list a message the agent's cluster saw (in
+  a request or as an output) in another conversation within the store's
+  seen-message retention; within one conversation they are positional, so
+  a repeat there is listed again. The output is never withheld
+  (`reconstruct.delta.excludes-seen-elsewhere`).
 - A message's role is its `MessageBody` variant: tool calls appear only in
   assistant messages, tool results only in tool messages. Normalizers split
   provider messages that mix roles.

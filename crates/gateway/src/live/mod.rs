@@ -48,6 +48,7 @@ use crosstalk_flow::consumer::{FlowConfig, InvalidFlowConfig, Settings as FlowSe
 use crosstalk_flow::extract::ExtractConfig;
 use crosstalk_memory::support::Outbox;
 use crosstalk_provenance::config::ProvenanceConfig;
+use crosstalk_reconstruct::thread::ThreadConfig;
 use crosstalk_spec::events::Subject;
 use crosstalk_spec::ids::SeededRandom;
 use crosstalk_spec::interfaces::l0_ingress::RawExchange;
@@ -113,6 +114,9 @@ pub struct LiveConfig {
     /// L5's extractors: the MCP tool mapping, the HTTP and fetch tool
     /// names, the site rules.
     pub extract: ExtractConfig,
+    /// L3's threading settings: how long a seen message is withheld from a
+    /// later conversation's new inputs.
+    pub threading: ThreadConfig,
     pub ticking: Ticking,
     /// Seeds every id generator (envelope, agent, conversation ids), so two
     /// runs over the same input mint the same ids.
@@ -212,6 +216,7 @@ impl Live {
             flow,
             provenance,
             extract,
+            threading,
             ticking,
             seed,
             capture,
@@ -245,7 +250,7 @@ impl Live {
         let activity = Activity::default();
         let context = StageContext {
             stores: backend.stores.clone(),
-            layers: LayerStores::default(),
+            layers: LayerStores::new(threading),
             publisher: publisher.clone(),
             clock: reader,
             flow,

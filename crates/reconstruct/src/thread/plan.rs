@@ -27,7 +27,9 @@
 //! 6. Otherwise **Starts** a root conversation.
 //!
 //! Every delta names the outcome's conversation, its `new_inputs` are the
-//! non-system messages the conversation had not stored, its `new_system`
+//! non-system messages the conversation had not stored, less those the
+//! cluster saw in another conversation within the store's retention
+//! (`reconstruct.delta.excludes-seen-elsewhere`), its `new_system`
 //! the request's system message when the conversation is new or that
 //! message differs from the previous exchange's, and its `output` the
 //! exchange's output.
@@ -117,6 +119,17 @@ pub(crate) trait ThreadReads: Send {
         members: &[AgentId],
     ) -> impl Future<Output = Result<Option<ConversationId>, TxFailure>> + Send;
 
+    /// Which of `messages` an agent of `members` saw (received in a request
+    /// or produced as an output) in a conversation other than
+    /// `conversation`, no earlier than the store's retention cutoff for
+    /// this call.
+    fn seen_elsewhere(
+        &mut self,
+        members: &[AgentId],
+        messages: &[MessageHash],
+        conversation: ConversationId,
+    ) -> impl Future<Output = Result<HashSet<MessageHash>, TxFailure>> + Send;
+
     /// Which of `messages` `conversation`'s non-system history holds.
     fn held(
         &mut self,
@@ -164,6 +177,20 @@ pub(crate) struct Write {
     pub(crate) last_system: Option<MessageHash>,
     /// The response to file, with the history length through it.
     pub(crate) response: Option<(ResponseKey, u32)>,
+    /// What the attributed agent is recorded as having seen in
+    /// `conversation`: the non-system messages the conversation stores
+    /// that this request carried (all of them for a new conversation, a
+    /// fork's base included; the appended ones for an extension) and the
+    /// output, once each, ascending.
+    pub(crate) seen: Vec<MessageHash>,
+}
+
+/// `messages` and `output`, once each, ascending.
+fn seen(messages: &[MessageHash], output: Option<MessageHash>) -> Vec<MessageHash> {
+    let mut seen: Vec<MessageHash> = messages.iter().copied().chain(output).collect();
+    seen.sort_unstable();
+    seen.dedup();
+    seen
 }
 
 /// The decision.
@@ -271,6 +298,27 @@ fn filed(input: &ThreadInput, history_len: u32) -> Option<(ResponseKey, u32)> {
         .map(|key| (key, history_len))
 }
 
+/// `candidates` without the messages the cluster saw in a conversation
+/// other than `conversation` (`reconstruct.delta.excludes-seen-elsewhere`),
+/// in order.
+async fn unseen<R: ThreadReads>(
+    reads: &mut R,
+    input: &ThreadInput,
+    conversation: ConversationId,
+    candidates: Vec<MessageHash>,
+) -> Result<Vec<MessageHash>, TxFailure> {
+    if candidates.is_empty() {
+        return Ok(candidates);
+    }
+    let seen = reads
+        .seen_elsewhere(&input.members, &candidates, conversation)
+        .await?;
+    Ok(candidates
+        .into_iter()
+        .filter(|message| !seen.contains(message))
+        .collect())
+}
+
 /// A new conversation holding `history`'s messages from the start.
 fn fresh(
     input: &ThreadInput,
@@ -314,6 +362,7 @@ fn fresh(
         history_len: appended.history_len,
         head: appended.head,
         last_system: history.system,
+        seen: seen(&history.non_system().collect::<Vec<_>>(), input.output),
     })
 }
 
@@ -342,7 +391,13 @@ pub(crate) async fn plan<R: ThreadReads>(
             }
             None => {
                 let history = History::of(input.request.clone());
-                let new_inputs = history.non_system().collect();
+                let new_inputs = unseen(
+                    reads,
+                    input,
+                    input.conversation,
+                    history.non_system().collect(),
+                )
+                .await?;
                 return Ok(Planned::Write(Box::new(fresh(
                     input,
                     &history,
@@ -364,7 +419,9 @@ pub(crate) async fn plan<R: ThreadReads>(
             .filter(|system| Some(*system) != extension.last_system);
         let appended = append(&history, k, tail, lead(new_system, tail), input.output)?;
         let conversation = extension.conversation;
-        let new_inputs = non_system.get(k..).unwrap_or(&[]).to_vec();
+        let added = non_system.get(k..).unwrap_or(&[]);
+        let new_inputs = unseen(reads, input, conversation, added.to_vec()).await?;
+        let seen = seen(added, input.output);
         return Ok(Planned::Write(Box::new(Write {
             outcome: ThreadOutcome::Extends {
                 conversation,
@@ -377,6 +434,7 @@ pub(crate) async fn plan<R: ThreadReads>(
             history_len: appended.history_len,
             head: appended.head,
             last_system: history.system,
+            seen,
         })));
     }
 
@@ -388,6 +446,7 @@ pub(crate) async fn plan<R: ThreadReads>(
             .copied()
             .filter(|message| !carried.contains(message))
             .collect();
+        let new_inputs = unseen(reads, input, input.conversation, new_inputs).await?;
         return Ok(Planned::Write(Box::new(fresh(
             input,
             &history,
@@ -412,7 +471,13 @@ pub(crate) async fn plan<R: ThreadReads>(
             input.output,
         )?;
         let conversation = input.conversation;
-        let new_inputs = non_system.get(shared..).unwrap_or(&[]).to_vec();
+        let new_inputs = unseen(
+            reads,
+            input,
+            conversation,
+            non_system.get(shared..).unwrap_or(&[]).to_vec(),
+        )
+        .await?;
         return Ok(Planned::Write(Box::new(Write {
             outcome: ThreadOutcome::Forks {
                 parent,
@@ -434,14 +499,16 @@ pub(crate) async fn plan<R: ThreadReads>(
             history_len: appended.history_len,
             head: appended.head,
             last_system: history.system,
+            seen: seen(&non_system, input.output),
         })));
     }
 
+    let new_inputs = unseen(reads, input, input.conversation, non_system).await?;
     Ok(Planned::Write(Box::new(fresh(
         input,
         &history,
         ConversationOrigin::Root,
-        non_system,
+        new_inputs,
     )?)))
 }
 

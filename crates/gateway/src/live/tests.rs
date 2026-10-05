@@ -13,6 +13,7 @@ use crosstalk_memory::analysis::catalog::RetentionPolicy;
 use crosstalk_memory::model::build::test_model;
 use crosstalk_memory::support::ManualClock;
 use crosstalk_provenance::config::ProvenanceConfig;
+use crosstalk_reconstruct::thread::ThreadConfig;
 use crosstalk_spec::aggregates::projection::FrameRetention;
 use crosstalk_spec::aggregates::series::BucketWidth;
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
@@ -123,6 +124,7 @@ fn config(blobs: BlobConfig) -> LiveConfig {
         flow: FlowConfig::default(),
         provenance: ProvenanceConfig::default(),
         extract: crosstalk_flow::extract::ExtractConfig::default(),
+        threading: ThreadConfig::default(),
         ticking: Ticking::OnSettle,
         seed: 7,
         capture: None,

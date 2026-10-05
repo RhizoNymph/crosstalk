@@ -490,8 +490,10 @@ async fn interleaved_reruns_thread_as_separate_conversations() {
 
 /// Regression (lmcache, the run's last request): the harness rewrote an
 /// early tool result in place, so the request shares only the messages
-/// before it with the stored run. It forks there, re-reporting every
-/// message after the rewrite as new.
+/// before it with the stored run. It forks there; of the messages after
+/// the rewrite only the rewritten one and the last tool result (never sent
+/// before) are new: the rest the agent already saw in the run
+/// (`reconstruct.delta.excludes-seen-elsewhere`).
 #[tokio::test]
 async fn rewritten_early_tool_result_forks_at_the_rewrite() {
     let mut scene = Scene::new();
@@ -534,7 +536,7 @@ async fn rewritten_early_tool_result_forks_at_the_rewrite() {
         } => {
             assert_eq!(Some(*parent), root);
             assert_eq!(*shared_prefix, 2);
-            assert_eq!(delta.new_inputs, edited[2..].to_vec());
+            assert_eq!(delta.new_inputs, vec![rewritten, history[8]]);
         }
         other => panic!("expected a fork, got {other:?}"),
     }
