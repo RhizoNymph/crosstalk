@@ -308,6 +308,70 @@ calls in the dataset.
 | `…/report.rs` | unlabelled predictions | `Unlabelled`, `tool_kind` |
 | `tests/ai_village/` | synthetic fixtures written to a temp dir; units, Claude Code, window, the L5 contract (`l5.rs`, runs `crosstalk-flow`'s extractor) | |
 
+## Reference baselines
+
+```text
+ct-eval run --dataset ai-village --mode claude-code
+```
+
+993 contexts (worlds), 65,571 Claude Code calls, 81,369 exchanges (with
+15,798 originating exchanges), 15,798 construction labels, about 5.5 min and
+0.8 GB. 33,897 `get_events` results delivered 31,541 talks from other
+agents (15,737 redeliveries, labelled only at the first); 6 events had no
+output to originate from. The agent's 2,627 `chat_message` calls matched
+2,623 `chat_messages` rows.
+
+| route | carrier | class | tier | expected | found | recall |
+| --- | --- | --- | --- | ---: | ---: | ---: |
+| direct | tool_result | exact | construction | 9148 | 9130 | 0.998 |
+| direct | tool_result | decoded (json_string) | construction | 6640 | 6640 | 1.000 |
+| direct | tool_result | semantic | construction | 10 | 6 | 0.600 |
+
+`get_events` recall is **0.999** (15,776 / 15,798), precision 1.000 on the
+labelled hits. Before events' bare Anthropic block arrays were read as
+Anthropic (they were taken for OpenAI Responses items, so the authors'
+texts were lost), recall was 0.615 with 7,323 labels `semantic`.
+
+Unjudged predictions (partial coverage) by where the reader read them:
+198,134 `get_events` (mostly redeliveries), 18,817 bash repository
+commands, 15,048 memory edits, 6,315 user turns. **Shared web content**:
+2,195 in bash web reads, 87 in `WebSearch`, 17 in `WebFetch`; the examples
+are pages several agents fetched (a shared quiz site's "Failed to load
+quiz data", news phrases such as "the Department of Defense").
+
+```text
+ct-eval run --dataset ai-village --mode window   # 2026-07-13..17
+```
+
+5 village days, 26 agents, 116,410 exchanges (one per turn), 97,988 labels:
+97,978 structural chat labels and 10 heuristic repository labels. About
+14.7 min and 6.6 GB peak (the week's raw turn lines are held per day; the
+three full passes over the 2.4 GB turns and memories tables dominate).
+
+| route | carrier | class | tier | expected | found | recall |
+| --- | --- | --- | --- | ---: | ---: | ---: |
+| direct | user_turn | exact | structural | 61860 | 61788 | 0.999 |
+| direct | user_turn | normalized | structural | 36118 | 36118 | 1.000 |
+| channel | tool_result | exact / normalized | heuristic | 10 | 0 | 0.000 |
+
+- **Accesses.** 21,668 (14,934 reads, 6,734 writes: 4,891 delivered, 48
+  rejected, 1,795 unknown) on 2,397 resources; 15,480 have an
+  `http_request` equivalent (curl 11,047, `glab api` 4,427, wget 6) and
+  6,188 are Bash-only (git push 4,759, pull 718, fetch 449, clone 130,
+  `glab` issue/MR commands 132).
+- **Pairs.** 993 cross-agent read-after-write pairs: 10 labels, 870
+  co-access only (most writes are `git push`, whose payload is code the
+  converter does not keep), 76 across days, 37 with no next call. Of the
+  10 labels, 5 are `glab api` on both sides (HTTP-visible) and 5 have a
+  `glab mr`/`issue` command on one side (Bash only).
+- **Channel recall 0** is the reference matcher's: it routes bash results
+  as `Direct` (see Gaps).
+- Unjudged predictions: 578,674 in system prompts (memories quoting other
+  agents), 362,110 in user turns (chat quoted again later), 80,664 in bash
+  local-file reads, 44,148 in bash repository commands. **Shared web
+  content**: 36,176 in bash web reads and 21,684 in scripts fetching a URL.
+- GUI: 34,999 GUI turns; 1,347 name Gmail and 141 Google Docs (counted).
+
 ## Invariants and constraints
 
 - **Streaming.** No table is held whole except the Claude Code stream

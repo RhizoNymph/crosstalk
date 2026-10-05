@@ -1121,13 +1121,20 @@ Features Index:
       day, requests rebuilt from responses (system prompt from goals and
       memory, session history, chat since the previous call), structural
       chat labels, heuristic repository-channel labels from bash accesses
-      on canonical repository URLs, GUI edits counted. Its streaming table
-      passes, resource normalizer and bash access tagger are reusable.
+      on canonical repository URLs, GUI edits counted. Bash accesses follow
+      the agreed L5 HttpTool contract: curl, wget and gh/glab api keep
+      their equivalent http_request {method, url, body} call, git and the
+      forge CLIs' issue commands are marked Bash-only, every resource is a
+      canonical URL (L5's url_locator off the forges, the repository's web
+      URL on them), and each write carries the spec's WriteOutcome
+      (rejected writes never pair). Its streaming table passes, resource
+      normalizer and bash access tagger are reusable.
     entry_points:
       - crates/eval/src/datasets/ai_village/mod.rs
       - crates/eval/src/datasets/ai_village/tables.rs
       - crates/eval/src/datasets/ai_village/resource.rs
       - crates/eval/src/datasets/ai_village/access/mod.rs
-    depends_on: [eval]
+      - crates/eval/src/datasets/ai_village/access/http.rs
+    depends_on: [eval, flow_extract]
     doc: docs/features/eval_ai_village.md
 ```
