@@ -24,9 +24,15 @@ fn a_base_url_is_an_http_origin_and_an_optional_prefix() {
         BaseUrl::parse("http://gateway:8081").map(|base| base.join("/agents", "page=1")),
         Ok("http://gateway:8081/agents?page=1".to_owned())
     );
-    assert_eq!(BaseUrl::parse("https://gateway"), Err(InvalidBaseUrl::NotHttp));
+    assert_eq!(
+        BaseUrl::parse("https://gateway"),
+        Err(InvalidBaseUrl::NotHttp)
+    );
     assert_eq!(BaseUrl::parse("/api"), Err(InvalidBaseUrl::NotHttp));
-    assert_eq!(BaseUrl::parse("http://gateway/?a=1"), Err(InvalidBaseUrl::Query));
+    assert_eq!(
+        BaseUrl::parse("http://gateway/?a=1"),
+        Err(InvalidBaseUrl::Query)
+    );
     assert!(matches!(
         BaseUrl::parse("http://gate way"),
         Err(InvalidBaseUrl::NotAUri { .. })
@@ -45,7 +51,11 @@ fn reconnect_delays_double_up_to_the_cap() {
     assert_eq!(delays, vec![0, 100, 200, 400, 500, 500]);
     assert_eq!(policy.delay(u32::MAX), Duration::from_millis(500));
     assert_eq!(
-        ReconnectPolicy::new(NonZeroU32::MIN, Duration::from_secs(2), Duration::from_secs(1)),
+        ReconnectPolicy::new(
+            NonZeroU32::MIN,
+            Duration::from_secs(2),
+            Duration::from_secs(1)
+        ),
         Err(InvalidConfig::DelayCapBelowFirst)
     );
 }

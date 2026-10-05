@@ -9,13 +9,15 @@ use crosstalk_spec::interfaces::l2_transport::{BlobError, BlobStore};
 use crosstalk_transport::blob::{FsBlobStore, MemoryBlobStore, OpenError};
 
 /// Which blob store to open.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum BlobConfig {
     Memory,
     /// An [`FsBlobStore`] rooted here, created if missing.
     Fs {
         root: PathBuf,
     },
+    /// A store the caller already opened (the gateway's `blobs.root`).
+    Open(LiveBlobs),
 }
 
 /// One of the two blob stores, behind the one `BlobStore` the pipeline and
@@ -32,6 +34,7 @@ impl LiveBlobs {
         match config {
             BlobConfig::Memory => Ok(Self::Memory(MemoryBlobStore::new())),
             BlobConfig::Fs { root } => FsBlobStore::open(root.clone()).await.map(Self::Fs),
+            BlobConfig::Open(blobs) => Ok(blobs.clone()),
         }
     }
 }

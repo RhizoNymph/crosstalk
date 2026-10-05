@@ -18,7 +18,8 @@
   },
   "api": {
     "listen": "0.0.0.0:8081",
-    "token": {"env": "CROSSTALK_API_TOKEN"}
+    "token": {"env": "CROSSTALK_API_TOKEN"},
+    "operator": {"name": "admin"}
   },
   "ops": {
     "listen": "0.0.0.0:9464"
@@ -33,5 +34,12 @@
     "base_url": "https://api.openai.com/v1",
     "model": "text-embedding-3-small",
     "api_key": {"env": "CROSSTALK_EMBEDDINGS_API_KEY"}
+  },
+  "flow": {
+    "correlation_window_ms": 600000,
+    "evidence_window_ms": 10000,
+    "suspected_ttl_ms": 60000,
+    "shards": 1,
+    "tick_ms": 1000
   }
 }

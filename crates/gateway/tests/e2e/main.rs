@@ -510,6 +510,10 @@ async fn ops_endpoints_and_inspect_report_the_capture() {
     assert_eq!(report["status"], "ok");
     assert_eq!(report["capture"]["captured"], 1);
     assert_eq!(report["pipeline"]["published"], 1);
+    assert!(
+        report["live"]["stages"]["l3-reconstruct"].is_u64(),
+        "{report}"
+    );
 
     let ready = ops_get(ops, "/readyz").await;
     assert_eq!(ready.status, StatusCode::OK, "{:?}", ready.body);
@@ -522,7 +526,8 @@ async fn ops_endpoints_and_inspect_report_the_capture() {
         .iter()
         .filter_map(|task| task["name"].as_str())
         .collect();
-    assert_eq!(tasks, ["exchange_log", "capture", "proxy"]);
+    // The test config has no api section, so no `api` task.
+    assert_eq!(tasks, ["exchange_log", "capture", "live", "proxy"]);
 
     let metrics = ops_get(ops, "/metrics").await;
     assert_eq!(metrics.status, StatusCode::OK);

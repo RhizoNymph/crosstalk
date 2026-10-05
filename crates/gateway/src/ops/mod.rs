@@ -21,6 +21,7 @@ use hyper::{Method, Request, Response, StatusCode};
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 
+use crate::live::{LiveReport, LiveReporter};
 use crate::log::consumer::{LogCounts, LogStats};
 use crate::pipeline::{PipelineCounts, PipelineStats};
 use crate::role::Role;
@@ -63,13 +64,16 @@ impl From<CaptureCounts> for CaptureReport {
 }
 
 /// The `GET /healthz` body.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct HealthReport {
     pub status: Phase,
     pub capture: CaptureReport,
     pub pipeline: PipelineCounts,
     pub log: LogCounts,
+    /// The live process: each layer stage's handled count and the L7
+    /// watermark; `null` for a role without one (`analysis`).
+    pub live: Option<LiveReport>,
 }
 
 /// The `GET /readyz` body.
@@ -103,6 +107,8 @@ pub struct Ops {
     pub capture: Option<Arc<CaptureStats>>,
     pub pipeline: Arc<PipelineStats>,
     pub log: Arc<LogStats>,
+    /// The live process's counts, when the role runs one.
+    pub live: Option<LiveReporter>,
     pub tasks: Tasks,
     pub store: StoreProbe,
 }
@@ -118,6 +124,7 @@ impl Ops {
                 .unwrap_or_default(),
             pipeline: self.pipeline.snapshot(),
             log: self.log.snapshot(),
+            live: self.live.as_ref().map(LiveReporter::report),
         }
     }
 
