@@ -676,7 +676,7 @@ dependencies = [
 name = "crosstalk-provenance"
 version = "0.1.0"
 dependencies = [
- "base64",
+ "base64 0.22.1",
  "crosstalk-memory",
  "crosstalk-sim",
  "crosstalk-spec",
