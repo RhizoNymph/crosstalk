@@ -8,10 +8,11 @@
 pub mod patterns;
 mod screen;
 
-use crate::pending::channel_semantics::ChannelRow;
 use crosstalk_spec::derived::flow::channel::ChannelOrigin;
 use crosstalk_spec::derived::flow::resource::Locator;
 use crosstalk_spec::ids::ChannelId;
+use crosstalk_spec::interfaces::l8_surface::QueryApi;
+use crosstalk_spec::interfaces::l8_surface::channels::ChannelRow;
 use topcoat::Result;
 use topcoat::context::Cx;
 use topcoat::router::content::Form;

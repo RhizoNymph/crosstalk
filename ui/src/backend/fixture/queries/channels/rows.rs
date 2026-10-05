@@ -12,15 +12,16 @@
 
 use std::collections::HashMap;
 
-use crate::pending::channel_semantics::ChannelFilter;
-use crate::pending::channel_semantics::{ChannelRow, ChannelStanding};
 use crosstalk_spec::aggregates::edge::{TopologyFilter, Weighting};
 use crosstalk_spec::aggregates::watermark::Watermarked;
 use crosstalk_spec::derived::flow::transmission::Route;
 use crosstalk_spec::ids::ChannelId;
+use crosstalk_spec::interfaces::l8_surface::channels::ChannelRow;
+use crosstalk_spec::interfaces::l8_surface::channels::ChannelStanding;
 use crosstalk_spec::interfaces::l8_surface::channels::{
     ChannelActivity, ChannelCounts, SupersededInto,
 };
+use crosstalk_spec::interfaces::l8_surface::lists::ChannelFilter;
 use crosstalk_spec::paging::{ChannelList, Page, PageRequest};
 use crosstalk_spec::support::{TimeWindow, Timestamp};
 
@@ -56,7 +57,7 @@ impl Counting {
             ctx,
             window,
             Weighting::Transmissions,
-            TopologyFilter::default(),
+            &TopologyFilter::default(),
         )?;
         Ok(Self {
             window,
@@ -134,8 +135,7 @@ fn row(ctx: &Ctx, record: &ChannelRecord, counting: &Counting) -> Result<Channel
                 .ok_or_else(|| store_error("unknown seed resource", seed.resource))
         })
         .transpose()?;
-    ChannelRow::new(channel.clone(), seed, standing, record.created)
-        .map_err(|e| store_error("channel row", e))
+    ChannelRow::new(channel.clone(), seed, standing).map_err(|e| store_error("channel row", e))
 }
 
 /// `channels`: the channels `filter` matches, newest first, counted in its

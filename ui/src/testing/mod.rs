@@ -72,7 +72,7 @@ pub fn router_over(backend: FixtureBackend) -> Router {
     Router::builder()
         .discover()
         .app_context(operator())
-        .app_context(backend)
+        .app_context(crate::backend::AppBackend::from(backend))
         .assets(assets())
         .runtime()
         .build()
@@ -110,7 +110,9 @@ fn assets() -> AssetConfig {
 pub fn cx() -> Cx {
     let mut app = AppContext::new();
     app.insert(operator());
-    app.insert(FixtureBackend::try_new(SEED).expect("fixture generates"));
+    app.insert(crate::backend::AppBackend::from(
+        FixtureBackend::try_new(SEED).expect("fixture generates"),
+    ));
     Cx::new(Arc::new(app))
 }
 

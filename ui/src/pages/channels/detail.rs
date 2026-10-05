@@ -4,12 +4,13 @@
 //! says so in a banner. Posting `set-policy` changes its policy; posting
 //! `set-verdict` records a verdict on one of its suspected transmissions.
 
-use crate::pending::channel_semantics::ChannelRow;
-use crate::pending::channel_semantics::{CrossTraffic, Listing};
 use crosstalk_spec::aggregates::node::CanonicalOriginKind;
 use crosstalk_spec::derived::flow::channel::ChannelOrigin;
+use crosstalk_spec::derived::flow::channel::confirmation::CrossTraffic;
+use crosstalk_spec::derived::flow::channel::confirmation::Listing;
 use crosstalk_spec::derived::flow::channel::detection::DetectionKind;
 use crosstalk_spec::ids::ChannelId;
+use crosstalk_spec::interfaces::l8_surface::channels::ChannelRow;
 use crosstalk_spec::interfaces::l8_surface::{AlertFilter, Caller, Permission, PolicyKind};
 use crosstalk_spec::paging::ResourceUseList;
 use topcoat::Result;
@@ -689,10 +690,10 @@ mod tests {
     async fn a_verdict_posted_from_the_channel_page_is_recorded() {
         use crate::backend::fixture::ChannelKey;
         use crate::pages::topology::tests::fixture_state;
-        use crate::pending::channel_semantics::ChannelTransmissionFilter;
-        use crate::pending::channel_semantics::Confirmation;
         use crate::testing::{Session, channel_id, operator, world};
         use crosstalk_spec::aggregates::filter::TopicVersionSelector;
+        use crosstalk_spec::derived::flow::channel::confirmation::Confirmation;
+        use crosstalk_spec::interfaces::l8_surface::channel_traffic::ChannelTransmissionFilter;
         use crosstalk_spec::interfaces::l8_surface::summary::TransmissionStateKind;
 
         let s3 = channel_id(ChannelKey::S3Handoff);

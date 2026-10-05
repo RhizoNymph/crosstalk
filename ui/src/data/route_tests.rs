@@ -27,7 +27,7 @@ async fn get_from(backend: FixtureBackend, uri: &str) -> Reply {
     let router = Router::builder()
         .discover()
         .app_context(crate::testing::operator())
-        .app_context(backend)
+        .app_context(crate::backend::AppBackend::from(backend))
         .build();
     let request = Request::<()>::builder()
         .uri(uri)

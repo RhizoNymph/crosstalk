@@ -13,16 +13,12 @@
 //!
 //! Reads, actions and the live feed are the surface's own (`QueryApi`,
 //! `OperatorActions`, `LiveFeed`); the UI's contract gaps (`Present`,
-//! `ExportFormats`) come from the world's config. The port-shaped channel
-//! reads the pages use (`crate::pending::channel_semantics`) are derived
-//! from the spec's answers in [`pending`]: see there for what they cannot
-//! know yet.
+//! `ExportFormats`) come from the world's config.
 //!
 //! The `InProcess` value owns the relay task and the live feed; `start`
 //! returns it beside the backend so the server can shut it down
 //! (`crate::backend::Service`).
 
-mod pending;
 mod stores;
 
 use std::num::NonZeroU32;

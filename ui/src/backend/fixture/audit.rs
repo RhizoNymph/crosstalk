@@ -57,13 +57,27 @@ impl AuditLog {
     }
 
     /// Appends `body` at `at` under a newly minted id, and returns the id.
+    /// Ids of entries recorded at one instant ascend in recording order
+    /// (a minted id's random bits would otherwise order them), so the
+    /// log's newest-first order, by time then id, is the order they were
+    /// made in.
     pub fn record(
         &mut self,
         mint: &mut Mint,
         at: Timestamp,
         body: AuditBody,
     ) -> Result<AuditId, AuditError> {
-        let id = AuditId::from_ulid(mint.ulid(at));
+        let minted = mint.ulid(at);
+        let latest_at_instant = self
+            .entries
+            .iter()
+            .filter(|e| e.at == at)
+            .map(|e| e.id.as_ulid())
+            .max();
+        let id = AuditId::from_ulid(match latest_at_instant {
+            Some(latest) if latest >= minted => latest.saturating_add(1),
+            _ => minted,
+        });
         self.append(AuditEntry { id, at, body })?;
         Ok(id)
     }

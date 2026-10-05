@@ -4,9 +4,9 @@
 
 use std::num::NonZeroU32;
 
-use crate::pending::channel_semantics::OverviewCounts;
 use crosstalk_spec::aggregates::alert::Alert;
 use crosstalk_spec::aggregates::watermark::Watermarked;
+use crosstalk_spec::interfaces::l8_surface::overview::OverviewCounts;
 use crosstalk_spec::interfaces::l8_surface::{AlertFilter, AlertStateKind, Caller, Permission};
 use topcoat::context::Cx;
 
@@ -199,11 +199,11 @@ pub async fn load(cx: &Cx, caller: &Caller, state: &ViewState) -> Result<Overvie
 
 #[cfg(test)]
 mod tests {
-    use crate::pending::channel_semantics::QueueCounts;
     use crosstalk_spec::aggregates::edge::EdgeTotals;
     use crosstalk_spec::aggregates::topic::TopicModelVersion;
     use crosstalk_spec::aggregates::watermark::Watermark;
     use crosstalk_spec::interfaces::l8_surface::QueryError;
+    use crosstalk_spec::interfaces::l8_surface::overview::QueueCounts;
     use crosstalk_spec::support::Timestamp;
 
     use super::*;

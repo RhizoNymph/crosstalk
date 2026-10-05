@@ -7,11 +7,16 @@
 //! merge left without cross-agent traffic is hidden. "Confirmed only"
 //! (`u=confirmed`) leaves unconfirmed channels out of every tab.
 
-use crate::pending::channel_semantics::{ChannelRow, ChannelStanding};
-use crate::pending::channel_semantics::{Confirmation, CrossTraffic, Listing};
+use crosstalk_spec::interfaces::l8_surface::QueryApi;
+use crosstalk_spec::interfaces::l8_surface::channels::ChannelRow;
+
 use crosstalk_spec::aggregates::node::CanonicalOriginKind;
+use crosstalk_spec::derived::flow::channel::confirmation::Confirmation;
+use crosstalk_spec::derived::flow::channel::confirmation::CrossTraffic;
+use crosstalk_spec::derived::flow::channel::confirmation::Listing;
 use crosstalk_spec::derived::flow::channel::detection::DetectionKind;
 use crosstalk_spec::derived::flow::resource::{Locator, ResourcePattern};
+use crosstalk_spec::interfaces::l8_surface::channels::ChannelStanding;
 use crosstalk_spec::interfaces::l8_surface::channels::{ChannelActivity, ChannelCounts};
 use crosstalk_spec::interfaces::l8_surface::{Permission, PolicyKind};
 use topcoat::Result;

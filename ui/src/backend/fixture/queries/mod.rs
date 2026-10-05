@@ -23,12 +23,16 @@ pub mod transmissions;
 
 use std::collections::{BTreeMap, HashMap};
 
-use crate::pending::channel_semantics::{Confirmation, CrossTraffic, Listing};
-use crate::pending::channel_semantics::{Crossing, crossing};
+use crosstalk_spec::derived::flow::channel::confirmation::Confirmation;
+
+use crosstalk_spec::derived::flow::channel::confirmation::CrossTraffic;
+
 use crosstalk_spec::aliases::{Aliases, Resolve};
+use crosstalk_spec::derived::flow::channel::confirmation::Listing;
+use crosstalk_spec::derived::flow::transmission::Crossing;
 use crosstalk_spec::derived::flow::transmission::{Route, Transmission};
 use crosstalk_spec::derived::flow::verdict::Verdict;
-use crosstalk_spec::ids::{AccessId, AgentId, ChannelId, TransmissionId};
+use crosstalk_spec::ids::{AgentId, ChannelId, TransmissionId};
 use crosstalk_spec::interfaces::l8_surface::{Caller, Permission};
 
 use std::num::NonZeroU64;
@@ -120,22 +124,15 @@ impl<'a> Ctx<'a> {
         routed
             .into_iter()
             .map(|(channel, transmissions)| {
-                let traffic = CrossTraffic::tally(transmissions, self.aliases(), |access| {
-                    self.writer(access)
-                });
+                let traffic = CrossTraffic::tally(transmissions, self.aliases());
                 (channel, traffic)
             })
             .collect()
     }
 
-    /// The agent that made `access`, as attributed.
-    pub fn writer(&self, access: AccessId) -> Option<AgentId> {
-        self.world.access(access).map(|a| a.agent)
-    }
-
     /// Whether `transmission` crosses agents at this read.
     pub fn crossing(&self, transmission: &Transmission) -> Crossing {
-        crossing(transmission, self.aliases(), |access| self.writer(access))
+        transmission.crossing(self.aliases())
     }
 
     /// The cross-agent traffic of the channel `id` resolves to.

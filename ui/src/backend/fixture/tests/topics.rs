@@ -11,7 +11,7 @@ use crosstalk_spec::interfaces::l8_surface::QueryError;
 use crosstalk_spec::paging::{PageRequest, TopicList};
 use crosstalk_spec::support::{NonEmpty, Similarity, TimeWindow, Timestamp};
 
-use crate::pending::channel_semantics::Crossing;
+use crosstalk_spec::derived::flow::transmission::Crossing;
 
 use super::super::clock::WATERMARK;
 use super::super::queries::Ctx;

@@ -32,7 +32,7 @@ use crosstalk_spec::interfaces::l8_surface::QueryApi;
 fn scope(scope: &Scope) -> ExportScope {
     ExportScope {
         window: scope.window,
-        filter: scope.topology_filter().filter,
+        filter: scope.topology_filter(),
     }
 }
 
@@ -267,7 +267,7 @@ async fn a_window_after_the_watermark_settles_nothing() {
     let b = &fresh();
     let c = researcher();
     let late = TimeWindow::new(WATERMARK, NOW).expect("window");
-    let filter = day().topology_filter().filter;
+    let filter = day().topology_filter();
     let scoped = |window| ExportScope {
         window,
         filter: filter.clone(),
@@ -332,11 +332,11 @@ async fn refusals_before_anything_is_sent() {
     for dataset in [
         ExportDataset::Edges(ExportScope {
             window: unaligned,
-            filter: day.topology_filter().filter,
+            filter: day.topology_filter(),
         }),
         ExportDataset::Accesses(ExportScope {
             window: unaligned,
-            filter: day.topology_filter().filter,
+            filter: day.topology_filter(),
         }),
     ] {
         assert_eq!(
@@ -359,7 +359,7 @@ async fn refusals_before_anything_is_sent() {
         b.export(&c, &unknown).await.err(),
         Some(QueryError::NotFound)
     );
-    let mut pinned = day.topology_filter().filter;
+    let mut pinned = day.topology_filter();
     pinned.topic_version = TopicVersionSelector::Pinned(TopicModelVersion(0));
     assert_eq!(
         b.export(

@@ -1,14 +1,15 @@
 //! Channel data as the pages show it: what a channel is matched by, its
 //! origin and detection in words, and its policy decisions.
 
-use crate::pending::channel_semantics::ChannelRow;
-use crate::pending::channel_semantics::{Confirmation, Listing};
 use crosstalk_spec::aggregates::node::CanonicalOriginKind;
+use crosstalk_spec::derived::flow::channel::confirmation::Confirmation;
+use crosstalk_spec::derived::flow::channel::confirmation::Listing;
 use crosstalk_spec::derived::flow::channel::detection::{DeclaredDetection, TrafficDetection};
 use crosstalk_spec::derived::flow::channel::policy::{PolicyDecision, PolicyKind};
 use crosstalk_spec::derived::flow::channel::{ChannelOrigin, DeclaredHistory};
 use crosstalk_spec::derived::flow::resource::{Locator, ResourcePattern};
 use crosstalk_spec::ids::TransmissionId;
+use crosstalk_spec::interfaces::l8_surface::channels::ChannelRow;
 
 use crate::components::format_time;
 use crate::components::locator::{format_locator, format_pattern};
@@ -97,14 +98,6 @@ pub fn detection_detail(origin: &ChannelOrigin) -> DetectionDetail {
         | ChannelOrigin::Superseded { detection, .. } => detection,
     };
     match traffic {
-        // The spec still has these two states; the channel-semantics port
-        // removes them and the fixture never builds them.
-        TrafficDetection::Observed { .. } => {
-            plain("Accessed, but not yet written by one agent and read by another.".to_owned())
-        }
-        TrafficDetection::Candidate { .. } => {
-            plain("Written by one agent and read by another; no content match yet.".to_owned())
-        }
         TrafficDetection::Active {
             since,
             last_transmission,
@@ -160,13 +153,13 @@ pub fn decision_text(entry: &PolicyDecision) -> &'static str {
 
 #[cfg(test)]
 pub(crate) mod tests {
-    use crate::pending::channel_semantics::ChannelStanding;
-    use crate::pending::channel_semantics::CrossTraffic;
+    use crosstalk_spec::derived::flow::channel::confirmation::CrossTraffic;
     use crosstalk_spec::derived::flow::channel::detection::TrafficDetection;
     use crosstalk_spec::derived::flow::channel::policy::{Decision, Policy, PolicyAuthor};
     use crosstalk_spec::derived::flow::channel::{Channel, Declaration, Seed, Supersession};
     use crosstalk_spec::derived::flow::resource::{Host, Resource};
-    use crosstalk_spec::ids::{AccessId, ChannelId, OperatorId, ResourceId};
+    use crosstalk_spec::ids::{ChannelId, OperatorId, ResourceId};
+    use crosstalk_spec::interfaces::l8_surface::channels::ChannelStanding;
     use crosstalk_spec::interfaces::l8_surface::channels::{
         ChannelActivity, ChannelCounts, SupersededInto,
     };
@@ -186,7 +179,8 @@ pub(crate) mod tests {
     fn seed(id: u128) -> Seed {
         Seed {
             resource: ResourceId::from_ulid(id),
-            first_access: AccessId::from_ulid(1),
+            first_transmission: TransmissionId::from_ulid(1),
+            opened_at: CREATED,
         }
     }
 
@@ -205,7 +199,7 @@ pub(crate) mod tests {
         }
     }
 
-    /// When every test channel but `declared` came to exist.
+    /// When every test channel's first cross-agent transmission opened.
     const CREATED: Timestamp = Timestamp::from_micros(1_790_900_000_000_000);
 
     /// A discovered, active, unreviewed channel seeded by [`wiki`], with
@@ -234,7 +228,7 @@ pub(crate) mod tests {
                 },
             },
         };
-        ChannelRow::new(channel, Some(seed_resource(id)), standing, CREATED).expect("row")
+        ChannelRow::new(channel, Some(seed_resource(id)), standing).expect("row")
     }
 
     /// `discovered(id)` with `policy`.
@@ -242,13 +236,7 @@ pub(crate) mod tests {
         let row = discovered(id);
         let mut channel = row.channel().clone();
         channel.policy = policy;
-        ChannelRow::new(
-            channel,
-            row.seed().cloned(),
-            row.standing(),
-            row.created_at(),
-        )
-        .expect("row")
+        ChannelRow::new(channel, row.seed().cloned(), row.standing()).expect("row")
     }
 
     /// The channel `promoted`, promoted by operator 3, and `id`, a
@@ -287,7 +275,6 @@ pub(crate) mod tests {
             channel,
             Some(seed_resource(id)),
             ChannelStanding::Superseded(into),
-            CREATED,
         )
         .expect("row")
     }
@@ -314,7 +301,6 @@ pub(crate) mod tests {
                 traffic: CrossTraffic::NONE,
                 activity: ChannelActivity::Never,
             },
-            Timestamp::from_micros(0),
         )
         .expect("row")
     }
@@ -380,13 +366,7 @@ pub(crate) mod tests {
             },
             activity,
         };
-        ChannelRow::new(
-            row.channel().clone(),
-            row.seed().cloned(),
-            standing,
-            row.created_at(),
-        )
-        .expect("row")
+        ChannelRow::new(row.channel().clone(), row.seed().cloned(), standing).expect("row")
     }
 
     #[test]

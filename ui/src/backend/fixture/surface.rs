@@ -51,17 +51,19 @@ use crosstalk_spec::support::{TimeWindow, Timestamp};
 use crate::backend::Result;
 use crate::contract::formats::ExportFormats;
 use crate::contract::present::Present;
-use crate::pending::channel_semantics as pending;
 use crosstalk_spec::aggregates::series::BucketWidth;
 use crosstalk_spec::ids::AlertRuleId;
 use crosstalk_spec::ids::ProjectionId;
+use crosstalk_spec::interfaces::l8_surface::channel_traffic::{
+    ChannelTransmissionFilter, ChannelTransmissionPage,
+};
 use crosstalk_spec::interfaces::l8_surface::present::Present as SpecPresent;
+use crosstalk_spec::paging::ChannelTransmissionList;
 use crosstalk_spec::paging::{
     AgentList, AlertList, AlertRuleList, AuditList, ChannelList, DeadLetterList,
     EdgeTransmissionList, Page, PageRequest, ProjectionList, ResourceUseList, SearchList,
     TopicList, TransmissionList,
 };
-use crosstalk_spec::support::NonEmpty;
 
 use super::queries::require;
 
@@ -131,24 +133,21 @@ impl QueryApi for FixtureBackend {
             .await
     }
 
-    /// The port-shaped overview (`pending`) with unconfirmed channels
-    /// included, without the unconfirmed-channel queue.
+    /// The overview's counts with the unconfirmed-channel queue, under the
+    /// filter's `unconfirmed_channels`.
     async fn overview(
         &self,
         caller: &Caller,
         window: TimeWindow,
         filter: &TopologyFilter,
     ) -> Result<Watermarked<OverviewCounts>> {
-        let filter = pending::TopologyFilter::from(filter.clone());
-        let counts = FixtureBackend::overview(self, caller, window, &filter).await?;
-        Ok(Watermarked {
-            watermark: counts.watermark,
-            value: counts.value.into(),
-        })
+        require(caller, Permission::View)?;
+        self.read(|ctx| queries::graph::overview(ctx, window, filter))
+            .await
     }
 
-    /// The port-shaped graph (`pending`) with unconfirmed channels
-    /// included, without the nodes' confirmations.
+    /// The channel-centred graph under the filter's `unconfirmed_channels`,
+    /// with each channel node's confirmation.
     async fn channel_topology(
         &self,
         caller: &Caller,
@@ -156,13 +155,9 @@ impl QueryApi for FixtureBackend {
         weighting: Weighting,
         filter: &TopologyFilter,
     ) -> Result<Watermarked<BipartiteGraph>> {
-        let filter = pending::TopologyFilter::from(filter.clone());
-        let graph =
-            FixtureBackend::channel_topology(self, caller, window, weighting, &filter).await?;
-        Ok(Watermarked {
-            watermark: graph.watermark,
-            value: graph.value.graph,
-        })
+        require(caller, Permission::View)?;
+        self.read(|ctx| queries::graph::channel_topology(ctx, window, weighting, filter))
+            .await
     }
 
     async fn series(
@@ -324,44 +319,42 @@ impl QueryApi for FixtureBackend {
         queries::projection::read(&*self.state.read().await, id)
     }
 
-    /// The port-shaped list (`pending`) with every listing, as the
-    /// spec's rows.
+    /// Rows with their cross-agent traffic and listings.
     async fn channels(
         &self,
         caller: &Caller,
         filter: &ChannelFilter,
         page: &PageRequest<ChannelList>,
     ) -> Result<Watermarked<Page<ChannelRow, ChannelList>>> {
-        let filter = pending::ChannelFilter::from(filter.clone());
-        let rows = FixtureBackend::channels(self, caller, &filter, page).await?;
-        let (items, next) = rows.value.into_parts();
-        let items: Vec<ChannelRow> = items
-            .into_iter()
-            .map(pending::ChannelRow::into_spec)
-            .collect();
-        let value = match (next, NonEmpty::from_vec(items.clone())) {
-            (Some(next), Some(items)) => Page::more(page.size, items, next),
-            (_, _) => Page::last(page.size, items),
-        }
-        .map_err(|e| queries::graph::store_error("channel page", e))?;
-        Ok(Watermarked {
-            watermark: rows.watermark,
-            value,
-        })
+        require(caller, Permission::View)?;
+        self.read(|ctx| queries::channels::rows::list(ctx, filter, page))
+            .await
     }
 
-    /// The port-shaped row (`pending`) as the spec's row.
+    /// A channel's cross-agent transmissions.
+    async fn channel_transmissions(
+        &self,
+        caller: &Caller,
+        channel: ChannelId,
+        filter: &ChannelTransmissionFilter,
+        version: TopicVersionSelector,
+        page: &PageRequest<ChannelTransmissionList>,
+    ) -> Result<ChannelTransmissionPage> {
+        require(caller, Permission::View)?;
+        self.read(|ctx| queries::channels::transmissions::page(ctx, channel, filter, version, page))
+            .await
+    }
+
+    /// The row with its cross-agent traffic, a hidden channel's included.
     async fn channel(
         &self,
         caller: &Caller,
         id: ChannelId,
         window: Option<TimeWindow>,
     ) -> Result<Option<Watermarked<ChannelRow>>> {
-        let row = FixtureBackend::channel(self, caller, id, window).await?;
-        Ok(row.map(|row| Watermarked {
-            watermark: row.watermark,
-            value: row.value.into_spec(),
-        }))
+        require(caller, Permission::View)?;
+        self.read(|ctx| queries::channels::rows::one(ctx, id, window))
+            .await
     }
 
     async fn policy_history(

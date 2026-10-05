@@ -15,11 +15,11 @@ use topcoat::router::query_params;
 use super::selection::Selection;
 use crate::error::UiError;
 use crate::pages::common::form::{FormFields, invalid};
-use crate::pending::channel_semantics::UnconfirmedChannels;
 use crate::url::route::decode_kind;
 use crate::url::scope::ViewFilter;
 use crate::url::ulid::UlidId;
 use crosstalk_spec::aggregates::filter::FalseDetections;
+use crosstalk_spec::aggregates::filter::UnconfirmedChannels;
 
 #[query_params]
 pub struct RawTopologyQuery {

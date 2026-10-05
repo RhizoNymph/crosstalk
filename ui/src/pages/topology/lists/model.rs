@@ -23,7 +23,7 @@ use crosstalk_spec::aggregates::edge::{TopologyGraph, WeightedEdge};
 use crosstalk_spec::aggregates::node::{AgentNode, CanonicalStateKind, ChannelNode, GraphNode};
 use crosstalk_spec::derived::flow::access::AccessKind;
 use crosstalk_spec::ids::{AgentId, ChannelId};
-use crosstalk_spec::interfaces::l8_surface::{Caller, Permission, PolicyKind};
+use crosstalk_spec::interfaces::l8_surface::{Caller, Permission, PolicyKind, QueryApi};
 use crosstalk_spec::observed::client::HarnessClaim;
 use topcoat::context::Cx;
 
@@ -33,9 +33,10 @@ use crate::error::UiError;
 use crate::pages::common::action::require;
 use crate::pages::common::transmissions::{ChannelNames, channel_names, route_channel};
 use crate::pages::topology::selection::Selection;
-use crate::pending::channel_semantics::{ChannelGraph, Confirmation};
 use crate::url::ulid::UlidId;
 use crate::url::view_state::{GraphMode, ViewState};
+use crosstalk_spec::aggregates::access::BipartiteGraph as ChannelGraph;
+use crosstalk_spec::derived::flow::channel::confirmation::Confirmation;
 
 /// An agent node of the graph.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -202,10 +203,11 @@ fn policies(graph: &ChannelGraph) -> HashMap<ChannelId, (PolicyKind, Confirmatio
         .iter()
         .filter_map(|node| match node {
             GraphNode::Channel(ChannelNode {
-                id, policy_kind, ..
-            }) => graph
-                .confirmation(*id)
-                .map(|confirmation| (*id, (*policy_kind, confirmation))),
+                id,
+                policy_kind,
+                confirmation,
+                ..
+            }) => Some((*id, (*policy_kind, *confirmation))),
             GraphNode::Agent(_) => None,
         })
         .collect()
@@ -266,7 +268,7 @@ pub fn channel_node_items(graph: &ChannelGraph, names: &ChannelNames) -> Vec<Cha
                 id: channel.id,
                 name: names.name(channel.id),
                 policy: Some(channel.policy_kind),
-                confirmation: graph.confirmation(channel.id),
+                confirmation: Some(channel.confirmation),
                 carried: Carried::Accesses { writes, reads },
             }
         })

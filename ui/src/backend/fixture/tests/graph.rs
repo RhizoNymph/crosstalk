@@ -18,12 +18,12 @@ use crosstalk_spec::interfaces::l8_surface::{AlertFilter, ConflictKind, QueryErr
 use super::super::clock::WATERMARK;
 use super::super::world::{ChannelKey, confirmed};
 use super::{day, first, graph_of, node_ids, researcher, shared, week};
-use crate::pending::channel_semantics::ChannelFilter;
 use crate::url::scope::{Scope, ViewFilter};
 use crosstalk_spec::aggregates::filter::TopicVersionSelector;
 use crosstalk_spec::aggregates::projection::ProjectionStatusKind;
 use crosstalk_spec::interfaces::l8_surface::QueryApi;
 use crosstalk_spec::interfaces::l8_surface::audit::AuditFilter;
+use crosstalk_spec::interfaces::l8_surface::lists::ChannelFilter;
 
 use super::reads_support::*;
 
@@ -612,8 +612,8 @@ async fn verdict_filter_drops_false_detections() {
 
 #[tokio::test]
 async fn channel_graph_draws_only_listed_channels() {
-    use crate::pending::channel_semantics::Confirmation;
-    use crate::pending::channel_semantics::UnconfirmedChannels;
+    use crosstalk_spec::aggregates::filter::UnconfirmedChannels;
+    use crosstalk_spec::derived::flow::channel::confirmation::Confirmation;
 
     let b = shared();
     let c = researcher();
@@ -631,10 +631,7 @@ async fn channel_graph_draws_only_listed_channels() {
         .nodes()
         .iter()
         .filter_map(|n| match n {
-            GraphNode::Channel(channel) => Some((
-                channel.id,
-                all.confirmation(channel.id).expect("confirmation"),
-            )),
+            GraphNode::Channel(channel) => Some((channel.id, channel.confirmation)),
             GraphNode::Agent(_) => None,
         })
         .collect();
@@ -690,10 +687,7 @@ async fn channel_graph_draws_only_listed_channels() {
         .nodes()
         .iter()
         .filter_map(|n| match n {
-            GraphNode::Channel(channel) => Some((
-                channel.id,
-                confirmed.confirmation(channel.id).expect("confirmation"),
-            )),
+            GraphNode::Channel(channel) => Some((channel.id, channel.confirmation)),
             GraphNode::Agent(_) => None,
         })
         .collect();
@@ -705,7 +699,7 @@ async fn channel_graph_draws_only_listed_channels() {
 
 #[tokio::test]
 async fn no_view_lists_a_transmission_within_one_agent() {
-    use crate::pending::channel_semantics::Crossing;
+    use crosstalk_spec::derived::flow::transmission::Crossing;
 
     let b = shared();
     let c = researcher();

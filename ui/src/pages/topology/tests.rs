@@ -459,7 +459,7 @@ fn list_row<'a>(body: &'a str, code: &str) -> Option<&'a str> {
 
 fn state_path(
     graph: GraphMode,
-    unconfirmed: crate::pending::channel_semantics::UnconfirmedChannels,
+    unconfirmed: crosstalk_spec::aggregates::filter::UnconfirmedChannels,
 ) -> String {
     let mut state = fixture_state();
     state.graph = graph;
@@ -473,7 +473,7 @@ fn state_path(
 /// neither its graph nor its list.
 #[tokio::test]
 async fn an_unconfirmed_channel_is_marked_in_the_channels_list() {
-    use crate::pending::channel_semantics::UnconfirmedChannels;
+    use crosstalk_spec::aggregates::filter::UnconfirmedChannels;
 
     let s3 = s3_handoff();
     let wiki = format!("channel:{}", wiki_channel().await.to_ulid());
@@ -503,7 +503,7 @@ async fn an_unconfirmed_channel_is_marked_in_the_channels_list() {
 
 #[tokio::test]
 async fn confirmed_only_leaves_unconfirmed_channels_out_of_list_and_graph() {
-    use crate::pending::channel_semantics::UnconfirmedChannels;
+    use crosstalk_spec::aggregates::filter::UnconfirmedChannels;
     use crosstalk_spec::aggregates::node::GraphNode;
 
     let s3 = s3_handoff();

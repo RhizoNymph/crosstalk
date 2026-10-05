@@ -130,8 +130,14 @@ pub fn plan(mint: &mut Mint, cast: &Cast) -> Result<ChannelPlan, GenError> {
     let mut specs = Vec::new();
     for draft in drafts() {
         let id = ChannelId::from_ulid(mint.ulid(draft.created));
-        let resources = draft
-            .locators
+        // A discovered channel holds exactly its seed: a resource joins a
+        // channel only through a declared pattern, so its other planned
+        // locators are dropped (as the world seed drops them).
+        let locators = match draft.origin {
+            DraftOrigin::Discovered => draft.locators.into_iter().take(1).collect(),
+            DraftOrigin::Declared { .. } => draft.locators,
+        };
+        let resources = locators
             .into_iter()
             .map(|l| (ResourceId::from_ulid(mint.ulid(draft.window.0)), l))
             .collect();
@@ -222,15 +228,11 @@ fn first_origin(
             // through falls back to the channel's first.
             let (created, first_transmission) =
                 traffic.first_crossing_through(*seed).unwrap_or(first);
-            // The spec's seed names an access (the channel-semantics port
-            // names the transmission): the write that opened it.
-            let first_access = traffic
-                .opening_access(first_transmission)
-                .ok_or_else(|| missing("opening access"))?;
             let origin = ChannelOrigin::Discovered {
                 seed: Seed {
                     resource: *seed,
-                    first_access,
+                    first_transmission,
+                    opened_at: created,
                 },
                 detection: traffic_detection(spec, stats)?,
             };

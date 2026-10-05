@@ -2,6 +2,7 @@
 //! evidence behind one transmission (excerpts from stored bodies, dropped
 //! bodies, accesses), verdict logs, search and detection quality.
 
+use crosstalk_spec::derived::flow::transmission::Crossing;
 use std::collections::HashSet;
 
 use crosstalk_spec::aggregates::edge::{EdgeSelector, Weighting};
@@ -303,7 +304,12 @@ async fn detection_quality_counts_each_judgeable_transmission() {
         MatchClass::Decoded,
         MatchClass::Semantic,
     ] {
-        assert!(kinds.contains(&QualityMatch::Content(class)), "{class:?}");
+        assert!(
+            kinds
+                .iter()
+                .any(|k| matches!(k, QualityMatch::Content { class: c, .. } if *c == class)),
+            "{class:?}"
+        );
     }
     assert!(kinds.contains(&QualityMatch::Suspected));
     assert!(kinds.contains(&QualityMatch::Discarded));
@@ -316,6 +322,7 @@ async fn detection_quality_counts_each_judgeable_transmission() {
             .transmissions
             .iter()
             .map(|t| (&t.transmission, ctx.verdict(t.transmission.id))),
+        ctx.aliases(),
     );
     assert_eq!(quality, tally);
     let judgeable = b
@@ -323,6 +330,8 @@ async fn detection_quality_counts_each_judgeable_transmission() {
         .transmissions
         .iter()
         .filter(|t| t.transmission.state.judgeable().is_ok())
+        // The tally leaves out transmissions now within one merged agent.
+        .filter(|t| t.transmission.crossing(ctx.aliases()) != Crossing::WithinOneAgent)
         .count() as u64;
     assert_eq!(rows.iter().map(|r| r.total()).sum::<u64>(), judgeable);
 }

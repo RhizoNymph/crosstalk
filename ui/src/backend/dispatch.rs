@@ -1,7 +1,6 @@
 //! [`AppBackend`] behind every trait the pages use: the spec's `QueryApi`,
 //! `OperatorActions` and `LiveFeed`, the contract gaps `Present` and
-//! `ExportFormats`, and the port-shaped channel reads of the
-//! channel-semantics stand-in. Each forwards to the configured backend;
+//! `ExportFormats`. Each forwards to the configured backend;
 //! the export rows and live streams are enums over the backends' own.
 
 use std::collections::BTreeMap;
@@ -64,10 +63,10 @@ use super::world::WorldSurface;
 use super::{AppBackend, Result};
 use crate::contract::formats::ExportFormats;
 use crate::contract::present::Present;
-use crate::pending::channel_semantics::{
-    ChannelFilter, ChannelGraph, ChannelRow, ChannelTransmissionFilter, ChannelTransmissionList,
-    ChannelTransmissionPage, OverviewCounts, TopologyFilter,
+use crosstalk_spec::interfaces::l8_surface::channel_traffic::{
+    ChannelTransmissionFilter, ChannelTransmissionPage,
 };
+use crosstalk_spec::paging::ChannelTransmissionList;
 
 /// Runs `$body` with `$b` bound to the fixture or to the world's surface,
 /// for a method both implement through the same trait.
@@ -144,6 +143,8 @@ impl QueryApi for AppBackend {
         fn policy_history(&self, caller: &Caller, channel: ChannelId) -> Option<PolicyHistory>;
         fn channels(&self, caller: &Caller, filter: &SpecChannelFilter, page: &PageRequest<ChannelList>)
             -> Watermarked<Page<SpecChannelRow, ChannelList>>;
+        fn channel_transmissions(&self, caller: &Caller, channel: ChannelId, filter: &ChannelTransmissionFilter, version: TopicVersionSelector, page: &PageRequest<ChannelTransmissionList>)
+            -> ChannelTransmissionPage;
         fn channel_names(&self, caller: &Caller, ids: &IdBatch<ChannelId>)
             -> BTreeMap<ChannelId, ChannelName>;
         fn promotion_preview(&self, caller: &Caller, channel: ChannelId, pattern: &ResourcePattern)
@@ -290,61 +291,6 @@ impl Present for AppBackend {
 impl ExportFormats for AppBackend {
     fn export_formats(&self) -> &'static [ExportFormat] {
         on_backend!(self, b => b.export_formats())
-    }
-}
-
-/// **Temporary.** The port-shaped channel reads
-/// (`crate::pending::channel_semantics`), as inherent methods that take
-/// precedence over the `QueryApi` methods of the same names. Deleted when
-/// the gateway's port lands, with the backends' own (`fixture::pending`,
-/// `world::pending`).
-impl AppBackend {
-    pub async fn channel(
-        &self,
-        caller: &Caller,
-        id: ChannelId,
-        window: Option<TimeWindow>,
-    ) -> Result<Option<Watermarked<ChannelRow>>> {
-        on_backend!(self, b => b.channel(caller, id, window).await)
-    }
-
-    pub async fn channels(
-        &self,
-        caller: &Caller,
-        filter: &ChannelFilter,
-        page: &PageRequest<ChannelList>,
-    ) -> Result<Watermarked<Page<ChannelRow, ChannelList>>> {
-        on_backend!(self, b => b.channels(caller, filter, page).await)
-    }
-
-    pub async fn channel_transmissions(
-        &self,
-        caller: &Caller,
-        channel: ChannelId,
-        filter: &ChannelTransmissionFilter,
-        version: TopicVersionSelector,
-        page: &PageRequest<ChannelTransmissionList>,
-    ) -> Result<ChannelTransmissionPage> {
-        on_backend!(self, b => b.channel_transmissions(caller, channel, filter, version, page).await)
-    }
-
-    pub async fn channel_topology(
-        &self,
-        caller: &Caller,
-        window: TimeWindow,
-        weighting: Weighting,
-        filter: &TopologyFilter,
-    ) -> Result<Watermarked<ChannelGraph>> {
-        on_backend!(self, b => b.channel_topology(caller, window, weighting, filter).await)
-    }
-
-    pub async fn overview(
-        &self,
-        caller: &Caller,
-        window: TimeWindow,
-        filter: &TopologyFilter,
-    ) -> Result<Watermarked<OverviewCounts>> {
-        on_backend!(self, b => b.overview(caller, window, filter).await)
     }
 }
 

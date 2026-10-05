@@ -81,9 +81,13 @@ async fn every_fit_is_a_new_ready_job_with_a_reproducible_frame() {
     let other_seed = fit(&a, &scope, 43, 300).await;
     assert_ne!(ids(&first_fit), ids(&other_seed));
     let points: Vec<_> = first_fit.frame().points().collect();
-    assert!(points.iter().any(|p| p.topic.is_some()));
-    assert!(points.iter().any(|p| p.topic.is_none()));
-    assert!(points.iter().any(|p| p.route.kind() == RouteKind::Channel));
+    assert!(points.iter().any(|p| p.topic().is_some()));
+    assert!(points.iter().any(|p| p.topic().is_none()));
+    assert!(
+        points
+            .iter()
+            .any(|p| p.route().kind() == RouteKind::Channel)
+    );
 }
 
 #[tokio::test]
@@ -99,10 +103,10 @@ async fn samples_honour_the_window_and_filter() {
         "below the limit everything is kept"
     );
     for point in projection.frame().points() {
-        assert_eq!(point.route.kind(), RouteKind::Channel);
-        assert!(scope.window.contains(point.confirmed_at));
-        let record = b.world.tx(point.transmission).expect("stored");
-        assert_eq!(record.topic(TopicModelVersion(2)), point.topic);
+        assert_eq!(point.route().kind(), RouteKind::Channel);
+        assert!(scope.window.contains(point.confirmed_at()));
+        let record = b.world.tx(point.transmission()).expect("stored");
+        assert_eq!(record.topic(TopicModelVersion(2)), point.topic());
     }
 }
 
@@ -116,8 +120,8 @@ async fn a_narrower_fit_keeps_what_it_admits_of_a_wider_sample() {
     let expected: Vec<_> = wide
         .frame()
         .points()
-        .filter(|p| narrow_scope.window.contains(p.confirmed_at))
-        .map(|p| p.transmission)
+        .filter(|p| narrow_scope.window.contains(p.confirmed_at()))
+        .map(|p| p.transmission())
         .collect();
     assert!(!expected.is_empty());
     assert!(expected.iter().all(|id| kept.contains(id)));

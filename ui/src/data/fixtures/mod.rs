@@ -18,7 +18,7 @@ use crosstalk_spec::aggregates::edge::{RouteKind, TopologyFilter};
 use crosstalk_spec::aggregates::node::AgentNode;
 use crosstalk_spec::aggregates::projection::frame::{FrameHeader, ProjectionFrame};
 use crosstalk_spec::aggregates::projection::{
-    Fitted, PointRoute, ProjectedPoint, Projection, ProjectionInfo, ProjectionLimit,
+    Fitted, PointParts, PointRoute, ProjectedPoint, Projection, ProjectionInfo, ProjectionLimit,
     ProjectionParams, ProjectionSpec, ProjectionStatus,
 };
 use crosstalk_spec::aggregates::topic::{EmbeddingModel, TopicModelVersion};
@@ -171,16 +171,19 @@ pub fn projection() -> (Projection, HashMap<TransmissionId, ChannelId>) {
             channel
         });
         let route = PointRoute::from_parts(kind, channel).expect("route");
-        points.push(ProjectedPoint {
-            transmission,
-            from: table_agents[sender].id,
-            to: table_agents[reader].id,
-            route,
-            topic: topic.map(|t| topics[t]),
-            confirmed_at: ts(u64::try_from(i).expect("small") * 60_000_000),
-            x: Finite::new(x).expect("finite"),
-            y: Finite::new(y).expect("finite"),
-        });
+        points.push(
+            ProjectedPoint::new(PointParts {
+                transmission,
+                from: table_agents[sender].id,
+                to: table_agents[reader].id,
+                route,
+                topic: topic.map(|t| topics[t]),
+                confirmed_at: ts(u64::try_from(i).expect("small") * 60_000_000),
+                x: Finite::new(x).expect("finite"),
+                y: Finite::new(y).expect("finite"),
+            })
+            .expect("sender and reader differ"),
+        );
     }
     let projection = stored(ProjectionId::from_ulid(ulid(0x9F, 1)), &points);
     (projection, routes)

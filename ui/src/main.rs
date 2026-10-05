@@ -12,7 +12,6 @@ mod contract;
 mod data;
 mod error;
 mod pages;
-mod pending;
 #[cfg(test)]
 mod testing;
 mod url;

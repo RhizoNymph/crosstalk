@@ -12,7 +12,8 @@
 use std::collections::BTreeMap;
 use std::num::NonZeroU64;
 
-use crate::pending::channel_semantics::{OverviewCounts, QueueCounts};
+use crosstalk_spec::interfaces::l8_surface::overview::OverviewCounts;
+
 use crosstalk_spec::aggregates::access::{BipartiteGraph, BipartiteParts, WeightedAccess};
 use crosstalk_spec::aggregates::edge::{
     EdgeStats, EdgeTotals, TopologyGraph, TopologyGraphParts, WeightedEdge, Weighting,
@@ -23,11 +24,13 @@ use crosstalk_spec::derived::flow::transmission::Route;
 use crosstalk_spec::ids::{AgentId, ChannelId};
 use crosstalk_spec::interfaces::l7_topology::EdgeQueryError;
 use crosstalk_spec::interfaces::l8_surface::QueryError;
+use crosstalk_spec::interfaces::l8_surface::overview::QueueCounts;
 use crosstalk_spec::support::{Share, TimeWindow};
 
 use crate::backend::Result;
 use crate::backend::fixture::clock::{BUCKET, WATERMARK};
-use crate::pending::channel_semantics::{ChannelGraph, TopologyFilter};
+use crosstalk_spec::aggregates::access::BipartiteGraph as ChannelGraph;
+use crosstalk_spec::aggregates::filter::TopologyFilter;
 
 use super::linked::{Counted, Linked};
 use super::{Ctx, alerts, channels, nodes, route_key};
@@ -135,7 +138,7 @@ pub fn graph(
     ctx: &Ctx,
     window: TimeWindow,
     weighting: Weighting,
-    filter: impl Into<TopologyFilter>,
+    filter: &TopologyFilter,
 ) -> Result<TopologyGraph> {
     aligned(window)?;
     let linked = Linked::new(ctx, window, filter)?;
@@ -155,7 +158,7 @@ pub fn topology(
     ctx: &Ctx,
     window: TimeWindow,
     weighting: Weighting,
-    filter: impl Into<TopologyFilter>,
+    filter: &TopologyFilter,
 ) -> Result<Watermarked<TopologyGraph>> {
     graph(ctx, window, weighting, filter).map(watermarked)
 }
@@ -266,8 +269,7 @@ pub fn channel_topology(
             Route::Delegation(_) | Route::Direct(_) | Route::Unobserved => None,
         }));
     let mut nodes = nodes::agent_nodes(ctx, agents, &transmissions)?;
-    let (channel_nodes, confirmations) = nodes::channel_nodes(ctx, channels)?;
-    nodes.extend(channel_nodes);
+    nodes.extend(nodes::channel_nodes(ctx, channels)?);
     let graph = BipartiteGraph::new(BipartiteParts {
         window,
         weighting,
@@ -277,8 +279,5 @@ pub fn channel_topology(
         transmissions,
     })
     .map_err(|e| store_error("channel-centred graph", e))?;
-    Ok(watermarked(ChannelGraph {
-        graph,
-        confirmations,
-    }))
+    Ok(watermarked(graph))
 }

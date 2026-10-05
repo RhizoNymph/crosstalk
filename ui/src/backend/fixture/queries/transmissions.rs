@@ -135,5 +135,6 @@ pub fn quality(ctx: &Ctx, window: TimeWindow) -> DetectionQuality {
             .transmissions
             .iter()
             .map(|record| (&record.transmission, ctx.verdict(record.transmission.id))),
+        ctx.aliases(),
     )
 }

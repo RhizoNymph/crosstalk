@@ -19,7 +19,15 @@ pub fn encode(text: &str, codec: Codec) -> String {
         Codec::Hex => hex(text.as_bytes()),
         Codec::UrlEncoding => url_encode(text),
         Codec::UnicodeNormalization => obfuscate_unicode(text),
+        // One level of escaping inside a quoted literal: a JSON string, and
+        // a YAML double-quoted scalar, whose escapes include JSON's.
+        Codec::JsonString | Codec::YamlString => json_literal(text),
     }
+}
+
+/// `text` as a JSON string literal, quotes included.
+fn json_literal(text: &str) -> String {
+    serde_json::Value::String(text.to_owned()).to_string()
 }
 
 pub fn base64(bytes: &[u8]) -> String {

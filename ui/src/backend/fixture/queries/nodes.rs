@@ -16,7 +16,6 @@ use crosstalk_spec::support::NonBlank;
 use crate::backend::Result;
 use crate::backend::fixture::store::ChannelRecord;
 use crate::data::names::{locator_name, pattern_name};
-use crate::pending::channel_semantics::Confirmation;
 
 use super::Ctx;
 use super::agents::profile::{claims, parent};
@@ -95,29 +94,26 @@ pub fn agent_nodes(
         .collect()
 }
 
-/// One channel node per distinct id of `channels`, in id order, and each
-/// node's confirmation (the stand-in for `ChannelNode::confirmation`).
+/// One channel node per distinct id of `channels`, in id order, each with
+/// its confirmation.
 pub fn channel_nodes(
     ctx: &Ctx,
     channels: impl IntoIterator<Item = ChannelId>,
-) -> Result<(Vec<GraphNode>, BTreeMap<ChannelId, Confirmation>)> {
+) -> Result<Vec<GraphNode>> {
     let ids: BTreeSet<ChannelId> = channels.into_iter().collect();
     let mut nodes = Vec::with_capacity(ids.len());
-    let mut confirmations = BTreeMap::new();
     for id in ids {
         let record = ctx
             .state
             .channels
             .get(&id)
             .ok_or_else(|| store("unknown channel", id))?;
-        let (node, confirmation) = channel_node(ctx, record)?;
-        confirmations.insert(id, confirmation);
-        nodes.push(GraphNode::Channel(node));
+        nodes.push(GraphNode::Channel(channel_node(ctx, record)?));
     }
-    Ok((nodes, confirmations))
+    Ok(nodes)
 }
 
-fn channel_node(ctx: &Ctx, record: &ChannelRecord) -> Result<(ChannelNode, Confirmation)> {
+fn channel_node(ctx: &Ctx, record: &ChannelRecord) -> Result<ChannelNode> {
     let channel = record.channel();
     let origin_kind = CanonicalOriginKind::of(&channel.origin)
         .ok_or_else(|| store("superseded channel as a node", channel.id))?;
@@ -130,9 +126,10 @@ fn channel_node(ctx: &Ctx, record: &ChannelRecord) -> Result<(ChannelNode, Confi
         origin_kind,
         detection_kind: channel.origin.detection_kind(),
         policy_kind: channel.policy.kind(),
+        confirmation,
         locator_summary: locator_summary(ctx, record)?,
     };
-    Ok((node, confirmation))
+    Ok(node)
 }
 
 /// What a channel covers, as the spec's `locator_summary` words it: the

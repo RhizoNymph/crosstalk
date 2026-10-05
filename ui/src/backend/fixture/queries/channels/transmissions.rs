@@ -5,14 +5,14 @@
 //! have merged into one is not listed), topics under the version the first
 //! page resolves and the cursor pins.
 
-use crate::pending::channel_semantics::ChannelTransmissionList;
-use crate::pending::channel_semantics::{
-    ChannelTransmission, ChannelTransmissionFilter, ChannelTransmissionPage,
-};
 use crosstalk_spec::aggregates::filter::TopicVersionSelector;
 use crosstalk_spec::derived::flow::transmission::Route;
 use crosstalk_spec::ids::ChannelId;
 use crosstalk_spec::interfaces::l8_surface::QueryError;
+use crosstalk_spec::interfaces::l8_surface::channel_traffic::ChannelTransmission;
+use crosstalk_spec::interfaces::l8_surface::channel_traffic::ChannelTransmissionFilter;
+use crosstalk_spec::interfaces::l8_surface::channel_traffic::ChannelTransmissionPage;
+use crosstalk_spec::paging::ChannelTransmissionList;
 use crosstalk_spec::paging::PageRequest;
 
 use crate::backend::Result;
@@ -53,7 +53,6 @@ pub fn page(
             let row = ChannelTransmission::of(
                 &record.transmission,
                 ctx.aliases(),
-                |access| ctx.writer(access),
                 |id| ctx.verdict(id),
                 |_| topic_under(record, version),
             )?;

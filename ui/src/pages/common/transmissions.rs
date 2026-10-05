@@ -28,10 +28,10 @@ use crate::components::{
 };
 use crate::data::names::{channel_name, locator_name, pattern_name};
 use crate::error::UiError;
-use crate::pending::channel_semantics::ChannelRow;
 use crate::url::ulid::UlidId;
 use crate::url::view_state::ViewState;
 use crosstalk_spec::interfaces::l8_surface::QueryApi;
+use crosstalk_spec::interfaces::l8_surface::channels::ChannelRow;
 
 /// A channel row's name: the declared pattern, else the seed resource,
 /// else the id's tail. Names follow `data::names`, as the graph shows them.

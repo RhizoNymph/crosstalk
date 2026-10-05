@@ -244,7 +244,10 @@ pub fn verdicts(ctx: &Ctx, settled: TimeWindow) -> Result<Vec<ExportRow>, Export
         if !settled.contains(record.transmission.opened_at) {
             continue;
         }
-        rows.extend(verdict_rows(&record.transmission, log).map_err(|e| store("verdicts", e))?);
+        rows.extend(
+            verdict_rows(&record.transmission, log, ctx.aliases())
+                .map_err(|e| store("verdicts", e))?,
+        );
     }
     Ok(sorted(rows))
 }

@@ -11,7 +11,9 @@
 
 use std::collections::HashMap;
 
-use crosstalk_spec::derived::flow::access::{Access, AccessKind, AccessOp, Extraction};
+use crosstalk_spec::derived::flow::access::{
+    Access, AccessKind, AccessOp, Extraction, WriteOutcome,
+};
 use crosstalk_spec::derived::flow::evidence::CoAccess;
 use crosstalk_spec::derived::flow::resource::{Locator, Resource};
 use crosstalk_spec::derived::flow::transmission::{DelegationDirection, DirectCarrier, Route};
@@ -156,15 +158,6 @@ impl Traffic {
             .filter(|t| t.accesses.first().is_some_and(|first| on.contains(first)))
             .map(|t| (t.transmission.opened_at, t.transmission.id))
             .min()
-    }
-
-    /// The access that opened `transmission`: the write its first co-access
-    /// pairs, on the resource the transmission went through.
-    pub fn opening_access(&self, transmission: TransmissionId) -> Option<AccessId> {
-        self.transmissions
-            .iter()
-            .find(|t| t.transmission.id == transmission)
-            .and_then(|t| t.accesses.first().copied())
     }
 
     /// The cross-agent transmissions that `counts` keeps: given
@@ -346,6 +339,7 @@ impl Gen<'_> {
             AccessKind::Write => AccessOp::Write {
                 call: evidence::part(&mut self.rng),
                 spans: vec![SpanId::from_ulid(self.mint.ulid(at))],
+                outcome: WriteOutcome::Delivered,
             },
             AccessKind::Read => AccessOp::Read {
                 result: evidence::part(&mut self.rng),

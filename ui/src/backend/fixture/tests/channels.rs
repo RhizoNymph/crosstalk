@@ -2,26 +2,30 @@
 //! resources, names and policy history, and the team-notes promotion in
 //! the world's past. Policy and promotion actions are in `promotion`.
 
-use crate::pending::channel_semantics::ChannelFilter;
-use crate::pending::channel_semantics::ChannelTransmissionFilter;
-use crate::pending::channel_semantics::CrossTraffic;
-use crate::pending::channel_semantics::{ChannelRow, ChannelStanding};
-use crate::pending::channel_semantics::{Confirmation, Listing, ListingKind};
-use crate::pending::channel_semantics::{TopologyFilter, UnconfirmedChannels};
 use crosstalk_spec::aggregates::alert::AlertSubject;
 use crosstalk_spec::aggregates::edge::Weighting;
 use crosstalk_spec::aggregates::filter::TopicVersionSelector;
+use crosstalk_spec::aggregates::filter::TopologyFilter;
+use crosstalk_spec::aggregates::filter::UnconfirmedChannels;
 use crosstalk_spec::aggregates::node::GraphNode;
 use crosstalk_spec::batch::IdBatch;
+use crosstalk_spec::derived::flow::channel::confirmation::Confirmation;
+use crosstalk_spec::derived::flow::channel::confirmation::CrossTraffic;
+use crosstalk_spec::derived::flow::channel::confirmation::Listing;
+use crosstalk_spec::derived::flow::channel::confirmation::ListingKind;
 use crosstalk_spec::derived::flow::channel::detection::TrafficDetection;
 use crosstalk_spec::derived::flow::channel::policy::{Policy, PolicyAuthor, PolicyKind};
 use crosstalk_spec::derived::flow::channel::{ChannelOrigin, DeclaredHistory};
 use crosstalk_spec::derived::flow::resource::Locator;
 use crosstalk_spec::derived::flow::transmission::Route;
 use crosstalk_spec::ids::ChannelId;
+use crosstalk_spec::interfaces::l8_surface::channel_traffic::ChannelTransmissionFilter;
+use crosstalk_spec::interfaces::l8_surface::channels::ChannelRow;
+use crosstalk_spec::interfaces::l8_surface::channels::ChannelStanding;
 use crosstalk_spec::interfaces::l8_surface::channels::{
     ChannelActivity, ChannelCounts, ChannelShape,
 };
+use crosstalk_spec::interfaces::l8_surface::lists::ChannelFilter;
 use crosstalk_spec::interfaces::l8_surface::lists::OriginFilter;
 use crosstalk_spec::interfaces::l8_surface::{AlertFilter, OperatorAction, OperatorActions};
 use crosstalk_spec::interfaces::l8_surface::{InputError, Permission, QueryError};

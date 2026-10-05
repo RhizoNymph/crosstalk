@@ -13,7 +13,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroU64;
 
-use crate::pending::channel_semantics::{Confirmation, TopologyFilter as ViewFilter};
+use crosstalk_spec::derived::flow::channel::confirmation::Confirmation;
+
+use crosstalk_spec::aggregates::filter::TopologyFilter as ViewFilter;
 use crosstalk_spec::aggregates::filter::{
     AccessSubject, FalseDetections, FilterSubject, TopicVersionSelector, TopologyFilter,
 };
@@ -142,11 +144,7 @@ pub struct Linked<'a> {
 
 impl<'a> Linked<'a> {
     /// Resolves the filter's version once, for the whole view.
-    pub fn new(
-        ctx: &'a Ctx<'a>,
-        window: TimeWindow,
-        filter: impl Into<ViewFilter>,
-    ) -> Result<Self> {
+    pub fn new(ctx: &'a Ctx<'a>, window: TimeWindow, filter: &ViewFilter) -> Result<Self> {
         Self::paged(ctx, Some(window), filter, None)
     }
 
@@ -156,10 +154,10 @@ impl<'a> Linked<'a> {
     pub fn paged(
         ctx: &'a Ctx<'a>,
         window: Option<TimeWindow>,
-        filter: impl Into<ViewFilter>,
+        filter: &ViewFilter,
         pinned: Option<TopicModelVersion>,
     ) -> Result<Self> {
-        let filter = filter.into();
+        let filter = filter.clone();
         let version = match pinned {
             Some(version) => pinned_version(ctx.state, version)?,
             None => resolve_version(ctx.world, ctx.state, &filter)?,
@@ -177,13 +175,13 @@ impl<'a> Linked<'a> {
     pub fn at(
         ctx: &'a Ctx<'a>,
         window: Option<TimeWindow>,
-        filter: impl Into<ViewFilter>,
+        filter: &ViewFilter,
         version: TopicModelVersion,
     ) -> Self {
         Self {
             ctx,
             window,
-            filter: filter.into(),
+            filter: filter.clone(),
             version,
         }
     }
@@ -301,10 +299,10 @@ impl<'a> Linked<'a> {
         let subject = AccessSubject {
             agent,
             channel,
+            confirmation,
             channel_topics: topics.get(&channel).map_or(&[], Vec::as_slice),
         };
-        self.filter
-            .admits_access(&subject, confirmation, self.aliases())
+        self.filter.admits_access(&subject, self.aliases())
     }
 }
 

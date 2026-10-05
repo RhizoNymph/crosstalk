@@ -244,7 +244,7 @@ mod tests {
         let router = Router::builder()
             .discover()
             .app_context(operator())
-            .app_context(backend)
+            .app_context(crate::backend::AppBackend::from(backend))
             .build();
         let mut request = Request::builder().uri("/data/live");
         if let Some(last) = last {

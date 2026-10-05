@@ -4,7 +4,8 @@
 
 use std::collections::BTreeMap;
 
-use crate::pending::channel_semantics::{ChannelGraph, Confirmation};
+use crosstalk_spec::aggregates::access::BipartiteGraph as ChannelGraph;
+
 use crosstalk_spec::aggregates::access::{BipartiteGraph, BipartiteParts, WeightedAccess};
 use crosstalk_spec::aggregates::edge::{
     EdgeStats, TopologyGraph, TopologyGraphParts, WeightedEdge, Weighting,
@@ -18,6 +19,7 @@ use crosstalk_spec::aggregates::series::{
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::aggregates::watermark::Watermarked;
 use crosstalk_spec::derived::flow::access::AccessKind;
+use crosstalk_spec::derived::flow::channel::confirmation::Confirmation;
 use crosstalk_spec::derived::flow::channel::detection::DetectionKind;
 use crosstalk_spec::derived::flow::resource::{Host, Locator, ResourcePattern};
 use crosstalk_spec::derived::flow::transmission::{DelegationDirection, DirectCarrier, Route};
@@ -354,28 +356,25 @@ pub fn channel_names() -> ChannelNames {
 fn channel_nodes() -> Vec<GraphNode> {
     channel_specs()
         .into_iter()
-        .map(|(n, origin_kind, detection_kind, _, policy_kind, shape)| {
-            GraphNode::Channel(ChannelNode {
-                id: channel_id(n),
-                label: None,
-                origin_kind,
-                detection_kind,
-                policy_kind,
-                locator_summary: NonBlank::new(&shape_name(&shape)).expect("names are not blank"),
-            })
-        })
+        .map(
+            |(n, origin_kind, detection_kind, confirmation, policy_kind, shape)| {
+                GraphNode::Channel(ChannelNode {
+                    id: channel_id(n),
+                    label: None,
+                    origin_kind,
+                    detection_kind,
+                    policy_kind,
+                    confirmation,
+                    locator_summary: NonBlank::new(&shape_name(&shape))
+                        .expect("names are not blank"),
+                })
+            },
+        )
         .collect()
 }
 
 /// Each channel node's confirmation (the stand-in for
 /// `ChannelNode::confirmation`).
-fn confirmations() -> BTreeMap<ChannelId, Confirmation> {
-    channel_specs()
-        .into_iter()
-        .map(|(n, _, _, confirmation, _, _)| (channel_id(n), confirmation))
-        .collect()
-}
-
 /// Writes by the sender and reads by the reader of every channel-routed
 /// edge, two accesses per transmission on each side.
 fn accesses() -> Vec<WeightedAccess> {
@@ -418,10 +417,7 @@ pub fn bipartite_graph() -> Watermarked<ChannelGraph> {
         transmissions: edges(),
     })
     .expect("every endpoint has a node");
-    watermarked(ChannelGraph {
-        graph,
-        confirmations: confirmations(),
-    })
+    watermarked(graph)
 }
 
 /// 96 points of 15 minutes over [`window`], busier in working hours: the

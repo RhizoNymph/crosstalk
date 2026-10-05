@@ -17,7 +17,7 @@
 
 use crosstalk_spec::aggregates::projection::frame::{FrameHeader, ProjectionFrame};
 use crosstalk_spec::aggregates::projection::{
-    FitFailure, Fitted, PointRoute, ProjectedPoint, ProjectionParams, ProjectionSpec,
+    FitFailure, Fitted, PointParts, PointRoute, ProjectedPoint, ProjectionParams, ProjectionSpec,
 };
 use crosstalk_spec::ids::{ProjectionId, TransmissionId};
 use crosstalk_spec::interfaces::l8_surface::QueryError;
@@ -27,7 +27,6 @@ use crate::backend::Result;
 use crate::backend::fixture::clock::{MINUTE, minus};
 use crate::backend::fixture::rng::Rng;
 use crate::backend::fixture::text::Theme;
-use crate::pending::channel_semantics::checked_point;
 
 use super::super::Ctx;
 use super::super::graph::store_error;
@@ -110,7 +109,7 @@ pub fn fit(ctx: &Ctx, spec: &ProjectionSpec, id: ProjectionId, at: Timestamp) ->
         .iter()
         .map(|counted| {
             let (x, y) = position(params, counted);
-            checked_point(ProjectedPoint {
+            ProjectedPoint::new(PointParts {
                 transmission: counted.record.transmission.id,
                 from: counted.from,
                 to: counted.to,

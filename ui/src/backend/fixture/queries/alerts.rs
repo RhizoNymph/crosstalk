@@ -6,7 +6,8 @@
 //! ([`shown`]); an unmerge lists it again. Rules list the built-ins first, in
 //! `BuiltinRule::ALL` order, then user rules newest first.
 
-use crate::pending::channel_semantics::{Crossing, alert_shown};
+use crosstalk_spec::derived::flow::transmission::Crossing;
+
 use crosstalk_spec::aggregates::alert::{Alert, AlertRuleDef, AlertSubject, BuiltinRule};
 use crosstalk_spec::derived::flow::transmission::Route;
 use crosstalk_spec::ids::{AlertId, AlertRuleId, ChannelId};
@@ -37,8 +38,7 @@ fn about_channel(ctx: &Ctx, alert: &Alert, channel: ChannelId) -> bool {
 /// (`AlertSubject::shown`): not when it is about a hidden channel or a
 /// transmission whose agents have merged into one.
 pub fn shown(ctx: &Ctx, alert: &Alert) -> bool {
-    alert_shown(
-        alert.subject,
+    alert.subject.shown(
         ctx.aliases(),
         |channel| ctx.hidden(channel),
         |transmission| {

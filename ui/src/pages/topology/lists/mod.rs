@@ -18,7 +18,7 @@
 
 pub mod model;
 
-use crate::pending::channel_semantics::Confirmation;
+use crosstalk_spec::derived::flow::channel::confirmation::Confirmation;
 use topcoat::Result;
 use topcoat::context::Cx;
 use topcoat::runtime::{Event, Signal, signal};

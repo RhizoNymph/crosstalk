@@ -65,8 +65,8 @@ pub async fn point_channels<B: QueryApi>(
     let routed: Vec<TransmissionId> = projection
         .frame()
         .points()
-        .filter(|point| point.route.kind() == RouteKind::Channel)
-        .map(|point| point.transmission)
+        .filter(|point| point.route().kind() == RouteKind::Channel)
+        .map(|point| point.transmission())
         .collect();
     let mut channels = HashMap::with_capacity(routed.len());
     if routed.is_empty() {
@@ -230,13 +230,13 @@ mod tests {
         let agent = |i: u32| points.agents()[i as usize];
         for (i, point) in projection.frame().points().enumerate() {
             let c = points.categories()[i];
-            assert_eq!(agent(decoded.senders[i]), point.from);
-            assert_eq!(agent(decoded.readers[i]), point.to);
-            assert_eq!(decoded.routes[i], route_code(point.route.kind()));
+            assert_eq!(agent(decoded.senders[i]), point.from());
+            assert_eq!(agent(decoded.readers[i]), point.to());
+            assert_eq!(decoded.routes[i], route_code(point.route().kind()));
             assert_eq!(decoded.channels[i], c.channel);
             assert_eq!(
                 decoded.topics[i].map(|t| points.topics()[t as usize]),
-                point.topic
+                point.topic()
             );
         }
         let ids: Vec<u128> = columns.transmissions.iter().map(|t| t.as_ulid()).collect();
@@ -298,7 +298,7 @@ mod tests {
         for (i, point) in projection.frame().points().enumerate() {
             assert_eq!(
                 decoded.channels[i].is_some(),
-                point.route.kind() == RouteKind::Channel,
+                point.route().kind() == RouteKind::Channel,
                 "exactly the channel-routed points name a channel"
             );
         }

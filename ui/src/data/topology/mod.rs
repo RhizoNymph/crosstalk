@@ -43,7 +43,8 @@
 //! which adds a resource count); `origin` is `declared` for a channel
 //! declared before traffic or promoted.
 
-use crate::pending::channel_semantics::{ChannelGraph, Confirmation};
+use crosstalk_spec::aggregates::access::BipartiteGraph as ChannelGraph;
+
 use crosstalk_spec::aggregates::access::WeightedAccess;
 use crosstalk_spec::aggregates::edge::{RouteKind, TopologyGraph, WeightedEdge, Weighting};
 use crosstalk_spec::aggregates::node::{
@@ -51,9 +52,9 @@ use crosstalk_spec::aggregates::node::{
 };
 use crosstalk_spec::aggregates::watermark::Watermarked;
 use crosstalk_spec::derived::flow::access::AccessKind;
+use crosstalk_spec::derived::flow::channel::confirmation::Confirmation;
 use crosstalk_spec::derived::flow::channel::detection::DetectionKind;
 use crosstalk_spec::derived::flow::transmission::Route;
-use crosstalk_spec::ids::ChannelId;
 use crosstalk_spec::interfaces::l8_surface::{Permission, PolicyKind};
 use crosstalk_spec::observed::agent::SeenClaim;
 use crosstalk_spec::support::TimeWindow;
@@ -265,12 +266,6 @@ impl From<DetectionKind> for DetectionCode {
     fn from(kind: DetectionKind) -> Self {
         match kind {
             DetectionKind::AwaitingTraffic => Self::AwaitingTraffic,
-            // No cross-agent transmission yet. The spec still has these
-            // two states; the channel-semantics port removes them, no
-            // channel node is built in either (only channels with
-            // cross-agent traffic are drawn), and the element payload
-            // keeps its four codes.
-            DetectionKind::Observed | DetectionKind::Candidate => Self::AwaitingTraffic,
             DetectionKind::Unused => Self::Unused,
             DetectionKind::Active => Self::Active,
             DetectionKind::Dormant => Self::Dormant,
@@ -384,12 +379,7 @@ fn agent_node(agent: &AgentNode) -> NodePayload {
     })
 }
 
-fn channel_node(
-    channel: &ChannelNode,
-    confirmation: Confirmation,
-    accesses: &[WeightedAccess],
-    name: String,
-) -> NodePayload {
+fn channel_node(channel: &ChannelNode, accesses: &[WeightedAccess], name: String) -> NodePayload {
     let volume = accesses
         .iter()
         .filter(|a| a.channel == channel.id)
@@ -399,7 +389,7 @@ fn channel_node(
         name,
         origin: channel.origin_kind.into(),
         detection: channel.detection_kind.into(),
-        confirmation: confirmation.into(),
+        confirmation: channel.confirmation.into(),
         policy: channel.policy_kind.into(),
         volume,
     })
@@ -428,25 +418,17 @@ fn access_edge(access: &WeightedAccess) -> EdgePayload {
 }
 
 /// A graph's nodes, agents and channels in the graph's order. `name` names
-/// a channel node and `confirmation` gives its confirmation (every channel
-/// node of a [`ChannelGraph`] has one; the stand-in for
-/// `ChannelNode::confirmation`).
+/// a channel node.
 fn nodes(
     nodes: &[GraphNode],
     accesses: &[WeightedAccess],
     name: impl Fn(&ChannelNode) -> String,
-    confirmation: impl Fn(ChannelId) -> Option<Confirmation>,
 ) -> Vec<NodePayload> {
     nodes
         .iter()
         .map(|node| match node {
             GraphNode::Agent(agent) => agent_node(agent),
-            GraphNode::Channel(channel) => channel_node(
-                channel,
-                confirmation(channel.id).unwrap_or(Confirmation::Confirmed),
-                accesses,
-                name(channel),
-            ),
+            GraphNode::Channel(channel) => channel_node(channel, accesses, name(channel)),
         })
         .collect()
 }
@@ -462,12 +444,9 @@ impl TopologyPayload {
             topic_version: value.topic_version().0,
             watermark: format_time(graph.watermark.at()),
             // A topology graph has agent nodes only.
-            nodes: nodes(
-                value.nodes(),
-                &[],
-                |c| c.locator_summary.as_str().to_owned(),
-                |_| None,
-            ),
+            nodes: nodes(value.nodes(), &[], |c| {
+                c.locator_summary.as_str().to_owned()
+            }),
             edges: value.edges().iter().map(transmission_edge).collect(),
         }
     }
@@ -494,12 +473,7 @@ impl TopologyPayload {
             weighting: value.weighting().into(),
             topic_version: value.topic_version().0,
             watermark: format_time(graph.watermark.at()),
-            nodes: nodes(
-                value.nodes(),
-                value.accesses(),
-                |c| names.name(c.id),
-                |id| value.confirmation(id),
-            ),
+            nodes: nodes(value.nodes(), value.accesses(), |c| names.name(c.id)),
             edges,
         }
     }

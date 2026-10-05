@@ -32,10 +32,10 @@ use crate::pages::common::transmissions::{
 };
 use crate::pages::topology::selection::Selection;
 use crate::pages::view::state_from_query;
-use crate::pending::channel_semantics::Listing;
 use crate::url::view_state::ViewState;
 use crosstalk_spec::aggregates::node::CanonicalOriginKind;
 use crosstalk_spec::aggregates::node::CanonicalStateKind;
+use crosstalk_spec::derived::flow::channel::confirmation::Listing;
 use crosstalk_spec::derived::flow::channel::detection::DetectionKind;
 use crosstalk_spec::interfaces::l8_surface::QueryApi;
 use crosstalk_spec::paging::PageRequest;
