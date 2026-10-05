@@ -43,7 +43,7 @@ pub mod spans;
 #[cfg(test)]
 mod fuzz;
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 use crosstalk_spec::derived::flow::access::AccessKind;
 use crosstalk_spec::interfaces::l5_flow::{ExtractError, ExtractedAccess, ResourceExtractor};
@@ -56,7 +56,7 @@ pub use mcp::config::{
     ConfigError, ExtractConfig, McpAccessRule, McpResource, McpServerConfig, McpToolRule,
     RefusalMarker, RuleOp,
 };
-pub use op::{Classified, ExtractedOp, WriteOutcome};
+pub use op::{Classified, ExtractedOp, WriteOutcome, WritePayload};
 pub use resource::{AbsolutePath, KeyCanon, RepoId};
 pub use sites::{HostPattern, MediaWikiSite, SitePath, SitesConfig};
 pub use spans::{AccessOpError, access_op, write_spans};
@@ -104,13 +104,25 @@ impl<'a> ToolExtractors<'a> {
             }
             KnownTool::Http(http) => http::tool_candidates(http, &args, self.config.sites())?,
         };
-        let write = outcome::write_outcome(&tool, result);
-        let read = outcome::read_delivered(&tool, result);
+        let text = result.map(outcome::result_text);
         let mut classified: Vec<Classified> = Vec::with_capacity(candidates.len());
-        for Candidate { kind, locator, via } in candidates {
+        for Candidate {
+            kind,
+            locator,
+            via,
+            payload,
+            rule,
+        } in candidates
+        {
+            let judged = outcome::judge(&tool, rule, result, text.as_deref());
             let op = match kind {
-                AccessKind::Write => ExtractedOp::Write(write),
-                AccessKind::Read if read => ExtractedOp::Read,
+                AccessKind::Write => ExtractedOp::Write {
+                    outcome: judged,
+                    payload,
+                },
+                AccessKind::Read if result.is_some() && judged != WriteOutcome::Rejected => {
+                    ExtractedOp::Read
+                }
                 AccessKind::Read => continue,
             };
             let access = Classified { op, locator, via };

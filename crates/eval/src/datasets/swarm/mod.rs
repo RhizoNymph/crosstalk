@@ -11,7 +11,11 @@
 //! [`World`]:
 //!
 //! - the **author** originates the decoded plaintext in its output;
-//! - the **reader** receives the encoded token in a tool result.
+//! - the **reader** calls `fetch_drop` in one exchange and receives the
+//!   encoded token as its result in the next, the shape a harness gives a
+//!   tool call; the label sits in that second exchange.
+//!
+//! The three calls are one paced step apart ([`Pace`]).
 //!
 //! The expected transmission is a Decoded-class edge author → reader,
 //! labelled with the codec chain the converter verified by actually decoding
@@ -32,12 +36,13 @@ use crosstalk_spec::observed::exchange::{StopReason, WireProtocol};
 use crosstalk_spec::observed::message::json::canonicalize;
 use crosstalk_spec::observed::message::{
     AssistantPart, MessageBody, SystemPart, Text, ToolArguments, ToolCall, ToolCallId,
-    ToolExecution, ToolName, ToolOutcome, ToolResult, ToolResultContent,
+    ToolExecution, ToolName, ToolOutcome, ToolResult, ToolResultContent, UserPart,
 };
 use crosstalk_spec::support::NonEmpty;
 use flate2::read::GzDecoder;
 use serde::Deserialize;
 
+use crate::corpus::clock::Pace;
 use crate::corpus::{
     CorpusError, Coverage, Driven, ExchangeDraft, Fidelity, HashedMessage, SourceError,
     TraceSource, World, WorldBuilder,
@@ -123,6 +128,7 @@ struct TokenWorld {
 pub struct SwarmSource {
     worlds: Vec<TokenWorld>,
     tally: ChainTally,
+    pace: Pace,
 }
 
 impl SwarmSource {
@@ -171,11 +177,25 @@ impl SwarmSource {
                     corroborated: is_corroborated,
                 });
                 if selection.limit.is_some_and(|limit| worlds.len() >= limit) {
-                    return Ok(Self { worlds, tally });
+                    return Ok(Self {
+                        worlds,
+                        tally,
+                        pace: Pace::DEFAULT,
+                    });
                 }
             }
         }
-        Ok(Self { worlds, tally })
+        Ok(Self {
+            worlds,
+            tally,
+            pace: Pace::DEFAULT,
+        })
+    }
+
+    /// These worlds with calls `pace` apart.
+    pub fn with_pace(mut self, pace: Pace) -> Self {
+        self.pace = pace;
+        self
     }
 
     /// Decode-chain counts over the payloads read: chains and lengths only,
@@ -195,14 +215,15 @@ impl TraceSource for SwarmSource {
     }
 
     fn worlds(&mut self) -> impl Iterator<Item = Result<World, SourceError>> + '_ {
-        self.worlds
-            .iter()
-            .map(|plan| build_world(plan).map_err(|error| SourceError::from(Box::new(error))))
+        let pace = self.pace;
+        self.worlds.iter().map(move |plan| {
+            build_world(plan, pace).map_err(|error| SourceError::from(Box::new(error)))
+        })
     }
 }
 
 /// Builds the two-agent world for one decodable token.
-fn build_world(plan: &TokenWorld) -> Result<World, SwarmError> {
+fn build_world(plan: &TokenWorld, pace: Pace) -> Result<World, SwarmError> {
     let dataset = DatasetId::new(DATASET);
     let key = WorldKey::new(format!("{}#{}", plan.payload_id, plan.token_index));
     let mut builder = WorldBuilder::new(dataset, key.clone());
@@ -216,7 +237,7 @@ fn build_world(plan: &TokenWorld) -> Result<World, SwarmError> {
     let plaintext = decoded.text;
 
     // The author originates the decoded plaintext.
-    let author_at = crate::corpus::clock::ordinal(0).map_err(SwarmError::Clock)?;
+    let author_at = pace.at(0, 0, 0).map_err(SwarmError::Clock)?;
     builder.exchange(ExchangeDraft {
         agent: author.clone(),
         at: author_at,
@@ -230,26 +251,37 @@ fn build_world(plan: &TokenWorld) -> Result<World, SwarmError> {
         source: SourceRef::new(PAYLOADS_FILE, format!("/row/{}/plaintext", plan.payload_id)),
     })?;
 
-    // The reader receives the encoded token in a tool result.
+    // The reader calls `fetch_drop`, then receives the encoded token as
+    // its result in its next request.
     let call_id = format!("fetch-{}", plan.payload_id);
     let call = assistant_call(&call_id, "fetch_drop", &serde_json::json!({}))?;
     let result = tool_result(&call_id, &plan.token);
     let result_hash = result.hash();
-    let reader_at = crate::corpus::clock::ordinal(1).map_err(SwarmError::Clock)?;
-    let reader_exchange = builder.exchange(ExchangeDraft {
+    let ask = user("Fetch the drop.");
+    let token_path = format!("/row/{}/token/{}", plan.payload_id, plan.token_index);
+    builder.exchange(ExchangeDraft {
         agent: reader.clone(),
-        at: reader_at,
+        at: pace.at(1, 0, 0).map_err(SwarmError::Clock)?,
         protocol: WireProtocol::OpenAiChat,
         model: MODEL.to_owned(),
-        request: vec![system("You are a swarm agent."), call, result],
+        request: vec![system("You are a swarm agent."), ask.clone()],
+        response: call.clone(),
+        stop: StopReason::ToolUse,
+        usage: None,
+        fidelity: Fidelity::Synthetic,
+        source: SourceRef::new(PAYLOADS_FILE, format!("{token_path}/call")),
+    })?;
+    let reader_exchange = builder.exchange(ExchangeDraft {
+        agent: reader.clone(),
+        at: pace.at(2, 0, 0).map_err(SwarmError::Clock)?,
+        protocol: WireProtocol::OpenAiChat,
+        model: MODEL.to_owned(),
+        request: vec![system("You are a swarm agent."), ask, call, result],
         response: assistant_text("Fetched the drop."),
         stop: StopReason::EndTurn,
         usage: None,
         fidelity: Fidelity::Synthetic,
-        source: SourceRef::new(
-            PAYLOADS_FILE,
-            format!("/row/{}/token/{}", plan.payload_id, plan.token_index),
-        ),
+        source: SourceRef::new(PAYLOADS_FILE, token_path),
     })?;
 
     let end = u32::try_from(plan.token.len()).map_err(|_| {
@@ -435,6 +467,12 @@ fn tool_result(call_id: &str, text: &str) -> HashedMessage {
         content: vec![ToolResultContent::Text(Text(text.to_owned()))],
         outcome: ToolOutcome::Success,
     })))
+}
+
+fn user(text: &str) -> HashedMessage {
+    HashedMessage::new(MessageBody::User(vec![UserPart::Text(Text(
+        text.to_owned(),
+    ))]))
 }
 
 fn system(text: &str) -> HashedMessage {

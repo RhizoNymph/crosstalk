@@ -250,7 +250,8 @@ Overview:
     turn) → RawExchange (in-process) → L1 normalizes, writes message bodies
     to the blob store, publishes ExchangeCaptured → L3 resolves the agent,
     records its harness claim and threads the conversation, publishes
-    ConversationDelta → L4 indexes the agent's originated spans and matches
+    ConversationDelta (new inputs exclude what the agent already saw in
+    another conversation) → L4 indexes the agent's originated spans and matches
     new inputs against other agents' spans (ContentMatched); L5 turns tool
     calls into accesses on resources, on a canonical channel or on none
     (AccessRecorded; a write once its result settles its outcome),
@@ -1088,10 +1089,13 @@ Features Index:
       the e2e smoke drives and eval builds against): Live::start(LiveConfig
       { surface, clock: LiveClock, blobs (memory or fs), bus, pipeline,
       flow: FlowConfig (correlation_window_ms, evidence_window_ms,
-      suspected_ttl_ms, shards, tick_ms), provenance, ticking, seed,
+      suspected_ttl_ms, shards, tick_ms), provenance, extract:
+      ExtractConfig (the gateway config's extract section), ticking, seed,
       capture }) fills one consumer slot per layer (L3
       ReconstructConsumer; L4 Provenance then the extraction step feeding
-      L5 its Extracted inputs; L5 FlowConsumer on its own task; the
+      L5 its Extracted inputs, pairing a tool result with its call
+      wherever the request or the conversation's history carries it and
+      reading a replayed result once; L5 FlowConsumer on its own task; the
       gateway's minimal L6 classifier; L7 topology::consumer::handle; an
       evidence feeder; a surface relay), forwards the stores' outbox onto
       the bus, and builds the surface with InProcess::start_with over the
@@ -1181,7 +1185,9 @@ Features Index:
       PgConversations (prefix chains, forks, compaction from summary
       turns, WebSocket increment resolution scoped by upstream and identity
       scope, system turns anywhere, every message kept in order under an
-      ordinal); and the reconstruct consumer (ExchangeCaptured in;
+      ordinal, a per-agent seen-message set within a configured retention
+      that keeps history replayed from another conversation out of a
+      delta's new inputs, INV-1100); and the reconstruct consumer (ExchangeCaptured in;
       AgentSeen and ConversationDelta out under envelope ids derived from
       the exchange). Replays AI Village's Claude Code stream and lmcache's
       interleaved re-runs as ignored fixture tests.
@@ -1430,9 +1436,13 @@ Features Index:
       http_request reads and writes of public wiki pages) and swarm-traces (a
       decode-chain corpus reported by chain, count and length only))
       streaming worlds of checked
-      spec NormalizedExchanges on a deterministic virtual clock, with typed,
-      JSONL-serialisable ground truth (expected transmissions, negative
-      controls, exemptions, agent clusters, with tiers); predictions converted from
+      spec NormalizedExchanges on a deterministic virtual clock (datasets
+      without times pace calls 1 to 5 s apart, seeded and configurable;
+      synthetic tool calls are answered in the agent's next request of one
+      growing conversation), with typed,
+      JSONL-serialisable ground truth (expected transmissions, out of reach
+      when undecodable or read from a medium the sender never wrote
+      (INV-963), negative controls, exemptions, agent clusters, with tiers); predictions converted from
       spec Transmissions (one per ContentMatch, and one per CoAccess of a
       suspected or discarded transmission) through a read seam over the
       spec's SpanIndex, AccessStore and channel reads; one documented
@@ -1506,26 +1516,38 @@ Features Index:
       ResourceExtractor over every known tool (Claude Code's file, fetch
       and Bash tools and their OpenCode, pi, Gemini CLI, Codex and text
       editor equivalents; HTTP tools such as http_request {method, url,
-      body?}, the method deciding the op; MCP tools mapped by typed JSON
-      configuration of tool name and argument paths to a resource and an
-      op). Every locator is canonical, so agents touching one thing meet
+      body?}, the method deciding the op; fetch tools configured by name,
+      fetch_tools, such as AgentDojo's get_webpage; MCP tools mapped by
+      typed JSON configuration of tool name and argument paths to a
+      resource and an op). Every locator is canonical, so agents touching one thing meet
       on one resource: lexical paths, relative paths against the stated
       or tracked working directory (Opaque without one), normalized URLs,
       folded MCP keys, MediaWiki pages as their canonical article URL
-      whatever URL or API reaches them, GitHub files and files of known
-      clones as the repository's file. A conservative shell lexer and
-      interpreter reads redirections, file readers, tee, curl, wget, cd,
-      git and gh. Each write carries its outcome (Delivered, Rejected,
-      Unknown), judged per tool in one place; reads need a delivered
-      result. ConversationContext learns the persistent shell's directory
-      and clones from shell calls. Builds the stored AccessOp with the
-      write's spans (originated plus self-relayed sources).
+      whatever URL or API reaches them, a forge repository as the spec's
+      canonical Locator::Repository from every remote, web, API and Pages
+      form, its files (forge URLs and files of known clones) as the
+      repository's file, GitHub/GitLab issues and pull/merge requests as
+      their canonical web URL. A conservative shell lexer and interpreter
+      reads redirections, file readers (cat, head, tail, sed -n), tee,
+      curl, wget, cd, git (clone, remote, show, push as an Unseen-payload
+      write, pull/fetch/clone as reads) and the gh/glab CLIs (issue and
+      PR/MR threads, api as the HttpTool contract); OpenHands'
+      execute_bash and str_replace_editor are known tools. Each write
+      carries its outcome (Delivered, Rejected, Unknown), judged in one
+      place per tool and, for git, curl/wget and gh/glab, from the
+      command's output; reads need a delivered result; a write's locators
+      never depend on its result. ConversationContext learns the
+      persistent shell's directory and clones from shell calls. Builds the
+      stored AccessOp with the write's spans (originated, forwarded from an
+      input, plus self-relayed sources; none for an Unseen payload).
     entry_points:
       - crates/flow/src/extract/mod.rs
       - crates/flow/src/extract/context.rs
       - crates/flow/src/extract/outcome.rs
       - crates/flow/src/extract/mcp/config.rs
       - crates/flow/src/extract/spans.rs
+      - crates/flow/src/extract/bash/forge.rs
+      - crates/flow/src/extract/resource/repo.rs
     depends_on: [type_spec, channel_semantics, workspace]
     doc: docs/features/flow_extract.md
   flow_correlator:
@@ -1595,8 +1617,9 @@ Features Index:
       read (exact, whitespace, JSON-string, base64). Seeded cipher pairs
       deliver steganographic-evals payloads encoded: base64, hex, URL and
       chains are in reach, while rotN, binary8 and substitution are
-      Tier::OutOfReach and reported as missed by design, as is a JSON-string
-      splice read through a shell (two string levels). crosstalk-flow's
+      Tier::OutOfReach and reported as missed by design; a JSON-string
+      splice read through a shell is in reach (L4 decodes the writer's
+      argument values, INV-1057, so the reader needs one level). crosstalk-flow's
       real extractors resolve the shell cat -n read and the editor view to
       the same Locator::File read. Reports gain out_of_reach and background
       (false positives per 1k exchanges, top sources) summaries.

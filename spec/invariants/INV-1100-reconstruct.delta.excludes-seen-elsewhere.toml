@@ -1,0 +1,44 @@
+[invariant]
+id = "reconstruct.delta.excludes-seen-elsewhere"
+statement = "A ConversationDelta's new_inputs hold no message whose MessageHash an exchange attributed to an agent of the delta agent's cluster stored in another conversation (as a request message or as the output) at an exchange start no earlier than the conversation store's seen-message retention before the latest exchange start it has threaded; the delta's output is never withheld."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Harnesses restart episodes carrying earlier transcript: SALT's main and
+memory_length conditions open a new conversation whose history repeats,
+byte for byte, messages the agent already received in an earlier one
+(652 late user-turn false positives in the first live eval). Reported as
+new inputs, they make L4 match every earlier delivery a second time, as if
+the agent had received it again. The same holds for a fork's tail after a
+rewritten message, a re-run of an opening turn, and the agent's own earlier
+outputs pasted back as history. The set is per cluster, so merged agents
+share it and different agents never do; under replay an agent belongs to
+one corpus (reconstruct.identity.replay-within-corpus), so the set is
+scoped per corpus too. Within one conversation the rule stays positional
+(reconstruct.delta.new-inputs-are-request-suffix): a message repeated there
+is new again. The retention bounds the set: a store remembers each
+sighting for at least the retention behind the newest exchange it has
+threaded and may forget it after; ThreadConfig sets it (30 days by
+default, L4's index retention). The output is this exchange's own response:
+a byte-identical response is produced again, not replayed, so it is always
+reported. The cost is that the same text reaching the agent again from
+another source, in another conversation, inside the window, is not
+scanned again.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_reconstruct::tests::seen::replayed_opening_history_is_not_new_input",
+    "crosstalk_reconstruct::tests::seen::later_replayed_message_is_not_new_input",
+    "crosstalk_reconstruct::tests::seen::different_agents_do_not_share_seen_messages",
+    "crosstalk_reconstruct::tests::seen::repeat_within_a_conversation_is_new_input",
+    "crosstalk_reconstruct::tests::seen::replayed_own_output_is_not_new_input",
+    "crosstalk_reconstruct::tests::seen::merged_cluster_shares_seen_messages",
+    "crosstalk_reconstruct::tests::seen::seen_messages_expire_after_retention",
+    "crosstalk_reconstruct::tests::seen::pg_seen_messages_are_withheld",
+    "crosstalk_reconstruct::tests::seen::pg_seen_messages_expire_after_retention",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

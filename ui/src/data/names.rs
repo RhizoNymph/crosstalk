@@ -27,6 +27,7 @@ pub fn locator_name(locator: &Locator) -> String {
             None => format!("mcp:{server}/{}", tool.0),
         },
         Locator::Opaque { tool, key } => format!("{}:{key}", tool.0),
+        Locator::Repository { host, owner, name } => format!("{}/{owner}/{name}", host.0),
     }
 }
 

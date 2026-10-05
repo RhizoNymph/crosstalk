@@ -184,6 +184,33 @@ fn write_spans_are_the_calls_originated_and_self_relayed_spans() {
     );
 }
 
+/// `flow.access.write-spans-include-forwarded-input`: A fetched a document
+/// and posts it to a channel; the post's text is relayed from the fetch's
+/// result (an input), and the write carries it. Another agent's input
+/// relay in the same part, and the writer's input relay outside the call,
+/// stay out.
+#[test]
+fn write_spans_include_the_writers_forwarded_input() {
+    let forwarded = SpanState::Relayed {
+        source: RelaySource::Input(MessageHash::from_digest(Blake3::from_bytes([9; 32]))),
+    };
+    let spans = vec![
+        span(1, call_part(), writer(), forwarded.clone()),
+        span(2, call_part(), writer(), SpanState::Originated),
+        span(3, call_part(), other(), forwarded.clone()),
+        span(4, text_part(), writer(), forwarded.clone()),
+        span(5, call_part(), writer(), forwarded),
+    ];
+    assert_eq!(
+        write_spans(call_part(), writer(), &spans, agent_of),
+        vec![
+            SpanId::from_ulid(1),
+            SpanId::from_ulid(2),
+            SpanId::from_ulid(5)
+        ],
+    );
+}
+
 #[test]
 fn access_operations() {
     let result = PartRef {
@@ -192,7 +219,7 @@ fn access_operations() {
     };
     assert_eq!(
         access_op(
-            ExtractedOp::Write(WriteOutcome::Rejected),
+            ExtractedOp::write(WriteOutcome::Rejected),
             call_part(),
             None,
             vec![SpanId::from_ulid(1)],

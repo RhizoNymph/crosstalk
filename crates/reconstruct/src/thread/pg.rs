@@ -6,6 +6,11 @@
 //! `PgReads` and the write lands in the same transaction, so concurrent
 //! calls (several consumers, redeliveries racing) leave what some serial
 //! order would (`reconstruct.thread.serializable`).
+//!
+//! Seen messages (`reconstruct.delta.excludes-seen-elsewhere`, migration
+//! `0003_seen_messages`) are written in the same transaction; it also
+//! forgets the cluster's sightings older than the retention behind the
+//! exchange. [`PgConversations::forget_seen`] sweeps every agent's.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -14,9 +19,11 @@ use crosstalk_spec::ids::{AgentId, ConversationId, ExchangeId, MessageHash};
 use crosstalk_spec::interfaces::l3_reconstruction::{ThreadError, ThreadOutcome};
 use crosstalk_spec::observed::conversation::{Conversation, ConversationOrigin};
 use crosstalk_spec::observed::message::Role;
+use crosstalk_spec::support::Timestamp;
 use crosstalk_store::{SerializableRetry, retry_serializable};
 use sqlx::{PgConnection, PgPool};
 
+use super::config::ThreadConfig;
 use super::history::{ChainHash, Entry};
 use super::plan::{Extension, Planned, Target, ThreadReads, Write, plan};
 use super::store::{
@@ -24,7 +31,7 @@ use super::store::{
 };
 use crate::agents::codec::{
     CodecError, count, count_of, digest, digest_bytes, from_json, hash_bytes, id_of, id_text, json,
-    message_hash,
+    message_hash, micros,
 };
 use crate::error::{StorageFailure, StoreReason, TxFailure, tx};
 
@@ -98,15 +105,19 @@ fn hashes(messages: &[MessageHash]) -> Vec<Vec<u8>> {
     messages.iter().map(hash_bytes).collect()
 }
 
-/// The decision's reads, inside the call's transaction.
-pub(crate) struct PgReads<'c>(pub(crate) &'c mut PgConnection);
+/// The decision's reads, inside the call's transaction; sightings before
+/// `cutoff` do not count.
+pub(crate) struct PgReads<'c> {
+    pub(crate) conn: &'c mut PgConnection,
+    pub(crate) cutoff: Timestamp,
+}
 
 impl ThreadReads for PgReads<'_> {
     async fn recorded(&mut self, exchange: ExchangeId) -> Result<Option<ThreadOutcome>, TxFailure> {
         let row: Option<(String,)> =
             sqlx::query_as("SELECT outcome FROM reconstruct.thread_records WHERE exchange = $1")
                 .bind(id_text(exchange))
-                .fetch_optional(&mut *self.0)
+                .fetch_optional(&mut *self.conn)
                 .await?;
         Ok(row
             .map(|(outcome,)| from_json::<StoredOutcome>("thread_records.outcome", &outcome))
@@ -138,7 +149,7 @@ impl ThreadReads for PgReads<'_> {
                 .collect::<Vec<_>>(),
         )
         .bind(ids(members))
-        .fetch_all(&mut *self.0)
+        .fetch_all(&mut *self.conn)
         .await?;
         let mut best: Option<(u32, i64, Extension)> = None;
         for (id, len, head, last_system, updated) in rows {
@@ -186,7 +197,7 @@ impl ThreadReads for PgReads<'_> {
         )
         .bind(wanted)
         .bind(ids(members))
-        .fetch_optional(&mut *self.0)
+        .fetch_optional(&mut *self.conn)
         .await?;
         Ok(row
             .map(|(id, index)| {
@@ -212,7 +223,7 @@ impl ThreadReads for PgReads<'_> {
         .bind(json(&key.scope)?)
         .bind(&key.response.0)
         .bind(ids(members))
-        .fetch_optional(&mut *self.0)
+        .fetch_optional(&mut *self.conn)
         .await?;
         Ok(row
             .map(|(id, len)| {
@@ -235,7 +246,7 @@ impl ThreadReads for PgReads<'_> {
         )
         .bind(id_text(conversation))
         .bind(i64::from(len))
-        .fetch_all(&mut *self.0)
+        .fetch_all(&mut *self.conn)
         .await?;
         Ok(rows
             .iter()
@@ -261,7 +272,7 @@ impl ThreadReads for PgReads<'_> {
         )
         .bind(hash_bytes(&message))
         .bind(ids(members))
-        .fetch_optional(&mut *self.0)
+        .fetch_optional(&mut *self.conn)
         .await?;
         Ok(row
             .map(|(id,)| id_of("conversations.id", &id))
@@ -284,7 +295,7 @@ impl ThreadReads for PgReads<'_> {
         )
         .bind(hashes(messages))
         .bind(ids(members))
-        .fetch_optional(&mut *self.0)
+        .fetch_optional(&mut *self.conn)
         .await?;
         Ok(row
             .map(|(id,)| id_of("conversations.id", &id))
@@ -297,11 +308,34 @@ impl ThreadReads for PgReads<'_> {
              ORDER BY updated DESC LIMIT 1",
         )
         .bind(ids(members))
-        .fetch_optional(&mut *self.0)
+        .fetch_optional(&mut *self.conn)
         .await?;
         Ok(row
             .map(|(id,)| id_of("conversations.id", &id))
             .transpose()?)
+    }
+
+    async fn seen_elsewhere(
+        &mut self,
+        members: &[AgentId],
+        messages: &[MessageHash],
+        conversation: ConversationId,
+    ) -> Result<HashSet<MessageHash>, TxFailure> {
+        let rows: Vec<(Vec<u8>,)> = sqlx::query_as(
+            "SELECT DISTINCT message FROM reconstruct.seen_messages \
+             WHERE agent = ANY($1) AND message = ANY($2) AND conversation <> $3 \
+             AND seen_at >= $4",
+        )
+        .bind(ids(members))
+        .bind(hashes(messages))
+        .bind(id_text(conversation))
+        .bind(micros(self.cutoff)?)
+        .fetch_all(&mut *self.conn)
+        .await?;
+        Ok(rows
+            .iter()
+            .map(|(message,)| message_hash("seen_messages.message", message))
+            .collect::<Result<_, CodecError>>()?)
     }
 
     async fn held(
@@ -315,7 +349,7 @@ impl ThreadReads for PgReads<'_> {
         )
         .bind(id_text(conversation))
         .bind(hashes(messages))
-        .fetch_all(&mut *self.0)
+        .fetch_all(&mut *self.conn)
         .await?;
         Ok(rows
             .iter()
@@ -324,11 +358,43 @@ impl ThreadReads for PgReads<'_> {
     }
 }
 
+/// Record that `input`'s agent saw `write`'s messages, and forget the
+/// cluster's sightings before `cutoff`.
+async fn see(
+    conn: &mut PgConnection,
+    input: &ThreadInput,
+    write: &Write,
+    cutoff: Timestamp,
+) -> Result<(), TxFailure> {
+    let seen = &write.seen;
+    if !seen.is_empty() {
+        sqlx::query(
+            "INSERT INTO reconstruct.seen_messages (agent, message, conversation, seen_at) \
+             SELECT $1, m, $3, $4 FROM UNNEST($2::bytea[]) AS t(m) \
+             ON CONFLICT (agent, message, conversation) \
+             DO UPDATE SET seen_at = GREATEST(seen_messages.seen_at, EXCLUDED.seen_at)",
+        )
+        .bind(id_text(input.agent))
+        .bind(hashes(seen))
+        .bind(id_text(write.conversation))
+        .bind(micros(input.at)?)
+        .execute(&mut *conn)
+        .await?;
+    }
+    sqlx::query("DELETE FROM reconstruct.seen_messages WHERE agent = ANY($1) AND seen_at < $2")
+        .bind(ids(&input.members))
+        .bind(micros(cutoff)?)
+        .execute(&mut *conn)
+        .await?;
+    Ok(())
+}
+
 /// Record `write` for `input`.
 async fn apply(
     conn: &mut PgConnection,
     input: &ThreadInput,
     write: &Write,
+    cutoff: Timestamp,
 ) -> Result<(), TxFailure> {
     let (updated,): (i64,) = sqlx::query_as("SELECT nextval('reconstruct.conversation_updates')")
         .fetch_one(&mut *conn)
@@ -470,7 +536,7 @@ async fn apply(
         .execute(&mut *conn)
         .await?;
     }
-    Ok(())
+    see(conn, input, write, cutoff).await
 }
 
 /// The conversation store on Postgres. Clones share the pool.
@@ -478,6 +544,7 @@ async fn apply(
 pub struct PgConversations {
     pool: PgPool,
     retry: SerializableRetry,
+    config: ThreadConfig,
 }
 
 impl PgConversations {
@@ -487,7 +554,31 @@ impl PgConversations {
         Self {
             pool,
             retry: SerializableRetry::default(),
+            config: ThreadConfig::default(),
         }
+    }
+
+    /// Use `config` for every threading call.
+    pub fn with_config(mut self, config: ThreadConfig) -> Self {
+        self.config = config;
+        self
+    }
+
+    /// Forget every agent's sightings older than the retention behind
+    /// `now`, returning how many were forgotten. Threading forgets only the
+    /// threaded cluster's; this sweeps agents that stopped calling.
+    pub async fn forget_seen(&self, now: Timestamp) -> Result<u64, ThreadError> {
+        let cutoff = self.config.seen_retention.cutoff(now);
+        let sweep = async {
+            let done = sqlx::query("DELETE FROM reconstruct.seen_messages WHERE seen_at < $1")
+                .bind(micros(cutoff)?)
+                .execute(&self.pool)
+                .await?;
+            Ok::<_, TxFailure>(done.rows_affected())
+        };
+        sweep
+            .await
+            .map_err(|failure| ThreadError::from_failure(&StorageFailure::from(failure)))
     }
 
     /// Use `retry` for every threading transaction.
@@ -500,14 +591,19 @@ impl PgConversations {
 impl ConversationStore for PgConversations {
     async fn thread(&self, input: ThreadInput) -> Result<ThreadOutcome, ThreadError> {
         let input = Arc::new(input);
+        let cutoff = self.config.seen_retention.cutoff(input.at);
         retry_serializable(&self.pool, &self.retry, |conn| {
             let input = Arc::clone(&input);
             Box::pin(async move {
-                let planned = plan(&mut PgReads(&mut *conn), &input).await.map_err(tx)?;
+                let mut reads = PgReads {
+                    conn: &mut *conn,
+                    cutoff,
+                };
+                let planned = plan(&mut reads, &input).await.map_err(tx)?;
                 match planned {
                     Planned::Recorded(outcome) => Ok(outcome),
                     Planned::Write(write) => {
-                        apply(conn, &input, &write).await.map_err(tx)?;
+                        apply(conn, &input, &write, cutoff).await.map_err(tx)?;
                         Ok(write.outcome)
                     }
                 }

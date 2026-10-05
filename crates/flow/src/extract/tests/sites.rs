@@ -198,6 +198,14 @@ fn wiki_pages_over_http() {
     }
 }
 
+fn atlas_repository() -> Locator {
+    Locator::Repository {
+        host: Host("github.com".to_owned()),
+        owner: "agentvillage".to_owned(),
+        name: "atlas".to_owned(),
+    }
+}
+
 fn here(path: &str) -> Locator {
     file(&format!("{CWD}/{path}"))
 }
@@ -225,9 +233,10 @@ fn forge_files_over_http() {
             "https://api.github.com/repos/AgentVillage/Atlas/contents/src/app.py?ref=main",
             vec![r(atlas_app(), Structured)],
         ),
+        // The repository itself, since `Locator::Repository`.
         (
             "https://github.com/AgentVillage/Atlas",
-            vec![r(https("github.com", "/AgentVillage/Atlas"), Structured)],
+            vec![r(atlas_repository(), Structured)],
         ),
     ];
     for (url, expected) in fetched {
@@ -315,7 +324,7 @@ fn configured_wiki_sites() {
         r#"{"sites": {"mediawiki": [{"hosts": ["Wiki.Example.org"]}]}}"#,
         r#"{"sites": {"mediawiki": [{"hosts": ["*."]}]}}"#,
         r#"{"sites": {"mediawiki": [{"hosts": ["w.org"], "article_path": "/wiki"}]}}"#,
-        r#"{"sites": {"github": true, "gitlab": true}}"#,
+        r#"{"sites": {"github": true, "bitbucket": true}}"#,
     ] {
         assert!(ExtractConfig::from_json(text).is_err(), "{text}");
     }

@@ -4,6 +4,8 @@
 
 mod bash;
 mod claude_code;
+mod fetch_config;
+mod forges;
 pub(crate) mod generate;
 mod http;
 mod mcp;
@@ -71,16 +73,17 @@ proptest! {
         if let Ok(accesses) = extract(&config, &context(), &call, result.as_ref()) {
             let expected = expected_outcome(&call, result.as_ref());
             for access in accesses {
-                if let ExtractedOp::Write(outcome) = access.op {
+                if let ExtractedOp::Write { outcome, .. } = access.op {
                     prop_assert_eq!(outcome, expected, "{:?} {:?}", call, result);
                 }
             }
         }
     }
 
-    /// `flow.access.write-spans-include-self-relay` (eval spec PR): the
-    /// originated spans in the call's part, and the writer's own sources of
-    /// the spans relayed there, each once.
+    /// `flow.access.write-spans-include-self-relay` (eval spec PR) and
+    /// `flow.access.write-spans-include-forwarded-input`: the originated
+    /// and input-relayed spans in the call's part, and the writer's own
+    /// sources of the spans relayed there, each once.
     #[test]
     fn write_spans_include_self_relayed_sources(
         drafts in prop::collection::vec(spans::span_draft(), 0..12),
@@ -93,7 +96,9 @@ proptest! {
                 continue;
             }
             let carried = match draft.kind {
-                spans::Kind::Originated | spans::Kind::Indexed => Some(draft.id()),
+                spans::Kind::Originated | spans::Kind::Indexed | spans::Kind::RelayedInput => {
+                    Some(draft.id())
+                }
                 spans::Kind::RelayedSpan { source, source_by_writer: true } => Some(source),
                 _ => None,
             };

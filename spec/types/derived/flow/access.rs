@@ -27,7 +27,9 @@ pub struct Access {
 )]
 pub enum AccessOp {
     /// `call` is the assistant's tool call part. `spans` are what was
-    /// written: the originated spans inside its arguments, and, for every
+    /// written: the writer's originated spans inside its arguments, its
+    /// spans there relayed from an input (forwarding counts as writing:
+    /// `flow.access.write-spans-include-forwarded-input`), and, for every
     /// span inside them relayed from the writer's own earlier output
     /// (`Relayed(RelaySource::Span(s))` where `s` is a span of the same
     /// agent), that source span `s` (`flow.access.write-spans-include-self-relay`).

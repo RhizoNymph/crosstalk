@@ -38,6 +38,7 @@ mod projection_frame;
 mod provenance;
 mod quality;
 mod query_errors;
+mod repository;
 mod retention;
 mod rules;
 mod secrets;

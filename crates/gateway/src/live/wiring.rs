@@ -5,6 +5,7 @@
 //! through the bus or `ctx.publisher`) and puts it in its slot.
 
 use crosstalk_flow::consumer::Extracted;
+use crosstalk_flow::extract::ExtractConfig;
 use crosstalk_provenance::config::ProvenanceConfig;
 use tokio::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 
@@ -18,10 +19,11 @@ pub fn wire_all(
     stages: &mut Stages,
     ctx: &StageContext,
     provenance: &ProvenanceConfig,
+    extract: &ExtractConfig,
 ) -> Result<(), SlotTaken> {
     let (extracted, flow_inputs) = mpsc::unbounded_channel();
     wire_l3(stages, ctx)?;
-    wire_l4(stages, ctx, provenance, extracted)?;
+    wire_l4(stages, ctx, provenance, extract, extracted)?;
     wire_l5(stages, ctx, flow_inputs)?;
     wire_l6(stages, ctx)?;
     wire_l7(stages, ctx)?;
@@ -39,16 +41,18 @@ pub fn wire_l3(stages: &mut Stages, ctx: &StageContext) -> Result<(), SlotTaken>
 /// L4 provenance: `ExchangeCaptured` and `ConversationDelta` in; spans and
 /// matches into `ctx.layers.provenance`; `SpanOriginated`, `SpanRelayed`
 /// and `ContentMatched` out. Then L5's extraction step over each delta,
-/// into `extracted`.
+/// under `extract`, into `extracted`.
 pub fn wire_l4(
     stages: &mut Stages,
     ctx: &StageContext,
     config: &ProvenanceConfig,
+    extract: &ExtractConfig,
     extracted: UnboundedSender<Extracted>,
 ) -> Result<(), SlotTaken> {
     let extraction = Extraction::new(
         ctx.stores.blobs.clone(),
         ctx.layers.provenance.clone(),
+        extract.clone(),
         extracted,
     );
     stages.fill(

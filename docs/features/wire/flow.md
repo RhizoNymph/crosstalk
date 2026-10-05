@@ -11,7 +11,10 @@ duration convention that started here.
 
 - Request: `ResourcePattern` (the pattern of `PromoteChannel` and of
   `promotion_preview`), one request golden per variant.
-- Responses and bus payloads: `Host`, `Locator`, `Resource`, `Access`,
+- Responses and bus payloads: `Host`, `Locator` (`url`, `file`, `mcp`,
+  `opaque` and `repository`: `{"type": "repository", "data": {"host":
+  "github.com", "owner": "agentvillage", "name": "atlas"}}`, canonical by
+  `Locator::repository`), `Resource`, `Access`,
   `AccessOp` (a write's `outcome` is required), `WriteOutcome`
   (`"delivered" | "rejected" | "unknown"`), `AccessKind`, `Extraction`,
   `CoAccess`, `Transmission`,
@@ -33,7 +36,7 @@ carries its traffic and derives its listing), `Judgeable`, `NotJudgeable`, `Curr
 `Observed`, `PromotionPlan`, `Registered`, `PromotionRefusal`,
 `TrafficVerdict`, `Recorded`, `CorrelationTiming` (config), and
 everything in `l5_flow.rs` and `l5_flow/verdicts.rs` (traits,
-`ExtractedAccess`, `ExtractedOp`, `ChannelLookup`, `OpensOn`, `Discovery`, `Promoted`,
+`ExtractedAccess`, `ExtractedOp`, `WritePayload`, `ChannelLookup`, `OpensOn`, `Discovery`, `Promoted`,
 `TransmissionUpdate`, `ChannelWithTraffic`, `DetectionUpdate`, the
 store errors that map into `ActionError` or `QueryError`): no wire root
 reaches them, so they have no serde.

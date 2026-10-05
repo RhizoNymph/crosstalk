@@ -165,8 +165,27 @@ Everything that decides whether evidence counts is in
 | Unknown pairs like Delivered (INV-960) | `WriteOutcome::pairs`; no numeric confidence |
 | Held writes settle at `write_settles_at` (INV-959) | `pairing::write_settles_at` delegates to `CorrelationTiming::write_settles_at` |
 | Shared upstream stays suspected (INV-963) | a carried match confirms only through `links`, which requires a paired write of the sender holding the span |
+| Shared public content stays suspected (INV-1087) | agents fetching one page none of them wrote: matches among their results confirm nothing, and with no writer nothing opens (`tests/shared_web.rs`, AI Village-shaped synthetic bash web reads) |
 | Retry after a rejected write (INV-962) | the rejected write is never in a medium, so a match on the relayed span links to the retry alone |
 | `ExtractedAccess::op` carries the outcome | the extraction step maps it into `Extracted::Write { outcome }` |
+
+**Shared upstream with no writer.** A carried tool-result match whose
+read resource no write of its sender explains, on a resource no agent
+wrote within the window, is held in the read's medium and opens nothing:
+there is no co-access to suspect on. Opening a `Suspected` transmission
+"with the read as evidence" (requested after the AgentDojo `read_file`
+results) is not representable without a spec change:
+`TransmissionState::Suspected` and `TransmissionUpdate::Suspect` hold
+`NonEmpty<CoAccess>`; `CoAccess::new` needs a pairing write by a
+different agent on the same resource before the read (INV-249, INV-958);
+the only ways to open a transmission are `OpenChannel`, which carries a
+co-access (INV-276), and `OpenConfirmed`, which INV-963 forbids for such
+a match; the lifecycle has no edge into `Suspected` other than from
+`AwaitingContent` (INV-1045, INV-289); and a channel route needs a
+channel, which a resource gets only from a cross-agent co-access or a
+declaration (INV-853). Options for the spec: a suspicion backed by
+content (`Suspected` over an evidence enum with a content-and-read
+variant, and an `OpenSuspected` update), or a non-channel suspected route.
 
 Evidence for INV-959 and INV-963 exists under the names the eval PR's
 TOML files use where they fit:

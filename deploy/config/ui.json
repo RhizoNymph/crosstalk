@@ -1,12 +1,9 @@
 {
   "listen": "0.0.0.0:3000",
-  "operator": {
-    "id": "01J9ZQ3W8D0000000000000001",
-    "name": "operator"
-  },
   "backend": {
-    "fixture": {
-      "seed": 7
+    "http": {
+      "url": "http://crosstalk:8081",
+      "token": {"env": "CROSSTALK_API_TOKEN"}
     }
   }
 }

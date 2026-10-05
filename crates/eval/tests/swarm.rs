@@ -146,3 +146,47 @@ fn tally_reports_chains_and_lengths_only() {
         assert!(!shown.contains(text), "{text:?} leaked into the tally");
     }
 }
+
+#[test]
+fn the_reader_calls_then_gets_the_token_in_its_next_request() {
+    use crosstalk_spec::observed::message::{AssistantPart, MessageBody};
+    for world in worlds() {
+        let reader: Vec<_> = world
+            .exchanges()
+            .iter()
+            .filter(|e| e.agent().name == "reader")
+            .collect();
+        assert_eq!(reader.len(), 2);
+        let Some(MessageBody::Assistant(parts)) = reader[0].response().map(|m| &m.body) else {
+            panic!("the reader's first response is its call");
+        };
+        assert!(matches!(parts[0], AssistantPart::ToolCall(_)));
+        assert!(
+            !reader[0]
+                .request()
+                .any(|m| matches!(m.body, MessageBody::Tool(_)))
+        );
+        let label = world
+            .truth()
+            .iter()
+            .find_map(|e| match e {
+                Expectation::Transmission(t) => Some(t.label()),
+                _ => None,
+            })
+            .expect("a label");
+        assert_eq!(label.reader_exchange, reader[1].id());
+        // The second request extends the first request and its call.
+        let mut history = reader[0].exchange().request.clone();
+        history.push(reader[0].response().expect("a response").hash);
+        assert_eq!(reader[1].exchange().request[..history.len()], history[..]);
+        // Calls are seconds apart.
+        let times: Vec<u64> = world
+            .exchanges()
+            .iter()
+            .map(|e| e.at().as_micros())
+            .collect();
+        for pair in times.windows(2) {
+            assert!((1_000_000..=5_000_000).contains(&(pair[1] - pair[0])));
+        }
+    }
+}

@@ -1,0 +1,24 @@
+[invariant]
+id = "flow.access.write-spans-include-forwarded-input"
+statement = "The spans of an Access's AccessOp::Write include every span of the writing agent inside its call's arguments that provenance classified Relayed(RelaySource::Input(_)), besides its originated spans and its own relayed sources (flow.access.write-spans-include-self-relay); a span of another agent, or outside the call's part, is never among them."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+Forwarding counts as writing. An agent that fetches a document and posts
+it to a channel passes text it did not originate, so provenance classifies
+the post's text Relayed from an input, and indexes it as authored by the
+relaying agent. Unless the write carries those spans, a reader's match on
+the forwarded text names the relaying agent as origin but links to no
+write of theirs, and "A forwards a document to B through a channel" is
+never confirmed. Spans relayed from another agent's indexed span stay out:
+that match belongs to its originator.
+"""
+
+[evidence]
+unit = "crosstalk_flow::extract::tests::spans::write_spans_include_the_writers_forwarded_input"
+property = "crosstalk_flow::extract::tests::write_spans_include_self_relayed_sources"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+property = { agent = "true", human = "false" }

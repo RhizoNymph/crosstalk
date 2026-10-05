@@ -1,6 +1,6 @@
 [invariant]
 id = "reconstruct.conversation.compaction-history"
-statement = "For a Compaction conversation, its stored history without system messages equals its first request's non-system messages in request order, carried-over messages included, followed by its first delta's output if present, then each later delta's new_inputs and then output if present, in threading order."
+statement = "For a Compaction conversation, its stored history without system messages equals its first request's non-system messages in request order, carried-over messages included, followed by its first delta's output if present, then, for each later delta in threading order, the request's non-system messages it was cut from (its new_inputs together with the messages reconstruct.delta.excludes-seen-elsewhere withheld, in request order) and then output if present."
 kind = "domain"
 property = "inductive"
 requires = ["property"]

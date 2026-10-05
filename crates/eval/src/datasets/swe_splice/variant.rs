@@ -15,10 +15,20 @@
 //! A shell read (`cat -n` through a harness that returns JSON) delivers the
 //! view inside a JSON string: one more level of string escaping, so `exact`
 //! and `whitespace` need `Decoded([JsonString])` there and `base64`
-//! `Decoded([JsonString, Base64])`. A `json_string` file read that way is a
-//! JSON string inside a JSON string, two string levels; the spec undoes
-//! one (`provenance.decode.one-string-level`), so that label is
-//! [`OutOfReach`](Tier::OutOfReach): expected, but missed by design.
+//! `Decoded([JsonString, Base64])`.
+//!
+//! A `json_string` file read that way is a JSON string inside a JSON
+//! string, but only one of those levels is the reader's to undo. The
+//! writer's content sits in its tool call's JSON arguments already
+//! escaped once (an editor's `file_text`, a heredoc in a shell `command`),
+//! and L4 cuts the writer's spans per argument value (INV-1057,
+//! `provenance.span.tool-arguments-per-value`) before fingerprinting. So
+//! the reader's side needs one level, the harness's: what it then holds
+//! is the writer's content in the escaped form it had in the writer's
+//! arguments (the first live run found all six such labels this way).
+//! `Decoded([JsonString])`, in reach, tier Construction.
+//! The reference matcher counts both levels on the reader's side and
+//! misses it; that is a reference miss, not a label out of reach.
 
 use std::fmt;
 
@@ -79,16 +89,10 @@ impl Variant {
             }
             (ReadForm::EditorView { .. }, Self::JsonString) => decoded(vec![Codec::JsonString]),
             (ReadForm::EditorView { .. }, Self::Base64) => decoded(vec![Codec::Base64]),
-            (ReadForm::ShellCat, Self::Exact | Self::Whitespace) => {
+            (ReadForm::ShellCat, Self::Exact | Self::Whitespace | Self::JsonString) => {
                 decoded(vec![Codec::JsonString])
             }
             (ReadForm::ShellCat, Self::Base64) => decoded(vec![Codec::JsonString, Codec::Base64]),
-            (ReadForm::ShellCat, Self::JsonString) => (
-                MatchNeed::Undecodable {
-                    codec: "json_string+json_string".to_owned(),
-                },
-                Tier::OutOfReach,
-            ),
         }
     }
 }

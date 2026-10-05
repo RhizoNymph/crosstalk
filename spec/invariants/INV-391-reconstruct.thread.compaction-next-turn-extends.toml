@@ -1,6 +1,6 @@
 [invariant]
 id = "reconstruct.thread.compaction-next-turn-extends"
-statement = "A full-history exchange whose non-system request messages are a compacted request's non-system messages, then that request's response, then new messages is threaded as Extends of the Compaction conversation that request created, with new_inputs equal to the new messages."
+statement = "A full-history exchange whose non-system request messages are a compacted request's non-system messages, then that request's response, then new messages is threaded as Extends of the Compaction conversation that request created, with new_inputs equal to the new messages less those reconstruct.delta.excludes-seen-elsewhere withholds."
 kind = "domain"
 property = "postcondition"
 requires = ["property"]

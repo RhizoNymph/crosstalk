@@ -65,8 +65,10 @@ conventions (snake_case, unknown fields refused), secrets only by `{"env":
 Optional keys the gateway also accepts, all defaulted when absent: `bus`,
 `pipeline` (blob put retries), `shutdown` (`drain_timeout_ms` 45 000 +
 `flush_timeout_ms` 10 000, chosen to fit compose's 60 s
-`stop_grace_period`) and `flow`, L5's correlation timing, every key
-defaulted:
+`stop_grace_period`), `extract` (L5's extractor configuration,
+crosstalk-flow's `ExtractConfig`: `mcp_servers`, `http_tools`,
+`fetch_tools`, `sites`; see `docs/features/flow_extract.md`) and `flow`,
+L5's correlation timing, every key defaulted:
 
 | `flow` key | Default | Meaning |
 |---|---|---|
@@ -146,7 +148,7 @@ without breaking the linking of exchanges across the change:
 | `deploy/crosstalk.Dockerfile` (+ `.dockerignore`) | Builds the gateway from the repository root on the nightly in `rust-toolchain.toml` (minimal profile). The runtime image is distroless `cc-debian13:nonroot`. |
 | `deploy/ui.Dockerfile` (+ `.dockerignore`) | Builds the elements bundle (pnpm 11.27.1, frozen lockfile), then the Topcoat binary. The context is the repository root, because `ui/` depends on `spec/` by path and `spec/` inherits from the root workspace. |
 | `deploy/config/crosstalk.json` | Gateway config (contract above). |
-| `deploy/config/ui.json` | UI config (fixture backend until the HTTP backend lands). |
+| `deploy/config/ui.json` | UI config: the HTTP backend, reading the gateway's operator API at `http://crosstalk:8081` with `CROSSTALK_API_TOKEN` (no operator section: the gateway's API names the operator). |
 | `deploy/.env.example` | Every variable compose reads, with the defaults: secrets, host ports and binds, `DOCKER_ROOT_DIR` (Docker's data root, for cAdvisor) and Postgres/Prometheus tuning. |
 | `deploy/run.sh` | `init`, `up`, `infra`, `down`, `logs`, `ps`, `psql`, `urls` (plus `demo ...` and `bench`, see below). Sets `DOCKER_ROOT_DIR` from `docker info` unless the environment or `deploy/.env` does. |
 | `deploy/postgres/init/` | First-start SQL: extensions and the monitor role. |

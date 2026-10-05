@@ -12,7 +12,18 @@
 //! A [`RepoId`] is the remote in canonical form: `host/owner/name` for a
 //! network remote (lowercase, without `.git`, scheme, user or port), the
 //! normalized absolute path for a repository on the local filesystem.
+//!
+//! The repository itself (what `git push`, `git pull` and `git clone`
+//! touch) is [`RepoId::locator`]: the spec's canonical
+//! `Locator::Repository { host, owner, name }` for a forge repository,
+//! `Locator::File { host: None, path }` of its directory for a local one.
+//! Every spelling of a remote meets on it, and so do the forge URLs that
+//! name the repository ([`crate::extract::sites`]).
+//!
+//! An issue or a pull/merge request of a forge repository is a `Url` of its
+//! canonical web page ([`ForgeRepo::thread`], [`ForgeRepo::collection`]).
 
+use std::cmp::Ordering;
 use std::fmt;
 
 use crosstalk_spec::derived::flow::resource::{Host, Locator};
@@ -21,8 +32,97 @@ use super::path::AbsolutePath;
 
 /// A repository's canonical identity. Only [`RepoId::parse`] and
 /// [`RepoId::forge`] make one.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct RepoId(String);
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RepoId {
+    /// `host/owner/name`, or the local path.
+    id: String,
+    /// The repository's own locator; a function of `id`.
+    locator: Locator,
+}
+
+impl PartialOrd for RepoId {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for RepoId {
+    fn cmp(&self, other: &Self) -> Ordering {
+        // The locator is a function of the id.
+        self.id.cmp(&other.id)
+    }
+}
+
+/// How a forge spells its issue and change-request pages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ForgeStyle {
+    /// GitHub (and GitHub Enterprise; the `gh` CLI).
+    GitHub,
+    /// GitLab (the `glab` CLI).
+    GitLab,
+}
+
+/// What a forge thread is: an issue, or a pull (GitHub) or merge (GitLab)
+/// request.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ThreadKind {
+    Issue,
+    Change,
+}
+
+/// The parts of a forge repository, canonical.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ForgeRepo<'a> {
+    pub host: &'a str,
+    pub owner: &'a str,
+    pub name: &'a str,
+}
+
+impl ForgeRepo<'_> {
+    /// The canonical locator of issue or change request `number`: the
+    /// `https` URL of its web page, with the repository's canonical
+    /// (lower-case) path.
+    ///
+    /// - GitHub: `/<owner>/<name>/issues/<n>` for an issue and a pull
+    ///   request alike. They share one number space and one conversation
+    ///   (`/issues/<n>` of a pull request redirects to `/pull/<n>`, and the
+    ///   REST API comments on both under `/issues/<n>/comments`), so a
+    ///   comment made either way and a read either way meet.
+    /// - GitLab: `/<owner>/<name>/-/issues/<n>` and
+    ///   `/<owner>/<name>/-/merge_requests/<n>`, separate number spaces.
+    pub fn thread(&self, style: ForgeStyle, kind: ThreadKind, number: u64) -> Locator {
+        let page = match (style, kind) {
+            (ForgeStyle::GitHub, _) => format!("issues/{number}"),
+            (ForgeStyle::GitLab, ThreadKind::Issue) => format!("-/issues/{number}"),
+            (ForgeStyle::GitLab, ThreadKind::Change) => format!("-/merge_requests/{number}"),
+        };
+        self.page(&page)
+    }
+
+    /// The canonical locator of the repository's issues or change
+    /// requests as a collection, for an access whose number is not known
+    /// from the call (a `create`, a `list`): GitHub `/<owner>/<name>/issues`
+    /// and `/<owner>/<name>/pulls`, GitLab `/<owner>/<name>/-/issues` and
+    /// `/<owner>/<name>/-/merge_requests`.
+    pub fn collection(&self, style: ForgeStyle, kind: ThreadKind) -> Locator {
+        let page = match (style, kind) {
+            (ForgeStyle::GitHub, ThreadKind::Issue) => "issues",
+            (ForgeStyle::GitHub, ThreadKind::Change) => "pulls",
+            (ForgeStyle::GitLab, ThreadKind::Issue) => "-/issues",
+            (ForgeStyle::GitLab, ThreadKind::Change) => "-/merge_requests",
+        };
+        self.page(page)
+    }
+
+    fn page(&self, page: &str) -> Locator {
+        Locator::Url {
+            scheme: "https".to_owned(),
+            host: Host(self.host.to_owned()),
+            path: format!("/{}/{}/{page}", self.owner, self.name),
+            query: None,
+        }
+    }
+}
 
 impl RepoId {
     /// The repository a git remote names: `https://host/owner/name(.git)`,
@@ -71,35 +171,15 @@ impl RepoId {
         None
     }
 
-    /// `host/owner/name` from a host and a repository path, which may carry
-    /// `.git` and a trailing slash.
+    /// The repository at `path` (`owner/name`, or `group/subgroup/name`)
+    /// on `host`. `path` may carry `.git` and slashes around it.
     pub fn forge(host: &str, path: &str) -> Option<Self> {
-        let host = host.trim_end_matches('.').to_ascii_lowercase();
-        let host = host.strip_prefix("www.").unwrap_or(&host);
-        let segments: Vec<&str> = path
-            .trim_end_matches('/')
-            .trim_end_matches(".git")
-            .split('/')
-            .filter(|segment| !segment.is_empty())
-            .collect();
-        let valid = |text: &str| {
-            !text.is_empty()
-                && text != "."
-                && text != ".."
-                && text
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
-        };
-        if host.is_empty()
-            || !valid(host)
-            || segments.len() < 2
-            || !segments.iter().all(|s| valid(s))
-        {
-            return None;
-        }
-        Some(Self(
-            format!("{host}/{}", segments.join("/")).to_ascii_lowercase(),
-        ))
+        let path = path.trim_matches('/');
+        let path = path.strip_suffix(".git").unwrap_or(path);
+        let (owner, name) = path.rsplit_once('/')?;
+        let locator = Locator::repository(host, owner, name).ok()?;
+        let id = locator.repository_file_host()?.0;
+        Some(Self { id, locator })
     }
 
     fn local(path: AbsolutePath) -> Option<Self> {
@@ -108,18 +188,45 @@ impl RepoId {
             .strip_suffix(".git")
             .unwrap_or(&text)
             .trim_end_matches('/');
-        (!text.is_empty()).then(|| Self(text.to_owned()))
+        (!text.is_empty()).then(|| Self {
+            id: text.to_owned(),
+            locator: Locator::File {
+                host: None,
+                path: text.to_owned(),
+            },
+        })
     }
 
     pub fn as_str(&self) -> &str {
-        &self.0
+        &self.id
+    }
+
+    /// The repository's own locator: `Locator::Repository` on a forge,
+    /// the `File` of its directory on the local filesystem.
+    pub fn locator(&self) -> &Locator {
+        &self.locator
+    }
+
+    /// The forge repository's parts; `None` for a local one.
+    pub fn forge_parts(&self) -> Option<ForgeRepo<'_>> {
+        match &self.locator {
+            Locator::Repository { host, owner, name } => Some(ForgeRepo {
+                host: &host.0,
+                owner,
+                name,
+            }),
+            Locator::Url { .. }
+            | Locator::File { .. }
+            | Locator::Mcp { .. }
+            | Locator::Opaque { .. } => None,
+        }
     }
 
     /// The locator of the file at `path` (absolute within the repository)
     /// in this repository.
     pub fn file(&self, path: &AbsolutePath) -> Locator {
         Locator::File {
-            host: Some(Host(self.0.clone())),
+            host: Some(Host(self.id.clone())),
             path: path.as_str().to_owned(),
         }
     }
@@ -127,7 +234,7 @@ impl RepoId {
 
 impl fmt::Display for RepoId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.0)
+        f.write_str(&self.id)
     }
 }
 

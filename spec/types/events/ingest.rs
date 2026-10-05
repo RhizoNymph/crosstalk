@@ -78,6 +78,15 @@ pub struct ConversationDelta {
     /// these. For an increment exchange, the increment after resolution; for
     /// a compaction's first exchange, its non-system messages whose hash is
     /// not in the predecessor's history, in request order.
+    ///
+    /// Less any message the agent's cluster already saw in another
+    /// conversation (received in a request or produced as an output) within
+    /// the threading store's seen-message retention: a new conversation
+    /// replaying earlier history, a fork's tail after a rewrite or a re-run
+    /// opening turn reports only what is new to the agent
+    /// (`reconstruct.delta.excludes-seen-elsewhere`). Within one
+    /// conversation the rule is positional: a message repeated there is
+    /// listed again.
     pub new_inputs: Vec<MessageHash>,
     /// The request's first System message (its top-level system prompt
     /// when it has one), when it is new to the conversation (its first
@@ -86,6 +95,7 @@ pub struct ConversationDelta {
     /// (`reconstruct.delta.new-system-when-changed`).
     pub new_system: Option<MessageHash>,
     /// The response, or a failed exchange's partial response. Write-side
-    /// detection and span extraction read this.
+    /// detection and span extraction read this. Always this exchange's own
+    /// output, never withheld: a byte-identical response is produced again.
     pub output: Option<MessageHash>,
 }

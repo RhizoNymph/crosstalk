@@ -1,9 +1,18 @@
-//! `git` and `gh`: which directories are clones of which repositories, and
-//! the repository files `git show` prints.
+//! `git`: which directories are clones of which repositories, the
+//! repository files `git show` prints, and the repository itself, which
+//! `git push` writes and `git pull`, `fetch` and `clone` read.
 //!
-//! - `git clone <remote> [<dir>]` and `gh repo clone <repo> [<dir>]` bind
-//!   the directory they make (`<dir>`, else the repository's name, from the
-//!   working directory) to the repository.
+//! - `git clone <remote> [<dir>]` (and `gh repo clone <repo> [<dir>]`,
+//!   [`super::forge`]) binds the directory it makes (`<dir>`, else the
+//!   repository's name, from the working directory) to the repository,
+//!   and reads the repository (`RepoId::locator`).
+//! - `git push [<remote>]` writes the repository, with no content of its
+//!   own in the call (`WritePayload::Unseen`); `--dry-run` writes nothing.
+//!   `git pull [<remote>]` and `git fetch [<remote>]` read it. The
+//!   repository is the remote operand when it is a URL or a path, else
+//!   (a remote name, or none) the one the clone the command runs in is
+//!   bound to. The output judges each (`CommandRule::GitPush`,
+//!   `CommandRule::GitTransfer`).
 //! - `git remote add|set-url <name> <url>` binds the working directory, as
 //!   the clone's root.
 //! - `git remote -v`, `git remote get-url` and `git config --get
@@ -21,6 +30,7 @@
 use crosstalk_spec::derived::flow::access::Extraction;
 
 use crate::extract::op::Candidate;
+use crate::extract::outcome::CommandRule;
 use crate::extract::resource::{AbsolutePath, RepoId, absolute_locator};
 
 use super::commands::Shell;
@@ -48,9 +58,25 @@ const CLONE: OptSpec = OptSpec {
     ],
 };
 
-const GH_CLONE: OptSpec = OptSpec {
-    short_values: "u",
-    long_values: &["--upstream-remote-name"],
+const PUSH: OptSpec = OptSpec {
+    short_values: "o",
+    long_values: &["--repo", "--push-option", "--receive-pack", "--exec"],
+};
+
+const PULL_FETCH: OptSpec = OptSpec {
+    short_values: "jsXo",
+    long_values: &[
+        "--depth",
+        "--deepen",
+        "--shallow-since",
+        "--shallow-exclude",
+        "--jobs",
+        "--upload-pack",
+        "--strategy",
+        "--strategy-option",
+        "--server-option",
+        "--negotiation-tip",
+    ],
 };
 
 impl Shell<'_> {
@@ -79,9 +105,49 @@ impl Shell<'_> {
         match subcommand.text.as_str() {
             "clone" => {
                 let parsed = Options::parse(args, &CLONE);
-                self.clone_into(dir.as_ref(), &parsed.operands, |remote, cwd| {
-                    RepoId::parse(remote, cwd)
-                });
+                if let Some(repo) =
+                    self.clone_into(dir.as_ref(), &parsed.operands, |remote, cwd| {
+                        RepoId::parse(remote, cwd)
+                    })
+                {
+                    found.push(
+                        Candidate::read(repo.locator().clone(), Extraction::Parsed)
+                            .judged_by(CommandRule::GitTransfer),
+                    );
+                }
+            }
+            "push" => {
+                let parsed = Options::parse(args, &PUSH);
+                if parsed.has(&["-n", "--dry-run"]) {
+                    return;
+                }
+                let named = parsed
+                    .last(&["--repo"])
+                    .or_else(|| parsed.operands.first().copied());
+                if let Some(repo) = self.remote_repo(dir.as_ref(), named) {
+                    found.push(
+                        Candidate::write(repo.locator().clone(), Extraction::Parsed)
+                            .unseen()
+                            .judged_by(CommandRule::GitPush),
+                    );
+                }
+            }
+            "pull" | "fetch" => {
+                let parsed = Options::parse(args, &PULL_FETCH);
+                if parsed.has(&["--dry-run"]) {
+                    return;
+                }
+                let named = if parsed.has(&["--all", "--multiple"]) {
+                    None
+                } else {
+                    parsed.operands.first().copied()
+                };
+                if let Some(repo) = self.remote_repo(dir.as_ref(), named) {
+                    found.push(
+                        Candidate::read(repo.locator().clone(), Extraction::Parsed)
+                            .judged_by(CommandRule::GitTransfer),
+                    );
+                }
             }
             "remote" => match args {
                 [verb, _name, url, ..] if matches!(verb.text.as_str(), "add" | "set-url") => {
@@ -120,42 +186,16 @@ impl Shell<'_> {
         }
     }
 
-    pub(super) fn gh(&mut self, args: &[Word]) {
-        let [repo_word, clone_word, rest @ ..] = args else {
-            return;
-        };
-        if repo_word.text != "repo" || clone_word.text != "clone" {
-            return;
-        }
-        let parsed = Options::parse(rest, &GH_CLONE);
-        let dir = self.state.cwd.clone();
-        self.clone_into(dir.as_ref(), &parsed.operands, |remote, cwd| {
-            if remote.contains("://") || remote.contains('@') {
-                return RepoId::parse(remote, cwd);
-            }
-            // `owner/name`, or `host/owner/name`.
-            match remote.matches('/').count() {
-                1 => RepoId::forge("github.com", remote),
-                _ => {
-                    let (host, path) = remote.split_once('/')?;
-                    RepoId::forge(host, path)
-                }
-            }
-        });
-    }
-
-    fn clone_into(
+    /// Bind the directory a clone makes to the repository it clones, which
+    /// is returned.
+    pub(super) fn clone_into(
         &mut self,
         dir: Option<&AbsolutePath>,
         operands: &[&Word],
         repo_of: impl Fn(&str, Option<&AbsolutePath>) -> Option<RepoId>,
-    ) {
-        let Some(remote) = operands.first().and_then(|word| word.as_literal()) else {
-            return;
-        };
-        let Some(repo) = repo_of(remote, dir) else {
-            return;
-        };
+    ) -> Option<RepoId> {
+        let remote = operands.first().and_then(|word| word.as_literal())?;
+        let repo = repo_of(remote, dir)?;
         let target = match operands.get(1) {
             Some(word) => self.directory(dir, word),
             None => dir
@@ -163,8 +203,32 @@ impl Shell<'_> {
                 .and_then(|(dir, name)| dir.join(name).ok()),
         };
         if let Some(target) = target {
-            self.state.repos.bind(target, repo);
+            self.state.repos.bind(target, repo.clone());
         }
+        Some(repo)
+    }
+
+    /// The repository a remote operand names: a URL or path names it
+    /// directly; a remote name, or none, is the remote the clone `dir` is
+    /// in is bound to.
+    pub(super) fn remote_repo(
+        &self,
+        dir: Option<&AbsolutePath>,
+        named: Option<&Word>,
+    ) -> Option<RepoId> {
+        if let Some(word) = named {
+            let text = word.as_literal()?;
+            if let Some(repo) = RepoId::parse(text, dir) {
+                return Some(repo);
+            }
+        }
+        self.bound_repo(dir)
+    }
+
+    /// The repository the clone `dir` is in is bound to.
+    pub(super) fn bound_repo(&self, dir: Option<&AbsolutePath>) -> Option<RepoId> {
+        let (repo, _) = self.state.repos.locate(dir?)?;
+        Some(repo.clone())
     }
 
     /// `<rev>:<path>`: the repository file it names.

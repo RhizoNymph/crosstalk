@@ -636,6 +636,7 @@ dependencies = [
  "crosstalk-ingress",
  "crosstalk-memory",
  "crosstalk-provenance",
+ "crosstalk-reconstruct",
  "crosstalk-spec",
  "crosstalk-surface",
  "crosstalk-transport",

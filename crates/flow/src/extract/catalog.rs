@@ -2,11 +2,14 @@
 //!
 //! File, fetch and shell tools are the built-in tables below, covering
 //! Claude Code and the harnesses with the same kind of tools (OpenCode, pi,
-//! Gemini CLI, Codex, the Anthropic text editor tool). MCP tools come from
+//! Gemini CLI, Codex, OpenHands, the Anthropic text editor tool). MCP tools come from
 //! the configuration ([`ExtractConfig`]), named as Claude Code names them:
 //! `mcp__<server>__<tool>`. HTTP tools (`http_request {method, url,
 //! body?}`) are the configured names ([`ExtractConfig::http_tools`]); a
 //! call of one without a `method` is the fetch tool of that name, if any.
+//! Further fetch tools are configured by name
+//! ([`ExtractConfig::fetch_tools`]): each reads the URL in its `url`
+//! argument ([`CONFIGURED_FETCH`]).
 
 use crosstalk_spec::observed::message::ToolName;
 
@@ -123,12 +126,18 @@ pub static FETCH_TOOLS: &[FetchTool] = &[
     fetch("webfetch", Some("url"), None),
 ];
 
+/// The schema of every configured fetch tool: the URL in `url`, read as
+/// `Structured`; no free-text argument.
+pub static CONFIGURED_FETCH: FetchTool = fetch("<configured>", Some("url"), None);
+
 pub static SHELL_TOOLS: &[ShellTool] = &[
     // Claude Code, OpenCode, pi.
     shell("Bash", "command", None, true),
     shell("bash", "command", None, false),
     // Gemini CLI.
     shell("run_shell_command", "command", Some("directory"), false),
+    // OpenHands: one persistent bash session per conversation.
+    shell("execute_bash", "command", None, true),
     // Codex.
     shell("shell", "command", Some("workdir"), false),
     shell("exec_command", "cmd", Some("workdir"), false),
@@ -186,6 +195,9 @@ pub fn identify<'c>(name: &ToolName, config: &'c ExtractConfig) -> Option<KnownT
     let fetch = FETCH_TOOLS.iter().find(|tool| tool.name == name);
     if config.http_tools().iter().any(|tool| tool == name) {
         return Some(KnownTool::Http(HttpTool { fallback: fetch }));
+    }
+    if config.fetch_tools().iter().any(|tool| tool == name) {
+        return Some(KnownTool::Fetch(&CONFIGURED_FETCH));
     }
     FILE_TOOLS
         .iter()

@@ -1,0 +1,18 @@
+[invariant]
+id = "flow.extract.shell-outcome-from-known-output"
+statement = "For an access a known shell command makes, a result the wire does not flag as an error is judged by that command's output: a `git push` rejection or error is Rejected, a ref update or `Everything up-to-date` Delivered and anything else Unknown; a `curl` or `wget` whose last shown HTTP status is 4xx or 5xx (or a `curl: (N)` error) is Rejected and 2xx or 3xx Delivered; a `gh` or `glab` error is Rejected and a printed URL Delivered; every other shell access keeps the wire's word."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Shell results often carry no exit status, and git and the forge CLIs print
+failures as text. A rejected push recorded as delivered would pair with a
+later read and open a transmission for content that never reached the
+resource; a read of an error page is not a read of the resource.
+"""
+
+[evidence]
+unit = ["crosstalk_flow::extract::tests::forges::git_push_pull_fetch_clone", "crosstalk_flow::extract::tests::forges::http_commands_judged_by_the_status_they_show", "crosstalk_flow::extract::tests::forges::forge_cli_threads"]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

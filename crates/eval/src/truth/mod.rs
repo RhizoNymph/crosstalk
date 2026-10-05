@@ -91,7 +91,7 @@ pub enum InvalidLabel {
     Unbounded,
     #[error("an agent cluster needs at least two agents")]
     SmallCluster,
-    #[error("a label needs an undecodable codec exactly when its tier is out of reach")]
+    #[error("a label's need is out of reach (undecodable or unobserved) exactly when its tier is")]
     Reach,
 }
 
@@ -126,8 +126,7 @@ impl ExpectedTransmission {
                 location: label.content.at.len(),
             });
         }
-        let undecodable = matches!(label.needs, MatchNeed::Undecodable { .. });
-        if undecodable != (label.tier == Tier::OutOfReach) {
+        if label.needs.out_of_reach() != (label.tier == Tier::OutOfReach) {
             return Err(InvalidLabel::Reach);
         }
         Ok(Self(label))
