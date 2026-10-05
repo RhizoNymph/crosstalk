@@ -16,6 +16,14 @@
 //! | `InvalidInput(_)` other than `MalformedRequest` | 422 Unprocessable Content: read, but invalid whatever the state |
 //! | `Conflict(ProjectionQueueFull)` | 429 Too Many Requests: the fit queue is full; retry later |
 //! | `Store` | 503 Service Unavailable: a store or the bus failed; retrying may succeed |
+//! | `Unavailable` (client-only) | never answered: a server answers `served()` of the error, `Store` with the same reason, at 503 |
+//!
+//! `Unavailable` has a status, 503, so a client that relays the error
+//! (the UI, to its browser) can still branch on it, and so serving it as
+//! `Store` keeps its status. It is not in the server's status table
+//! (`http/query_error_statuses.json`): a server never answers it, and the
+//! client refuses an `unavailable` body as a response the binding does not
+//! describe.
 //!
 //! Every match below is exhaustive with no wildcard, over the error enums
 //! and over every [`ConflictKind`] and [`InputError`], so a new variant
@@ -91,7 +99,7 @@ pub trait ErrorStatus {
 impl ErrorStatus for QueryError {
     fn status(&self) -> Status {
         match self {
-            Self::Store { .. } => Status::ServiceUnavailable,
+            Self::Store { .. } | Self::Unavailable { .. } => Status::ServiceUnavailable,
             Self::NotFound => Status::NotFound,
             Self::Forbidden { .. } => Status::Forbidden,
             Self::VersionNotRetained { .. } | Self::ProjectionNotRetained { .. } => Status::Gone,
@@ -105,7 +113,7 @@ impl ErrorStatus for QueryError {
 impl ErrorStatus for ActionError {
     fn status(&self) -> Status {
         match self {
-            Self::Store { .. } => Status::ServiceUnavailable,
+            Self::Store { .. } | Self::Unavailable { .. } => Status::ServiceUnavailable,
             Self::NotFound => Status::NotFound,
             Self::Forbidden { .. } => Status::Forbidden,
             Self::Conflict(kind) => conflict_status(kind),

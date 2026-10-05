@@ -103,7 +103,7 @@ before any byte is sent.
 | `crates/api/src/http/frame.rs` | `GET /projections/{id}/frame` | — |
 | `crates/api/src/http/live.rs` | `GET /live` | — |
 | `crates/api/src/http/export.rs` | `POST /exports` | `written_formats` |
-| `crates/api/src/http/respond.rs` | Status codes, JSON and error responses, the 401, `no-store` | — |
+| `crates/api/src/http/respond.rs` | Status codes, JSON and error responses (each error's `served()` form, never a client-only `Unavailable`), the 401, `no-store` | `Answered` |
 | `crates/api/src/http/serve.rs` | Listening on `api.listen` | `bind`, `serve`, `ServeError` |
 | `crates/api/src/http/integration/` | Tests: a fake surface (`fake.rs`), one case per query route built from the wire goldens (`cases.rs`), and routes, errors, actions, auth, live, frame, export and socket tests | — |
 

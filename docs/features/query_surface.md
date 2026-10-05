@@ -224,6 +224,10 @@ and its JSON as the data; a stream's last event is `end` with the
 carrying their newest cursor, end with `LiveEnd::Lagged` when their bounded buffer fills, so a
 slow client never blocks the feed or other clients, and end with
 `SessionEnded` when the session ends or a config load changes the operator.
+`LiveEnd::Unreachable` is client-only: a client of the feed (the HTTP
+client) ends its stream with it when it runs out of reconnect attempts. A
+surface never ends a stream with it, and a server sends
+`LiveEnd::served()` of an end, which is never `Unreachable`.
 
 ### The present
 
@@ -739,7 +743,19 @@ Every query returns `QueryError`: `Store` (retry may succeed), `NotFound`,
 (the state does not allow the request), `InvalidInput(InputError)` (invalid
 whatever the state), `InvalidCursor`, `ProjectionNotRetained`. Operator
 actions return the subset `ActionError`, which `QueryError::from` keeps
-variant for variant (`l8_surface/errors.rs`). How each store error becomes
+variant for variant (`l8_surface/errors.rs`).
+
+Both enums also have the client-only `Unavailable { kind: UnavailableKind,
+reason }`: the call never reached a surface that answered it, because of
+a `401` (`Unauthenticated`), a failed connect or send (`Transport`), a
+failed body read (`Body`) or no response in time (`Timeout`). Only a
+client of the surface produces it (`crosstalk-client`). No surface
+returns it, the store error mappings never produce it, and a server
+answers `served()` of an error, which turns `Unavailable` into `Store`
+with the same reason and status (`surface.http.client-unavailable-typed`).
+An action that fails this way had no effect and was not audited;
+`AuditOutcome::of` would record it as `Rejected(Failed)`, the `Store` it
+is served as. How each store error becomes
 one is defined once, by the `From` impls in `l8_surface/query_errors.rs`:
 for queries `VersionUnavailable`, `EdgeQueryError`, `SearchError`,
 `EmbedError` (embedding a search's text), `CatalogError`,
@@ -833,13 +849,13 @@ free-text classification: `Store`'s reason is diagnostic only.
 | `spec/types/interfaces/l8_surface/sinks.rs` | Alert delivery | `AlertSink`, `SinkInfo`, `SinkKind`, `SinkError` |
 | `spec/types/interfaces/l8_surface/actions.rs` | Operator actions | `OperatorAction` (`merge_agents`, `kind`, `required_permission`, `subjects`; wire data, never a request), `ActionKind` (`ALL`, `index`, `required_permission`, which `OperatorAction::required_permission` returns), `ActionOutcome` (`subjects`), `SupersededChannels` |
 | `spec/types/interfaces/l8_surface/actions/request.rs` | The action a client sends | `ActionRequest` (a `WireRequest`; `into_action`, `of`, `kind`) |
-| `spec/types/interfaces/l8_surface/errors.rs` | Why a query or action failed; adjacently tagged on the wire ([wire_contract.md](wire_contract.md)) | `QueryError`, `ActionError`, `ConflictKind` (incl. `AlertNotAcknowledged`, `RuleStale`, `MergeIntoSelf`, `ExportTooLarge`), `InputError` (incl. `SelfMerge`, `EmptySelection`, `ExcerptContextTooLong`, `TooManyIds`, `UnsupportedFormat`, `MalformedRequest`) |
+| `spec/types/interfaces/l8_surface/errors.rs` | Why a query or action failed; adjacently tagged on the wire ([wire_contract.md](wire_contract.md)) | `QueryError`, `ActionError` (both with the client-only `Unavailable`, `served`, `is_client_only`), `UnavailableKind` (`ALL`), `ConflictKind` (incl. `AlertNotAcknowledged`, `RuleStale`, `MergeIntoSelf`, `ExportTooLarge`), `InputError` (incl. `SelfMerge`, `EmptySelection`, `ExcerptContextTooLong`, `TooManyIds`, `UnsupportedFormat`, `MalformedRequest`) |
 | `spec/types/interfaces/l8_surface/lists.rs` | Surface list filters, the search request and the topic page | `ChannelFilter`, `OriginFilter` ([read_models.md](read_models.md)), `AgentFilter` and `AgentText` (re-exported), `AlertRuleFilter`, `SearchRequest`, `SearchMode` (default `Hybrid`), `TopicPage` |
 | `spec/types/interfaces/l8_surface/query_errors.rs` | How each store error and refused request value becomes a `QueryError` or an `ActionError` | `From` impls for `VersionUnavailable`, `EdgeQueryError`, `SearchError`, `EmbedError`, `CatalogError`, `ProjectionStoreError`, `RegistryError`, `VerdictError`, `AuditError`,
 `AlertReadError` (rules and alerts), `TransmissionStoreError` (stored
 transmissions), `SinkRegistryError` (`sinks`), `OperatorStoreError`
 (`operators`), `BusError`, `BlobError`, `EvidenceError`, `AgentReadError`, `ExportPlanError`, `TooManyIds`, `InvalidSelection`, `InvalidWindow`, `UnsupportedFormat` (to `QueryError`), `RegistryError`, `VerdictError`, `CatalogError`, `PinError`, `PromotionRefusal`, `PromoteError`, `RuleError`, `ResolveError`, `SelfMerge` (to `ActionError`) and `DecodeError` (to both) |
-| `spec/types/interfaces/l8_surface/live.rs` | The live feed (SSE) and its framing | `LiveFeed`, `LiveStream`, `UiEvent` (`from(Changed)`, incl. `VerdictChanged` and `ProjectionReady { id: ProjectionId }`, `required_permission`, `visible_to`), `LiveCursor` (wire form: its text), `FeedEpoch`, `Resume`, `FeedWindow` (checked), `ResumePlan`, `ResyncReason`, `LiveItem` (`event_name`, `cursor`), `LiveEnd` (`EVENT_NAME`), `LiveConfig` (checked) |
+| `spec/types/interfaces/l8_surface/live.rs` | The live feed (SSE) and its framing | `LiveFeed`, `LiveStream`, `UiEvent` (`from(Changed)`, incl. `VerdictChanged` and `ProjectionReady { id: ProjectionId }`, `required_permission`, `visible_to`), `LiveCursor` (wire form: its text), `FeedEpoch`, `Resume`, `FeedWindow` (checked), `ResumePlan`, `ResyncReason`, `LiveItem` (`event_name`, `cursor`), `LiveEnd` (`EVENT_NAME`, client-only `Unreachable`, `served`, `is_client_only`), `LiveConfig` (checked) |
 | `spec/types/interfaces/l8_surface/export/` | Streamed exports with a manifest ([export.md](export.md)) | `ExportRequest`, `ExportDataset`, `ExportFormats` (checked; `check` gives `UnsupportedFormat`), `ExportHeader`, `ExportTrailer`, `ExportStream`, `ExportSealer`, `verify_export`, `ExportRecord`, `ExportPlanError` |
 | `spec/types/interfaces/l8_surface/audit.rs` | The audit log | `AuditLog`, `AuditEntry` (`by`, `subjects`), `AuditBody` (incl. `Export`), `OperatorRecord` (checked; keeps a `CallerSnapshot`), `ConfigRecord`, `ConfigChange` (incl. `SetSink`, `RemoveSink`, `SetTopicRetention`, `SetFrameRetention`), `ConfigOutcome`, `AuditAuthor`, `AuditSubject` (incl. `Sink`), `AuditOutcome`, `OutcomeKind`, `Rejection`, `AuditFilter`, `AuditError` |
 | `spec/types/interfaces/l8_surface/operators.rs` | The operator directory and access config | `AccessConfig`, `AccessMode`, `TrustedOperator`, `OperatorConfig`, `OperatorName` (checked), `Operator`, `OperatorDirectory` (checked: `load`, `caller`), `RequestIdentity`, `Unauthenticated`, `InvalidAccessConfig` |
@@ -950,6 +966,10 @@ transmissions), `SinkRegistryError` (`sinks`), `OperatorStoreError`
   disabling any rule is always allowed, and only `UpdateRule` makes a stale
   rule current again, enabling it. A rule that goes stale while enabled
   keeps its status.
+- Only a client produces `QueryError::Unavailable`,
+  `ActionError::Unavailable` and `LiveEnd::Unreachable`; a server answers
+  their `served()` form (`Store`, `ShuttingDown`), never them
+  (`surface.http.client-unavailable-typed`).
 - Every query error is a typed `QueryError` and every action error a typed
   `ActionError`, which converts to `QueryError` variant for variant; each
   store error maps to exactly one variant through the one `From` impl per

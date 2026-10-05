@@ -20,7 +20,7 @@ use crate::interfaces::l8_surface::operators::{AccessMode, OperatorName};
 use crate::interfaces::l8_surface::sinks::SinkKind;
 use crate::interfaces::l8_surface::{
     ActionError, ActionKind, ActionOutcome, CallerSnapshot, ConflictKind, InputError,
-    OperatorAction, Permission, PermissionSet, QueryError,
+    OperatorAction, Permission, PermissionSet, QueryError, UnavailableKind,
 };
 use crate::observed::agent::{AgentLabel, IdentityEvidence, MergeAuthor, MergeRequest};
 use crate::support::{Blake3, NonEmpty, TimeWindow};
@@ -729,6 +729,7 @@ fn every_act_result() -> Vec<Result<ActionOutcome, ActionError>> {
     fn error(error: ActionError) -> ActionError {
         match error {
             ActionError::Store { .. }
+            | ActionError::Unavailable { .. }
             | ActionError::NotFound
             | ActionError::Forbidden { .. }
             | ActionError::Conflict(_)
@@ -785,12 +786,41 @@ fn every_action_error_keeps_its_variant_as_a_query_error() {
         let Err(error) = result else { continue };
         let expected = match error.clone() {
             ActionError::Store { reason } => QueryError::Store { reason },
+            ActionError::Unavailable { kind, reason } => QueryError::Unavailable { kind, reason },
             ActionError::NotFound => QueryError::NotFound,
             ActionError::Forbidden { missing } => QueryError::Forbidden { missing },
             ActionError::Conflict(kind) => QueryError::Conflict(kind),
             ActionError::InvalidInput(input) => QueryError::InvalidInput(input),
         };
         assert_eq!(QueryError::from(error), expected);
+    }
+}
+
+/// No surface's `act` returns the client-only `Unavailable`, so the audit
+/// log never records one; were it handed one, it records the `Store` the
+/// error is served as, and reads it back as that.
+#[test]
+fn a_client_only_action_error_audits_as_its_served_store() {
+    for kind in UnavailableKind::ALL {
+        let error = ActionError::Unavailable {
+            kind,
+            reason: "sending the request: connection refused".into(),
+        };
+        let outcome = AuditOutcome::of(&Err(error.clone()));
+        assert_eq!(
+            outcome,
+            AuditOutcome::Rejected(Rejection::Failed {
+                reason: "sending the request: connection refused".into()
+            })
+        );
+        assert_eq!(outcome.result(), Err(error.clone().served()));
+        assert_eq!(
+            QueryError::from(error),
+            QueryError::Unavailable {
+                kind,
+                reason: "sending the request: connection refused".into()
+            }
+        );
     }
 }
 

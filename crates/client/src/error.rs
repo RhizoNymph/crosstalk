@@ -8,33 +8,57 @@
 //! status received ([`decode_error`]): a body whose error belongs to
 //! another status is [`ClientError::StatusMismatch`], not trusted. A `401`
 //! is the binding's [`AuthError`]. Anything without an L8 body (a proxy's
-//! `502`, an HTML page) is [`ClientError::UnexpectedResponse`].
+//! `502`, an HTML page) is [`ClientError::UnexpectedResponse`], and so is
+//! a body holding a client-only error (`Unavailable`), which a server
+//! never answers.
 //!
 //! **Into the trait's error.** `QueryApi` and `OperatorActions` return the
-//! surface's `QueryError` and `ActionError`, which have no variant for "no
-//! caller" or "the network failed", because the in-process surface has
-//! neither. The trait methods therefore return the decoded error as is,
-//! a request the client could not encode as `InvalidInput(MalformedRequest)`
-//! (what the server would answer it with), and everything else as
-//! `Store { reason }`: the call did not reach a store that answered, and
-//! retrying may succeed. The reason names the cause, and a page that needs
-//! to tell "sign in again" apart reads [`ClientError`] from the inherent
-//! methods instead.
+//! surface's `QueryError` and `ActionError`. The trait methods return the
+//! decoded error as is, and a request the client could not encode as
+//! `InvalidInput(MalformedRequest)` (what the server would answer it
+//! with). A call that never reached a surface that answered is the
+//! client-only `Unavailable { kind, reason }` ([`ClientError::unavailable`]):
+//!
+//! | `ClientError` | `UnavailableKind` | `reason` starts with |
+//! | --- | --- | --- |
+//! | `Unauthenticated` (a `401`) | `Unauthenticated` | `no caller: ` |
+//! | `Transport(Send)` | `Transport` | `sending the request: ` |
+//! | `Transport(Body)` | `Body` | `reading the body: ` |
+//! | `Transport(Timeout)` | `Timeout` | `no response within ` |
+//!
+//! Everything else (`Transport(Build)`, `Transport(TooLarge)`,
+//! `StatusMismatch`, `UnexpectedResponse`) is `Store { reason }`: a
+//! response came back, but not one the binding describes. Either way the
+//! reason is the `ClientError`'s text, so it names the cause.
 
 use std::fmt::Debug;
 
 use crosstalk_spec::interfaces::l8_surface::http::{AuthError, EncodeError, ErrorStatus, Route};
-use crosstalk_spec::interfaces::l8_surface::{ActionError, InputError, QueryError};
+use crosstalk_spec::interfaces::l8_surface::{
+    ActionError, InputError, QueryError, UnavailableKind,
+};
 use crosstalk_spec::wire::DecodeErrorKind;
 use serde::de::DeserializeOwned;
 
 /// An error type a route answers with: decoded from the body, with the
 /// status the binding gives it.
-pub trait ApiError: DeserializeOwned + ErrorStatus + Debug + Send + 'static {}
+pub trait ApiError: DeserializeOwned + ErrorStatus + Debug + Send + 'static {
+    /// Whether only a client produces this error: a server never answers
+    /// it, so a body holding one is not the surface's answer.
+    fn is_client_only(&self) -> bool;
+}
 
-impl ApiError for QueryError {}
+impl ApiError for QueryError {
+    fn is_client_only(&self) -> bool {
+        QueryError::is_client_only(self)
+    }
+}
 
-impl ApiError for ActionError {}
+impl ApiError for ActionError {
+    fn is_client_only(&self) -> bool {
+        ActionError::is_client_only(self)
+    }
+}
 
 /// Why the HTTP exchange itself failed: nothing the surface decided.
 #[derive(Debug, thiserror::Error)]
@@ -93,6 +117,24 @@ pub enum ClientError<E: Debug> {
 }
 
 impl<E: Debug> ClientError<E> {
+    /// The kind of `Unavailable` this error becomes through the traits:
+    /// the call never reached a surface that answered it. `None` for an
+    /// error that is the surface's answer, a call off the route table, or
+    /// a response the binding does not describe.
+    pub fn unavailable(&self) -> Option<UnavailableKind> {
+        match self {
+            Self::Unauthenticated(_) => Some(UnavailableKind::Unauthenticated),
+            Self::Transport(TransportError::Send(_)) => Some(UnavailableKind::Transport),
+            Self::Transport(TransportError::Body(_)) => Some(UnavailableKind::Body),
+            Self::Transport(TransportError::Timeout { .. }) => Some(UnavailableKind::Timeout),
+            Self::Api(_)
+            | Self::Encode(_)
+            | Self::Transport(TransportError::Build(_) | TransportError::TooLarge { .. })
+            | Self::StatusMismatch { .. }
+            | Self::UnexpectedResponse { .. } => None,
+        }
+    }
+
     pub(crate) fn unexpected(route: Route, status: u16, reason: impl Into<String>) -> Self {
         Self::UnexpectedResponse {
             route,
@@ -114,6 +156,11 @@ pub(crate) fn decode_error<E: ApiError>(route: Route, status: u16, body: &[u8]) 
         };
     }
     match serde_json::from_slice::<E>(body) {
+        Ok(error) if error.is_client_only() => ClientError::unexpected(
+            route,
+            status,
+            format!("an error only a client produces: {error:?}"),
+        ),
         Ok(error) => {
             let expected = error.status().code();
             if expected == status {
@@ -140,10 +187,15 @@ fn malformed(error: &EncodeError) -> InputError {
 
 impl From<ClientError<QueryError>> for QueryError {
     fn from(error: ClientError<QueryError>) -> Self {
-        match error {
-            ClientError::Api(error) => error,
-            ClientError::Encode(encode) => Self::InvalidInput(malformed(&encode)),
-            other => Self::Store {
+        let kind = error.unavailable();
+        match (error, kind) {
+            (ClientError::Api(error), _) => error,
+            (ClientError::Encode(encode), _) => Self::InvalidInput(malformed(&encode)),
+            (other, Some(kind)) => Self::Unavailable {
+                kind,
+                reason: other.to_string(),
+            },
+            (other, None) => Self::Store {
                 reason: other.to_string(),
             },
         }
@@ -152,10 +204,15 @@ impl From<ClientError<QueryError>> for QueryError {
 
 impl From<ClientError<ActionError>> for ActionError {
     fn from(error: ClientError<ActionError>) -> Self {
-        match error {
-            ClientError::Api(error) => error,
-            ClientError::Encode(encode) => Self::InvalidInput(malformed(&encode)),
-            other => Self::Store {
+        let kind = error.unavailable();
+        match (error, kind) {
+            (ClientError::Api(error), _) => error,
+            (ClientError::Encode(encode), _) => Self::InvalidInput(malformed(&encode)),
+            (other, Some(kind)) => Self::Unavailable {
+                kind,
+                reason: other.to_string(),
+            },
+            (other, None) => Self::Store {
                 reason: other.to_string(),
             },
         }

@@ -5,7 +5,9 @@ use std::sync::Arc;
 
 use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
 use crosstalk_spec::interfaces::l8_surface::http::{ErrorStatus, RequestBuilder, Route};
-use crosstalk_spec::interfaces::l8_surface::{ActionError, ActionRequest, QueryError};
+use crosstalk_spec::interfaces::l8_surface::{
+    ActionError, ActionRequest, QueryError, UnavailableKind,
+};
 use serde_json::Value;
 
 use super::fake::Fake;
@@ -59,5 +61,48 @@ async fn errors_answer_with_their_status_and_json() {
         assert_eq!(reply.status.as_u16(), status, "{json}");
         assert_eq!(reply.json(), json, "the body is the error's JSON");
         assert_eq!(reply.header(CACHE_CONTROL.as_str()), Some("no-store"));
+    }
+}
+
+/// The server never answers a client-only error. Were the surface to hand
+/// it one (no surface does), every `Unavailable` goes out as the `Store` it
+/// is served as, with the same reason and status 503: no response body is
+/// ever `unavailable`.
+#[tokio::test]
+async fn a_client_only_error_is_never_answered() {
+    let watermark = RequestBuilder::new(Route::Watermark)
+        .build()
+        .expect("a request");
+    let acknowledge: ActionRequest = golden("surface_actions/actions/request_acknowledge");
+    let act = RequestBuilder::new(Route::Action(acknowledge.kind()))
+        .body(&acknowledge)
+        .build()
+        .expect("a request");
+    for kind in UnavailableKind::ALL {
+        let reason = format!("sending the request: {kind:?}");
+        let fake = Arc::new(Fake::default());
+        fake.fail_with(QueryError::Unavailable {
+            kind,
+            reason: reason.clone(),
+        });
+        let reply = send(&server(&fake), request(&watermark, FULL)).await;
+        assert_eq!(reply.status.as_u16(), 503, "{kind:?}");
+        let served: QueryError = serde_json::from_value(reply.json()).expect("a query error");
+        assert_eq!(
+            served,
+            QueryError::Store {
+                reason: reason.clone()
+            }
+        );
+
+        let fake = Arc::new(Fake::default());
+        fake.act_with(Err(ActionError::Unavailable {
+            kind,
+            reason: reason.clone(),
+        }));
+        let reply = send(&server(&fake), request(&act, FULL)).await;
+        assert_eq!(reply.status.as_u16(), 503, "{kind:?}");
+        let served: ActionError = serde_json::from_value(reply.json()).expect("an action error");
+        assert_eq!(served, ActionError::Store { reason });
     }
 }

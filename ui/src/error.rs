@@ -60,7 +60,11 @@ impl std::error::Error for UiError {}
 /// A query error in words.
 pub fn describe(error: &QueryError) -> String {
     match error {
-        QueryError::Store { reason } => format!("the gateway's store failed: {reason}"),
+        // A call that never reached the gateway reads as a store failure
+        // for now, its reason naming the cause (`no caller: `, ...).
+        QueryError::Store { reason } | QueryError::Unavailable { reason, .. } => {
+            format!("the gateway's store failed: {reason}")
+        }
         QueryError::NotFound => "not found".to_owned(),
         QueryError::Forbidden { missing } => {
             format!("this needs the {} permission", permission_name(*missing))

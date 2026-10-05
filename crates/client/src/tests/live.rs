@@ -295,7 +295,8 @@ async fn a_refused_reconnect_ends_the_session() {
 }
 
 /// Reconnects that keep failing give up after the policy's attempts, with
-/// `ShuttingDown`; the last cursor stays the resume point.
+/// the client-only `Unreachable` (the surface did not end the stream); the
+/// last cursor stays the resume point.
 #[tokio::test]
 async fn reconnects_give_up_after_the_policy() {
     let mut stub = Stub::start(|_, n| match n {
@@ -309,7 +310,7 @@ async fn reconnects_give_up_after_the_policy() {
     .await;
     let mut stream = subscribe(&stub.client(), Resume::Fresh).await;
     assert_eq!(take(&mut stream, 1).await, vec![item(1)]);
-    assert_eq!(stream.next().await, Err(LiveEnd::ShuttingDown));
+    assert_eq!(stream.next().await, Err(LiveEnd::Unreachable));
     assert_eq!(stream.last_cursor(), Some(cursor(1)));
     let resumes: Vec<Resume> = stub.requests().iter().map(resume_sent).collect();
     assert_eq!(resumes.len(), 1 + 3, "the subscription and three attempts");
@@ -318,6 +319,33 @@ async fn reconnects_give_up_after_the_policy() {
             .iter()
             .all(|resume| *resume == Resume::From(cursor(1)))
     );
+}
+
+/// An end event carrying the client-only `unreachable`, which a server
+/// never sends, is not the surface ending the stream: it is a cut, and the
+/// client reconnects from the last cursor.
+#[tokio::test]
+async fn an_unreachable_end_from_the_server_is_a_cut() {
+    let mut stub = Stub::start(|_, n| match n {
+        0 => {
+            let mut steps = frames(1..=1);
+            steps.push(Step::Send(
+                b"event: end\ndata: \"unreachable\"\n\n".to_vec(),
+            ));
+            feed(steps)
+        }
+        _ => {
+            let mut steps = frames(2..=2);
+            steps.push(end(LiveEnd::Lagged));
+            feed(steps)
+        }
+    })
+    .await;
+    let mut stream = subscribe(&stub.client(), Resume::Fresh).await;
+    assert_eq!(take(&mut stream, 2).await, vec![item(1), item(2)]);
+    assert_eq!(stream.next().await, Err(LiveEnd::Lagged));
+    let resumes: Vec<Resume> = stub.requests().iter().map(resume_sent).collect();
+    assert_eq!(resumes, vec![Resume::Fresh, Resume::From(cursor(1))]);
 }
 
 /// A subscription the surface refuses is the refusal.
