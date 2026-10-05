@@ -17,8 +17,8 @@ use crate::ids::{
     TransmissionId,
 };
 use crate::interfaces::l5_flow::channels::{
-    AccessReadError, AccessStore, ChannelReads, ChannelTraffic, ChannelWithTraffic, DetectionUpdate,
-    TrafficError,
+    AccessReadError, AccessStore, ChannelReads, ChannelTraffic, ChannelWithTraffic,
+    DetectionUpdate, TrafficError,
 };
 use crate::interfaces::l5_flow::transmissions::{TransmissionStore, TransmissionStoreError};
 use crate::interfaces::l5_flow::{Discovery, RegistryError};

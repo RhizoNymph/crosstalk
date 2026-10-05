@@ -103,6 +103,7 @@ async fn single_agent_resource_stays_a_resource() {
                 crosstalk_spec::derived::flow::access::AccessOp::Write {
                     call: part(),
                     spans: Vec::new(),
+                    outcome: crosstalk_spec::derived::flow::access::WriteOutcome::Delivered,
                 }
             } else {
                 crosstalk_spec::derived::flow::access::AccessOp::Read { result: part() }
@@ -554,6 +555,7 @@ async fn a_declared_channel_is_in_use_from_its_first_cross_agent_transmission() 
             op: crosstalk_spec::derived::flow::access::AccessOp::Write {
                 call: part(),
                 spans: Vec::new(),
+                outcome: crosstalk_spec::derived::flow::access::WriteOutcome::Delivered,
             },
         };
         assert_eq!(registry.record_access(write).await, Ok(()));

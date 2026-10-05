@@ -24,6 +24,7 @@ use crate::derived::flow::transmission::{
     Confirmed, Crossing, Route, Transmission, TransmissionState,
 };
 use crate::derived::flow::verdict::{TransmissionVerdict, Verdict, VerdictLog};
+use crate::derived::provenance::matching::CarrierKind;
 use crate::ids::{AgentId, AlertId, AlertRuleId, ChannelId, OperatorId};
 use crate::interfaces::l5_flow::channels::ChannelWithTraffic;
 use crate::interfaces::l8_surface::channel_traffic::{
@@ -687,7 +688,10 @@ fn detection_quality_leaves_out_transmissions_within_one_agent() {
     ];
     let row = |genuine, false_detection| crate::aggregates::quality::QualityRow {
         route_kind: RouteKind::Channel,
-        match_kind: QualityMatch::Content(MatchClass::Exact),
+        match_kind: QualityMatch::Content {
+            class: MatchClass::Exact,
+            carrier: CarrierKind::ToolResult,
+        },
         genuine,
         false_detection,
         unlabeled: 0,

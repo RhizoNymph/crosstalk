@@ -18,8 +18,7 @@ use crate::ids::{OperatorId, TransmissionId};
 use crate::observed::message::ToolName;
 use crate::support::NonEmpty;
 use crate::tests::fixtures::{
-    access, agent, at, content_match, read_access, resource, transmission, write_access,
-    write_with_outcome,
+    agent, at, content_match, read_access, resource, transmission, write_access, write_with_outcome,
 };
 
 const WINDOW: Duration = Duration::from_secs(3600);
