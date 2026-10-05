@@ -179,7 +179,10 @@ Overview:
       reference matcher, or the gateway's own Pipeline::ingest, which is
       unscored until L3 to L5 consume the bus) produces spec Transmissions;
       the scorer aligns them with the labels and reports per dataset,
-      route, carrier, match class and tier against regression gates.
+      route, carrier, match class and tier against regression gates. The
+      swarm benchmark (ct-eval swarm) instead scores the live gateway: it
+      joins the demo swarm's ground truth to the gateway's exchange log and
+      blobs, and scores a saved L8 transmissions export and its evidence.
     e2e: >
       Crate crosstalk-e2e (a composer): the end-to-end smoke harness. A
       scripted two-agent Claude Code scenario as wire traffic, captured
@@ -1118,7 +1121,8 @@ Features Index:
       - crates/eval/src/bin/ct-eval/main.rs
       - crates/eval/src/datasets/agentdojo/mod.rs
       - crates/eval/src/datasets/tau2/mod.rs
-    depends_on: [type_spec, gateway, transport, sim, testkit]
+      - crates/eval/src/datasets/swarm_truth/mod.rs
+    depends_on: [type_spec, gateway, transport, flow_extract, export, http_api, sim, testkit]
     doc: docs/features/eval.md
   e2e_smoke:
     description: >
@@ -1228,4 +1232,31 @@ Features Index:
       - crates/analysis/src/pg/mod.rs
     depends_on: [type_spec, store, memory, gateway]
     doc: docs/features/search_alerts.md
+  eval_ai_village:
+    description: >
+      The AI Village converter (crosstalk-eval datasets::ai_village, ct-eval
+      --dataset ai-village). Claude Code mode: the Claude Agent SDK agent's
+      exact calls, one world per context, with construction-tier labels for
+      every chat message it read through the village MCP server's
+      get_events (keyed by event id; Direct/ToolResult). Window mode
+      (default 2026-07-13..17): every standard agent, one world per village
+      day, requests rebuilt from responses (system prompt from goals and
+      memory, session history, chat since the previous call), structural
+      chat labels, heuristic repository-channel labels from bash accesses
+      on canonical repository URLs, GUI edits counted. Bash accesses follow
+      the agreed L5 HttpTool contract: curl, wget and gh/glab api keep
+      their equivalent http_request {method, url, body} call, git and the
+      forge CLIs' issue commands are marked Bash-only, every resource is a
+      canonical URL (L5's url_locator off the forges, the repository's web
+      URL on them), and each write carries the spec's WriteOutcome
+      (rejected writes never pair). Its streaming table passes, resource
+      normalizer and bash access tagger are reusable.
+    entry_points:
+      - crates/eval/src/datasets/ai_village/mod.rs
+      - crates/eval/src/datasets/ai_village/tables.rs
+      - crates/eval/src/datasets/ai_village/resource.rs
+      - crates/eval/src/datasets/ai_village/access/mod.rs
+      - crates/eval/src/datasets/ai_village/access/http.rs
+    depends_on: [eval, flow_extract]
+    doc: docs/features/eval_ai_village.md
 ```
