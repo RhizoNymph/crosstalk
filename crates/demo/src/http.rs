@@ -166,6 +166,7 @@ pub enum UrlError {
 /// An `http://host[:port][/path]` base URL (no query, no TLS).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BaseUrl {
+    /// Lower-case.
     pub host: String,
     pub port: u16,
     /// The path prefix without a trailing slash; empty for none.
@@ -202,7 +203,9 @@ impl FromStr for BaseUrl {
             return Err(bad());
         }
         Ok(Self {
-            host: host.to_owned(),
+            // Host names are case-insensitive; one spelling keeps every URL
+            // built from this base identical.
+            host: host.to_ascii_lowercase(),
             port,
             prefix: path.trim_end_matches('/').to_owned(),
         })
@@ -211,11 +214,28 @@ impl FromStr for BaseUrl {
 
 impl std::fmt::Display for BaseUrl {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "http://{}:{}{}", self.host, self.port, self.prefix)
+        f.write_str(&self.url())
     }
 }
 
 impl BaseUrl {
+    /// The URL as one string, in the form a URL canonicaliser keeps: the
+    /// host lower-case (in brackets when it is IPv6), port 80 left out,
+    /// the prefix without a trailing slash. Parsing it gives this base URL
+    /// back, so it survives a round trip through a task marker.
+    pub fn url(&self) -> String {
+        let host = if self.host.contains(':') {
+            format!("[{}]", self.host)
+        } else {
+            self.host.clone()
+        };
+        if self.port == 80 {
+            format!("http://{host}{}", self.prefix)
+        } else {
+            format!("http://{host}:{}{}", self.port, self.prefix)
+        }
+    }
+
     /// The first address the host resolves to.
     pub async fn resolve(&self) -> Result<SocketAddr, UrlError> {
         let resolve_error = |reason: String| UrlError::Resolve {

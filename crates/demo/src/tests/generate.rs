@@ -8,8 +8,9 @@ use serde_json::{Value, json};
 
 use crate::anthropic::sse::{Split, encode};
 use crate::anthropic::{ResponseBlock, StopReason};
+use crate::http::BaseUrl;
 use crate::knobs::Span;
-use crate::protocol::{PageSlug, Task, WIKI_READ, WIKI_WRITE, tool_definitions};
+use crate::protocol::{HTTP_TOOL, PageSlug, Task, tool_definitions};
 use crate::upstream::generate::{GenConfig, LastTurn, RequestError, generate, parse_request};
 
 fn config() -> GenConfig {
@@ -39,6 +40,10 @@ fn user_task(task: &Task) -> Value {
 
 fn page(name: &str) -> PageSlug {
     name.parse().expect("slug")
+}
+
+fn wiki() -> BaseUrl {
+    "http://wiki:8090".parse().expect("url")
 }
 
 fn sse(body: &[u8]) -> Vec<u8> {
@@ -79,10 +84,11 @@ fn seed_and_body_change_the_answer() {
 }
 
 #[test]
-fn write_task_gets_a_wiki_write_call() {
+fn write_task_gets_an_http_put() {
     let task = Task::Write {
         page: page("vacuum-tuning-1"),
         topic: 1,
+        base: wiki(),
     };
     let body = body(user_task(&task), true);
     let request = parse_request(&body).expect("request");
@@ -97,18 +103,25 @@ fn write_task_gets_a_wiki_write_call() {
         panic!("a tool call")
     };
     assert!(id.starts_with("toolu_01"));
-    assert_eq!(name, WIKI_WRITE);
-    assert_eq!(input["page"], "vacuum-tuning-1");
-    let content = input["content"].as_str().expect("content");
+    assert_eq!(name, HTTP_TOOL);
+    assert_eq!(input["method"], "PUT");
+    assert_eq!(input["url"], "http://wiki:8090/pages/vacuum-tuning-1");
+    assert_eq!(
+        input.as_object().map(|o| o.len()),
+        Some(3),
+        "method, url, body"
+    );
+    let content = input["body"].as_str().expect("body");
     let words = content.split_whitespace().count();
     assert!(words >= 30, "{words} words");
     assert!(reply.message.id.starts_with("msg_01"));
 }
 
 #[test]
-fn read_task_gets_a_wiki_read_call() {
+fn read_task_gets_an_http_get() {
     let task = Task::Read {
         page: page("cache-invalidation-2"),
+        base: wiki(),
     };
     let body = body(user_task(&task), false);
     let request = parse_request(&body).expect("request");
@@ -119,8 +132,11 @@ fn read_task_gets_a_wiki_read_call() {
     let ResponseBlock::ToolUse { name, input, .. } = &reply.message.content[1] else {
         panic!("a tool call")
     };
-    assert_eq!(name, WIKI_READ);
-    assert_eq!(input, &json!({"page": "cache-invalidation-2"}));
+    assert_eq!(name, HTTP_TOOL);
+    assert_eq!(
+        input,
+        &json!({"method": "GET", "url": "http://wiki:8090/pages/cache-invalidation-2"})
+    );
 }
 
 #[test]
@@ -128,6 +144,7 @@ fn undeclared_tools_are_never_called() {
     let task = Task::Write {
         page: page("vacuum-tuning-1"),
         topic: 1,
+        base: wiki(),
     };
     let body = serde_json::to_vec(&json!({
         "model": "m", "max_tokens": 100, "messages": user_task(&task),
@@ -148,8 +165,8 @@ fn undeclared_tools_are_never_called() {
 #[test]
 fn tool_results_get_a_closing_answer() {
     let messages = json!([
-        {"role": "user", "content": [{"type": "text", "text": Task::Read { page: page("x-1") }.prompt()}]},
-        {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_1", "name": WIKI_READ, "input": {"page": "x-1"}}]},
+        {"role": "user", "content": [{"type": "text", "text": Task::Read { page: page("x-1"), base: wiki() }.prompt()}]},
+        {"role": "assistant", "content": [{"type": "tool_use", "id": "toolu_1", "name": HTTP_TOOL, "input": {"method": "GET", "url": "http://wiki:8090/pages/x-1"}}]},
         {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "page text"}]},
     ]);
     let body = body(messages, true);
@@ -189,7 +206,10 @@ fn failed_tool_results_are_acknowledged() {
 
 #[test]
 fn system_turns_inside_messages_are_skipped() {
-    let task = Task::Read { page: page("x-1") };
+    let task = Task::Read {
+        page: page("x-1"),
+        base: wiki(),
+    };
     let messages = json!([
         {"role": "system", "content": "<system-reminder>hi</system-reminder>"},
         {"role": "user", "content": task.prompt()},

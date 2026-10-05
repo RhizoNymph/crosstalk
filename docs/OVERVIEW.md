@@ -1046,11 +1046,17 @@ Features Index:
       wiki is an in-memory HTTP page store with versions and authors, the
       shared channel. swarm runs N agents through the crosstalk proxy. Each
       keeps a growing conversation, resent whole every turn, with fake
-      x-api-keys per agent or group. The model's wiki_write and wiki_read
-      calls run against the wiki, and their results go back as tool_result,
-      so one agent's model output reaches another's input. swarm reports
-      throughput, p50/p95/p99 time to first byte and total time, and the
-      expected transmissions, optionally as a ground-truth JSONL file.
+      x-api-keys per agent or group. The one declared tool is http_request
+      (L5's HTTP tool contract); the model's GET and PUT calls of
+      <wiki>/pages/<page> run against the wiki, and their results go back as
+      tool_result, so one agent's model output reaches another's input and
+      L5 can discover the wiki as a channel. swarm reports throughput,
+      p50/p95/p99 time to first byte and total time, and the expected
+      transmissions, self-reads, rereads and misses, optionally as a
+      ground-truth JSONL file (schema v2: header, agent clusters, and per
+      read the writer's and reader's session, turn and tool_use id, the
+      content's hashes and its exact message/block in the reader's request),
+      which ct-eval scores against.
       healthcheck serves the distroless image. deploy/compose.demo.yaml,
       deploy/demo.Dockerfile, deploy/demo/crosstalk.demo.json and run.sh
       demo up|run|down|logs run the demo on the compose stack. It reuses
@@ -1061,6 +1067,7 @@ Features Index:
       - crates/demo/src/upstream/mod.rs
       - crates/demo/src/wiki/mod.rs
       - crates/demo/src/swarm/mod.rs
+      - crates/demo/src/swarm/truth.rs
       - deploy/compose.demo.yaml
       - deploy/run.sh
     depends_on: [testkit, deploy, gateway, workspace]

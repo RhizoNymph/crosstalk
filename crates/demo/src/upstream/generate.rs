@@ -5,17 +5,18 @@
 //! It reads only what it needs, tolerantly: `model`, `stream`,
 //! `max_tokens`, the declared tool names and the last user turn (system
 //! turns inside `messages` are skipped). A user turn ending in a task
-//! marker ([`Task`]) gets the matching wiki tool call when the tool is
-//! declared; a turn of tool results gets a closing answer; anything else
-//! gets prose.
+//! marker ([`Task`]) gets the matching `http_request` call against the
+//! wiki URL the marker names (a GET to read, a PUT with generated page text
+//! to write) when the tool is declared; a turn of tool results gets a
+//! closing answer; anything else gets prose.
 
 use std::time::Duration;
 
-use serde_json::{Value, json};
+use serde_json::Value;
 
 use crate::anthropic::{AssistantMessage, ResponseBlock, StopReason, Usage};
 use crate::knobs::{Rng, Span};
-use crate::protocol::{PageSlug, Task, Topic, WIKI_READ, WIKI_WRITE};
+use crate::protocol::{HTTP_TOOL, Task, Topic, read_input, write_input};
 
 use super::text::paragraph;
 
@@ -175,7 +176,7 @@ pub fn generate(config: &GenConfig, request: &Request, body: &[u8]) -> Reply {
     let random_topic = |rng: &mut Rng| Topic::of(u32::try_from(rng.below(64)).unwrap_or(0));
 
     let (content, stop_reason) = match &request.last {
-        LastTurn::Task(Task::Write { page, topic }) if declared(WIKI_WRITE) => {
+        LastTurn::Task(Task::Write { page, topic, base }) if declared(HTTP_TOOL) => {
             let topic = Topic::of(*topic);
             let page_text = paragraph(&mut rng, &topic, words);
             (
@@ -184,19 +185,15 @@ pub fn generate(config: &GenConfig, request: &Request, body: &[u8]) -> Reply {
                         "I'll update the wiki page `{page}` with my notes on {}.",
                         topic.label
                     )),
-                    tool_use(
-                        &mut rng,
-                        WIKI_WRITE,
-                        json!({"page": page.as_str(), "content": page_text}),
-                    ),
+                    tool_use(&mut rng, HTTP_TOOL, write_input(base, page, &page_text)),
                 ],
                 StopReason::ToolUse,
             )
         }
-        LastTurn::Task(Task::Read { page }) if declared(WIKI_READ) => (
+        LastTurn::Task(Task::Read { page, base }) if declared(HTTP_TOOL) => (
             vec![
                 text(format!("Let me check `{page}` on the wiki first.")),
-                tool_use(&mut rng, WIKI_READ, json!({"page": page.as_str()})),
+                tool_use(&mut rng, HTTP_TOOL, read_input(base, page)),
             ],
             StopReason::ToolUse,
         ),
@@ -260,9 +257,4 @@ fn tokens_of(block: &ResponseBlock) -> u64 {
         ResponseBlock::ToolUse { input, .. } => input.to_string().split_whitespace().count() + 8,
     };
     (words as u64 * 4).div_ceil(3)
-}
-
-/// The page a tool input names, if it is a valid page name.
-pub fn page_of(input: &Value) -> Option<PageSlug> {
-    input.get("page")?.as_str()?.parse().ok()
 }

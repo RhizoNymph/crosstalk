@@ -4,8 +4,9 @@
 use serde_json::{Value, json};
 
 use crate::anthropic::{AssistantMessage, ResponseBlock, Role, StopReason, Usage};
+use crate::http::BaseUrl;
 use crate::knobs::Span;
-use crate::protocol::{PageSlug, Task, WIKI_READ, WIKI_WRITE};
+use crate::protocol::{HTTP_TOOL, PageSlug, Task, WikiCall};
 use crate::swarm::conversation::{Conversation, OrderError, Profile, SYSTEM_TURN, Step};
 use crate::upstream::generate::{GenConfig, generate, parse_request};
 use crate::wiki::store::{Author, Wiki};
@@ -42,8 +43,8 @@ fn tool_answer(id: &str) -> AssistantMessage {
             },
             ResponseBlock::ToolUse {
                 id: id.to_owned(),
-                name: WIKI_READ.to_owned(),
-                input: json!({"page": "a-1"}),
+                name: HTTP_TOOL.to_owned(),
+                input: json!({"method": "GET", "url": "http://wiki:8090/pages/a-1"}),
             },
         ],
         stop_reason: StopReason::ToolUse,
@@ -64,7 +65,8 @@ fn every_turn_resends_the_whole_conversation() {
         assert_eq!(&messages[..previous.len()], &previous[..]);
         assert_eq!(messages.len(), previous.len() + 1);
         assert_eq!(body["system"][0]["text"], "You are agent-001.");
-        assert_eq!(body["tools"].as_array().map(Vec::len), Some(2));
+        assert_eq!(body["tools"].as_array().map(Vec::len), Some(1));
+        assert_eq!(body["tools"][0]["name"], HTTP_TOOL);
         assert_eq!(body["stream"], true);
         assert_eq!(body["max_tokens"], 4096);
         assert_eq!(
@@ -197,6 +199,7 @@ fn one_agents_output_reaches_anothers_input_through_the_wiki() {
     };
     let mut wiki = Wiki::new(1 << 20, 100);
     let page: PageSlug = "rate-limiting-0".parse().expect("slug");
+    let base: BaseUrl = "http://wiki:8090".parse().expect("url");
 
     // Agent A: the write task, the model's wiki_write call, the wiki.
     let a = profile("agent-000");
@@ -206,6 +209,7 @@ fn one_agents_output_reaches_anothers_input_through_the_wiki() {
             Task::Write {
                 page: page.clone(),
                 topic: 0,
+                base: base.clone(),
             }
             .prompt(),
         )
@@ -216,8 +220,15 @@ fn one_agents_output_reaches_anothers_input_through_the_wiki() {
         panic!("a write call")
     };
     let call = &pending.calls()[0];
-    assert_eq!(call.name, WIKI_WRITE);
-    let written = call.input["content"].as_str().expect("content").to_owned();
+    assert_eq!(call.name, HTTP_TOOL);
+    let Ok(WikiCall::Write {
+        page: put_page,
+        body: written,
+    }) = WikiCall::parse(&call.name, &call.input, &base)
+    else {
+        panic!("a PUT of a wiki page")
+    };
+    assert_eq!(put_page, page);
     wiki.put(
         page.clone(),
         written.clone(),
@@ -231,14 +242,23 @@ fn one_agents_output_reaches_anothers_input_through_the_wiki() {
     let b = profile("agent-001");
     let mut reader = Conversation::new("sb".to_owned(), false);
     reader
-        .ask(Task::Read { page: page.clone() }.prompt())
+        .ask(
+            Task::Read {
+                page: page.clone(),
+                base: base.clone(),
+            }
+            .prompt(),
+        )
         .expect("idle");
     let body = serde_json::to_vec(&reader.body(&b, true)).expect("encode");
     let reply = generate(&config, &parse_request(&body).expect("request"), &body);
     let Ok(Step::Tools(pending)) = reader.receive(reply.message) else {
         panic!("a read call")
     };
-    assert_eq!(pending.calls()[0].name, WIKI_READ);
+    assert_eq!(
+        WikiCall::parse(&pending.calls()[0].name, &pending.calls()[0].input, &base),
+        Ok(WikiCall::Read { page: page.clone() })
+    );
     let stored = wiki.get(&page).expect("page");
     assert_eq!(stored.author.as_str(), "agent-000");
     let result = pending.calls()[0].result(stored.text.clone(), false);
