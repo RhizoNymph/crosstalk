@@ -647,7 +647,8 @@ Features Index:
       BLAKE3 ETag, and POST /exports streams JSONL with the trailer last.
       Every other response is no-store. HttpApi::new(surface, Auth,
       HttpConfig).router() plus serve(bind(api.listen)) is what the
-      gateway's --role api mounts. Tested against a fake surface with
+      gateway's roles all and api mount over their Live process's surface,
+      the bearer token from api.token mapped to api.operator. Tested against a fake surface with
       requests and responses from the wire goldens.
     entry_points: [crates/api/src/http/mod.rs, crates/api/src/http/routes.rs]
     depends_on: [http_api, query_surface, wire_contract]
@@ -1071,7 +1072,16 @@ Features Index:
       same stores. Live::settle(until) moves a manual clock, ticks every
       stage and drains every group until a pass changes nothing;
       Live::stores and Live::layers expose TransmissionStore::list and
-      ExchangePlacements::placement for eval.
+      ExchangePlacements::placement for eval. Live advances the L7
+      watermark on each tick when the layer groups are empty (the spec's
+      Watermark::settled rule) and reports per-stage counts. serve runs a
+      Live process in every role but analysis (memory stores, wall clock,
+      periodic ticks every flow.tick_ms), feeds it from the proxy, and in
+      roles all and api mounts crosstalk-api's HttpApi on api.listen (bearer
+      token from api.token, mapped to api.operator, default admin, every
+      permission); the optional flow section configures L5's windows;
+      /readyz lists exchange_log, capture, live, proxy and api, and
+      /healthz has a live section (stage counts, watermark_micros).
     entry_points:
       - crates/gateway/src/main.rs
       - crates/gateway/src/gateway.rs
@@ -1080,12 +1090,13 @@ Features Index:
       - crates/gateway/src/live/mod.rs
       - crates/gateway/src/live/settle.rs
       - crates/gateway/src/live/wiring.rs
+      - crates/gateway/src/live/layers/l7.rs
       - crates/gateway/src/capture.rs
       - crates/gateway/src/config/mod.rs
       - crates/gateway/src/log/mod.rs
       - crates/gateway/src/ops/mod.rs
       - scripts/try-claude-code.sh
-    depends_on: [ingress, canonical, transport, store, workspace, sim, testkit, memory, surface_service, reconstruct, provenance, flow_extract, flow_correlator, topology_store]
+    depends_on: [ingress, canonical, transport, store, workspace, sim, testkit, memory, surface_service, http_server, reconstruct, provenance, flow_extract, flow_correlator, topology_store]
     doc: docs/features/gateway.md
   analysis:
     description: >

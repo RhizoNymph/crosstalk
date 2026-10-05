@@ -36,8 +36,8 @@ Listeners:
 | Container port | Config key | Serves |
 |---|---|---|
 | 8080 | `ingress.listen` | The reverse proxy. Agents set `ANTHROPIC_BASE_URL=http://<host>:<CROSSTALK_PROXY_PORT>/anthropic` (host port, default 8080). |
-| 8081 | `api.listen` | The L8 HTTP binding (bearer token from `api.token`). |
-| 9464 | `ops.listen` | `GET /metrics` (Prometheus text format), `GET /healthz` (process serving, with the capture, pipeline and exchange-log counters), `GET /readyz` (database reachable, migrations at head, every role's tasks running). |
+| 8081 | `api.listen` | The L8 HTTP binding over the live process's surface (roles `all` and `api`). Every request carries `Authorization: Bearer <value of the variable api.token names>` and is made as `api.operator` (default `{"name": "admin"}`, every permission); without it, `401`. |
+| 9464 | `ops.listen` | `GET /metrics` (Prometheus text format), `GET /healthz` (process serving, with the capture, pipeline and exchange-log counters, and a `live` section: each layer stage's handled count and the L7 watermark), `GET /readyz` (database reachable, migrations at head, every role's tasks running: `exchange_log`, `capture`, `live` (every layer stage), `proxy`, `api`). |
 
 Environment:
 
@@ -56,16 +56,32 @@ conventions (snake_case, unknown fields refused), secrets only by `{"env":
 | Key | Shape |
 |---|---|
 | `ingress` | `crosstalk_ingress::config::IngressConfig`, unchanged. |
-| `api` | `{"listen": SocketAddr, "token": {"env": String}}` |
+| `api` | `{"listen": SocketAddr, "token": {"env": String}, "operator": {"name": String}}`; `operator` defaults to `{"name": "admin"}` |
 | `ops` | `{"listen": SocketAddr}` |
 | `store` | `{"pool": crosstalk_store::config::PoolSettings}` |
 | `blobs` | `{"root": path}` for `FsBlobStore::open`. The `data` volume is mounted at `/var/lib/crosstalk` (owned by the runtime user), so the blob root and anything the gateway keeps beside it (P3's exchange log in the blob root's parent) persist. |
 | `embeddings` | `{"base_url": String, "model": String, "api_key": {"env": String}}`, an OpenAI-compatible endpoint. |
 
 Optional keys the gateway also accepts, all defaulted when absent: `bus`,
-`pipeline` (blob put retries) and `shutdown` (`drain_timeout_ms` 45 000 +
+`pipeline` (blob put retries), `shutdown` (`drain_timeout_ms` 45 000 +
 `flush_timeout_ms` 10 000, chosen to fit compose's 60 s
-`stop_grace_period`). `docs/features/gateway.md` is the authoritative
+`stop_grace_period`) and `flow`, L5's correlation timing, every key
+defaulted:
+
+| `flow` key | Default | Meaning |
+|---|---|---|
+| `correlation_window_ms` | 600 000 | The longest write-to-read lag that pairs |
+| `evidence_window_ms` | 120 000 | How long after a read a channel transmission waits for its content match |
+| `suspected_ttl_ms` | 1 800 000 | How long a suspected transmission waits for a late match |
+| `shards` | 1 | Correlator shards |
+| `tick_ms` | 1 000 | How often the live process ticks (windows close, the watermark advances) |
+
+`deploy/config/crosstalk.json` spells the defaults out; the demo config
+(`deploy/demo/crosstalk.demo.json`) differs only in its upstream URL and
+`evidence_window_ms` 10 000 / `suspected_ttl_ms` 60 000, so the demo's
+transmissions confirm and its watermark (the tick's time minus
+`evidence_window_ms + suspected_ttl_ms`, aligned to a 5-minute bucket)
+moves within minutes. `docs/features/gateway.md` is the authoritative
 description of the binary's side of this contract; keep the two in step.
 
 ### Rotating the deployment secret
@@ -346,7 +362,11 @@ ANTHROPIC_BASE_URL=http://<host-ip>:<proxy port>/anthropic claude -p "say hi"
 
 Then `/healthz` again: `capture.captured` has gone up (one `claude -p`
 may make more than one generation request), and `pipeline.published` and
-`log.written` with it.
+`log.written` with it, and `live.stages` counts the layers' work. The API:
+
+```sh
+curl -s -H "Authorization: Bearer $CROSSTALK_API_TOKEN" 127.0.0.1:<api port>/operators
+```
 
 ### Inspecting the distroless gateway
 

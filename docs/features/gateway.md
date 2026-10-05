@@ -50,7 +50,7 @@ follow the deployment contract in `docs/features/deploy.md` (branch
   `Live`, over the memory stores. The `pipeline` role runs only the
   exchange log today.
 - Topic modelling in `Live`: its classifier assigns every transmission
-  unassigned under the active version; the watermark is not recomputed.
+  unassigned under the active version.
 - A cross-node bus (P9). The bus is in-process, so a `proxy` process and a
   `pipeline` process do not reach each other; `--role all` is the only role
   that captures and logs end to end (the gateway warns at start otherwise).
@@ -89,7 +89,7 @@ against the config file's directory.
 | Key | Required | Shape |
 | --- | --- | --- |
 | `ingress` | yes | `crosstalk_ingress::config::IngressConfig`, unchanged: `listen`, `routes` (name, prefix, upstream id, kind, base URL), `secrets` (`current` `{version, env}` and an optional `previous` `{version, env, overlap_ends}`, an older version whose digests are also computed for exchanges that start before `overlap_ends`, an RFC 3339 timestamp at microsecond precision), `limits`, `capture.channel_capacity` |
-| `api` | no | `{"listen": SocketAddr, "token": {"env": ..}}`; checked, not bound |
+| `api` | no | `{"listen": SocketAddr, "token": {"env": ..}, "operator": {"name": ..}}`: the HTTP API (roles `all`, `api`); the token signs in as `operator` (default `{"name": "admin"}`, every permission) |
 | `ops` | yes | `{"listen": SocketAddr}` |
 | `store` | no | `{"pool": crosstalk_store::PoolSettings}`; the URL is `DATABASE_URL` |
 | `blobs` | yes | `{"root": path}` for `FsBlobStore::open`; its parent is the data directory |
@@ -97,6 +97,7 @@ against the config file's directory.
 | `bus` | no | transport's `BusConfig` (defaults) |
 | `pipeline` | no | `{"blob_put_attempts": 3, "blob_put_backoff_ms": 100}` |
 | `shutdown` | no | `{"drain_timeout_ms": 45000, "flush_timeout_ms": 10000}`; together under compose's 60 s grace period |
+| `flow` | no | crosstalk-flow's `FlowConfig`, each key defaulted: `{"correlation_window_ms": 600000, "evidence_window_ms": 120000, "suspected_ttl_ms": 1800000, "shards": 1, "tick_ms": 1000}`; checked at start (`LiveError::Flow`) |
 
 Checked values: environment variable names are non-empty without `=` or
 NUL (`EnvVarName`), URLs are `http(s)` with a host (`HttpUrl`), the model
@@ -129,17 +130,28 @@ start (exit 1).
 | --- | --- |
 | `CROSSTALK_SECRET_V1` (whatever `ingress.secrets.current.env` names, and `previous.env` during a rotation) | `serve` (roles running the proxy): 64 hex digits keying credential and account digests; surrounding whitespace such as a trailing newline is ignored |
 | `DATABASE_URL` | `migrate`; `serve` when `store` is configured (missing or malformed is a start error; unreachable only makes `/readyz` fail) |
-| `CROSSTALK_API_TOKEN`, `CROSSTALK_EMBEDDINGS_API_KEY` | nothing yet (their sections are checked, not used) |
+| `CROSSTALK_API_TOKEN` (whatever `api.token.env` names) | `serve` (roles `all` and `api` with an `api` section): the operator bearer token, at least 16 `b64token` characters; missing or malformed is a start error |
+| `CROSSTALK_EMBEDDINGS_API_KEY` | nothing yet (its section is checked, not used) |
 | `RUST_LOG` | the log filter (default `info`; `inspect` defaults to `warn`) |
 
 ## Roles
 
+Every role but `analysis` runs a [`Live`](#live-the-whole-detection-path-in-one-process)
+process over the memory stores (the wall clock, `Ticking::Periodic`
+every `flow.tick_ms`, the blob store at `blobs.root`). `/readyz` lists
+the tasks below; `live` is ready while every layer stage runs.
+
 | Role | Tasks |
 | --- | --- |
-| `all` | `proxy`, `capture`, `exchange_log`, ops |
-| `proxy` | `proxy`, `capture`, ops (published events have no consumer in this process) |
-| `pipeline` | `exchange_log`, ops (nothing publishes in this process) |
-| `api`, `analysis` | ops only; the startup log names what is not built |
+| `all` | `exchange_log`, `capture`, `live`, `proxy`, `api` (with an `api` section), ops: capture, detect and serve end to end |
+| `proxy` | `capture`, `live`, `proxy`, ops |
+| `pipeline` | `exchange_log`, `live`, ops (nothing publishes in this process) |
+| `api` | `live`, `api`, ops: the HTTP API over a live process that nothing feeds yet |
+| `analysis` | ops only; the startup log names what is not built |
+
+The bus and the stores are in-process until the cross-node bus (P9) and
+the Postgres stores are wired, so processes of different roles do not
+reach each other; only `all` is useful today.
 
 ## Listeners
 
@@ -147,9 +159,12 @@ start (exit 1).
 | --- | --- |
 | `ingress.listen` | The reverse proxy. `ANTHROPIC_BASE_URL=http://<host>:<port>/anthropic` |
 | `ops.listen` | `GET /healthz`: 200 while the process serves, with the counters as JSON. `GET /readyz`: 200 or 503 with the checks (database reachable when `store` is configured, migrations at head, every role task running, not draining). `GET /metrics`: Prometheus text. Anything else is 404 |
-| `api.listen` | Not bound until P7.1 |
+| `api.listen` | The L8 HTTP binding (`crosstalk-api`'s `HttpApi`, [http_server.md](http_server.md)) over the live process's surface, roles `all` and `api`. Auth: `Authorization: Bearer <api.token>` is the one operator `api.operator` (default named `admin`, id `ApiOperator::ID`, every permission), loaded in authenticated mode; anything else is `401`. Exports are JSONL |
 
-`/healthz` body (pinned by `ops::tests::health_report_json_is_pinned`):
+`/healthz` body (pinned by `ops::tests::health_report_json_is_pinned`).
+`live` is `null` for `analysis`; `live.stages` counts the deliveries and
+side inputs each stage handled, by slot name; `live.watermark_micros` is
+the L7 watermark (microseconds since the epoch, 0 until it first moves):
 
 ```json
 {"status": "ok",
@@ -158,19 +173,26 @@ start (exit 1).
              "ids_exhausted": 0},
  "pipeline": {"published": 3, "normalize_failed": 0, "store_failed": 0,
               "store_retries": 0, "publish_failed": 0},
- "log": {"written": 3, "duplicates": 0, "write_failed": 0}}
+ "log": {"written": 3, "duplicates": 0, "write_failed": 0},
+ "live": {"stages": {"evidence": 5, "l3-reconstruct": 3, "l4-provenance": 6,
+                     "l5-flow": 14, "l6-classify": 1, "l7-topology": 4,
+                     "surface-relay": 31},
+          "watermark_micros": 1790845200000000}}
 ```
 
 `/readyz` body: `{"ready": true, "role": "all", "status": "ok", "database":
 "not_configured" | "reachable" | "unreachable: <why>", "migrations":
-"at_head", "tasks": [{"name": "exchange_log", "running": true}, ..]}`.
+"at_head", "tasks": [{"name": "exchange_log", "running": true}, {"name":
+"capture", ..}, {"name": "live", ..}, {"name": "proxy", ..}, {"name": "api",
+..}]}`.
 
 `/metrics` series: `crosstalk_draining`,
 `crosstalk_capture_exchanges_total`,
 `crosstalk_capture_uncaptured_total{reason}`,
 `crosstalk_pipeline_exchanges_total{outcome}`,
 `crosstalk_pipeline_blob_put_retries_total`,
-`crosstalk_exchange_log_deliveries_total{outcome}`.
+`crosstalk_exchange_log_deliveries_total{outcome}`, unchanged by `Live`
+(the live counts are in `/healthz` only).
 
 The `normalize_failed` outcome of `crosstalk_pipeline_exchanges_total`
 also carries `reason` and `protocol`, fixed codes from
@@ -203,7 +225,7 @@ harness ──HTTP──▶ server::serve (proxy listener, hyper http1, no Date)
                     │ generation exchange ends ──▶ RawExchange ── bounded mpsc (capacity from config) ──┐
                     ▼                                                                                    │
                  client response, unchanged                                                              ▼
-                                                                         capture::CaptureStage::run (one task, spawned by Pipeline::build)
+                                                                         capture::CaptureStage::run (one task, spawned by Live::start)
                                                                            AnthropicMessages::normalize_with_media (L1)
                                                                              └ refused ─▶ normalize_failed (by reason, protocol); debug log of the body's shape
                                                                            Ingester::ingest(normalization, clock.now())   ◀── Pipeline::ingest(NormalizedExchange, at)
@@ -213,20 +235,28 @@ harness ──HTTP──▶ server::serve (proxy listener, hyper http1, no Date)
                                                                              Envelope { EventId, at, ExchangeCaptured(Exchange) }
                                                                              MpscBus::publish ─▶ every subscribed group
                                                                                                 │
-                                         log::consumer::run (group "exchange-log") ◀────────────┘
+                                         log::consumer::run (group "exchange-log") ◀────────────┤
                                            ExchangeLog::append: one JSON line, synced; ack after; nack on failure
-                                           <data dir>/exchanges/exchange-log.jsonl
+                                           <data dir>/exchanges/exchange-log.jsonl              │
+                                         Live's layer stages (groups live-l3-reconstruct .. ) ◀─┘ ─▶ memory stores ─▶ Surface
+operator ──HTTP──▶ crosstalk_api::http::serve (api listener): Auth (Bearer api.token ─▶ api.operator) ─▶ Surface
 ```
 
-- **Start** (`gateway::start`): resolve the data directory and, with a
-  `store` section, `DATABASE_URL`; open the blob store and (pipeline) the
-  log; build the proxy from the ingress config, reading its secrets
-  through the environment lookup; bind the proxy and ops listeners; start
-  the bus; `Pipeline::build` with the role's stages, which subscribes the
-  exchange log before anything can publish and spawns `exchange_log` and
-  `capture`; spawn the proxy listener (each task tracked by a running flag
-  for `/readyz`); with `store`, connect to Postgres in the background,
-  retrying every 5 s.
+- **Start** (`gateway::start`, or `gateway::start_on` with a
+  `LiveClock`, which tests use to drive `Live::settle`): resolve the data
+  directory and, with a `store` section, `DATABASE_URL`; open the blob
+  store and (pipeline) the log; build the proxy from the ingress config,
+  reading its secrets through the environment lookup; read the API token
+  (`api.token`); bind the proxy, API and ops listeners; start the `Live`
+  process (`LiveConfig::new` with the gateway's `flow`, `bus` and
+  `pipeline` sections, the opened blob store, `Ticking::Periodic`, the
+  capture channel and the log, and access mode authenticated for
+  `api.operator` when there is an `api` section, trusted otherwise), which
+  subscribes every group before anything can publish and spawns
+  `exchange_log`, `capture` and the layer stages; mount `HttpApi` on its
+  surface and spawn the API and proxy listeners (each task tracked by a
+  running flag for `/readyz`, the stages together as `live`); with
+  `store`, connect to Postgres in the background, retrying every 5 s.
 - **Envelope ids** come from the spec's `UlidGenerator` (seeded from the
   operating system's randomness), owned by the pipeline's `Ingester` behind
   a `tokio::sync::Mutex`, and minted with `mint_at` at the envelope time
@@ -241,15 +271,16 @@ harness ──HTTP──▶ server::serve (proxy listener, hyper http1, no Date)
      it ends. Up to `drain_timeout_ms`; connections still open are then
      aborted, which the proxy records as `ClientDisconnected` and still
      hands to capture.
-  3. `Pipeline::shutdown`: with the proxy and its connections gone, the
+  3. The API listener stops (graceful; requests in flight finish, a live
+     stream ends with the feed), within `drain_timeout_ms`.
+  4. `Live::shutdown`: with the proxy and its connections gone, the
      capture channel closes once the last per-exchange capture task has
-     handed off; the capture stage drains it.
-  4. Still `Pipeline::shutdown`: the exchange log's group drains (bus
-     depth zero), the bus stops, and the consumer closes the log (flush
-     and `fsync`).
+     handed off; the capture stage drains it; every layer group and the
+     exchange log's group drain (bus depth zero), the bus stops, the
+     stages end and the consumer closes the log (flush and `fsync`).
   5. The Postgres pool closes and the ops listener stops last.
 
-  Steps 3 and 4 share one `flush_timeout_ms` deadline; a task still
+  Step 4 has one `flush_timeout_ms` deadline; a task still
   running at it is aborted and the report says so.
 
 ## Pipeline: the library entry point
@@ -419,9 +450,16 @@ Surface<LiveStores>: crosstalk-api's InProcess::start_with over the same stores,
   `TransmissionClassified { cause: Confirmation }`. No topic model runs
   in the process.
 - **L7.** `crosstalk_topology::consumer::handle` over the shared
-  `InMemoryEdgeStore`, announcing through a `BusAnnouncer`. The watermark
-  is not recomputed (no frontier source in memory yet), so buckets stay
-  open and transmissions stay `Classified`.
+  `InMemoryEdgeStore`, announcing through a `BusAnnouncer`. **Watermark:**
+  on each tick at `now` (after L5's tick at the same instant), when every
+  group from L3 to L7 is empty, the stage calls
+  `EdgeStore::advance_watermark(PipelineFrontier { ticked_through: now,
+  oldest_pending: None })`; the store settles it by the spec's rule
+  (`Watermark::settled`: `now` minus `evidence_window + suspected_ttl`,
+  aligned down to a bucket) and never lowers it. With a group still busy
+  the tick leaves it alone; the next tick or settle pass retries.
+  `Live::watermark()` and `/healthz`'s `live.watermark_micros` read it
+  (INV-1059).
 - **Settle.** `Live::settle(until)` moves a manual clock forwards to
   `until` (never backwards; a read clock stays), then runs passes until
   one handles nothing new: wait until every slot's group is empty, the
@@ -513,9 +551,9 @@ gracefully.
 | `src/main.rs` | The binary: parse, log, run, wait for SIGINT/SIGTERM, shut down | `main` |
 | `src/lib.rs` | Crate doc and modules | — |
 | `src/cli.rs` | The command line | `Command` (`parse`), `UsageError`, `USAGE` |
-| `src/config/mod.rs`, `sections.rs` | The config and its checked values | `GatewayConfig` (`from_json`, `load`, `data_dir`, `exchange_log_path`), `ApiConfig`, `OpsConfig`, `StoreSection`, `BlobsConfig`, `EmbeddingsConfig`, `PipelineConfig`, `ShutdownConfig`, `EnvRef`, `EnvVarName`, `HttpUrl`, `NonEmpty`, `ConfigError`, `exchange_log_path` |
-| `src/role.rs` | Roles and their tasks | `Role` (`runs_proxy`, `runs_pipeline`, `not_built`), `UnknownRole` |
-| `src/gateway.rs` | Role wiring around a `Pipeline`: the proxy and ops listeners, start and shutdown | `start`, `Running` (`proxy_addr`, `ops_addr`, `bus`, `blobs`, `pipeline`, `health`, `readiness`, `shutdown`), `StartError`, `ShutdownReport` |
+| `src/config/mod.rs`, `sections.rs` | The config and its checked values | `GatewayConfig` (`from_json`, `load`, `data_dir`, `exchange_log_path`, `flow`), `ApiConfig`, `ApiOperator` (`ID`), `FlowConfig` (re-exported from crosstalk-flow), `OpsConfig`, `StoreSection`, `BlobsConfig`, `EmbeddingsConfig`, `PipelineConfig`, `ShutdownConfig`, `EnvRef`, `EnvVarName`, `HttpUrl`, `NonEmpty`, `ConfigError`, `exchange_log_path` |
+| `src/role.rs` | Roles and their tasks | `Role` (`runs_proxy`, `runs_pipeline`, `runs_live`, `runs_api`, `not_built`), `UnknownRole` |
+| `src/gateway.rs` | Role wiring around a `Live` process: the proxy, API and ops listeners, start and shutdown | `start`, `start_on`, `Running` (`proxy_addr`, `api_addr`, `ops_addr`, `bus`, `blobs`, `live`, `health`, `readiness`, `shutdown`), `StartError`, `ShutdownReport` |
 | `src/pipeline/mod.rs` | The library entry point: build, stages, shutdown | `Pipeline`, `Settings`, `Deps`, `BuildError`, `Drained`; re-exports `Ingester`, `IngestError`, `PipelineStats`, `PipelineCounts`, `PutRetry` |
 | `src/pipeline/ingest.rs` | Ingest at L1: store (retried), mint, publish | `Ingester` (`ingest`, `now`, `blobs`, `bus`, `stats`, `retry`), `IngestError` |
 | `src/pipeline/stats.rs` | Counters and put retry; refusals held as a `FailureStats` by reason and protocol | `PipelineStats` (`snapshot`, `normalize_failures`), `PipelineCounts`, `PutRetry` |
@@ -524,7 +562,7 @@ gracefully.
 | `src/log/mod.rs` | The exchange log file | `ExchangeLog` (`open`, `append`, `close`), `Appended`, `read`, `LogContents`, `LogError` |
 | `src/log/consumer.rs` | The exchange log's bus consumer | `run`, `GROUP`, `group`, `LogStats`, `LogCounts` |
 | `src/server.rs` | Accept loop with graceful, bounded drain (proxy and ops) | `serve`, `ServeOptions`, `DrainReport` |
-| `src/ops/mod.rs`, `metrics.rs` | `/healthz`, `/readyz`, `/metrics` | `Ops` (`health`, `readiness`, `handle`), `HealthReport`, `Readiness`, `TaskState`, `CaptureReport`, `Phase`, `metrics::render` (the health report and the refusal counts) |
+| `src/ops/mod.rs`, `metrics.rs` | `/healthz`, `/readyz`, `/metrics` | `Ops` (`health`, `readiness`, `handle`), `HealthReport` (with `live`), `Readiness`, `TaskState`, `CaptureReport`, `Phase`, `metrics::render` (the health report and the refusal counts) |
 | `src/live/mod.rs` | `Live`: start, accessors, shutdown | `Live`, `LiveConfig`, `LiveError`, `LiveDrained`, `LivePipeline`, `Ticking` |
 | `src/live/settle.rs` | Driving the process to a fixed point | `Live::settle`, `Settled`, `SettleError` |
 | `src/live/stage.rs` | The slot interface and the generic stage loop | `Stage`, `Stages`, `Slot`, `StageContext`, `StageError`, `Command`, `Control`, `Activity`, `Publisher`, `LiveStores`, `LayerStores`, `settle_delivery` |
@@ -536,7 +574,7 @@ gracefully.
 | `src/live/clock.rs`, `blobs.rs` | The injected clock; the blob store choice | `LiveClock`; `BlobConfig`, `LiveBlobs` |
 | `src/live/defaults.rs` | `LiveConfig::new`: the surface's defaults | `DEFAULT_BUCKET`, `DefaultsError` |
 | `src/live/tests.rs` | `crosstalk_gateway::live::tests::*` | — |
-| `src/tasks.rs` | Per-task running flags | `Tasks` (`spawn`, `states`) |
+| `src/tasks.rs` | Per-task running flags, and probes for a group of tasks | `Tasks` (`spawn`, `probe`, `states`) |
 | `src/store.rs` | `migrate` and the background connection `/readyz` checks | `migrate`, `MigrateError`, `store_config`, `StoreProbe`, `StoreCheck` |
 | `src/healthcheck.rs` | The healthcheck client | `check`, `CheckError`, `TIMEOUT` |
 | `src/inspect.rs` | Reading back the log and bodies | `list`, `show`, `InspectError` |
@@ -571,6 +609,7 @@ gracefully.
 | `live::tests::a_store_event_reaches_the_bus_and_the_live_feed` | A registry write's `Changed::Channel` reaches the bus through the outbox and the live feed through the surface relay |
 | `live::tests::a_confirmed_transmission_is_classified_under_the_active_version` | `TransmissionConfirmed` gives `TransmissionClassified` under version 0, unassigned, an assignment in the catalog and a `Classified` stored state |
 | `live::tests::an_access_and_its_resource_reach_the_evidence_records` | `AccessRecorded` fills the evidence records from `AccessStore::accesses` |
+| `crosstalk_e2e` `serve::serve_all_exports_and_shows_the_confirmed_transmission_over_http` | `gateway::start_on` role `all` on ephemeral ports: the scenario ingested through the live pipeline and settled; over HTTP with crosstalk-client, the agents, the transmissions export (one row, A to B through a channel, trailer complete), the evidence page (a match carried by B's read), the token's operator `admin`, and a 401 without the token |
 | `live::tests::the_defaults_start_on_any_clock` | `LiveConfig::new` on a read clock with a 10 s evidence window and 60 s TTL starts every slot and settles |
 | `live::tests::bodies_can_live_on_the_filesystem` | `BlobConfig::Fs` stores bodies the surface reads |
 | unit tests | Config (the example and the deployment's config parse; strictness at every level; checked values; path resolution), the CLI, roles, task flags, the log file (reopen, duplicates, torn tails, corruption), the health JSON (pinned, strict), readiness, metrics text (the `normalize_failed` series sum to the health total), healthcheck URL checks, refusal codes |
@@ -624,11 +663,17 @@ store; the cluster stores (JetStream, Postgres or object storage) are P9.
 
 ## Gaps found
 
-- **`Live` never advances L7's watermark.** No frontier source exists over
-  the memory stores (the gateway's is Postgres-backed), so the topology
-  stage never calls `advance_watermark`: buckets stay open and confirmed
-  transmissions stay `Classified`, never `Aggregated`. Edges and series
-  read the open buckets. Known and accepted for now.
+- **`Live`'s frontier is coarse.** With no frontier source over the
+  memory stores, `oldest_pending` is taken as `None` whenever the layer
+  groups are empty; exchanges in flight at the proxy are not counted
+  (their times are later than `now - settle_after` for any request
+  shorter than the settle bound).
+- **The transmissions export has no content columns in memory**, and
+  carries confirmed, classified and aggregated transmissions only: the
+  spec's `ExportDataset::Transmissions` is defined over confirmed rows
+  (`TransmissionRow::new` refuses any other state), so suspected,
+  awaiting and discarded transmissions are not exported; `verdicts` (by
+  `opened_at`) is still refused by `SpecExportSource`.
 - **No exchange store in the spec.** Nothing in `spec/types/interfaces`
   persists `Exchange`s or lists them; L8 reads exchanges only through
   L3 to L7's stores. The exchange log here is a stopgap. A spec trait

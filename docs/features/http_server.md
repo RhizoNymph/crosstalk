@@ -34,7 +34,6 @@ axum, to a surface and to a credential check.
   knows no sessions.
 - Loading the operator directory. The gateway publishes it on a `watch`
   channel (`Auth::new`).
-- Wiring into the gateway's `--role api`. The gateway is not edited here.
 - Parquet exports. The server writes JSONL only (`written_formats`).
 - TLS, CORS, compression and rate limiting, as in the binding.
 
@@ -108,7 +107,15 @@ before any byte is sent.
 | `crates/api/src/http/serve.rs` | Listening on `api.listen` | `bind`, `serve`, `ServeError` |
 | `crates/api/src/http/integration/` | Tests: a fake surface (`fake.rs`), one case per query route built from the wire goldens (`cases.rs`), and routes, errors, actions, auth, live, frame, export and socket tests | — |
 
-### Wiring (for the gateway's `--role api`)
+### Wiring (the gateway's roles `all` and `api`)
+
+The gateway mounts it over its `Live` process's surface
+(`crates/gateway/src/gateway.rs`, [gateway.md](gateway.md)): the token
+from the variable `api.token` names, mapped by `StaticTokens` to
+`api.operator` (`ApiOperator::ID`, default name `admin`, every
+permission), which the live process loads as its one operator in
+authenticated mode; the directory is fixed (`Auth::fixed`) since config
+does not change at runtime. Sketch:
 
 ```rust
 let token = BearerToken::from_env(&config.api.token.env)?;          // api.token {env}
