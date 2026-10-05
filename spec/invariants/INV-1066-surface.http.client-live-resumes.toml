@@ -1,6 +1,6 @@
 [invariant]
 id = "surface.http.client-live-resumes"
-statement = "The HTTP client's live stream delivers only events that are the binding's framing of a LiveItem (event name its event_name, id its cursor's text), and when its connection is cut (aborted, ended without the end event, silent past the idle timeout, or carrying an event that is not such a frame) it reconnects with Last-Event-ID set to the cursor of the last item it delivered; it ends only with the end event's LiveEnd, with SessionEnded when a reconnect is answered 401 or 403, or with ShuttingDown when its reconnect attempts run out, and its resume point stays the last cursor delivered."
+statement = "The HTTP client's live stream delivers only events that are the binding's framing of a LiveItem (event name its event_name, id its cursor's text), and when its connection is cut (aborted, ended without the end event, silent past the idle timeout, or carrying an event that is not such a frame) it reconnects with Last-Event-ID set to the cursor of the last item it delivered; it ends only with the end event's LiveEnd, with SessionEnded when a reconnect is answered 401 or 403, or with the client-only Unreachable when its reconnect attempts run out, and its resume point stays the last cursor delivered; an end event carrying unreachable, which a server never sends, is a cut."
 kind = "coordination"
 requires = ["unit"]
 rationale = """
@@ -9,10 +9,11 @@ names, or resyncs (surface.live.resume-plan), so a client that reconnects
 from the last cursor it actually delivered loses nothing and repeats
 nothing. Moving the resume point only on a delivered item, never on a
 misframed event, keeps a broken frame from skipping entries. A stream
-must end with a LiveEnd, which has no variant for a failed network, so a
-reconnect refused for the caller ends the session and exhausted attempts
-read as the gateway going away; either way the caller resubscribes from
-last_cursor.
+must end with a LiveEnd: a reconnect refused for the caller ends the
+session, and exhausted attempts end with the client-only Unreachable
+rather than ShuttingDown, so the caller can tell a gateway it could not
+reach from one that said it was going away; either way the caller
+resubscribes from last_cursor.
 """
 
 [evidence]
@@ -24,6 +25,7 @@ unit = [
     "crosstalk_client::tests::live::a_misframed_event_is_a_cut",
     "crosstalk_client::tests::live::a_refused_reconnect_ends_the_session",
     "crosstalk_client::tests::live::reconnects_give_up_after_the_policy",
+    "crosstalk_client::tests::live::an_unreachable_end_from_the_server_is_a_cut",
     "crosstalk_client::tests::sse::binding_frames_parse_however_they_are_split",
 ]
 

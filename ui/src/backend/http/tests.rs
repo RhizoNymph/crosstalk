@@ -6,23 +6,26 @@ use std::num::NonZeroU32;
 use std::pin::Pin;
 use std::time::Duration;
 
-use crosstalk_client::BearerToken;
+use crosstalk_client::{BearerToken, ClientConfig, HttpClient, ReconnectPolicy};
 use crosstalk_spec::aggregates::alert::AlertState;
 use crosstalk_spec::ids::AlertId;
 use crosstalk_spec::interfaces::l8_surface::audit::AuditFilter;
 use crosstalk_spec::interfaces::l8_surface::{
     AlertFilter, AlertStateKind, OperatorAction, OperatorActions, Permission, PermissionSet,
-    QueryApi, QueryError,
+    QueryApi, QueryError, UnavailableKind,
 };
 use futures_core::Stream;
 use topcoat::router::request::Request;
 use topcoat::router::{Body, BodyDataStream, Router, StatusCode};
 
 use super::identity::IdentityError;
+use crate::backend::AppBackend;
 use crate::config::HttpConfig;
+use crate::identity::Identity;
 use crate::pages::common::paging::first;
 use crate::testing::http::{HttpWorld, ONCALL_TOKEN, RESEARCHER_TOKEN, UNKNOWN_TOKEN};
-use crate::testing::{Reply, get_from, send_to};
+use crate::testing::proxy::Proxy;
+use crate::testing::{Reply, get_from, router_with, send_to};
 use crate::url::ulid::UlidId;
 use crosstalk_spec::interfaces::l8_surface::operators::{
     AccessConfig, OperatorConfig, OperatorName,
@@ -116,11 +119,14 @@ async fn startup_learns_the_tokens_operator_and_permissions_from_the_server() {
         PermissionSet::of([Permission::View, Permission::Content, Permission::Triage])
     );
 
-    // A token the server does not know: the 401 is a store failure, and
-    // the UI does not start.
+    // A token the server does not know: the 401 is the client-only
+    // `Unavailable` of kind `Unauthenticated`, and the UI does not start.
     assert!(matches!(
         world.access(UNKNOWN_TOKEN).await,
-        Err(IdentityError::Read(QueryError::Store { .. }))
+        Err(IdentityError::Read(QueryError::Unavailable {
+            kind: UnavailableKind::Unauthenticated,
+            ..
+        }))
     ));
     world.stop().await;
 }
@@ -315,7 +321,8 @@ async fn a_refused_token_renders_the_token_refused_page() {
         &url,
         "POST /pipeline",
     );
-    // Data routes keep their status: the elements show their own error.
+    // Data routes answer 503 for a call that never reached the gateway:
+    // the elements read JSON and show their own error.
     let live = router
         .handle(
             Request::builder()
@@ -324,7 +331,7 @@ async fn a_refused_token_renders_the_token_refused_page() {
                 .expect("request"),
         )
         .await;
-    assert_eq!(live.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    assert_eq!(live.status(), StatusCode::SERVICE_UNAVAILABLE);
     drop(router);
     world.stop().await;
 }
@@ -426,5 +433,58 @@ async fn the_identity_follows_a_change_on_the_server() {
     assert_eq!(receiver.borrow().name(), "lead researcher");
     assert_eq!(receiver.borrow().caller().operator(), OPERATOR_RESEARCHER);
     refresh.abort();
+    world.stop().await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_lost_gateway_ends_data_live_as_unreachable() {
+    let world = HttpWorld::start().await;
+    let proxy = Proxy::start(world.addr()).await;
+    let access = world.access(RESEARCHER_TOKEN).await.expect("access");
+    // Two quick reconnects, so the client gives up in well under a second.
+    let reconnect = ReconnectPolicy::new(
+        NonZeroU32::new(2).expect("attempts"),
+        Duration::from_millis(50),
+        Duration::from_millis(100),
+    )
+    .expect("policy");
+    let client = HttpClient::new(
+        proxy.url.clone(),
+        ClientConfig::default().with_reconnect(reconnect),
+    )
+    .with_token(BearerToken::new(RESEARCHER_TOKEN).expect("token"));
+    let router = router_with(AppBackend::Http(client), Identity::fixed(access));
+    let response = router
+        .handle(
+            Request::builder()
+                .uri("/data/live")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let mut body = response.into_body().into_data_stream();
+
+    // The gateway goes away under the open stream, and stays away.
+    proxy.cut().await;
+    let ended = tokio::time::timeout(LIVE_DEADLINE, async {
+        loop {
+            let frame = next_frame(&mut body).await;
+            if frame.starts_with("event: end") {
+                return frame;
+            }
+        }
+    })
+    .await
+    .expect("the stream ends in time");
+    assert_eq!(ended, "event: end\ndata: {\"reason\":\"unreachable\"}\n\n");
+    let after = tokio::time::timeout(
+        WAIT,
+        std::future::poll_fn(|cx| Pin::new(&mut body).poll_next(cx)),
+    )
+    .await
+    .expect("closed in time");
+    assert!(after.is_none(), "the response closes after the end event");
+    drop(router);
     world.stop().await;
 }

@@ -9,6 +9,7 @@
 use std::fmt;
 
 use crosstalk_spec::aggregates::projection::{FitFailure, ProjectionStatusKind};
+use crosstalk_spec::interfaces::l8_surface::UnavailableKind;
 use crosstalk_spec::interfaces::l8_surface::audit::Rejection;
 use crosstalk_spec::interfaces::l8_surface::export::{ExportFailure, RowRefused};
 use crosstalk_spec::interfaces::l8_surface::{
@@ -61,6 +62,15 @@ impl std::error::Error for UiError {}
 pub fn describe(error: &QueryError) -> String {
     match error {
         QueryError::Store { reason } => format!("the gateway's store failed: {reason}"),
+        // The call never reached a gateway that answered it.
+        QueryError::Unavailable { kind, reason } => match kind {
+            UnavailableKind::Unauthenticated => {
+                format!("the gateway refused the UI's token: {reason}")
+            }
+            UnavailableKind::Transport | UnavailableKind::Body | UnavailableKind::Timeout => {
+                format!("the gateway is unreachable: {reason}")
+            }
+        },
         QueryError::NotFound => "not found".to_owned(),
         QueryError::Forbidden { missing } => {
             format!("this needs the {} permission", permission_name(*missing))

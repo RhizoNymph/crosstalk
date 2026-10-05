@@ -14,7 +14,7 @@ use crate::ids::{
 };
 use crate::interfaces::l8_surface::export::ExportFormat;
 use crate::interfaces::l8_surface::{
-    ActionError, ConflictKind, InputError, Permission, QueryError,
+    ActionError, ConflictKind, InputError, Permission, QueryError, UnavailableKind,
 };
 use crate::wire::DecodeErrorKind;
 
@@ -217,6 +217,7 @@ pub(super) fn every_query_error() -> Vec<QueryError> {
     fn declared(error: QueryError) -> QueryError {
         match error {
             QueryError::Store { .. }
+            | QueryError::Unavailable { .. }
             | QueryError::NotFound
             | QueryError::Forbidden { .. }
             | QueryError::VersionNotRetained { .. }
@@ -229,6 +230,10 @@ pub(super) fn every_query_error() -> Vec<QueryError> {
     [
         QueryError::Store {
             reason: "connection reset by peer".into(),
+        },
+        QueryError::Unavailable {
+            kind: UnavailableKind::Transport,
+            reason: "sending the request: connection refused".into(),
         },
         QueryError::NotFound,
         QueryError::Forbidden {
@@ -255,6 +260,7 @@ pub(super) fn every_action_error() -> Vec<ActionError> {
     fn declared(error: ActionError) -> ActionError {
         match error {
             ActionError::Store { .. }
+            | ActionError::Unavailable { .. }
             | ActionError::NotFound
             | ActionError::Forbidden { .. }
             | ActionError::Conflict(_)
@@ -264,6 +270,10 @@ pub(super) fn every_action_error() -> Vec<ActionError> {
     [
         ActionError::Store {
             reason: "serialization failure".into(),
+        },
+        ActionError::Unavailable {
+            kind: UnavailableKind::Unauthenticated,
+            reason: "no caller: AuthError { reason: Expired }".into(),
         },
         ActionError::NotFound,
         ActionError::Forbidden {
@@ -287,6 +297,7 @@ fn errors_golden_with_every_variant() {
     assert_golden(AREA, "input_errors", &every_input_error());
     assert_golden(AREA, "fit_failures", &every_fit_failure());
     assert_golden(AREA, "permissions", &Permission::ALL.to_vec());
+    assert_golden(AREA, "unavailable_kinds", &UnavailableKind::ALL.to_vec());
     let statuses = [
         ProjectionStatusKind::Queued,
         ProjectionStatusKind::Fitting,

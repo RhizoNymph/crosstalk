@@ -5,9 +5,9 @@ use axum::body::Body;
 use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE, WWW_AUTHENTICATE};
 use axum::http::{HeaderValue, StatusCode};
 use axum::response::Response;
-use crosstalk_spec::interfaces::l8_surface::QueryError;
 use crosstalk_spec::interfaces::l8_surface::http::auth::AuthError;
 use crosstalk_spec::interfaces::l8_surface::http::{ErrorStatus, JSON, Status};
+use crosstalk_spec::interfaces::l8_surface::{ActionError, QueryError};
 use serde::Serialize;
 
 /// `Cache-Control` of every response but a ready frame.
@@ -53,10 +53,44 @@ pub(super) fn json<T: Serialize>(status: Status, value: &T) -> Result<Response, 
     Ok(with_body(status, JSON, Body::from(bytes)))
 }
 
-/// An error: its status and its wire JSON.
-pub(super) fn error<E: ErrorStatus + Serialize>(error: &E) -> Response {
+/// An error the server answers with. A server never answers a client-only
+/// error (`QueryError::Unavailable`, `ActionError::Unavailable`): what it
+/// answers is the error's `served()` form, `Store` with the same reason and
+/// status. No surface returns one; this keeps the wire free of them even
+/// when one is handed over.
+pub(super) trait Answered: ErrorStatus + Serialize {
+    fn served(&self) -> Self;
+}
+
+impl Answered for QueryError {
+    fn served(&self) -> Self {
+        if self.is_client_only() {
+            tracing::error!(error = ?self, "a client-only error reached the server; answered as Store");
+        }
+        self.clone().served()
+    }
+}
+
+impl Answered for ActionError {
+    fn served(&self) -> Self {
+        if self.is_client_only() {
+            tracing::error!(error = ?self, "a client-only error reached the server; answered as Store");
+        }
+        self.clone().served()
+    }
+}
+
+impl Answered for AuthError {
+    fn served(&self) -> Self {
+        *self
+    }
+}
+
+/// An error: the status and wire JSON of its served form ([`Answered`]).
+pub(super) fn error<E: Answered>(error: &E) -> Response {
+    let error = error.served();
     let status = error.status();
-    match serde_json::to_vec(error) {
+    match serde_json::to_vec(&error) {
         Ok(bytes) => with_body(status, JSON, Body::from(bytes)),
         Err(encode) => {
             // Errors hold ids, enums and strings, all of which encode; this

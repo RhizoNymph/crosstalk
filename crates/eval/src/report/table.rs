@@ -167,6 +167,7 @@ pub fn render(report: &Report) -> String {
                 GateStatus::Pass { value } => format!("pass  {value:.3}"),
                 GateStatus::Fail { value, bound } => format!("FAIL  {value:.3} (bound {bound:.3})"),
                 GateStatus::Skipped => "skip  (no data)".to_owned(),
+                GateStatus::OtherDataset => "skip  (other dataset)".to_owned(),
             };
             let _ = writeln!(out, "  {status:<30} {}", gate.name);
         }

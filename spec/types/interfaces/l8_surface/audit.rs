@@ -140,14 +140,19 @@ impl AuditOutcome {
             Err(ActionError::InvalidInput(input)) => {
                 Self::Rejected(Rejection::InvalidInput(input.clone()))
             }
-            Err(ActionError::Store { reason }) => Self::Rejected(Rejection::Failed {
-                reason: reason.clone(),
-            }),
+            Err(ActionError::Store { reason } | ActionError::Unavailable { reason, .. }) => {
+                Self::Rejected(Rejection::Failed {
+                    reason: reason.clone(),
+                })
+            }
         }
     }
 
     /// What `act` returned for a call recorded with this outcome. The exact
-    /// inverse of [`AuditOutcome::of`].
+    /// inverse of [`AuditOutcome::of`] over everything a surface's `act`
+    /// returns; the client-only `ActionError::Unavailable`, which no
+    /// surface returns or records, reads back as the `Store` it is served
+    /// as.
     pub fn result(&self) -> Result<ActionOutcome, ActionError> {
         match self {
             Self::Succeeded(outcome) => Ok(outcome.clone()),

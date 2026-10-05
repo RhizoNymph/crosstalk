@@ -12,7 +12,7 @@
 //!     ─▶ reconnect with Last-Event-ID: <last cursor>, as a browser's EventSource does
 //!          ├─ 200 ─▶ carry on; the surface replays what followed the cursor, or resyncs
 //!          ├─ 401 or 403 ─▶ Err(SessionEnded): the caller must sign in again
-//!          └─ fails ─▶ retry per ReconnectPolicy; out of attempts ─▶ Err(ShuttingDown)
+//!          └─ fails ─▶ retry per ReconnectPolicy; out of attempts ─▶ Err(Unreachable)
 //! ```
 //!
 //! **Resume.** An item's cursor is its SSE id, and the surface replays
@@ -28,7 +28,13 @@
 //! carries (`surface.live.sse-frame-matches-item`): an item's event name
 //! is its `LiveItem::event_name` and its id its cursor's text; the end
 //! event has no id. An event that is not is treated as a cut, so the
-//! client never moves its resume point to a cursor it did not read.
+//! client never moves its resume point to a cursor it did not read. So is
+//! an end event carrying the client-only `unreachable`, which a server
+//! never sends (`LiveEnd::served`).
+//!
+//! **Giving up.** When the reconnect attempts run out, the stream ends
+//! with the client-only `LiveEnd::Unreachable`: the surface did not end
+//! it, the client could not reach one that served the feed.
 
 pub(crate) mod sse;
 
@@ -83,6 +89,9 @@ fn frame(event: SseEvent) -> Frame {
             return Frame::Invalid("the end event carries an id".to_owned());
         }
         return match serde_json::from_str::<LiveEnd>(&event.data) {
+            Ok(end) if end.is_client_only() => {
+                Frame::Invalid(format!("an end only a client produces: {end:?}"))
+            }
             Ok(end) => Frame::End(end),
             Err(error) => Frame::Invalid(format!("end data: {error}")),
         };
@@ -208,7 +217,7 @@ impl HttpLiveStream {
         self.attempts += 1;
         if self.attempts > policy.attempts().get() {
             tracing::error!(attempts = self.attempts - 1, "live feed unreachable");
-            self.ended = Some(LiveEnd::ShuttingDown);
+            self.ended = Some(LiveEnd::Unreachable);
             return;
         }
         tokio::time::sleep(policy.delay(self.attempts)).await;

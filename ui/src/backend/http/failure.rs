@@ -1,25 +1,21 @@
 //! Telling a gateway that cannot be reached, or that refused the token,
 //! apart from a failure the gateway itself reported.
 //!
-//! `crosstalk-client` folds what the spec's errors have no variant for
-//! into `QueryError::Store { reason }`, the reason being its
-//! `ClientError`'s display, and exposes no typed accessor through the
-//! traits. [`classify`] reads that display, in this one place:
+//! `crosstalk-client` returns a call that never reached a surface that
+//! answered it as the client-only `Unavailable { kind, reason }`
+//! (`QueryError` and `ActionError` alike). [`classify`] maps its `kind`:
 //!
-//! | `ClientError` | Reason starts with | [`GatewayFailure`] |
-//! | --- | --- | --- |
-//! | `Unauthenticated` (`401`) | `no caller: ` | `TokenRefused` |
-//! | `Transport(Send)` (connect, send, response head) | `sending the request: ` | `Unreachable` |
-//! | `Transport(Body)` (the connection cut) | `reading the body: ` | `Unreachable` |
-//! | `Transport(Timeout)` | `no response within ` | `Unreachable` |
-//! | anything else, the gateway's own `Store` included | | none |
+//! | Error | [`GatewayFailure`] |
+//! | --- | --- |
+//! | `Unavailable { kind: Unauthenticated }` (a `401`) | `TokenRefused` |
+//! | `Unavailable { kind: Transport \| Body \| Timeout }` | `Unreachable` |
+//! | anything else, the gateway's own `Store` included | none: the generic 500 |
 //!
-//! The router tests pin it against the client's real errors (a refused
-//! token, a stopped server), so a change to the client's wording fails
-//! them rather than the page.
+//! The router tests pin it end to end against the client's real errors (a
+//! refused token, a stopped server).
 
 use crosstalk_client::BaseUrl;
-use crosstalk_spec::interfaces::l8_surface::QueryError;
+use crosstalk_spec::interfaces::l8_surface::{ActionError, QueryError, UnavailableKind};
 
 /// Why the http backend could not get an answer from the gateway.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -30,25 +26,44 @@ pub enum GatewayFailure {
     TokenRefused,
 }
 
-/// The gateway failure a call over HTTP failed with, if it was one.
-pub fn classify(error: &QueryError) -> Option<GatewayFailure> {
-    let QueryError::Store { reason } = error else {
-        return None;
-    };
-    if reason.starts_with("no caller: ") {
-        Some(GatewayFailure::TokenRefused)
-    } else if [
-        "sending the request: ",
-        "reading the body: ",
-        "no response within ",
-    ]
-    .iter()
-    .any(|prefix| reason.starts_with(prefix))
-    {
-        Some(GatewayFailure::Unreachable)
-    } else {
-        None
+impl From<UnavailableKind> for GatewayFailure {
+    fn from(kind: UnavailableKind) -> Self {
+        match kind {
+            UnavailableKind::Unauthenticated => Self::TokenRefused,
+            UnavailableKind::Transport | UnavailableKind::Body | UnavailableKind::Timeout => {
+                Self::Unreachable
+            }
+        }
     }
+}
+
+/// An error a call to the gateway can fail with.
+pub trait CallFailure {
+    /// The `kind` of an `Unavailable`, if the error is one.
+    fn unavailable(&self) -> Option<UnavailableKind>;
+}
+
+impl CallFailure for QueryError {
+    fn unavailable(&self) -> Option<UnavailableKind> {
+        match self {
+            Self::Unavailable { kind, .. } => Some(*kind),
+            _ => None,
+        }
+    }
+}
+
+impl CallFailure for ActionError {
+    fn unavailable(&self) -> Option<UnavailableKind> {
+        match self {
+            Self::Unavailable { kind, .. } => Some(*kind),
+            _ => None,
+        }
+    }
+}
+
+/// The gateway failure a call over HTTP failed with, if it was one.
+pub fn classify(error: &impl CallFailure) -> Option<GatewayFailure> {
+    error.unavailable().map(GatewayFailure::from)
 }
 
 /// `url` as an operator may see it: without the username and password a
@@ -92,38 +107,68 @@ fn redact(text: &str) -> String {
 mod tests {
     use super::*;
 
-    fn store(reason: &str) -> QueryError {
-        QueryError::Store {
-            reason: reason.to_owned(),
+    fn query(kind: UnavailableKind) -> QueryError {
+        QueryError::Unavailable {
+            kind,
+            reason: "the client's reason".to_owned(),
+        }
+    }
+
+    fn action(kind: UnavailableKind) -> ActionError {
+        ActionError::Unavailable {
+            kind,
+            reason: "the client's reason".to_owned(),
         }
     }
 
     #[test]
-    fn a_401_is_a_refused_token() {
-        assert_eq!(
-            classify(&store("no caller: AuthError { reason: InvalidCredential }")),
-            Some(GatewayFailure::TokenRefused)
-        );
+    fn unauthenticated_is_a_refused_token() {
+        let kind = UnavailableKind::Unauthenticated;
+        assert_eq!(classify(&query(kind)), Some(GatewayFailure::TokenRefused));
+        assert_eq!(classify(&action(kind)), Some(GatewayFailure::TokenRefused));
     }
 
     #[test]
-    fn transport_failures_are_unreachable() {
-        for reason in [
-            "sending the request: client error (Connect)",
-            "reading the body: connection reset",
-            "no response within 30000 ms",
+    fn transport_body_and_timeout_are_unreachable() {
+        for kind in [
+            UnavailableKind::Transport,
+            UnavailableKind::Body,
+            UnavailableKind::Timeout,
         ] {
             assert_eq!(
-                classify(&store(reason)),
+                classify(&query(kind)),
                 Some(GatewayFailure::Unreachable),
-                "{reason}"
+                "{kind:?}"
+            );
+            assert_eq!(
+                classify(&action(kind)),
+                Some(GatewayFailure::Unreachable),
+                "{kind:?}"
             );
         }
     }
 
     #[test]
-    fn the_gateways_own_failures_and_other_errors_are_not_gateway_failures() {
-        assert_eq!(classify(&store("the edge store is down")), None);
+    fn every_kind_is_a_gateway_failure() {
+        for kind in UnavailableKind::ALL {
+            assert!(classify(&query(kind)).is_some(), "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn store_and_other_errors_are_not_gateway_failures() {
+        // A store failure, whatever its text, is the gateway's own: the
+        // generic 500, not the gateway page.
+        for reason in ["the edge store is down", "no caller: looks like a 401"] {
+            let store = QueryError::Store {
+                reason: reason.to_owned(),
+            };
+            assert_eq!(classify(&store), None, "{reason}");
+            let action_store = ActionError::Store {
+                reason: reason.to_owned(),
+            };
+            assert_eq!(classify(&action_store), None, "{reason}");
+        }
         assert_eq!(classify(&QueryError::NotFound), None);
         assert_eq!(
             classify(&QueryError::Forbidden {
@@ -131,6 +176,7 @@ mod tests {
             }),
             None
         );
+        assert_eq!(classify(&ActionError::NotFound), None);
     }
 
     #[test]

@@ -19,7 +19,9 @@
 //! prediction fell under, optionally of one `reason`) takes a `max`;
 //! `fp_per_1k` (the selected rows' false positives per 1,000 of the run's
 //! exchanges) takes a `max`, and is skipped in a run with no exchanges. A gate
-//! whose rows hold no data is skipped, not failed, so a small `--limit` run
+//! naming a dataset the run did not score is skipped as `other_dataset`
+//! (never a pass on an empty count); a gate whose rows hold no data is
+//! skipped, not failed, so a small `--limit` run
 //! is not failed by rows it never reached. Thresholds are regression gates
 //! for the eval, not invariants of the gateway.
 
@@ -270,6 +272,9 @@ pub enum GateStatus {
     },
     /// No row it selects holds data for its metric.
     Skipped,
+    /// It names a dataset the run did not score: it says nothing about
+    /// this run.
+    OtherDataset,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -297,6 +302,14 @@ impl Gate {
     }
 
     pub fn evaluate(&self, score: &Score) -> GateOutcome {
+        if let Some(dataset) = &self.dataset
+            && !score.scored(dataset)
+        {
+            return GateOutcome {
+                name: self.name.clone(),
+                status: GateStatus::OtherDataset,
+            };
+        }
         let counts = score.total(&self.selector());
         let status = match &self.check {
             Check::Recall { min } => at_least(counts.recall(), *min),

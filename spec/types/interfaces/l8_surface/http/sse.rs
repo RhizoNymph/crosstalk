@@ -79,11 +79,13 @@ pub fn event_frame(item: &LiveItem) -> Result<String, Unencodable> {
 }
 
 /// The stream's last event: `event: end\ndata: "<reason>"\n\n`, no `id`.
+/// The reason is that of [`LiveEnd::served`]: a server never sends the
+/// client-only `unreachable`.
 pub fn end_frame(end: LiveEnd) -> String {
-    let reason = match end {
+    let reason = match end.served() {
         LiveEnd::Lagged => "lagged",
         LiveEnd::SessionEnded => "session_ended",
-        LiveEnd::ShuttingDown => "shutting_down",
+        LiveEnd::ShuttingDown | LiveEnd::Unreachable => "shutting_down",
     };
     format!("event: {}\ndata: \"{reason}\"\n\n", LiveEnd::EVENT_NAME)
 }
