@@ -4,8 +4,11 @@
 //! Join rules:
 //!
 //! - **Agents.** `AgentKey { world: header.world, name }`. A session id
-//!   belongs to the agent the truth rows name for it; an exchange belongs to
-//!   its session's agent.
+//!   belongs to the agent its `session` row names; a session with no such
+//!   row belongs to the agent the other rows name for it. An exchange
+//!   belongs to its session's agent; one in a session no row names stays
+//!   unknown, and a detection tied only to it is reported
+//!   (`unknown_detected_agent`).
 //! - **Reader.** The session's exchange at ordinal `reader_turn`, checked by
 //!   finding a tool result for `content.at.tool_use_id` whose text hashes
 //!   to `content.blake3`. When that exchange does not hold the tool result,
@@ -22,6 +25,7 @@
 //!
 //! | Row | Label |
 //! | --- | --- |
+//! | `session` | none: maps the session to its agent |
 //! | `transmission` | `ExpectedTransmission`: Channel route (`Locator::Url` of the canonical URL), `ToolResult` carrier, `Construction` tier |
 //! | `self_read` | `NegativeControl` `SelfRead`, writer → itself, at the read |
 //! | `reread` | `NegativeControl` `Reread`, writer → reader, at the read |
@@ -42,15 +46,15 @@ use crosstalk_spec::derived::provenance::span::SpanLocation;
 use crosstalk_spec::ids::ExchangeId;
 use crosstalk_spec::observed::exchange::Exchange;
 
+use super::MODEL;
 use super::bodies::{Bodies, Cached};
 use super::diagnostics::{Diagnostic, Diagnostics, Effect, JoinFailure, RowKind, Side};
 use super::exchange_log::{Session, Sessions};
 use super::locate::{FoundCall, FoundResult, LocateError, tool_result, write_call};
 use super::schema::{Delivery, HexDigest, KeyGroup, Miss, TruthRoute, UnattributedRead};
 use super::truth_file::{DeliveryKind, Row, TruthFile};
-use super::{DATASET, MODEL};
 use crate::corpus::{CorpusError, Coverage, Driven, World, WorldBuilder};
-use crate::keys::{AgentKey, DatasetId, SourceRef, WorldKey};
+use crate::keys::{AgentKey, SourceRef, WorldKey};
 use crate::truth::{
     CarrierKind, Exemption, ExemptionReason, Expectation, ExpectedContent, ExpectedTransmission,
     MatchNeed, NegativeControl, NegativeLabel, NegativeReason, RouteExpectation, Tier,
@@ -74,6 +78,10 @@ impl AgentIndex {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, serde::Serialize)]
 pub struct ResolveCounts {
     pub rows: u64,
+    /// `session` rows.
+    pub sessions: u64,
+    /// Exchanges of the log in the truth's sessions: the world's traffic.
+    pub exchanges: u64,
     pub transmissions: u64,
     pub without_sender: u64,
     pub self_reads: u64,
@@ -128,21 +136,41 @@ struct Resolver<'a, B> {
     diagnostics: Diagnostics,
 }
 
-/// The truth's agents, the session each row names for them, and the
-/// sessions two agents claim.
-fn agents_and_sessions(
-    truth: &TruthFile,
-) -> (BTreeSet<String>, BTreeMap<String, BTreeSet<String>>) {
+/// The agents claiming one session: those `session` rows name, and those
+/// the other rows name.
+#[derive(Debug, Default)]
+struct Claims {
+    started: BTreeSet<String>,
+    named: BTreeSet<String>,
+}
+
+impl Claims {
+    /// The session's agent: the first its `session` rows name, else the
+    /// first the other rows name.
+    fn owner(&self) -> Option<&String> {
+        self.started.first().or_else(|| self.named.first())
+    }
+
+    /// Every agent claiming the session; more than one is a conflict.
+    fn all(&self) -> BTreeSet<&String> {
+        self.started.iter().chain(&self.named).collect()
+    }
+}
+
+/// The truth's agents and the agents claiming each session.
+fn agents_and_sessions(truth: &TruthFile) -> (BTreeSet<String>, BTreeMap<String, Claims>) {
     let mut agents = BTreeSet::new();
-    let mut sessions: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    let mut sessions: BTreeMap<String, Claims> = BTreeMap::new();
     let mut claim = |session: &str, agent: &str| {
         sessions
             .entry(session.to_owned())
             .or_default()
+            .named
             .insert(agent.to_owned());
     };
     for numbered in &truth.rows {
         match &numbered.row {
+            Row::Session(_) => {}
             Row::Delivery { row, .. } => {
                 agents.insert(row.writer.clone());
                 agents.insert(row.reader.clone());
@@ -160,6 +188,16 @@ fn agents_and_sessions(
             Row::Cluster(row) => agents.extend(row.agents.iter().cloned()),
         }
     }
+    for numbered in &truth.rows {
+        if let Row::Session(row) = &numbered.row {
+            agents.insert(row.agent.clone());
+            sessions
+                .entry(row.session.clone())
+                .or_default()
+                .started
+                .insert(row.agent.clone());
+        }
+    }
     (agents, sessions)
 }
 
@@ -171,7 +209,7 @@ pub fn resolve<B: Bodies>(
     sessions: &Sessions,
     bodies: &mut Cached<B>,
 ) -> Result<Resolved, ResolveError> {
-    let dataset = DatasetId::new(DATASET);
+    let dataset = truth.header.scenario().dataset();
     let world = WorldKey::new(truth.header.world.clone());
     let mut builder = WorldBuilder::new(dataset, world.clone());
     let (names, claims) = agents_and_sessions(truth);
@@ -186,21 +224,22 @@ pub fn resolve<B: Bodies>(
         diagnostics: Diagnostics::default(),
     };
     let mut index = AgentIndex::default();
-    for (session, agents) in claims {
-        if agents.len() > 1 {
+    for (session, claimed) in claims {
+        let all = claimed.all();
+        if all.len() > 1 {
             resolver.diagnostics.push(Diagnostic {
                 line: None,
                 row: None,
                 side: Side::Row,
                 failure: JoinFailure::SessionConflict {
                     session: session.clone(),
-                    agents: agents.iter().cloned().collect(),
+                    agents: all.into_iter().cloned().collect(),
                 },
                 effect: Effect::Noted,
             });
         }
-        if let Some(first) = agents.into_iter().next() {
-            let key = AgentKey::new(world.clone(), first);
+        if let Some(owner) = claimed.owner() {
+            let key = AgentKey::new(world.clone(), owner.clone());
             if let Some(found) = sessions.get(&session) {
                 for exchange in &found.exchanges {
                     index.exchanges.insert(exchange.meta.id, key.clone());
@@ -215,6 +254,20 @@ pub fn resolve<B: Bodies>(
         counts.rows += 1;
         let line = numbered.line;
         match &numbered.row {
+            Row::Session(row) => {
+                counts.sessions += 1;
+                if sessions.get(&row.session).is_none() {
+                    resolver.diagnostics.push(Diagnostic {
+                        line: Some(line),
+                        row: Some(RowKind::Session),
+                        side: Side::Row,
+                        failure: JoinFailure::UnknownSession {
+                            session: row.session.clone(),
+                        },
+                        effect: Effect::Noted,
+                    });
+                }
+            }
             Row::Delivery { kind, row } => match resolver.delivery(*kind, row, line) {
                 Some(made) => {
                     match *kind {
@@ -268,6 +321,7 @@ pub fn resolve<B: Bodies>(
             }
         }
     }
+    counts.exchanges = index.exchanges.len() as u64;
     let diagnostics = resolver.diagnostics;
     Ok(Resolved {
         world: builder.finish(Coverage::Complete {

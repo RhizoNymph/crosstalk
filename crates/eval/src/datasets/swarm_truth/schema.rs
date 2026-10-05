@@ -2,7 +2,8 @@
 //! tagged by `kind`, written by `swarm --ground-truth PATH` (crates/demo).
 //!
 //! ```text
-//! {"kind":"header","version":2,"world":"swarm-<run>",…}          first line, once
+//! {"kind":"header","version":2,"scenario":"headline",…}         first line, once
+//! {"kind":"session",…}        a conversation starting: its session id and agent
 //! {"kind":"transmission",…}   another agent's page version reached the reader
 //! {"kind":"self_read",…}      the same fields; writer == reader (always, even on a repeat read)
 //! {"kind":"reread",…}         the same fields; another agent's version the reader already
@@ -27,6 +28,13 @@
 //! - A read whose write event never arrived is an `unattributed_read`
 //!   row: the reader side and the content, no writer. No row is written
 //!   for a read whose follow-up request was never sent, or a failed `PUT`.
+//! - The header's `scenario` (`headline` or `boilerplate`) is optional;
+//!   missing means `headline`. A run scores under the dataset id
+//!   `demo-swarm/<scenario>` ([`Scenario::dataset`]).
+//! - A `session` row is written once per conversation, when it starts.
+//!   It is the primary agent ↔ session map: a conversation that no read,
+//!   write or miss row names (one that only talked to the model) still
+//!   belongs to its agent.
 //! - `content.blake3` and `content.sha256` hash the page body's bytes,
 //!   which are exactly the tool result's content; `content.at` indexes the
 //!   wire `messages` array of the reader's request.
@@ -34,6 +42,9 @@
 use std::fmt;
 
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+use super::DATASET_PREFIX;
+use crate::keys::DatasetId;
 
 /// The one version this reader understands.
 pub const VERSION: u32 = 2;
@@ -43,6 +54,7 @@ pub const VERSION: u32 = 2;
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum TruthLine {
     Header(Header),
+    Session(SessionStart),
     Transmission(Delivery),
     SelfRead(Delivery),
     Reread(Delivery),
@@ -56,6 +68,14 @@ pub enum TruthLine {
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct Header {
     pub version: u32,
+    /// Which swarm scenario ran, as written; [`Header::scenario`] reads
+    /// it (missing: [`Scenario::Headline`]).
+    #[serde(
+        default,
+        skip_serializing_if = "Option::is_none",
+        deserialize_with = "present_scenario"
+    )]
+    pub scenario: Option<Scenario>,
     pub world: String,
     pub run: String,
     pub seed: u64,
@@ -66,6 +86,62 @@ pub struct Header {
     pub started_at_unix_ms: u64,
     pub gateway_url: String,
     pub wiki_url: String,
+}
+
+/// A `scenario` key that is present names a scenario: `null` is refused,
+/// only a missing key means the default.
+fn present_scenario<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Scenario>, D::Error> {
+    Scenario::deserialize(deserializer).map(Some)
+}
+
+impl Header {
+    /// The run's scenario: [`Scenario::Headline`] when the header names
+    /// none.
+    pub fn scenario(&self) -> Scenario {
+        self.scenario.unwrap_or_default()
+    }
+}
+
+/// The swarm scenario a run used: what its agents were prompted to write.
+/// Each agent's system prompt carries the tag `[style:<scenario>]`,
+/// identical across agents: shared prompt text, never a label.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Scenario {
+    /// The headline bench: agents pass distinct content through the wiki.
+    #[default]
+    Headline,
+    /// Agents write template-heavy boilerplate: a false-positive bench.
+    Boilerplate,
+}
+
+impl Scenario {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Headline => "headline",
+            Self::Boilerplate => "boilerplate",
+        }
+    }
+
+    /// The dataset id a run of this scenario scores under:
+    /// `demo-swarm/<scenario>`.
+    pub fn dataset(self) -> DatasetId {
+        DatasetId::new(format!("{DATASET_PREFIX}/{}", self.as_str()))
+    }
+}
+
+/// A conversation starting: the harness session id (`x-claude-code-session-id`)
+/// and the agent it belongs to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct SessionStart {
+    pub world: String,
+    pub agent: String,
+    pub key_group: u32,
+    pub session: String,
+    pub started_at_unix_ms: u64,
 }
 
 /// A read of a page version someone wrote: a transmission, a self-read or

@@ -3,6 +3,8 @@
 //! of a saved export.
 
 mod fixture;
+mod scenario;
+mod sessions;
 
 use std::io::Cursor;
 
@@ -77,6 +79,7 @@ fn a_v2_file_reads_every_kind_in_order() {
             Row::Miss(_) => "miss",
             Row::Unattributed(_) => "unattributed_read",
             Row::Cluster(_) => "agent_cluster",
+            Row::Session(_) => "session",
         })
         .collect();
     assert_eq!(

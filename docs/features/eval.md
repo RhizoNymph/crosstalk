@@ -621,12 +621,18 @@ installed | crate)`) or `no gates` on stderr. A missing default (2–4) is
 never an error, and falls through to the next; only an explicit
 `--gates` that does not exist is (`GateError::Missing`).
 
-Each gate checks one detector's runs: `detector = "live"` (or
-`"pipeline"`), and a gate that names none is the reference matcher's
-(`GateDetector`, `Gates::for_detector`). `ct-eval run` evaluates only the
-gates of the detector it ran, so the reference baselines never fail a live
-run and the reverse. There are no
-demo-swarm gates yet: they wait for a calibrated first live run.
+Each gate checks one detector's runs: `detector = "live"`, `"pipeline"`
+or `"gateway-export"` (the swarm benchmark's detector name, `DETECTOR`),
+and a gate that names none is the reference matcher's (`GateDetector`,
+`Gates::for_detector`). `ct-eval run` evaluates only the gates of the
+detector it ran, and `ct-eval swarm` only the `gateway-export` gates, so
+the reference baselines never fail a live run and the reverse. The
+demo-swarm gates are listed under [Swarm benchmark](#gates-demo-swarm).
+
+Metrics: `recall` and `precision` take a `min`; `violations` (negative
+controls predictions fell under, optionally of one `reason`) and
+`fp_per_1k` (the selected rows' false positives per 1,000 of the run's
+exchanges, `Totals::exchanges`; skipped in a run with none) take a `max`.
 
 ## How to add a converter
 
@@ -966,7 +972,10 @@ predictions. No gate reads a row that moved, so `gates.toml` is unchanged.
 demo swarm (`crates/demo`, `swarm --ground-truth PATH`). Unlike the dataset
 converters, the exchanges are the gateway's own captures with their real
 ids; the eval only labels them and scores what the gateway exported. The
-dataset id is `demo-swarm`; one run is one world (`header.world`).
+dataset id is `demo-swarm/<scenario>`, from the header's optional
+`scenario` (`headline` or `boilerplate`; missing means `headline`,
+`Header::scenario`, `Scenario::dataset`); one run is one world
+(`header.world`).
 
 **Scope.** Reading truth v2, joining it to the gateway's exchange log and
 blobs, scoring a saved transmissions export with its evidence (and the
@@ -986,9 +995,12 @@ groups are kept but not labelled, see below), and Parquet exports.
 | `export.jsonl` | `POST /exports` | spec JSONL export framing (header, `transmission` rows, trailer); read with `read_jsonl` and checked with `verify_export` and the BLAKE3 row digest (`ROW_DIGEST_CONTEXT`), so a cut-off export is refused |
 | `evidence.jsonl` | `GET /transmissions/{id}/evidence?window={"context":0}` | one spec `TransmissionEvidence` per line, for the exported transmissions |
 
-Truth v2 lines: `header` (version, world, run, seed, agent and key counts,
+Truth v2 lines: `header` (version, optional `scenario`, world, run, seed, agent and key counts,
 `claude_code_shape`, start time, gateway and wiki URLs; `run` is a ULID), then
-`agent_cluster` (one per key group), then `transmission`, `self_read` and
+`agent_cluster` (one per key group), then, interleaved in event order,
+`session` (`world`, `agent`, `key_group`, `session`, `started_at_unix_ms`:
+one per conversation, written when it starts, before its first request),
+`transmission`, `self_read` and
 `reread` (writer and reader with key group, session, turn and tool use id,
 `route: {kind: channel, url}`, `carrier: tool_result`, the read tool,
 `content: {blake3, sha256, excerpt, at: {message, block, tool_use_id}}` and
@@ -1010,9 +1022,17 @@ times) and `miss` (the reader side only).
 ### Join rules (`resolve.rs`)
 
 - **Agents.** `AgentKey { world: header.world, name }`. A session id
-  belongs to the agent the truth rows name for it (a session claimed by
-  two agents is reported, `session_conflict`); an exchange belongs to its
-  session's agent.
+  belongs to the agent its `session` row names; a session with no
+  `session` row belongs to the agent the other rows name for it (a session
+  claimed by two agents, by any rows, is reported, `session_conflict`,
+  and the `session` row's agent wins). An exchange belongs to its
+  session's agent. `session` rows may come anywhere after the header: the
+  map is built from every row before any is joined. A conversation that
+  never touched the wiki (no read, write or miss row) still maps to its
+  agent, so its detections are scored (false positives count against
+  precision) rather than dropped as `unknown_detected_agent`; exchanges in
+  a session no row names still are. A `session` row whose session the log
+  lacks is noted (`unknown_session`, `row: session`).
 - **Turns.** The log's exchanges are grouped by `meta.client.ids.session`
   (from `x-claude-code-session-id`) and ordered by (`started_at`, id). The
   position in that order is the session's generation-request ordinal, the
@@ -1041,6 +1061,7 @@ times) and `miss` (the reader side only).
 | `reread` | `NegativeControl` `Reread`, writer → reader, at the later read |
 | `miss` | `NegativeControl` `Miss` from every other agent of the world, at the read |
 | `unattributed_read` | `Exemption` `UnknownSender` at the read (joined like any read, hash-checked): a prediction into that reader exchange on that content is unjudged, neither correct nor false |
+| `session` | no label: the session's agent (above) |
 | `agent_cluster` | no label: a key group is agents sharing one API key, while an `AgentCluster` is keys that are one agent. Reported as `key_group_not_a_cluster` and kept on `Resolved::key_groups` |
 
 Coverage is `Complete { Construction }`: the swarm logs every read, the
@@ -1117,10 +1138,49 @@ the diagnostics table, writes `report.json`, `report.txt` and
 exits 2 when a gate fails. A re-run over the same files is byte-identical
 (tested).
 
+**Header counts.** The swarm's world holds labels over the log's exchange
+ids, not the exchanges themselves, so the report's `totals.exchanges` (the
+header's "N exchanges", and the denominator of the false positives per 1k
+exchanges) is set from the resolver: the exchanges of the log in the
+truth's sessions (`ResolveCounts::exchanges`; exchanges in sessions no row
+names are not counted). The truth line under the table also prints the
+`session` row count (`ResolveCounts::sessions`, equal to the swarm
+report's `sessions`).
+
+<a id="gates-demo-swarm"></a>
+**Gates** (`gates.toml`, `detector = "gateway-export"`, by scenario
+dataset id):
+
+| Dataset | Gate | Bound | First bench |
+| --- | --- | --- | --- |
+| `demo-swarm/headline` | channel / tool_result / exact recall | ≥ 0.95 | 1.000 (58 / 58) |
+| `demo-swarm/headline` | channel / tool_result / exact precision | ≥ 0.90 | 0.951 |
+| `demo-swarm/headline` | negative-control violations, reason `reread` | ≤ 0 | 9 (L4's reread dedup is to remove them) |
+| `demo-swarm/boilerplate` | `fp_per_1k` | ≤ 10,000 (placeholder) | not run yet |
+
+The boilerplate ceiling is a loose placeholder, to calibrate from a
+measured run after L4 match quality lands. Overall precision is not
+gated: its false positives are template-phrase ReaderOutput matches,
+pending the L4 ReaderOutput floor and more entropy in the swarm's
+generator. Each agent's system prompt carries `[style:<scenario>]`,
+text identical across agents: no truth row names it, so it is never a
+label, and a detection of it is a false positive.
+
+**First live bench** (2026-10-05, `--agents 20 --duration 2m --seed 42`,
+headline, before `scenario` existed):
+83 truth rows, all joined; recall 58 / 58 (1.000); overall precision 0.175
+(166 correct, 780 false of 952 predictions). The false positives are
+dominated by 34–46-byte `unobserved` / `reader_output` template matches
+(749 exact). The header then said "0 exchanges" (the world carries no
+exchanges; fixed above), and 36 transmissions whose agents sat only in 2
+sessions no row named (8 exchanges) were dropped as
+`unknown_detected_agent`, all `unobserved` / `reader_output`; `session`
+rows map them, and they are scored as false positives.
+
 | File | Role | Key exports |
 | --- | --- | --- |
-| `src/datasets/swarm_truth/mod.rs` | the run | `run`, `score`, `Inputs`, `Detections`, `SwarmOutcome`, `DetectedCounts`, `default_blobs`, `default_evidence`, `DATASET`, `SwarmTruthError` |
-| `src/datasets/swarm_truth/schema.rs` | truth v2 serde types | `TruthLine`, `Header`, `Delivery`, `Miss`, `UnattributedRead`, `KeyGroup`, `TruthRoute`, `TruthCarrier`, `Content`, `WireAt`, `HexDigest`, `VERSION` |
+| `src/datasets/swarm_truth/mod.rs` | the run | `run`, `score`, `Inputs`, `Detections`, `SwarmOutcome`, `DetectedCounts`, `default_blobs`, `default_evidence`, `DATASET_PREFIX`, `DETECTOR`, `SwarmTruthError` |
+| `src/datasets/swarm_truth/schema.rs` | truth v2 serde types | `TruthLine`, `Header`, `Scenario`, `SessionStart`, `Delivery`, `Miss`, `UnattributedRead`, `KeyGroup`, `TruthRoute`, `TruthCarrier`, `Content`, `WireAt`, `HexDigest`, `VERSION` |
 | `src/datasets/swarm_truth/truth_file.rs` | reading the truth file | `read`, `TruthFile`, `Row`, `DeliveryKind`, `TruthFileError` |
 | `src/datasets/swarm_truth/exchange_log.rs` | the gateway's exchange log | `read`, `parse`, `ExchangeLog`, `Sessions`, `Session` |
 | `src/datasets/swarm_truth/bodies.rs` | message bodies by hash | `Bodies`, `BlobBodies`, `MemoryBodies`, `Cached`, `BodyError` |
@@ -1139,6 +1199,10 @@ exits 2 when a gate fails. A re-run over the same files is byte-identical
   truth's `content.blake3`, and its content text is exactly that result's
   text.
 - Only a `SelfRead` control may name one agent as sender and reader.
+- A session maps to at most one agent; with `session` rows present, it is
+  theirs. A truth file with no `session` rows scores exactly as before
+  they existed (tested).
+- A swarm report's exchange count is the exchanges of the truth's sessions.
 
 ## AI Village
 
@@ -1601,5 +1665,5 @@ purpose:
 - **cipher**: 0.245, dominated by payloads under L4's 32-character
   shingle (finding 4); stable, but it measures the k tuning, not a
   regression.
-- **open-swe, lmcache**: background-only; gates have no false-positive
-  rate metric yet. Their calls are paced now too; not rescored.
+- **open-swe, lmcache**: background-only; not gated yet (a `fp_per_1k`
+  ceiling now exists, first used by the demo-swarm boilerplate scenario). Their calls are paced now too; not rescored.

@@ -3,7 +3,9 @@
 
 use std::io::BufRead;
 
-use super::schema::{Delivery, Header, KeyGroup, Miss, TruthLine, UnattributedRead, VERSION};
+use super::schema::{
+    Delivery, Header, KeyGroup, Miss, SessionStart, TruthLine, UnattributedRead, VERSION,
+};
 
 /// What a delivery line says about the read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
@@ -17,6 +19,7 @@ pub enum DeliveryKind {
 /// One row after the header.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Row {
+    Session(SessionStart),
     Delivery {
         kind: DeliveryKind,
         row: Box<Delivery>,
@@ -102,6 +105,7 @@ pub fn read<R: BufRead>(input: R) -> Result<TruthFile, TruthFileError> {
                 header = Some(found);
                 continue;
             }
+            TruthLine::Session(row) => Row::Session(row),
             TruthLine::Transmission(row) => Row::Delivery {
                 kind: DeliveryKind::Transmission,
                 row: Box::new(row),
@@ -122,6 +126,7 @@ pub fn read<R: BufRead>(input: R) -> Result<TruthFile, TruthFileError> {
             return Err(TruthFileError::HeaderNotFirst { line: line_no });
         };
         let world = match &row {
+            Row::Session(row) => &row.world,
             Row::Delivery { row, .. } => &row.world,
             Row::Miss(row) => &row.world,
             Row::Unattributed(row) => &row.world,

@@ -202,7 +202,10 @@ Overview:
       and blobs, and scores a saved L8 transmissions export and its evidence,
       suspected and discarded transmissions as access-only predictions
       from their evidence's accesses (reported as access-only recall,
-      apart from overall).
+      apart from overall). The truth's session rows map every gateway
+      session to its swarm agent; it scores under
+      demo-swarm/<scenario> (headline or boilerplate), and its gates are
+      those named detector "gateway-export".
     e2e: >
       Crate crosstalk-e2e (a composer): the end-to-end smoke harness. A
       scripted two-agent Claude Code scenario as wire traffic, captured
