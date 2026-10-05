@@ -9,6 +9,17 @@
 //! same text share their copies: each copy is labelled once. Its match need is the
 //! weakest arrival that finds it ([`classify`](super::classify)).
 //!
+//! **Channel copies are access-only.** A copy read through a resource (a
+//! web page, a file) arrives on a medium the attacker never wrote: the
+//! synthetic attacker's one exchange writes text, not the page or file.
+//! The spec makes such content a shared upstream source that stays
+//! Suspected and is never confirmed (INV-963,
+//! `flow.route.shared-upstream-stays-suspected`), so the copy is an
+//! [`ExpectedAccess`]: only access evidence finds it, under access-only
+//! recall, and a content match there is correct but finds nothing. A copy
+//! read through a keyed tool that records no access stays a `Direct`
+//! content expectation.
+//!
 //! **Negative controls (Structural).** The victim's system prompt and user
 //! turns are harness text: `Boilerplate` from the attacker. (In
 //! `injection_task_*/none` runs the attacker's goal is the user prompt, but
@@ -33,8 +44,8 @@ use super::tally::Tally;
 use crate::keys::{AgentKey, SourceRef};
 use crate::location;
 use crate::truth::{
-    CarrierKind, Expectation, ExpectedContent, ExpectedTransmission, NegativeControl,
-    NegativeLabel, NegativeReason, Tier, TransmissionLabel,
+    CarrierKind, Expectation, ExpectedAccess, ExpectedContent, ExpectedTransmission,
+    NegativeControl, NegativeLabel, NegativeReason, RouteExpectation, Tier, TransmissionLabel,
 };
 
 /// The attacker and its one exchange.
@@ -131,24 +142,23 @@ impl RunLabels<'_> {
                     };
                     let at = location::location(message.hash, 0, start, end)?;
                     let content = text.get(found.start..found.end).unwrap_or_default();
-                    out.push(Expectation::Transmission(ExpectedTransmission::new(
-                        TransmissionLabel {
-                            from: attacker.key.clone(),
-                            to: self.victim.clone(),
-                            sender_exchange: Some(attacker.exchange),
-                            reader_exchange,
-                            route: route.clone(),
-                            carrier: CarrierKind::ToolResult,
-                            content: ExpectedContent {
-                                text: content.to_owned(),
-                                at,
-                            },
-                            needs: found.arrival.need(),
-                            tier: Tier::Construction,
-                            source: self
-                                .source(format!("/messages/{index}/injections/{vector}/{copy}")),
+                    let label = TransmissionLabel {
+                        from: attacker.key.clone(),
+                        to: self.victim.clone(),
+                        sender_exchange: Some(attacker.exchange),
+                        reader_exchange,
+                        route: route.clone(),
+                        carrier: CarrierKind::ToolResult,
+                        content: ExpectedContent {
+                            text: content.to_owned(),
+                            at,
                         },
-                    )?));
+                        needs: found.arrival.need(),
+                        tier: Tier::Construction,
+                        source: self
+                            .source(format!("/messages/{index}/injections/{vector}/{copy}")),
+                    };
+                    out.push(expectation(label)?);
                     tally.labels.add_arrival(Some(found.arrival));
                     first_read.get_or_insert(index);
                     for vector in vectors {
@@ -246,6 +256,19 @@ impl RunLabels<'_> {
             tally.second_hop.ioc_written += 1;
         }
     }
+}
+
+/// The expectation for one injection copy. Through a channel (a page or
+/// file the victim read) the attacker never wrote the resource, so the
+/// content is a shared upstream source: an access-only expectation
+/// (INV-963, `flow.route.shared-upstream-stays-suspected`). Read through a
+/// keyed tool that records no access it arrives `Direct` in the tool
+/// result, a content expectation.
+fn expectation(label: TransmissionLabel) -> Result<Expectation, AgentDojoError> {
+    Ok(match label.route {
+        RouteExpectation::Channel { .. } => Expectation::AccessOnly(ExpectedAccess::new(label)?),
+        _ => Expectation::Transmission(ExpectedTransmission::new(label)?),
+    })
 }
 
 /// URLs, email addresses and IBANs in `text`, lowercased.
