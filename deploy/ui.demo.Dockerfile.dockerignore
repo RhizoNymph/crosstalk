@@ -4,3 +4,4 @@
 **/target
 deploy
 **/node_modules
+ui/elements/dist
