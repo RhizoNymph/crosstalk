@@ -48,18 +48,6 @@ pub async fn all_rules<B: QueryApi>(
     })
 }
 
-/// The rule stored under `id`, if any.
-pub async fn rule<B: QueryApi>(
-    backend: &B,
-    caller: &Caller,
-    id: AlertRuleId,
-) -> Result<Option<AlertRuleDef>, QueryError> {
-    Ok(all_rules(backend, caller)
-        .await?
-        .into_iter()
-        .find(|r| r.id() == id))
-}
-
 /// Rule names by id. Unknown rules show as a short id.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct RuleNames(HashMap<AlertRuleId, String>);

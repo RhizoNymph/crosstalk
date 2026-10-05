@@ -1,7 +1,6 @@
 //! The generated world: determinism, size, and the traffic every page
 //! relies on.
 
-use crate::contract::present::Present;
 use std::collections::HashSet;
 use std::time::Instant;
 
@@ -75,7 +74,7 @@ async fn now_and_versions() {
 
     let b = shared();
     let c = super::researcher();
-    assert_eq!(b.now(&c).await, Ok(NOW));
+    assert_eq!(b.present(&c).await.map(|p| p.now), Ok(NOW));
     let active = |history: crosstalk_spec::aggregates::topic_history::TopicVersionHistory| {
         history.active().version()
     };
@@ -86,7 +85,7 @@ async fn now_and_versions() {
     assert_eq!(b.seed(), SEED);
     let nobody = super::caller(&[Permission::Audit]);
     assert_eq!(
-        b.now(&nobody).await,
+        b.present(&nobody).await.map(|p| p.now),
         Err(QueryError::Forbidden {
             missing: Permission::View
         })

@@ -16,16 +16,16 @@ pub mod model;
 pub mod pin;
 
 use crosstalk_spec::aggregates::filter::TopicVersionSelector;
+use crosstalk_spec::aggregates::series::BucketWidth;
 use crosstalk_spec::aggregates::topic::{Topic, TopicModelVersion};
 use crosstalk_spec::interfaces::l8_surface::{Caller, Permission, QueryError};
-use crosstalk_spec::support::Similarity;
 use topcoat::Result;
 use topcoat::context::Cx;
 use topcoat::router::{page, query_params};
 use topcoat::view::{View, component, view};
 
 use self::model::{RemapRow, TopicRow, VersionTab, remap_rows, topic_rows, version_tabs};
-use crate::app::{backend, caller, can};
+use crate::app::{backend, caller, can, present};
 use crate::components::form::{FACET, LINK, PANEL, SECTION, SECTION_TITLE};
 use crate::components::live::live_watch;
 use crate::components::sparkline::sparkline;
@@ -35,7 +35,6 @@ use crate::components::{
     segmented,
 };
 use crate::error::UiError;
-use crate::pages::alerts::rules::form::DEFAULT_REMAP;
 use crate::pages::common::action::{Failure, require, status_of};
 use crate::pages::common::flash::{Flash, flash};
 use crate::pages::common::form::invalid;
@@ -83,20 +82,6 @@ struct Loaded {
     remap: Option<(u32, Vec<RemapRow>)>,
 }
 
-/// The remap threshold the table maps at: the rule form's default.
-fn default_threshold() -> std::result::Result<Similarity, UiError> {
-    DEFAULT_REMAP
-        .parse::<f32>()
-        .ok()
-        .and_then(|value| Similarity::new(value).ok())
-        .ok_or_else(|| {
-            invalid(
-                "remap_threshold",
-                "the default threshold is not a similarity",
-            )
-        })
-}
-
 /// The rows of the selected version's `topics`: sizes over the window,
 /// then trends (a version never activated has sizes but no series; it
 /// shows no trend).
@@ -105,13 +90,13 @@ async fn table(
     caller: &Caller,
     state: &ViewState,
     (selected, topics): (TopicModelVersion, &[Topic]),
-    watched_version: TopicModelVersion,
+    (bucket, watched_version): (BucketWidth, TopicModelVersion),
 ) -> std::result::Result<Table, UiError> {
     let backend = backend(cx);
     let sizes = backend
         .topic_sizes(caller, Some(selected), Some(state.scope.window))
         .await?;
-    let trends = match topic_trends(backend, caller, state.scope.window, selected).await {
+    let trends = match topic_trends(backend, caller, state.scope.window, bucket, selected).await {
         Ok(trends) => trends,
         Err(error) => {
             tracing::warn!(error = %error, version = selected.0, "topic trends unavailable");
@@ -134,11 +119,12 @@ async fn load(
     selected: TopicModelVersion,
 ) -> std::result::Result<Loaded, UiError> {
     let backend = backend(cx);
+    let present = present(cx).await.map_err(|e| UiError::from(e.clone()))?;
     let history = backend.topic_versions(caller).await?;
     let tabs = version_tabs(&history, state.scope.topic_version);
     // New watched-topic rules name the version the rule form picks topics
-    // from: the active one.
-    let active = history.active().version();
+    // from: the present's rule version.
+    let watched = (present.bucket_width, present.current_rule_version);
     let topics: std::result::Result<Vec<Topic>, UiError> = if history.get(selected).is_some() {
         all_topics(backend, caller, TopicVersionSelector::Pinned(selected))
             .await
@@ -148,7 +134,7 @@ async fn load(
         Err(UiError::Query(QueryError::NotFound))
     };
     let table = match &topics {
-        Ok(topics) => table(cx, caller, state, (selected, topics), active).await,
+        Ok(topics) => table(cx, caller, state, (selected, topics), watched).await,
         Err(error) => Err(error.clone()),
     };
     let remap = match backend.topic_lineage(caller, selected).await {
@@ -157,7 +143,14 @@ async fn load(
             let (_, next) =
                 all_topics(backend, caller, TopicVersionSelector::Pinned(lineage.to())).await?;
             let rules = all_rules(backend, caller).await?;
-            let rows = remap_rows(&lineage, &from, &next, &rules, default_threshold()?, state);
+            let rows = remap_rows(
+                &lineage,
+                &from,
+                &next,
+                &rules,
+                present.default_remap_threshold,
+                state,
+            );
             Some((lineage.to().0, rows))
         }
         Ok(None) | Err(QueryError::NotFound) => None,

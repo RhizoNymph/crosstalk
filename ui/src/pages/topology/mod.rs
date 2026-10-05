@@ -24,7 +24,6 @@ pub mod lists;
 pub mod query;
 pub mod selection;
 
-use crate::contract::present::Present;
 use std::time::Duration;
 
 use crosstalk_spec::aggregates::edge::{TopologyGraph, Weighting};
@@ -45,13 +44,13 @@ use self::filters::{FilterChoices, chips, clear_href, filter_chips, filter_form,
 use self::lists::model::{GraphLists, load as load_lists};
 use self::lists::{ListTab, graph_lists, selection_sync};
 use self::query::{RawTopologyQuery, TopologyQuery, submitted_filter};
-use crate::app::{backend, caller};
+use crate::app::{backend, caller, present};
 use crate::components::{Tab, error_panel, format_time, href, segmented};
 use crate::data::elements::{TIMEBRUSH_JS, TOPOLOGY_JS};
 use crate::error::UiError;
 use crate::pages::common::action::{require, status_of};
 use crate::pages::common::form::{FormFields, invalid};
-use crate::pages::view::view_state;
+use crate::pages::view::{defaults_error, view_state};
 use crate::url::scope::{align_down, align_up};
 use crate::url::view_state::{GraphMode, ViewState, format_time as rfc3339};
 use crosstalk_spec::interfaces::l8_surface::QueryApi;
@@ -317,12 +316,11 @@ async fn workspace(
 ) -> Result<impl View> {
     let collapse = query.collapse;
     let topology_src = href("/data/topology", state, &[]);
-    let backend = backend(cx);
-    let now = backend
-        .now(&caller(cx))
+    // The view state was built from this request's present, so it reads.
+    let present = present(cx)
         .await
-        .unwrap_or(state.scope.window.end());
-    let brush_src = timeline_src(state, now, backend.bucket_width());
+        .map_err(|e| defaults_error(UiError::Query(e.clone())))?;
+    let brush_src = timeline_src(state, present.now, present.bucket_width);
     let brush_from = rfc3339(state.scope.window.start());
     let brush_to = rfc3339(state.scope.window.end());
     let state_query = state.to_query();

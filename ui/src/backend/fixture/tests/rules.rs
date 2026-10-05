@@ -16,7 +16,6 @@ use super::super::FixtureBackend;
 use super::super::clock::NOW;
 use super::super::text::Theme;
 use super::{caller, collect, first, fresh, researcher, shared};
-use crate::backend::alert_state;
 use crosstalk_spec::interfaces::l8_surface::{ActionError, ActionOutcome, OperatorAction};
 use crosstalk_spec::interfaces::l8_surface::{OperatorActions, QueryApi};
 
@@ -263,7 +262,7 @@ async fn builtin_rules_switch_but_never_edit() {
     let active: Vec<_> = alerts_of(&b, builtin)
         .await
         .into_iter()
-        .filter(|a| alert_state::is_active(&a.state))
+        .filter(|a| a.state.is_active())
         .map(|a| a.id)
         .collect();
     assert!(!active.is_empty());
@@ -294,7 +293,7 @@ async fn builtin_rules_switch_but_never_edit() {
         alerts_of(&b, builtin)
             .await
             .iter()
-            .all(|a| !alert_state::is_active(&a.state)),
+            .all(|a| !a.state.is_active()),
         "re-enabling reopens nothing"
     );
     let unknown = AlertRuleId::from_ulid(1 << 100);

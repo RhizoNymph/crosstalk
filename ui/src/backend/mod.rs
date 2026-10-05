@@ -1,11 +1,12 @@
 //! The data source behind every page.
 //!
-//! Pages and data routes read through the spec's L8 traits,
+//! Pages and data routes read only through the spec's L8 traits,
 //! `crosstalk_spec::interfaces::l8_surface::{QueryApi, OperatorActions,
-//! LiveFeed}`, plus the two gaps in `crate::contract` (`present::Present`:
-//! the bucket width and the present; `formats::ExportFormats`: the export
-//! formats the backend writes) and the port-shaped channel reads of the
-//! channel-semantics stand-in (`crate::pending`).
+//! LiveFeed}`. The clock, bucket width, export formats and rule defaults
+//! are `QueryApi::present`, read once per request (`crate::app::present`).
+//! The one question that is not the spec's, where a default view ends, is
+//! [`AppBackend::view_end`]: the present's `now`, unless the fixture
+//! replays up to a fixed end.
 //!
 //! [`AppBackend`] is the configured backend, one of:
 //!
@@ -28,7 +29,6 @@
 //! `QueryError::Forbidden`; pages also check, to render the "content
 //! hidden" state instead of an error.
 
-pub mod alert_state;
 pub mod dispatch;
 pub mod fixture;
 #[cfg(feature = "live")]

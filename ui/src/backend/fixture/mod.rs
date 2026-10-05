@@ -10,8 +10,8 @@
 //!   every one; [`export`] plans and streams exports; [`live`] is the feed
 //!   of committed changes.
 //! - [`surface`] implements the spec's `QueryApi`, `OperatorActions` and
-//!   `LiveFeed`, and the contract gaps `Present` and `ExportFormats`, over
-//!   them.
+//!   `LiveFeed` over them. [`FixtureBackend::view_end`] is the one thing
+//!   pages ask the fixture beside them: where a replay's default view ends.
 //!
 //! The scenarios the world contains are listed in `docs/features/ui.md`.
 
@@ -39,6 +39,8 @@ use std::sync::Arc;
 #[cfg(test)]
 use crosstalk_spec::ids::TransmissionId;
 use crosstalk_spec::interfaces::l8_surface::export::ExportLimits;
+use crosstalk_spec::interfaces::l8_surface::present::Present;
+use crosstalk_spec::support::Timestamp;
 use tokio::sync::RwLock;
 
 use super::Result;
@@ -60,6 +62,13 @@ pub struct FixtureBackend {
     feed: Arc<live::Feed>,
     /// Set in replay mode: what reads see and what the ticker reveals.
     replay: Option<replay::Replay>,
+    /// Set in replay mode: where a default view ends ([`Self::view_end`]).
+    replay_end: Option<Timestamp>,
+    /// How many times `QueryApi::present` was read, for tests that check
+    /// a request reads it once. Shared, so a test keeps it after handing
+    /// the backend to a router.
+    #[cfg(test)]
+    present_reads: Arc<std::sync::atomic::AtomicUsize>,
 }
 
 impl FixtureBackend {
@@ -105,6 +114,11 @@ impl FixtureBackend {
             clock::Clock::Replay { from, .. } => Some(replay::Replay::new(&world, &state, from)),
             clock::Clock::Fixed | clock::Clock::Live { .. } => None,
         };
+        // A replay's data ends at `clock::NOW`; its default window runs a
+        // bucket past it, so the last bucket fills in as the replay reaches it.
+        let replay_end = clock
+            .cutoff()
+            .map(|_| clock::plus(clock.view_end(), clock::BUCKET.as_micros().get()));
         Ok(Self {
             world,
             state: Arc::new(RwLock::new(state)),
@@ -113,7 +127,24 @@ impl FixtureBackend {
                 live::config().map_err(|e| GenError::invalid("live config", e))?,
             )),
             replay,
+            replay_end,
+            #[cfg(test)]
+            present_reads: Arc::default(),
         })
+    }
+
+    /// Where a default view's window ends, given the present the request
+    /// read: one bucket past the end of the data in replay mode, so a
+    /// replay fills the default window in; `present.now` otherwise.
+    pub fn view_end(&self, present: &Present) -> Timestamp {
+        self.replay_end.unwrap_or(present.now)
+    }
+
+    /// The count of `QueryApi::present` reads, which follows the backend
+    /// into a router.
+    #[cfg(test)]
+    pub fn present_reads(&self) -> Arc<std::sync::atomic::AtomicUsize> {
+        Arc::clone(&self.present_reads)
     }
 
     /// The same world with a new feed under other limits.
@@ -130,6 +161,15 @@ impl FixtureBackend {
     #[cfg(test)]
     pub fn feed_epoch(&self) -> crosstalk_spec::interfaces::l8_surface::live::FeedEpoch {
         self.feed.epoch()
+    }
+
+    /// The same world with another configured default remap threshold
+    /// (`AlertRuleConfig::default_remap_threshold`), which the present
+    /// reports and `CreateRule` fills a missing threshold with.
+    #[cfg(test)]
+    pub fn with_default_remap(mut self, threshold: crosstalk_spec::support::Similarity) -> Self {
+        self.world.rule_config.default_remap_threshold = threshold;
+        self
     }
 
     /// The same world with another `export.max_rows`.

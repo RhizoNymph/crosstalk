@@ -8,7 +8,7 @@ use crosstalk_spec::aggregates::alert::{RuleName, UserRule, WatchedTopics};
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::ids::TopicId;
 use crosstalk_spec::support::InvalidQueryText;
-use crosstalk_spec::support::{InvalidText, NonEmpty};
+use crosstalk_spec::support::{InvalidText, NonEmpty, Similarity};
 use topcoat::Result;
 use topcoat::view::{View, component, view};
 
@@ -19,7 +19,6 @@ use crate::pages::common::form::{FormFields, invalid, required, similarity};
 use crate::url::ulid::UlidId;
 use crosstalk_spec::ids::SinkId;
 
-pub const DEFAULT_REMAP: &str = "0.80";
 pub const DEFAULT_SEMANTIC: &str = "0.75";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -158,10 +157,12 @@ pub struct Values {
 }
 
 impl Values {
-    pub fn defaults(kind: RuleKindChoice) -> Self {
+    /// A new rule's values: empty, but for the threshold, a watched-topic
+    /// rule's `remap` (the present's default) or the semantic default.
+    pub fn defaults(kind: RuleKindChoice, remap: Similarity) -> Self {
         Self {
             threshold: match kind {
-                RuleKindChoice::Watched => DEFAULT_REMAP.to_owned(),
+                RuleKindChoice::Watched => format!("{:.2}", remap.get()),
                 RuleKindChoice::Semantic => DEFAULT_SEMANTIC.to_owned(),
             },
             ..Self::default()
