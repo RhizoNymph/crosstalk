@@ -501,6 +501,15 @@ feeder reads through it. `PgProvenanceStore` does not yet.
   originated spans and self-relays, so a forward through a file write
   carries no forwarded span (a forward through a message tool's result is
   matched directly); whether writes should carry forwards is L5's call.
+- **wiki `--demo` "decoded" misses were not a decode-path bug.** At
+  b0bd046 the live detector missed 63 `Decoded([JsonString])` wiki labels
+  (`dse/BridgeLAProd1782007689`). Every one was a reread: the reader had
+  read the same revision's lines on that page at an earlier edit, and
+  that first read was found. L5 folds a reread into the first delivery
+  (INV-1122). The labels are `Decoded([JsonString])` only because a run of
+  several lines holds a newline, which the writer's `POST` arguments
+  escape; the tool-argument view already undoes that. The eval now labels
+  rereads as controls (eval.md, collusion-wiki labels). No L4 change.
 - **Short spans** take only whole values. A short originated piece that is
   not a whole value (a remainder) is matched only through context
   k-grams; one that sits next to no posted span has no posting.

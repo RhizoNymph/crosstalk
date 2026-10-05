@@ -7,6 +7,17 @@
 //! whose inserted lines survive into the body a reader read, and a
 //! ReaderOutput relay when a reader's own edit quotes such a line verbatim.
 //!
+//! **Rereads.** A reader that edits a page again reads it again, and the
+//! body still holds lines it already received in an earlier read. A run of
+//! lines from a revision whose lines this reader already read on this page
+//! is a [`NegativeReason::Reread`] control at the later read, not another
+//! transmission: the transmission is at the first read
+//! (`flow.correlator.reread-refreshes-delivery`, INV-1122, keys a
+//! delivery on the sender's span and the reader; the swarm truth labels
+//! rereads the same way). Several runs of one revision in one read are all
+//! transmissions; a revision's lines count as received once that read's
+//! labels are emitted.
+//!
 //! **The shape of a harness.** Each agent is one conversation that only
 //! grows: every request is the agent's previous request, its previous
 //! response, and the new inputs, so L3 threads an agent's exchanges into
@@ -56,8 +67,8 @@ use crate::keys::{AgentKey, DatasetId, SourceRef, WorldKey};
 use crate::location::location;
 use crate::truth::kinds::json_escapes;
 use crate::truth::{
-    CarrierKind, Expectation, ExpectedContent, ExpectedTransmission, MatchNeed, RouteExpectation,
-    Tier, TransmissionLabel,
+    CarrierKind, Expectation, ExpectedContent, ExpectedTransmission, MatchNeed, NegativeControl,
+    NegativeLabel, NegativeReason, RouteExpectation, Tier, TransmissionLabel,
 };
 
 /// The shortest labelled content, in bytes: matches the reference matcher's
@@ -92,7 +103,8 @@ pub fn world(key: WorldKey, revs: &[&Revision], pace: Pace) -> Result<World, Wik
         records.insert(rev.rev_id.as_str(), record);
     }
 
-    // Pass 2: labels.
+    // Pass 2: labels, in revision (so read) order.
+    let mut received = Received::default();
     for rev in revs {
         let (page, li) = pages.locate(rev);
         let Some(record) = records.get(rev.rev_id.as_str()) else {
@@ -100,7 +112,17 @@ pub fn world(key: WorldKey, revs: &[&Revision], pace: Pace) -> Result<World, Wik
         };
         if let Some(read) = &record.read {
             let prev = page.revs[li - 1];
-            channel_labels(&mut builder, &key, rev, prev, page, li, read, &records)?;
+            channel_labels(
+                &mut builder,
+                &key,
+                rev,
+                prev,
+                page,
+                li,
+                read,
+                &records,
+                &mut received,
+            )?;
             relay_labels(&mut builder, &key, rev, prev, page, li, record, &records)?;
         }
     }
@@ -365,6 +387,25 @@ fn inserted_text(body: &str, source: &[usize], own: usize) -> String {
         .join("\n")
 }
 
+/// Which revisions' lines each reader has read on each page: (reader
+/// identity, page id, source revision id).
+#[derive(Default)]
+struct Received(BTreeSet<(String, String, String)>);
+
+impl Received {
+    fn key(reader: &str, page: &Revision, source: &Revision) -> (String, String, String) {
+        (
+            reader.to_owned(),
+            page.page_id.clone(),
+            source.rev_id.clone(),
+        )
+    }
+
+    fn contains(&self, reader: &str, page: &Revision, source: &Revision) -> bool {
+        self.0.contains(&Self::key(reader, page, source))
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 fn channel_labels(
     builder: &mut WorldBuilder,
@@ -375,6 +416,7 @@ fn channel_labels(
     li: usize,
     read: &ReadRecord,
     records: &BTreeMap<&str, RevRecord>,
+    received: &mut Received,
 ) -> Result<(), WikiError> {
     let reader_id = rev.identity();
     let body_prev = &prev.body;
@@ -383,6 +425,7 @@ fn channel_labels(
     let Some(resource) = page_locator(&rev.wiki, &rev.name) else {
         return Ok(());
     };
+    let mut read_now = Vec::new();
     for run in runs(prev_sources) {
         let author = page.revs[run.source];
         if author.identity() == reader_id {
@@ -396,6 +439,26 @@ fn channel_labels(
             continue;
         }
         let at = location(read.result_hash, 0, start, end)?;
+        let source = SourceRef::new(
+            REVISIONS_FILE,
+            format!("/rev/{}/read/run/{}", rev.rev_id, run.from),
+        );
+        if received.contains(&reader_id, rev, author) {
+            let control = NegativeControl::new(NegativeLabel {
+                from: AgentKey::new(world.clone(), author.identity()),
+                to: AgentKey::new(world.clone(), reader_id.clone()),
+                reader_exchange: Some(read.exchange),
+                at: Some(at),
+                origin: None,
+                text: Some(text.to_owned()),
+                reason: NegativeReason::Reread,
+                tier: Tier::Heuristic,
+                source,
+            })?;
+            builder.expect(Expectation::NoTransmission(control));
+            continue;
+        }
+        read_now.push(Received::key(&reader_id, rev, author));
         let sender_exchange = records
             .get(author.rev_id.as_str())
             .map(|record| record.edit.exchange);
@@ -415,13 +478,11 @@ fn channel_labels(
             },
             needs,
             tier: Tier::Heuristic,
-            source: SourceRef::new(
-                REVISIONS_FILE,
-                format!("/rev/{}/read/run/{}", rev.rev_id, run.from),
-            ),
+            source,
         };
         builder.expect(Expectation::Transmission(ExpectedTransmission::new(label)?));
     }
+    received.0.extend(read_now);
     Ok(())
 }
 
