@@ -14,6 +14,14 @@
 //! Thin by design: every rule lives in `crosstalk-surface` and the stores;
 //! this module only builds them and relays what the stores publish to the
 //! two consumers the surface needs (in a gateway, bus consumer groups do).
+//!
+//! [`InProcess::start`] builds its own [`Backbone`]: an in-memory blob
+//! store, a bus, and an outbox whose receiver is the relay's input. A
+//! composer that runs the layers too (`crosstalk_gateway::live::Live`)
+//! calls [`InProcess::start_with`] with its own: its bus and blob store,
+//! an outbox it forwards onto that bus, and a relay input fed from a bus
+//! subscription, so the node facts and the live feed see every event on
+//! the bus, not only the stores' own.
 
 mod stores;
 
@@ -40,6 +48,7 @@ use crosstalk_spec::aggregates::topic::EmbeddingModel;
 use crosstalk_spec::derived::flow::timing::CorrelationTiming;
 use crosstalk_spec::events::BusEvent;
 use crosstalk_spec::ids::{ConfigHash, SeededRandom};
+use crosstalk_spec::interfaces::l2_transport::BlobStore;
 use crosstalk_spec::interfaces::l6_analysis::lifecycle::TopicLifecycleError;
 use crosstalk_spec::interfaces::l8_surface::Caller;
 use crosstalk_spec::interfaces::l8_surface::live::FeedEpoch;
@@ -47,7 +56,7 @@ use crosstalk_spec::interfaces::l8_surface::operators::{
     AccessConfig, CallerError, OperatorLoadError, OperatorStore, RequestIdentity,
 };
 use crosstalk_spec::support::{Blake3, Clock, Similarity};
-use crosstalk_surface::export::SpecExportSource;
+use crosstalk_surface::export::{SpecExportSource, StoredTransmissions};
 use crosstalk_surface::live::{FeedClosed, FeedHandle, FeedWriter};
 use crosstalk_surface::nodes::{NodeCache, NodeFeedError, NodeFeeder};
 use crosstalk_surface::{Surface, SurfaceConfig};
@@ -101,23 +110,70 @@ pub enum InProcessError {
     Feed(FeedClosed),
 }
 
+/// What the stores run over, supplied by whoever hosts them.
+pub struct Backbone<B> {
+    /// The bus the surface reads depths and dead letters from.
+    pub bus: MpscBus,
+    /// Where bodies are stored, and evidence excerpts cut from.
+    pub blobs: B,
+    /// Every store publishes into it.
+    pub outbox: Outbox,
+    /// What the relay hands to the node facts and the live feed, in order:
+    /// the outbox's own receiver when nothing else consumes the stores'
+    /// events, or a bus subscription's events when the outbox is
+    /// forwarded onto the bus.
+    pub events: UnboundedReceiver<BusEvent>,
+}
+
+impl Backbone<MemoryBlobStore> {
+    /// A backbone of its own: a fresh bus and in-memory blob store, and the
+    /// outbox relayed straight to the surface.
+    pub fn standalone() -> Result<Self, InProcessError> {
+        let (outbox, events) = Outbox::channel();
+        Ok(Self {
+            bus: MpscBus::start(BusConfig::default()).map_err(InProcessError::Bus)?,
+            blobs: MemoryBlobStore::new(),
+            outbox,
+            events,
+        })
+    }
+}
+
 /// The surface over the reference stores, and handles on both.
-pub struct InProcess {
+pub struct InProcess<B = MemoryBlobStore> {
     /// The stores: seed the world through the spec's write traits on them.
-    pub stores: MemoryStores,
+    pub stores: MemoryStores<B>,
     /// The surface: `QueryApi`, `OperatorActions` and `LiveFeed`.
-    pub surface: Arc<Surface<MemoryStores>>,
+    pub surface: Arc<Surface<MemoryStores<B>>>,
     /// Keeps the graphs' node facts current; the relay feeds it.
     pub nodes: NodeFeeder<MemoryAgents, MemoryChannels<MemoryAgents>>,
     relay: JoinHandle<()>,
 }
 
-impl InProcess {
-    /// Build every store, load `options.access`, rebuild the node facts,
-    /// start the live feed and the relay, and build the surface. Needs a
-    /// tokio runtime.
+impl InProcess<MemoryBlobStore> {
+    /// [`InProcess::start_with`] over a [`Backbone::standalone`].
     pub async fn start(options: InProcessOptions) -> Result<Self, InProcessError> {
-        let (outbox, published) = Outbox::channel();
+        Self::start_with(options, Backbone::standalone()?).await
+    }
+}
+
+impl<B> InProcess<B>
+where
+    B: BlobStore + Clone + Send + Sync + 'static,
+{
+    /// Build every store over `backbone`, load `options.access`, rebuild
+    /// the node facts, start the live feed and the relay, and build the
+    /// surface. Needs a tokio runtime.
+    pub async fn start_with(
+        options: InProcessOptions,
+        backbone: Backbone<B>,
+    ) -> Result<Self, InProcessError> {
+        let Backbone {
+            bus,
+            blobs,
+            outbox,
+            events: published,
+        } = backbone;
         let started = options.clock.now();
         let agents = MemoryAgents::new(IdSequence::new(1 << 90), outbox.clone());
         let channels =
@@ -126,7 +182,8 @@ impl InProcess {
             agents: agents.clone(),
             channels: channels.clone(),
         };
-        let transmissions = MemoryVerdicts::new(outbox.clone());
+        let transmissions =
+            MemoryVerdicts::with_directories(directory.clone(), directory.clone(), outbox.clone());
         let catalog = InMemoryTopicCatalog::new(
             CatalogConfig {
                 retention: options.retention,
@@ -174,20 +231,23 @@ impl InProcess {
             },
             Env {
                 topics: catalog.clone(),
-                directory,
+                directory: directory.clone(),
                 nodes: nodes.clone(),
             },
             outbox.clone(),
         );
         let audit = InMemoryAuditLog::new();
         let operators = InMemoryOperatorStore::new(audit.clone(), IdSequence::new(3 << 90));
-        let bus = MpscBus::start(BusConfig::default()).map_err(InProcessError::Bus)?;
         let export = SpecExportSource::new(
             edges.clone(),
             projections.clone(),
             catalog.clone(),
             embedder.clone(),
-        );
+        )
+        .with_transmissions(StoredTransmissions::new(
+            transmissions.clone(),
+            directory.clone(),
+        ));
         let stores = MemoryStores {
             agents,
             channels,
@@ -203,7 +263,7 @@ impl InProcess {
             sinks: InMemorySinkRegistry::new(options.sinks.clone()),
             dead_letters: bus.dead_letters(),
             bus,
-            blobs: MemoryBlobStore::new(),
+            blobs,
             evidence: MemoryEvidence::default(),
             export,
             nodes,

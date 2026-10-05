@@ -376,6 +376,17 @@ impl TransmissionStore for Flaky {
     ) -> Result<Option<Transmission>, TransmissionStoreError> {
         self.inner.transmission(id).await
     }
+
+    async fn list(
+        &self,
+        query: &crosstalk_spec::interfaces::l5_flow::transmissions::TransmissionQuery,
+        page: &crosstalk_spec::paging::PageRequest<crosstalk_spec::paging::TransmissionList>,
+    ) -> Result<
+        crosstalk_spec::paging::Page<Transmission, crosstalk_spec::paging::TransmissionList>,
+        TransmissionStoreError,
+    > {
+        self.inner.list(query, page).await
+    }
 }
 
 /// A failed save waits at the head of the queue and is retried with the

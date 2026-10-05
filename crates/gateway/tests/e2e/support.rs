@@ -96,6 +96,7 @@ pub async fn start(upstream_base: &str, options: Options) -> TestGateway {
         .expect("the gateway starts");
     let observer = running
         .bus()
+        .expect("role all runs a live process")
         .subscribe(
             &[Subject::ExchangeCaptured],
             ConsumerGroup("e2e-observer".to_owned()),

@@ -1,98 +1,114 @@
-//! The composition the smoke runs against: a pipeline and a surface over
-//! one set of stores, in this process.
-//!
-//! [`Composition`] has the shape `crosstalk_gateway::live::Live` is
-//! announced with (`pipeline`, `stores`, `surface`). Until `Live` exists it
-//! is wired here from what is merged:
+//! The composition the smoke runs against: `crosstalk_gateway::live::Live`,
+//! the pipeline, the layer consumers and the surface over one set of
+//! stores, in this process, on a clock the harness moves.
 //!
 //! ```text
-//! InProcess::start ─▶ MemoryStores (blobs, bus, agents, channels, edges, …) ─▶ Surface
-//!                        │ blobs.clone(), bus.clone()
-//!                        ▼
-//!                 Pipeline::build(Deps::stores(..)) ─ ingest ─▶ ExchangeCaptured on that bus
+//! feed ─ ingest(exchange, at) ─▶ Live::pipeline ─▶ blobs + ExchangeCaptured on the bus
+//!                                    bus ─▶ L3 ▶ L4 ▶ L5 ▶ L6 ▶ L7 stages ─▶ LiveStores ─▶ Surface
 //! ```
 //!
-//! The pipeline stores bodies in the surface's blob store and publishes on
-//! the surface's bus, so the evidence page can cut excerpts from what the
-//! pipeline stored. No L3 to L7 consumer subscribes yet: what the pipeline
-//! publishes stops at the bus. **When `Live::start` lands, [`compose`] is
-//! the one place to change**: build through it and keep the fields.
+//! A slot whose layer crate has no consumer yet does not run (see
+//! `Live::filled`), so what the pipeline publishes stops where the first
+//! missing stage would take it.
 
 use std::sync::Arc;
+use std::time::Duration;
 
-use crosstalk_api::{InProcess, InProcessError, InProcessOptions, MemoryStores};
-use crosstalk_gateway::pipeline::{BuildError, Deps, Pipeline, Settings};
+use crosstalk_gateway::live::{
+    BlobConfig, Live, LiveClock, LiveConfig, LiveError, LivePipeline, LiveStores, Ticking,
+};
+use crosstalk_gateway::pipeline::Settings;
 use crosstalk_memory::support::ManualClock;
-use crosstalk_spec::ids::SeededRandom;
+use crosstalk_provenance::config::ProvenanceConfig;
 use crosstalk_spec::interfaces::l8_surface::Caller;
 use crosstalk_spec::interfaces::l8_surface::operators::{CallerError, RequestIdentity};
 use crosstalk_spec::support::Timestamp;
 use crosstalk_surface::Surface;
-use crosstalk_transport::MpscBus;
-use crosstalk_transport::blob::MemoryBlobStore;
+use crosstalk_transport::BusConfig;
 
 use crate::options;
 
 /// The pipeline the composition ingests through.
-pub type E2ePipeline = Pipeline<MemoryBlobStore, MpscBus>;
+pub type E2ePipeline = LivePipeline;
+
+/// How long shutdown waits for the stages to drain.
+const DRAIN: Duration = Duration::from_secs(5);
 
 /// Why the composition did not start.
 #[derive(Debug, thiserror::Error)]
 pub enum ComposeError {
     #[error("the options are invalid: {0}")]
     Options(#[from] options::OptionsError),
-    #[error("the in-process surface did not start: {0}")]
-    Surface(#[from] InProcessError),
-    #[error("the pipeline did not build: {0}")]
-    Pipeline(#[from] BuildError),
+    #[error("the live process did not start: {0}")]
+    Live(#[from] LiveError),
     #[error("no caller for the trusted operator: {0:?}")]
     Caller(CallerError),
 }
 
-/// A pipeline and a surface over one set of stores.
+/// A live process, and handles on its parts.
 pub struct Composition {
     /// Where captured traffic enters (`Pipeline::ingest`).
-    pub pipeline: E2ePipeline,
-    /// The stores both sides share.
-    pub stores: MemoryStores,
+    pub pipeline: Arc<E2ePipeline>,
+    /// The stores the stages and the surface share.
+    pub stores: LiveStores,
     /// The surface the UI reads through.
-    pub surface: Arc<Surface<MemoryStores>>,
+    pub surface: Arc<Surface<LiveStores>>,
     /// The clock every stage reads; the harness moves it.
     pub clock: ManualClock,
     /// The trusted operator every query is made as.
     pub caller: Caller,
-    backend: InProcess,
+    live: Live,
 }
 
-/// Build the composition with its clock at `start`.
+/// Build the composition with its clock at `start`, ticking periodically
+/// (the smoke polls the surface).
 pub async fn compose(start: Timestamp) -> Result<Composition, ComposeError> {
+    compose_with(start, Ticking::Periodic).await
+}
+
+/// Build the composition with its clock at `start`, ticking as `ticking`
+/// says: `Ticking::OnSettle` for a run driven by `Live::settle`.
+pub async fn compose_with(start: Timestamp, ticking: Ticking) -> Result<Composition, ComposeError> {
     let clock = ManualClock::at(start);
-    let options: InProcessOptions = options::in_process(clock.clone())?;
-    let backend = InProcess::start(options).await?;
-    let caller = backend
+    let live = Live::start(LiveConfig {
+        surface: options::in_process(clock.clone())?,
+        clock: LiveClock::Manual(clock.clone()),
+        blobs: BlobConfig::Memory,
+        bus: BusConfig::default(),
+        pipeline: Settings::default(),
+        flow: options::flow()?,
+        provenance: ProvenanceConfig::default(),
+        ticking,
+        seed: 0xE2E,
+        capture: None,
+        exchange_log: None,
+    })
+    .await?;
+    let caller = live
         .caller(RequestIdentity::Anonymous)
         .await
         .map_err(ComposeError::Caller)?;
-    let deps = Deps::stores(
-        backend.stores.blobs.clone(),
-        backend.stores.bus.clone(),
-        SeededRandom::new(0xE2E),
-    );
-    let pipeline = Pipeline::build(Settings::default(), deps, Arc::new(clock.clone())).await?;
     Ok(Composition {
-        pipeline,
-        stores: backend.stores.clone(),
-        surface: Arc::clone(&backend.surface),
+        pipeline: Arc::clone(live.pipeline()),
+        stores: live.stores().clone(),
+        surface: Arc::clone(live.surface()),
         clock,
         caller,
-        backend,
+        live,
     })
 }
 
 impl Composition {
-    /// Stop the surface's relay and live feed, and the bus.
+    /// The live process itself.
+    pub fn live(&self) -> &Live {
+        &self.live
+    }
+
+    /// Drain the stages, then stop the bus, the surface's relay and the
+    /// live feed.
     pub async fn shutdown(self) {
-        self.stores.bus.shutdown().await;
-        self.backend.shutdown().await;
+        self.live
+            .shutdown(tokio::time::Instant::now() + DRAIN)
+            .await;
     }
 }

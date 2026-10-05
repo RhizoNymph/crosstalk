@@ -2,15 +2,17 @@
 //!
 //! | Role | Runs |
 //! | --- | --- |
-//! | `all` | everything below that exists |
-//! | `proxy` | the reverse proxy and the capture stage (L0 and L1: normalize, store bodies, publish `ExchangeCaptured`) |
-//! | `pipeline` | the bus consumers: today the exchange log (the P3 stopgap); L3 to L7 later |
-//! | `api` | the L8 HTTP binding: not built yet (P7.1), so nothing |
+//! | `all` | everything below that exists: the proxy feeding a [`Live`](crate::live::Live) process, the exchange log, the HTTP API |
+//! | `proxy` | the reverse proxy and the capture stage (L0 and L1: normalize, store bodies, publish `ExchangeCaptured`) into its own `Live` |
+//! | `pipeline` | a `Live` process (L3 to L7 over the memory stores) and the exchange log (the P3 stopgap) |
+//! | `api` | a `Live` process and the L8 HTTP binding on `api.listen` over its surface |
 //! | `analysis` | L6 analysis: not built yet (P6), so nothing |
 //!
-//! Every role serves the ops listener. The bus is in-process until the
-//! cross-node bus (P9), so a `proxy` process and a `pipeline` process do
-//! not reach each other yet: only `all` captures and logs end to end.
+//! Every role serves the ops listener, and every role but `analysis` runs a
+//! `Live` process. The bus and the stores are in-process until the
+//! cross-node bus (P9) and the Postgres stores are wired, so processes of
+//! different roles do not reach each other: only `all` captures, detects
+//! and serves what it detected end to end.
 
 use std::fmt;
 use std::str::FromStr;
@@ -63,22 +65,29 @@ impl Role {
         matches!(self, Self::All | Self::Proxy)
     }
 
-    /// Whether this process runs the bus consumers (the exchange log).
+    /// Whether this process keeps the exchange log.
     pub fn runs_pipeline(self) -> bool {
         matches!(self, Self::All | Self::Pipeline)
+    }
+
+    /// Whether this process runs a `Live` process (the layer consumers and
+    /// the surface over the memory stores).
+    pub fn runs_live(self) -> bool {
+        !matches!(self, Self::Analysis)
+    }
+
+    /// Whether this process serves the HTTP API (when `api` is
+    /// configured).
+    pub fn runs_api(self) -> bool {
+        matches!(self, Self::All | Self::Api)
     }
 
     /// What this role would run that does not exist yet, for the startup
     /// log.
     pub fn not_built(self) -> &'static [&'static str] {
         match self {
-            Self::All => &[
-                "api: the L8 HTTP binding (P7.1); api.listen is not bound",
-                "analysis: L6 (P6)",
-            ],
-            Self::Api => &["api: the L8 HTTP binding (P7.1); api.listen is not bound"],
-            Self::Analysis => &["analysis: L6 (P6)"],
-            Self::Proxy | Self::Pipeline => &[],
+            Self::All | Self::Analysis => &["analysis: L6 (P6)"],
+            Self::Proxy | Self::Pipeline | Self::Api => &[],
         }
     }
 }
@@ -111,7 +120,9 @@ mod tests {
         assert!(!Role::Pipeline.runs_proxy() && Role::Pipeline.runs_pipeline());
         for role in [Role::Api, Role::Analysis] {
             assert!(!role.runs_proxy() && !role.runs_pipeline());
-            assert!(!role.not_built().is_empty());
         }
+        // The API is built (P7.1): only analysis is still missing.
+        assert!(Role::Api.not_built().is_empty() && Role::Api.runs_api());
+        assert!(!Role::Analysis.not_built().is_empty() && !Role::Analysis.runs_live());
     }
 }

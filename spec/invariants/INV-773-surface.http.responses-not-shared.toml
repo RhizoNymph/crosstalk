@@ -12,7 +12,7 @@ caching, and only in the requesting browser.
 """
 
 [evidence]
-integration = "crosstalk_api::integration::responses_are_not_stored_by_shared_caches"
+integration = "crosstalk_api::http::integration::routes::responses_are_not_stored_by_shared_caches"
 
 [evidence-review]
-integration = { agent = "false", human = "false" }
+integration = { agent = "true", human = "false" }

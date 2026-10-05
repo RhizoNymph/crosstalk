@@ -44,7 +44,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
-pub use self::ingest::{IngestError, Ingester};
+pub use self::ingest::{IngestError, Ingester, PublishError};
 pub use self::stats::{PipelineCounts, PipelineStats, PutRetry};
 use crate::capture::CaptureStage;
 use crate::config::GatewayConfig;

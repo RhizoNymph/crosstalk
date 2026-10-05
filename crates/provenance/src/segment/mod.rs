@@ -16,7 +16,14 @@
 //! 3. Text copied from a server tool's result in the same output (a web
 //!    fetch the provider ran) is no one's: it gets no span.
 //! 4. Every remaining stretch, trimmed of surrounding whitespace, is a
-//!    candidate `Originated` span, kept when it has at least one k-gram
+//!    candidate `Originated` span. In a tool call's arguments (valid JSON)
+//!    a stretch is first cut to the string values it covers
+//!    ([`string_values`]), so an originated span never holds a key, a
+//!    quote or the structure, and its view is what the tool wrote
+//!    (`provenance.span.tool-arguments-per-value`). A value directly under
+//!    a locator key (`ProvenanceConfig::locator_keys`: a path or a URL the
+//!    call acts on) is left out entirely (`provenance.span.locator-arguments-excluded`).
+//!    It is kept when it has at least one k-gram
 //!    (shorter text can never be matched).
 //!    None of its k-grams occurs in any input layer, so it shares no
 //!    fingerprint with the inputs (`provenance.span.originated-absent-from-inputs`).
@@ -39,7 +46,8 @@ use crosstalk_spec::observed::message::{Message, PartRef};
 use crosstalk_spec::support::ByteRange;
 
 pub use self::coverage::{Coverage, MessageKGrams, Occurrence, message_kgrams};
-pub use self::view::{PartKind, TextPart, text_parts, view};
+pub use self::view::{PartKind, TextPart, keyed_string_values, string_values, text_parts, view};
+use crate::config::LocatorKeys;
 use crate::decode::DecodePipeline;
 use crate::fingerprint::{KGram, Winnowing};
 use crate::text::{MappedText, normalize, trim_range};
@@ -49,6 +57,7 @@ use crate::text::{MappedText, normalize, trim_range};
 pub struct NovelRunSegmenter {
     winnowing: Winnowing,
     pipeline: DecodePipeline,
+    locator_keys: LocatorKeys,
 }
 
 /// A run of consecutive output k-grams found consecutively in one input
@@ -63,11 +72,20 @@ pub struct Run {
 }
 
 impl NovelRunSegmenter {
+    /// A segmenter with the default locator keys.
     pub fn new(winnowing: Winnowing, pipeline: DecodePipeline) -> Self {
         Self {
             winnowing,
             pipeline,
+            locator_keys: LocatorKeys::default(),
         }
+    }
+
+    /// This segmenter with other locator keys: string values directly under
+    /// them yield no originated span.
+    pub fn with_locator_keys(mut self, locator_keys: LocatorKeys) -> Self {
+        self.locator_keys = locator_keys;
+        self
     }
 
     pub fn winnowing(&self) -> &Winnowing {
@@ -150,7 +168,21 @@ impl NovelRunSegmenter {
             let (start, end) = run_bytes(&seen, &kgrams, run);
             covered.push((start, end));
         }
-        for (start, end) in gaps(&mut covered, text_len) {
+        let mut novel = gaps(&mut covered, text_len);
+        if part.kind == PartKind::ToolArguments
+            && let Some(values) = keyed_string_values(&part.text)
+        {
+            let content: Vec<(u32, u32)> = values
+                .into_iter()
+                .filter(|(key, _)| {
+                    key.as_deref()
+                        .is_none_or(|key| !self.locator_keys.contains(key))
+                })
+                .map(|(_, range)| range)
+                .collect();
+            novel = within(&novel, &content);
+        }
+        for (start, end) in novel {
             let Some((start, end)) = trim_range(&part.text, start, end) else {
                 continue;
             };
@@ -246,6 +278,22 @@ pub fn runs(kgrams: &[KGram], coverage: &Coverage) -> Vec<Run> {
         index += 1;
     }
     runs
+}
+
+/// The parts of `gaps` inside one of `values`: each gap cut at the value
+/// boundaries, in order.
+fn within(gaps: &[(u32, u32)], values: &[(u32, u32)]) -> Vec<(u32, u32)> {
+    let mut cut = Vec::new();
+    for &(gap_start, gap_end) in gaps {
+        for &(value_start, value_end) in values {
+            let start = gap_start.max(value_start);
+            let end = gap_end.min(value_end);
+            if start < end {
+                cut.push((start, end));
+            }
+        }
+    }
+    cut
 }
 
 /// The stretches of `0..len` no interval in `covered` touches.

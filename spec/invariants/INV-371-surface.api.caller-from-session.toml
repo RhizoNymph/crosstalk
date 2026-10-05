@@ -29,9 +29,9 @@ unit = [
     "crosstalk_spec::tests::wire::http::auth::authenticated_mode_answers_401_without_a_caller",
     "crosstalk_spec::tests::wire::http::auth::trusted_mode_ignores_the_credential",
 ]
-integration = "crosstalk_api::integration::forged_operator_field_has_no_effect"
+integration = "crosstalk_api::http::integration::auth::forged_operator_field_has_no_effect"
 
 [evidence-review]
 type = { agent = "true", human = "false" }
 unit = { agent = "true", human = "false" }
-integration = { agent = "false", human = "false" }
+integration = { agent = "true", human = "false" }

@@ -11,7 +11,8 @@
 //! | accesses | `EdgeStore::channel_topology` of each bucket of the settled window |
 //! | edges | `EdgeStore::graph` of each bucket, once per topic of the version (one-topic filters), outliers as the rest |
 //! | topics | `EdgeStore::totals` of the settled window under a one-topic filter, per topic |
-//! | transmissions, verdicts | refused: no spec trait lists the transmissions of a window |
+//! | transmissions | the [`TransmissionSource`] given ([`StoredTransmissions`]: `TransmissionStore::list`, rows as `transmissions_by_id` lists them, no content columns); refused by default ([`NoTransmissions`]) |
+//! | verdicts | the same [`TransmissionSource`]: [`StoredTransmissions`] gives `verdict_rows` of every judgeable transmission opened in the settled window; refused by default |
 //!
 //! Every row is read when the export is planned (the count must be known
 //! first anyway), so a store change while it streams changes nothing sent.
@@ -43,6 +44,10 @@ use crosstalk_spec::interfaces::l8_surface::export::{
 use crosstalk_spec::paging::{PageRequest, PageSize};
 use crosstalk_spec::support::{TimeWindow, Timestamp, Watermark};
 
+#[cfg(doc)]
+use super::transmissions::StoredTransmissions;
+use super::transmissions::{NoTransmissions, TransmissionSource};
+
 /// Rows read when the export was planned, handed out in key order.
 #[derive(Debug, Default)]
 pub struct PlannedRows(VecDeque<ExportRow>);
@@ -63,11 +68,12 @@ impl RowSource for PlannedRows {
 
 /// An `ExportSource` over the spec's read traits (module docs).
 #[derive(Debug, Clone)]
-pub struct SpecExportSource<E, P, T, M> {
+pub struct SpecExportSource<E, P, T, M, X = NoTransmissions> {
     edges: E,
     projections: P,
     topics: T,
     embedder: M,
+    transmissions: X,
 }
 
 fn store(reason: impl Into<String>) -> ExportPlanError {
@@ -136,9 +142,31 @@ where
             projections,
             topics,
             embedder,
+            transmissions: NoTransmissions,
         }
     }
+}
 
+impl<E, P, T, M, X> SpecExportSource<E, P, T, M, X> {
+    /// This source with `transmissions` serving the transmissions dataset.
+    pub fn with_transmissions<Y>(self, transmissions: Y) -> SpecExportSource<E, P, T, M, Y> {
+        SpecExportSource {
+            edges: self.edges,
+            projections: self.projections,
+            topics: self.topics,
+            embedder: self.embedder,
+            transmissions,
+        }
+    }
+}
+
+impl<E, P, T, M, X> SpecExportSource<E, P, T, M, X>
+where
+    E: EdgeStore + Send + Sync,
+    P: ProjectionStore + Send + Sync,
+    T: TopicCatalog + Send + Sync,
+    M: Embedder + Send + Sync,
+{
     async fn all_topics(&self, version: TopicModelVersion) -> Result<Vec<Topic>, ExportPlanError> {
         let size = PageSize::new(PageSize::MAX).map_err(|error| store(format!("{error:?}")))?;
         let mut request = PageRequest { size, after: None };
@@ -427,12 +455,13 @@ fn edge_key(from: AgentId, to: AgentId, route: &Route) -> EdgeKey {
     (from, to, bytes)
 }
 
-impl<E, P, T, M> ExportSource for SpecExportSource<E, P, T, M>
+impl<E, P, T, M, X> ExportSource for SpecExportSource<E, P, T, M, X>
 where
     E: EdgeStore + Send + Sync,
     P: ProjectionStore + Send + Sync,
     T: TopicCatalog + Send + Sync,
     M: Embedder + Send + Sync,
+    X: TransmissionSource,
 {
     type Rows = PlannedRows;
 
@@ -467,12 +496,19 @@ where
                 let rows = self.topic_rows(&filter, topics, settled, content).await?;
                 (scoped_basis(version, filter, settled), rows)
             }
-            ExportDataset::Transmissions(_) | ExportDataset::Verdicts(_) => {
-                return Err(store(format!(
-                    "a {:?} export needs a store that lists the transmissions of a window, \
-                     which no spec read trait does",
-                    request.dataset().kind()
-                )));
+            ExportDataset::Transmissions(scope) => {
+                let (version, _, filter) = self.scoped(scope).await?;
+                let settled = settled_window(scope.window, watermark);
+                let rows = self
+                    .transmissions
+                    .rows(&filter, version, settled, content)
+                    .await?;
+                (scoped_basis(version, filter, settled), rows)
+            }
+            ExportDataset::Verdicts(window) => {
+                let settled = settled_window(*window, watermark);
+                let rows = self.transmissions.verdict_rows(settled).await?;
+                (ExportBasis::Verdicts { settled }, rows)
             }
         };
         let count = u64::try_from(rows.len()).unwrap_or(u64::MAX);

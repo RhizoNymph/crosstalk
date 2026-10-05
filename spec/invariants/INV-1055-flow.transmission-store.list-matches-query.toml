@@ -1,0 +1,20 @@
+[invariant]
+id = "flow.transmission-store.list-matches-query"
+statement = "TransmissionStore::list returns exactly the stored transmissions TransmissionQuery::matches keeps (opened_at in the window, a listed state kind, a channel route resolving through ChannelDirectory to the query's channel), each as last saved, newest id first, each once across a traversal; a cursor presented with another query, or not issued by the store, is InvalidCursor."
+kind = "domain"
+property = "invariant"
+requires = ["property"]
+rationale = """
+Eval scores detection by reading every transmission a replay produced, in
+every state, and the review queue lists suspected transmissions across
+channels. One channel's traffic (ChannelReads::transmissions) and one id
+(TransmissionStore::transmission) do not cover either. Resolving the
+channel filter through the directory keeps a superseded channel's traffic
+with its successor, as every other reader counts it.
+"""
+
+[evidence]
+property = "crosstalk_memory::flow::verdicts::tests::list_returns_what_the_query_matches_newest_first"
+
+[evidence-review]
+property = { agent = "true", human = "false" }

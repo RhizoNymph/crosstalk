@@ -32,6 +32,7 @@ pub mod config;
 pub mod gateway;
 pub mod healthcheck;
 pub mod inspect;
+pub mod live;
 pub mod log;
 pub mod logging;
 pub mod normalize_failure;

@@ -10,7 +10,9 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
 
 use crosstalk_spec::ids::{AgentId, ConversationId, ExchangeId, MessageHash};
-use crosstalk_spec::interfaces::l3_reconstruction::{ThreadError, ThreadOutcome};
+use crosstalk_spec::interfaces::l3_reconstruction::{
+    ExchangePlacements, Placement, ThreadError, ThreadOutcome,
+};
 use crosstalk_spec::observed::conversation::{Conversation, ConversationOrigin};
 use tokio::sync::Mutex;
 
@@ -327,6 +329,13 @@ pub struct MemoryConversations {
 impl MemoryConversations {
     pub fn new() -> Self {
         Self::default()
+    }
+}
+
+impl ExchangePlacements for MemoryConversations {
+    async fn placement(&self, exchange: ExchangeId) -> Result<Option<Placement>, ThreadError> {
+        let state = self.state.lock().await;
+        Ok(state.records.get(&exchange).map(Placement::of))
     }
 }
 

@@ -80,7 +80,13 @@ Overview:
     Pipeline (build over any blob store, bus and injected clock), and a
     pre-normalized exchange enters it through Pipeline::ingest, the same
     path the capture stage takes after L1 (P3.1), so the eval harness can
-    drive the real layers under simulated time. crosstalk-eval is that
+    drive the real layers under simulated time. crosstalk_gateway::live::
+    Live composes every layer in one process over the memory stores: L3
+    reconstruct, L4 provenance with L5's extraction step, L5 flow, a
+    minimal L6 classifier and L7 topology as bus consumer slots, the store
+    outboxes forwarded onto the bus, and crosstalk-api's InProcess surface
+    over the same stores; Live::settle drives it deterministically to a
+    fixed point (gateway). crosstalk-eval is that
     harness (eval): it converts public multi-agent datasets (SALT-NLP
     first) into labelled corpora of spec NormalizedExchanges, scores a
     detector against the labels, and runs a naive reference matcher,
@@ -197,8 +203,10 @@ Overview:
     e2e: >
       Crate crosstalk-e2e (a composer): the end-to-end smoke harness. A
       scripted two-agent Claude Code scenario as wire traffic, captured
-      through L0 and L1, fed through Pipeline::ingest, and asserted through
-      the L8 surface; the scenario is reusable for demos.
+      through L0 and L1, fed through a gateway Live process (every layer
+      consuming the bus), and asserted through the L8 surface; two settled
+      runs give identical transmissions. The scenario is reusable for
+      demos.
     deploy: >
       deploy/ (outside the workspace): docker compose on one machine with
       Postgres, a migrate step, the crosstalk binary as --role all, the UI,
@@ -614,7 +622,9 @@ Features Index:
       each resource included), kept by NodeFeeder from L3's and L5's events
       and rebuilt from the stores on start. crosstalk-api's InProcess builds it over
       the reference stores with a relay from their outbox to the node
-      facts and the feed. The HTTP server (P7.1) is not part of it.
+      facts and the feed; InProcess::start_with takes a composer's own
+      Backbone (bus, blob store, outbox, relay input), which gateway's
+      Live uses to feed the relay from the bus. The HTTP server (P7.1) is http_server.
     entry_points:
       - crates/surface/src/lib.rs
       - crates/surface/src/service.rs
@@ -627,6 +637,51 @@ Features Index:
       - crates/api/src/in_process/mod.rs
     depends_on: [query_surface, read_models, export, channel_semantics, memory, transport, sim, testkit, workspace]
     doc: docs/features/surface_service.md
+  http_server:
+    description: >
+      crosstalk-api's HTTP server (roadmap P7.1): the http_api binding
+      served with axum 0.8 over any QueryApi + OperatorActions + LiveFeed.
+      The router is registered from Route::all(), and every request is
+      authenticated first (bearer token or session cookie, then the
+      operator directory on a watch channel), so even an unserved path
+      without a caller is a 401. Paths, queries and bodies are read with
+      the spec's readers and decode_request; id batches, selections,
+      excerpt windows and action requests go through their checked
+      constructors, with 422 for a refusal. Errors are answered with
+      their status and wire JSON. GET /live is SSE resumed from
+      Last-Event-ID or cursor, the projection frame is cached by its
+      BLAKE3 ETag, and POST /exports streams JSONL with the trailer last.
+      Every other response is no-store. HttpApi::new(surface, Auth,
+      HttpConfig).router() plus serve(bind(api.listen)) is what the
+      gateway's roles all and api mount over their Live process's surface,
+      the bearer token from api.token mapped to api.operator. Tested against a fake surface with
+      requests and responses from the wire goldens.
+    entry_points: [crates/api/src/http/mod.rs, crates/api/src/http/routes.rs]
+    depends_on: [http_api, query_surface, wire_contract]
+    doc: docs/features/http_server.md
+  http_client:
+    description: >
+      crosstalk-client (P7.2): HttpClient implements QueryApi,
+      OperatorActions and LiveFeed over the HTTP binding, so the UI's
+      server can use it in place of the in-process surface. Every call is
+      encoded with the binding's RequestBuilder for its Route (query
+      parameters form-encoded compact JSON, bodies the wire goldens) and
+      carries one Authorization: Bearer token; an error response is
+      decoded as the route's error and accepted only at the status the
+      binding gives it (401 is AuthError); the live feed is parsed as SSE,
+      checked frame by frame and reconnected with Last-Event-ID from the
+      last cursor delivered; a JSONL export is checked row by row with the
+      binding's ExportSealer and ends Complete only when the surface's
+      trailer verifies (download_export passes either format on as bytes);
+      a projection frame is checked against its BLAKE3 ETag and revalidated
+      with If-None-Match. Tested against a stub server speaking the binding.
+    entry_points:
+      - crates/client/src/client.rs
+      - crates/client/src/query.rs
+      - crates/client/src/live/mod.rs
+      - crates/client/src/export/mod.rs
+    depends_on: [http_api, wire_contract, export]
+    doc: docs/features/http_client.md
   store:
     description: >
       crosstalk-store, the Postgres infrastructure layer crates build on
@@ -1008,18 +1063,46 @@ Features Index:
       after L1. Envelope ids reach the bus in strictly increasing order
       under concurrent ingests. Every serve role builds one; the eval
       harness (crosstalk-eval, a composer) builds one over simulated
-      stores and time.
+      stores and time. live::Live is the whole detection path and the L8
+      surface in one process over the memory stores (what the UI hosts,
+      the e2e smoke drives and eval builds against): Live::start(LiveConfig
+      { surface, clock: LiveClock, blobs (memory or fs), bus, pipeline,
+      flow: FlowConfig (correlation_window_ms, evidence_window_ms,
+      suspected_ttl_ms, shards, tick_ms), provenance, ticking, seed,
+      capture }) fills one consumer slot per layer (L3
+      ReconstructConsumer; L4 Provenance then the extraction step feeding
+      L5 its Extracted inputs; L5 FlowConsumer on its own task; the
+      gateway's minimal L6 classifier; L7 topology::consumer::handle; an
+      evidence feeder; a surface relay), forwards the stores' outbox onto
+      the bus, and builds the surface with InProcess::start_with over the
+      same stores. Live::settle(until) moves a manual clock, ticks every
+      stage and drains every group until a pass changes nothing;
+      Live::stores and Live::layers expose TransmissionStore::list and
+      ExchangePlacements::placement for eval. Live advances the L7
+      watermark on each tick when the layer groups are empty (the spec's
+      Watermark::settled rule) and reports per-stage counts. serve runs a
+      Live process in every role but analysis (memory stores, wall clock,
+      periodic ticks every flow.tick_ms), feeds it from the proxy, and in
+      roles all and api mounts crosstalk-api's HttpApi on api.listen (bearer
+      token from api.token, mapped to api.operator, default admin, every
+      permission); the optional flow section configures L5's windows;
+      /readyz lists exchange_log, capture, live, proxy and api, and
+      /healthz has a live section (stage counts, watermark_micros).
     entry_points:
       - crates/gateway/src/main.rs
       - crates/gateway/src/gateway.rs
       - crates/gateway/src/pipeline/mod.rs
       - crates/gateway/src/pipeline/ingest.rs
+      - crates/gateway/src/live/mod.rs
+      - crates/gateway/src/live/settle.rs
+      - crates/gateway/src/live/wiring.rs
+      - crates/gateway/src/live/layers/l7.rs
       - crates/gateway/src/capture.rs
       - crates/gateway/src/config/mod.rs
       - crates/gateway/src/log/mod.rs
       - crates/gateway/src/ops/mod.rs
       - scripts/try-claude-code.sh
-    depends_on: [ingress, canonical, transport, store, workspace, sim, testkit]
+    depends_on: [ingress, canonical, transport, store, workspace, sim, testkit, memory, surface_service, http_server, reconstruct, provenance, flow_extract, flow_correlator, topology_store]
     doc: docs/features/gateway.md
   analysis:
     description: >
@@ -1361,7 +1444,8 @@ Features Index:
       normalizer into NormalizedExchanges, fed through Pipeline::ingest in
       time order, and read back only through QueryApi (agents by session,
       the A to B channel edge, the confirmed transmission, its evidence,
-      the discovered channel). The composition is shaped like
+      and the channel the cross-agent transmission created, dated by its
+      opening, listed and confirmed). The composition is shaped like
       crosstalk_gateway::live::Live and is wired today from InProcess plus
       a pipeline over its blob store and bus; the assertions needing L3 to
       L7 are ignored until Live composes them. The scenario and readers are

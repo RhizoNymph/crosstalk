@@ -120,7 +120,7 @@ pub enum TopicUnder {
 }
 
 /// Which state a transmission is in, without its data.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum TransmissionStateKind {
     Detected,
     AwaitingContent,

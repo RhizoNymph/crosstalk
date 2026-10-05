@@ -104,7 +104,7 @@ spec/types/
 │   ├── l0_ingress.rs      UpstreamRouter, ClientIdentifier (derivations at the exchange's start time), ProviderAdapter, HarnessRequest and BodyDecodeError (what capture decodes from a request body, in process; not the JSON wire's), ResponseHead, ResponseFramer, WebSocketTap
 │   ├── l1_canonical.rs    Normalizer, NormalizedExchange (with its media; check, applied on decode: InvalidNormalizedExchange; serde for goldens, in process only), NormalizeWarning
 │   ├── l2_transport.rs    EventBus, Subscription, RetryPolicy, ConsumerGroup (a WireRequest), DeadLetter, DeadLetterStore (list, replay), BlobStore (None: dropped by retention)
-│   ├── l3_reconstruction.rs IdentityResolver (merge, unmerge, rename, resolve over derived evidence), EvidenceDeriver, AgentDirectory, ClaimStore, Threader, ResolveError (incl. MergeIntoSelf)
+│   ├── l3_reconstruction.rs IdentityResolver (merge, unmerge, rename, resolve over derived evidence), EvidenceDeriver, AgentDirectory, ClaimStore, Threader, ExchangePlacements (placement by exchange), Placement, ResolveError (incl. MergeIntoSelf)
 │   ├── l3_reconstruction/
 │   │   ├── agents.rs      AgentReads (list, cluster, names), ActivityStore, AgentReadError
 │   │   └── lifecycle.rs   AgentLifecycle (create, advance, attach_evidence), NewAgent, AgentOrigin, Advance, AgentLifecycleError
@@ -112,7 +112,7 @@ spec/types/
 │   ├── l5_flow.rs         ResourceExtractor (ExtractedOp with write outcomes), ChannelLookup (NoChannel), OpensOn, Discovery, ChannelDirectory, ChannelRegistry (declare at a time, policy history, promote with supersession, promotion coverage, resource use), Correlator; write outcomes, shared upstream source; discovery on the first cross-agent transmission; detection follows resolution
 │   ├── l5_flow/
 │   │   ├── channels.rs    ChannelTraffic (add_resource on its lookup's channel or none, record_access, discover by a cross-agent transmission: publishes ChannelDiscovered, record_transmission, set_detection), DetectionUpdate, TrafficError; ChannelReads (a channel by id and filtered pages, newest created first, each a ChannelWithTraffic; a channel's crossing transmissions); AccessStore (batch accesses with their resources), AccessReadError
-│   │   ├── transmissions.rs TransmissionStore (save, transmission), TransmissionStoreError
+│   │   ├── transmissions.rs TransmissionStore (save, transmission, list), TransmissionQuery (window, states, channel), TransmissionStoreError (Store, InvalidCursor)
 │   │   └── verdicts.rs    TransmissionVerdicts (set, log, quality), VerdictError
 │   ├── l6_analysis.rs     Embedder, TopicModel (async fit of a given version over FitDocuments at a given time; TopicError::VersionNotNewer, Backend), TopicCatalog (pins, retention; publishes TopicVersionDropped), SearchIndex, ProjectionStore (FrameMismatch), ProjectionSource, LayoutFitter (async; LayoutError: Backend or Failed(FitFailure)), AlertRuleEval, AlertTriage (suppressions at a time), AlertRuleStore; SearchHit and SearchResults are its only wire types
 │   ├── l6_analysis/

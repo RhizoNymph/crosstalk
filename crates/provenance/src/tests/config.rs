@@ -60,3 +60,15 @@ fn constructors_refuse_invalid_values() {
         Err(ConfigError::EncodedRun { run: 4 })
     );
 }
+
+#[test]
+fn locator_keys_default_decode_and_refuse_an_empty_key() {
+    let config = ProvenanceConfig::default();
+    let keys: Vec<&str> = config.locator_keys().iter().collect();
+    assert_eq!(keys, ["file_path", "notebook_path", "path", "uri", "url"]);
+    let config: ProvenanceConfig =
+        serde_json::from_str(r#"{"locator_keys": ["target"]}"#).expect("decodes");
+    assert!(config.locator_keys().contains("target"));
+    assert!(!config.locator_keys().contains("file_path"));
+    assert!(serde_json::from_str::<ProvenanceConfig>(r#"{"locator_keys": [""]}"#).is_err());
+}
