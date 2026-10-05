@@ -5,10 +5,8 @@
 //! - No decode step otherwise: `Normalized` (whitespace and case folding).
 //! - Decoded through spec codecs: `Decoded`, listing the codecs in the order
 //!   they were undone (`provenance.decode.codecs-in-decode-order`).
-//! - Decoded through string unescapes only: `Normalized` until the spec
-//!   names `Codec::JsonString` and `Codec::YamlString`; then
-//!   [`Step::codec`] maps them and this reports `Decoded` with no change
-//!   here.
+//! - String unescapes count as spec codecs (`Codec::JsonString`,
+//!   `Codec::YamlString`, through [`Step::codec`]).
 
 use crosstalk_spec::derived::provenance::matching::{Codec, MatchKind};
 use crosstalk_spec::support::NonEmpty;

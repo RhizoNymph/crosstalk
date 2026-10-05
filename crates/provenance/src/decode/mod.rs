@@ -19,8 +19,8 @@
 //!
 //! The string unescapes are separate decoders, never part of
 //! normalization: whitespace and case folding stay in the fingerprinter.
-//! When the spec gains `Codec::JsonString` and `Codec::YamlString`,
-//! [`Step::codec`] maps them and [`crate::scan::kind`] reports them in
+//! [`Step::codec`] maps them to `Codec::JsonString` and
+//! `Codec::YamlString`, and [`crate::scan::kind`] reports them in
 //! `MatchKind::Decoded`.
 
 mod base64;
@@ -57,12 +57,13 @@ pub enum Step {
 
 impl Step {
     /// The spec codec this step is reported as in `MatchKind::Decoded`;
-    /// `None` for the string unescapes until the spec names them
-    /// (`Codec::JsonString`, `Codec::YamlString`).
+    /// the string unescapes are `Codec::JsonString` and
+    /// `Codec::YamlString`.
     pub fn codec(self) -> Option<Codec> {
         match self {
             Self::Codec(codec) => Some(codec),
-            Self::JsonString | Self::YamlString => None,
+            Self::JsonString => Some(Codec::JsonString),
+            Self::YamlString => Some(Codec::YamlString),
         }
     }
 }

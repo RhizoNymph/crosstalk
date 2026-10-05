@@ -73,6 +73,10 @@ pub fn encode(codec: Codec, text: &str) -> String {
                 format!("{wide}\u{200b}")
             })
             .collect(),
+        // A JSON string literal, quotes included.
+        Codec::JsonString => serde_json::Value::from(text).to_string(),
+        // A single-quoted YAML scalar.
+        Codec::YamlString => format!("'{}'", text.replace('\'', "''")),
     }
 }
 
