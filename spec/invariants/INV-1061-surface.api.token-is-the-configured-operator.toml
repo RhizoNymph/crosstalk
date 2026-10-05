@@ -1,0 +1,18 @@
+[invariant]
+id = "surface.api.token-is-the-configured-operator"
+statement = "A gateway serving the HTTP API loads one operator, api.operator (default named admin, id ApiOperator::ID, every permission), in authenticated mode; a request carrying Authorization: Bearer with the value of the variable api.token names is made as that operator, and a request without it is refused with 401."
+kind = "domain"
+property = "invariant"
+requires = ["integration"]
+rationale = """
+The deployment has one operator token and no session store yet. Mapping
+the token to one configured operator keeps every action attributed in the
+audit log, and authenticated mode keeps the API closed to anyone without
+the token.
+"""
+
+[evidence]
+integration = "crosstalk_e2e::smoke::serve::serve_all_exports_and_shows_the_confirmed_transmission_over_http"
+
+[evidence-review]
+integration = { agent = "true", human = "false" }

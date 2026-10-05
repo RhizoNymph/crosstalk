@@ -24,4 +24,6 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["rt", "sync", "time"] }
 
 [dev-dependencies]
-tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
+crosstalk-client = { path = "../client" }
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "rt-multi-thread", "sync", "time"] }

@@ -624,6 +624,7 @@ version = "0.1.0"
 dependencies = [
  "crosstalk-api",
  "crosstalk-canonical",
+ "crosstalk-client",
  "crosstalk-flow",
  "crosstalk-gateway",
  "crosstalk-ingress",
@@ -633,6 +634,7 @@ dependencies = [
  "crosstalk-surface",
  "crosstalk-transport",
  "serde_json",
+ "tempfile",
  "thiserror",
  "tokio",
 ]

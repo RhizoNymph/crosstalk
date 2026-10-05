@@ -1,0 +1,19 @@
+[invariant]
+id = "topology.watermark.live-advances-when-idle"
+statement = "In a Live process, each tick at `now` advances the L7 watermark from the frontier { ticked_through: now, oldest_pending: None } when every layer consumer group (L3 to L7) holds no delivery, and leaves it where it is otherwise; settled to the scenario's end plus the settle bound (evidence_window + suspected_ttl) and one bucket, the watermark has passed every exchange."
+kind = "domain"
+property = "invariant"
+requires = ["integration"]
+rationale = """
+Exports and final buckets are cut at the watermark, so a process that never
+advances it exports nothing. With no frontier source in memory, an empty
+group is the only evidence that nothing earlier is still on its way to a
+bucket; holding the watermark while any group is busy keeps late
+contributions out of final buckets.
+"""
+
+[evidence]
+integration = "crosstalk_e2e::smoke::determinism::the_watermark_passes_the_scenario_once_settled_past_the_bound"
+
+[evidence-review]
+integration = { agent = "true", human = "false" }
