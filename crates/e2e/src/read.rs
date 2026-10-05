@@ -24,6 +24,11 @@ use crosstalk_spec::observed::agent::IdentityEvidence;
 use crosstalk_spec::paging::{PageRequest, PageSize};
 use crosstalk_spec::support::{TimeWindow, Timestamp};
 
+use crosstalk_spec::derived::flow::transmission::Transmission;
+use crosstalk_spec::interfaces::l5_flow::transmissions::{
+    TransmissionQuery, TransmissionStore, TransmissionStoreError,
+};
+
 use crate::scenario::Scenario;
 
 /// The page size every reader asks for: more than the scenario can make.
@@ -42,6 +47,8 @@ pub enum ReadError {
     Selection,
     #[error("the edge from {from:?} to {to:?} is a self-edge")]
     SelfEdge { from: AgentId, to: AgentId },
+    #[error("the transmission store refused the list: {0:?}")]
+    Transmissions(TransmissionStoreError),
 }
 
 impl From<QueryError> for ReadError {
@@ -222,4 +229,32 @@ pub async fn channels<Q: QueryApi + Sync>(
         .channels(caller, &ChannelFilter::default(), &first_page()?)
         .await?;
     Ok(page.value.items().to_vec())
+}
+
+/// Every stored transmission, newest id first, as L5 last saved it
+/// (`TransmissionStore::list` over all time, every state and route).
+pub async fn all_transmissions<T: TransmissionStore + Sync>(
+    store: &T,
+) -> Result<Vec<Transmission>, ReadError> {
+    let window = TimeWindow::new(Timestamp::from_micros(0), crosstalk_spec::wire::time::MAX)
+        .map_err(|_| ReadError::Window)?;
+    let query = TransmissionQuery {
+        window,
+        states: None,
+        channel: None,
+    };
+    let mut request = first_page()?;
+    let mut all = Vec::new();
+    loop {
+        let page = store
+            .list(&query, &request)
+            .await
+            .map_err(ReadError::Transmissions)?;
+        let (items, next) = page.into_parts();
+        all.extend(items);
+        match next {
+            Some(next) => request.after = Some(next),
+            None => return Ok(all),
+        }
+    }
 }

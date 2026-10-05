@@ -29,6 +29,6 @@ pub mod read;
 pub mod scenario;
 
 pub use capture::{Capture, CaptureError};
-pub use compose::{ComposeError, Composition, compose};
+pub use compose::{ComposeError, Composition, compose, compose_with};
 pub use feed::{Fed, FeedError, feed};
 pub use scenario::{Scenario, WireExchange};

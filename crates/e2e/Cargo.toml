@@ -12,9 +12,11 @@ workspace = true
 crosstalk-spec = { path = "../../spec" }
 crosstalk-api = { path = "../api" }
 crosstalk-canonical = { path = "../canonical" }
+crosstalk-flow = { path = "../flow" }
 crosstalk-gateway = { path = "../gateway" }
 crosstalk-ingress = { path = "../ingress" }
 crosstalk-memory = { path = "../memory" }
+crosstalk-provenance = { path = "../provenance" }
 crosstalk-surface = { path = "../surface" }
 crosstalk-transport = { path = "../transport" }
 serde_json.workspace = true
@@ -22,5 +24,4 @@ thiserror.workspace = true
 tokio = { workspace = true, features = ["rt", "sync", "time"] }
 
 [dev-dependencies]
-crosstalk-flow = { path = "../flow" }
 tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }

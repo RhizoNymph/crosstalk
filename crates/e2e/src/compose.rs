@@ -14,10 +14,12 @@
 use std::sync::Arc;
 use std::time::Duration;
 
-use crosstalk_gateway::live::{BlobConfig, Live, LiveConfig, LiveError, LivePipeline, LiveStores};
+use crosstalk_gateway::live::{
+    BlobConfig, Live, LiveClock, LiveConfig, LiveError, LivePipeline, LiveStores, Ticking,
+};
 use crosstalk_gateway::pipeline::Settings;
 use crosstalk_memory::support::ManualClock;
-use crosstalk_spec::ids::SeededRandom;
+use crosstalk_provenance::config::ProvenanceConfig;
 use crosstalk_spec::interfaces::l8_surface::Caller;
 use crosstalk_spec::interfaces::l8_surface::operators::{CallerError, RequestIdentity};
 use crosstalk_spec::support::Timestamp;
@@ -58,15 +60,26 @@ pub struct Composition {
     live: Live,
 }
 
-/// Build the composition with its clock at `start`.
+/// Build the composition with its clock at `start`, ticking periodically
+/// (the smoke polls the surface).
 pub async fn compose(start: Timestamp) -> Result<Composition, ComposeError> {
+    compose_with(start, Ticking::Periodic).await
+}
+
+/// Build the composition with its clock at `start`, ticking as `ticking`
+/// says: `Ticking::OnSettle` for a run driven by `Live::settle`.
+pub async fn compose_with(start: Timestamp, ticking: Ticking) -> Result<Composition, ComposeError> {
     let clock = ManualClock::at(start);
     let live = Live::start(LiveConfig {
         surface: options::in_process(clock.clone())?,
+        clock: LiveClock::Manual(clock.clone()),
         blobs: BlobConfig::Memory,
         bus: BusConfig::default(),
         pipeline: Settings::default(),
-        id_entropy: SeededRandom::new(0xE2E),
+        flow: options::flow()?,
+        provenance: ProvenanceConfig::default(),
+        ticking,
+        seed: 0xE2E,
         capture: None,
     })
     .await?;
