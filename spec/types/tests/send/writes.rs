@@ -20,7 +20,9 @@ use crate::interfaces::l5_flow::channels::{
     AccessReadError, AccessStore, ChannelReads, ChannelTraffic, ChannelWithTraffic,
     DetectionUpdate, TrafficError,
 };
-use crate::interfaces::l5_flow::transmissions::{TransmissionStore, TransmissionStoreError};
+use crate::interfaces::l5_flow::transmissions::{
+    TransmissionQuery, TransmissionStore, TransmissionStoreError,
+};
 use crate::interfaces::l5_flow::{Discovery, RegistryError};
 use crate::interfaces::l6_analysis::RuleError;
 use crate::interfaces::l6_analysis::alerts::{
@@ -42,6 +44,7 @@ use crate::interfaces::l8_surface::permissions::Caller;
 use crate::interfaces::l8_surface::sinks::{SinkError, SinkInfo, SinkRegistry, SinkRegistryError};
 use crate::paging::{
     AlertList, AlertRuleList, ChannelList, ChannelTransmissionList, Page, PageRequest,
+    TransmissionList,
 };
 use crate::support::{Change, Timestamp};
 
@@ -127,6 +130,13 @@ impl TransmissionStore for Dummy {
     ) -> Result<Option<Transmission>, TransmissionStoreError> {
         match *self {}
     }
+    async fn list(
+        &self,
+        _query: &TransmissionQuery,
+        _page: &PageRequest<TransmissionList>,
+    ) -> Result<Page<Transmission, TransmissionList>, TransmissionStoreError> {
+        match *self {}
+    }
 }
 
 fn channel_traffic<T: ChannelTraffic>(x: &mut T, never: &Dummy) {
@@ -146,6 +156,7 @@ fn channel_reads<T: ChannelReads>(x: &T, never: &Dummy) {
 fn transmission_store<T: TransmissionStore>(x: &mut T, never: &Dummy) {
     assert_send(x.save(arg(never)));
     assert_send(x.transmission(arg(never)));
+    assert_send(x.list(arg(never), arg(never)));
 }
 
 // ── L6 analysis ────────────────────────────────────────────────────────

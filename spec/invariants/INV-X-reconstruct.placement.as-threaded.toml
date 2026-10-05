@@ -1,0 +1,19 @@
+[invariant]
+id = "reconstruct.placement.as-threaded"
+statement = "ExchangePlacements::placement of an exchange is the agent and conversation of its recorded ThreadOutcome's delta (Placement::of), unchanged by a redelivery of the exchange, and None for an exchange never threaded."
+kind = "domain"
+property = "invariant"
+requires = ["property"]
+rationale = """
+Eval scores L3's identity and threading by placing every replayed
+exchange, and a reader holding an exchange id (an access, a content
+match) needs its agent and conversation. Reading the recorded outcome,
+rather than re-deriving it, gives the placement the published
+ConversationDelta announced.
+"""
+
+[evidence]
+property = "crosstalk_reconstruct::tests::placement::a_threaded_exchange_reads_back_as_its_delta_placed_it"
+
+[evidence-review]
+property = { agent = "true", human = "false" }

@@ -17,7 +17,7 @@ pub mod model;
 mod tests;
 
 use std::collections::BTreeMap;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crosstalk_spec::aggregates::quality::DetectionQuality;
 use crosstalk_spec::derived::flow::transmission::Transmission;
@@ -29,14 +29,16 @@ use crosstalk_spec::events::changed::Changed;
 use crosstalk_spec::events::detect::DetectEvent;
 use crosstalk_spec::ids::{AgentId, OperatorId, TransmissionId};
 use crosstalk_spec::interfaces::l3_reconstruction::AgentDirectory;
+use crosstalk_spec::interfaces::l5_flow::ChannelDirectory;
 use crosstalk_spec::interfaces::l5_flow::transmissions::{
-    TransmissionStore, TransmissionStoreError,
+    TransmissionQuery, TransmissionStore, TransmissionStoreError,
 };
 use crosstalk_spec::interfaces::l5_flow::verdicts::{TransmissionVerdicts, VerdictError};
+use crosstalk_spec::paging::{Page, PageRequest, TransmissionList};
 use crosstalk_spec::support::{TimeWindow, Timestamp};
 
 use crate::analysis::aliases::StaticDirectory;
-use crate::support::{Outbox, State};
+use crate::support::{CursorBook, Outbox, State, lock, page_after};
 
 #[derive(Debug, Default, Clone, PartialEq)]
 pub(crate) struct VerdictTable {
@@ -117,11 +119,16 @@ impl VerdictTable {
 /// handles on one store. `quality` resolves agents through the directory it
 /// was given (none merged by default), so a transmission whose agents have
 /// since merged into one is not counted.
+/// Issued `list` cursors: each bound to its query, resuming after an id.
+type ListCursors = CursorBook<TransmissionQuery, TransmissionId>;
+
 #[derive(Clone)]
 pub struct MemoryVerdicts {
     state: State<VerdictTable>,
     outbox: Outbox,
     agents: Arc<dyn AgentDirectory + Send + Sync>,
+    channels: Arc<dyn ChannelDirectory + Send + Sync>,
+    cursors: Arc<Mutex<ListCursors>>,
 }
 
 impl Default for MemoryVerdicts {
@@ -149,10 +156,22 @@ impl MemoryVerdicts {
         agents: impl AgentDirectory + Send + Sync + 'static,
         outbox: Outbox,
     ) -> Self {
+        Self::with_directories(agents, StaticDirectory::default(), outbox)
+    }
+
+    /// A store resolving agents through `agents` (quality) and channels
+    /// through `channels` (`list`'s channel filter).
+    pub fn with_directories(
+        agents: impl AgentDirectory + Send + Sync + 'static,
+        channels: impl ChannelDirectory + Send + Sync + 'static,
+        outbox: Outbox,
+    ) -> Self {
         Self {
             state: State::new(VerdictTable::default()),
             outbox,
             agents: Arc::new(agents),
+            channels: Arc::new(channels),
+            cursors: Arc::new(Mutex::new(ListCursors::default())),
         }
     }
 
@@ -216,5 +235,42 @@ impl TransmissionStore for MemoryVerdicts {
         id: TransmissionId,
     ) -> Result<Option<Transmission>, TransmissionStoreError> {
         Ok(self.state.read().transmissions.get(&id).cloned())
+    }
+
+    async fn list(
+        &self,
+        query: &TransmissionQuery,
+        page: &PageRequest<TransmissionList>,
+    ) -> Result<Page<Transmission, TransmissionList>, TransmissionStoreError> {
+        let mut cursors = lock(&self.cursors);
+        let after = match &page.after {
+            None => None,
+            Some(cursor) => Some(
+                cursors
+                    .resolve(cursor, query)
+                    .ok_or(TransmissionStoreError::InvalidCursor)?,
+            ),
+        };
+        let channels = &self.channels;
+        let rows: Vec<Transmission> = self
+            .state
+            .read()
+            .transmissions
+            .values()
+            .rev()
+            .filter(|transmission| after.is_none_or(|after| transmission.id < after))
+            .filter(|transmission| query.matches(transmission, |id| channels.canonical(id)))
+            .cloned()
+            .collect();
+        page_after(
+            &mut cursors,
+            rows,
+            page.size,
+            query.clone(),
+            |transmission| transmission.id,
+        )
+        .map_err(|error| TransmissionStoreError::Store {
+            reason: error.to_string(),
+        })
     }
 }
