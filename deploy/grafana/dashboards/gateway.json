@@ -1082,6 +1082,86 @@
       }
     },
     {
+      "type": "timeseries",
+      "title": "Normalize failures/s by protocol and reason",
+      "description": "Captured exchanges the canonical normalizer refused, split by the wire protocol the route speaks and the reason code (unsupported_protocol, request_body). Only pairs that failed in the range are drawn; the CrosstalkNormalizeFailures alert fires on any of them.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${ds_prometheus}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${ds_prometheus}"
+          },
+          "expr": "sum by (protocol, reason) (rate(crosstalk_pipeline_exchanges_total{job=\"crosstalk\", outcome=\"normalize_failed\"}[$__rate_interval])) > 0",
+          "refId": "A",
+          "legendFormat": "{{protocol}} / {{reason}}",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 40,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "gradientMode": "none",
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "min": 0,
+          "noValue": "not scraped"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 22,
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 24
+      }
+    },
+    {
       "type": "row",
       "title": "Exchange log",
       "collapsed": false,
@@ -1090,7 +1170,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 24
+        "y": 32
       },
       "panels": []
     },
@@ -1217,7 +1297,7 @@
         "h": 8,
         "w": 16,
         "x": 0,
-        "y": 25
+        "y": 33
       }
     },
     {
@@ -1308,7 +1388,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 25
+        "y": 33
       }
     },
     {
@@ -1320,7 +1400,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 33
+        "y": 41
       },
       "panels": []
     },
@@ -1408,7 +1488,7 @@
         "h": 7,
         "w": 24,
         "x": 0,
-        "y": 34
+        "y": 42
       }
     },
     {
@@ -1420,7 +1500,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 41
+        "y": 49
       },
       "panels": []
     },
@@ -1532,7 +1612,7 @@
         "h": 7,
         "w": 24,
         "x": 0,
-        "y": 42
+        "y": 50
       }
     },
     {
@@ -1571,7 +1651,7 @@
         "h": 14,
         "w": 24,
         "x": 0,
-        "y": 49
+        "y": 57
       }
     }
   ]
