@@ -2,10 +2,10 @@
 //! spans it cut, and the content matches it made. No text: ids, hashes,
 //! locations, states and times only.
 //!
-//! The spec has no trait for these yet (the evidence page reads "L4's span
-//! records", and a later `SpanIndex` / `ProvenanceReads` will serve span
-//! locations, scan status and matches), so [`ProvenanceStore`] is this
-//! crate's. [`MemoryProvenanceStore`] keeps them in memory (tests, the
+//! [`ProvenanceStore`] is this crate's write and read of them; the spec's
+//! reads (`SpanIndex`, `ProvenanceReads`: scan status, output spans of
+//! every origin, matches by reader exchange, a span's readers) are served
+//! over it ([`reads`]). [`MemoryProvenanceStore`] keeps them in memory (tests, the
 //! simulation); [`PgProvenanceStore`] in the `provenance` schema.
 //!
 //! **Scan status.** An exchange is recorded from `ExchangeCaptured` as
@@ -25,6 +25,7 @@
 
 mod memory;
 mod pg;
+pub mod reads;
 
 use std::future::Future;
 

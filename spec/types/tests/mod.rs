@@ -15,6 +15,7 @@ mod audit_intents;
 mod channel_reads;
 mod channels;
 mod confirmation;
+mod conversation;
 mod derived_ids;
 mod encoding;
 mod events;

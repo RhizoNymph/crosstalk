@@ -1,0 +1,22 @@
+[invariant]
+id = "surface.conversation.read-by"
+statement = "An indexed span's ReadBy::total is the number of content matches whose origin is the span; first is the newest min(total, INLINE) of them by reader exchange start then match; span_readers traverses all total of them newest first, each exactly once."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+The +N more link must lead to exactly the rest; a count that disagrees
+with the list, or a list that repeats a reader, misstates who read the
+text.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_provenance::tests::reads::readers_page_newest_first_with_their_total",
+    "crosstalk_surface::tests::conversations::read_by_is_the_newest_readers_and_their_count",
+]
+integration = "crosstalk_provenance::integration::reads::pg_readers_agree_with_memory"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

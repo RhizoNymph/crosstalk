@@ -1,0 +1,60 @@
+{
+  "items": [
+    {
+      "agent": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+      "exchange": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+      "turn": {
+        "conversation": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+        "turn": 7
+      },
+      "read_at": {
+        "part": {
+          "message": "20272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f9",
+          "index": 2
+        },
+        "range": {
+          "start": 12,
+          "end": 59
+        }
+      },
+      "carrier": {
+        "type": "tool_result",
+        "data": "toolu_01VfA7wiki"
+      },
+      "kind": {
+        "type": "exact"
+      },
+      "transmission": {
+        "id": "01J9Z3S8V9W0X1Y2Z3A4B5C6D7",
+        "route": {
+          "type": "channel",
+          "data": "01J9Z3P5R6S7T8V9W0X1Y2Z3A4"
+        },
+        "state": "confirmed"
+      }
+    },
+    {
+      "agent": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+      "exchange": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+      "turn": null,
+      "read_at": {
+        "part": {
+          "message": "20272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f9",
+          "index": 2
+        },
+        "range": {
+          "start": 12,
+          "end": 59
+        }
+      },
+      "carrier": {
+        "type": "reader_output"
+      },
+      "kind": {
+        "type": "normalized"
+      },
+      "transmission": null
+    }
+  ],
+  "next": null
+}

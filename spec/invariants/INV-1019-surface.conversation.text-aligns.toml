@@ -1,0 +1,16 @@
+[invariant]
+id = "surface.conversation.text-aligns"
+statement = "For one conversation and window, conversation_text returns the same turns as conversation_turns, and per turn the same input messages in the same order, the same output, and per shown message one entry per part in part order."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+The page renders text beside structure by zipping the two reads; a
+misaligned read would put one message's text under another's marks.
+"""
+
+[evidence]
+unit = "crosstalk_surface::tests::conversations::text_aligns_with_turns"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

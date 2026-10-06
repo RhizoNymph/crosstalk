@@ -11,6 +11,8 @@
 //! Harnesses fork conversations (sub-agents, retries) and compact them
 //! (summarize and restart), and both break a plain prefix chain.
 
+use serde::{Deserialize, Serialize};
+
 use crate::ids::{AgentId, ConversationId, MessageHash};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -53,4 +55,35 @@ pub enum ConversationOrigin {
     Compaction {
         predecessor: ConversationId,
     },
+}
+
+impl ConversationOrigin {
+    /// The origin without its links.
+    pub fn kind(&self) -> OriginKind {
+        match self {
+            Self::Root => OriginKind::Root,
+            Self::Fork { .. } => OriginKind::Fork,
+            Self::Compaction { .. } => OriginKind::Compaction,
+        }
+    }
+
+    /// The conversation this one continues: a fork's parent or a
+    /// compaction's predecessor; `None` for a root.
+    pub fn source(&self) -> Option<ConversationId> {
+        match self {
+            Self::Root => None,
+            Self::Fork { parent, .. } => Some(*parent),
+            Self::Compaction { predecessor } => Some(*predecessor),
+        }
+    }
+}
+
+/// A [`ConversationOrigin`] without its links. On the wire, snake_case
+/// strings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OriginKind {
+    Root,
+    Fork,
+    Compaction,
 }

@@ -1,0 +1,43 @@
+{
+  "conversation": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+  "turns": [
+    {
+      "index": 37,
+      "inputs": [
+        {
+          "hash": "20272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f9",
+          "body": {
+            "type": "shown",
+            "data": [
+              {
+                "from": 0,
+                "text": "release plan: ship on friday ✓",
+                "part_len": 32
+              }
+            ]
+          }
+        },
+        {
+          "hash": "50575e656c737a81888f969da4abb2b9c0c7ced5dce3eaf1f8ff060d141b2229",
+          "body": {
+            "type": "body_dropped"
+          }
+        }
+      ],
+      "output": {
+        "hash": "40474e555c636a71787f868d949ba2a9b0b7bec5ccd3dae1e8eff6fd040b1219",
+        "body": {
+          "type": "shown",
+          "data": [
+            null,
+            {
+              "from": 0,
+              "text": "the plan",
+              "part_len": 20
+            }
+          ]
+        }
+      }
+    }
+  ]
+}

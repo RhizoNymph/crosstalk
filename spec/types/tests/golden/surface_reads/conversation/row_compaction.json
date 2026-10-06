@@ -1,0 +1,18 @@
+{
+  "id": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+  "agent": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+  "origin": {
+    "type": "compaction",
+    "data": {
+      "predecessor": "01J9Z3Q6S7T8V9W0X1Y2Z3A4B5",
+      "predecessor_agent": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+      "carried_over": 31
+    }
+  },
+  "started_at": "2026-10-04T09:01:12.000000Z",
+  "last_turn_at": "2026-10-04T09:40:55.250000Z",
+  "turns": 84,
+  "source": {
+    "type": "live"
+  }
+}

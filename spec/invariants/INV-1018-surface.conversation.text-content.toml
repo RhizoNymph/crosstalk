@@ -1,0 +1,18 @@
+[invariant]
+id = "surface.conversation.text-content"
+statement = "conversation_text and part_text require Content, and without it return Forbidden { missing: Content } before reading any store."
+kind = "confidentiality"
+requires = ["unit", "integration"]
+rationale = """
+Message text, tool arguments included, is content; reading it for a
+caller without Content would leak it even if the response were then
+refused.
+"""
+
+[evidence]
+unit = "crosstalk_surface::tests::conversations::text_reads_need_content_and_read_nothing_without_it"
+integration = "crosstalk_api::http::integration::routes::every_route_refuses_a_caller_without_its_permission"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

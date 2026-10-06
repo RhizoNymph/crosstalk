@@ -1,0 +1,17 @@
+[invariant]
+id = "surface.conversation.list-canonical"
+statement = "QueryApi::conversations with filter.agent lists a conversation iff AgentDirectory::canonical of its stored agent equals the canonical agent filter.agent resolves to, each at most once per traversal, and every row names the canonical agent."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+A merge must show an alias's conversations under the agent it joined,
+and an unmerge must split them again on the next read; listing by the
+stored id alone would hide half a merged agent's history.
+"""
+
+[evidence]
+unit = "crosstalk_surface::tests::conversations::list_follows_merges_and_unmerges"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
