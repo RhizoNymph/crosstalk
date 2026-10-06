@@ -199,6 +199,20 @@ where
         let records = self.env.store.spans(&missing).await?;
         let mut live = LiveSpans::new(records, self.watermark, self.now);
         live.add_relays(self.env.store.relays(&missing).await?, self.now);
+        // Coincident template stretches count their sources' holders, one
+        // hop (`provenance.match.cross-agent-spread`).
+        let coincidences = self.env.store.coincident_sources(&missing).await?;
+        if !coincidences.is_empty() {
+            let sources: Vec<SpanId> = coincidences
+                .iter()
+                .map(|coincidence| coincidence.source)
+                .collect::<BTreeSet<_>>()
+                .into_iter()
+                .collect();
+            let source_records = self.env.store.spans(&sources).await?;
+            let source_relays = self.env.store.relays(&sources).await?;
+            live.add_coincident(&coincidences, &source_records, &source_relays, self.now);
+        }
         self.live.extend(live);
         Ok(())
     }
@@ -399,11 +413,13 @@ impl Scanner {
             found.extend(self.read_message(&mut session, message, false).await?);
         }
         let mut spans: Vec<Span> = Vec::new();
+        let mut coincidences = Vec::new();
         if let Some(output) = &loaded.output {
             found.extend(self.read_message(&mut session, output, true).await?);
-            let (output_spans, output_matches) =
+            let (output_spans, output_matches, output_coincidences) =
                 self.output_spans(&mut session, output, loaded).await?;
             spans = output_spans;
+            coincidences = output_coincidences;
             found.extend(output_matches);
         }
         let mut ids = BTreeSet::new();
@@ -431,6 +447,7 @@ impl Scanner {
             at: exchange.started_at,
             spans,
             matches,
+            coincidences,
             messages,
             forwarding: self.forwarding,
         })

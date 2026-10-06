@@ -159,6 +159,7 @@ pub(crate) async fn scenario<S: ProvenanceStore>(
                 ),
             ],
             matches: Vec::new(),
+            coincidences: Vec::new(),
             messages: vec![(out_w, ScannedAs::Output)],
             forwarding: true,
         })
@@ -213,6 +214,7 @@ pub(crate) async fn scenario<S: ProvenanceStore>(
                 stored(ids.event(), 1, at(30), second.clone()),
                 stored(ids.event(), 2, at(30), of_forwarded.clone()),
             ],
+            coincidences: Vec::new(),
             messages: vec![(out_x, ScannedAs::Output)],
             forwarding: true,
         })
@@ -232,6 +234,7 @@ pub(crate) async fn scenario<S: ProvenanceStore>(
             },
         )],
         matches: vec![stored(ids.event(), 0, at(20), read_by_relayer.clone())],
+        coincidences: Vec::new(),
         messages: vec![(out_r, ScannedAs::Output)],
         forwarding: true,
     };
