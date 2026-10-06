@@ -15,8 +15,13 @@ therefore needs a long contiguous stretch. Neither a text-count cutoff nor
 the spread rule may apply to it: when one agent broadcasts a distinctive
 message through a channel the gateway cannot see and others copy it later,
 every copy must still match the first writer, however many copies there
-are, and a contiguous run of 64 characters or more is distinctive whatever
-its spread (provenance.match.cross-agent-spread). The stretch is
+are, and a contiguous run of 64 characters or more is kept whatever its
+spread (provenance.match.cross-agent-spread). Length alone does not make a
+stretch distinctive, though: two agents filling one sentence template with
+the same words write 64 characters or more alike, so by default the
+stretch must also hold a token rare relative to its source's holders
+(provenance.match.reader-output-rare-token), a bound every copy and read
+raises, so broadcasts keep matching. The stretch is
 still classified Relayed from the origin span, so it is never indexed as
 the reader's (provenance.span.originated-absent-from-inputs); only the
 match is withheld. Tool results, user turns and system prompts are visible

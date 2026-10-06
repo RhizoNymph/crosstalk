@@ -12,7 +12,8 @@ use crosstalk_eval::datasets::swarm_truth::window::{
     DEFAULT_LEAD_MS, DEFAULT_SLACK_MS, Margins, RunWindow,
 };
 use crosstalk_eval::datasets::swarm_truth::{
-    Inputs, Options, default_blobs, default_evidence, run_with as run_swarm, truth_file,
+    Inputs, Options, SwarmOutcome, default_blobs, default_evidence, run_with as run_swarm,
+    truth_file,
 };
 use crosstalk_eval::report::table::render;
 use crosstalk_spec::support::{TimeWindow, Timestamp};
@@ -110,6 +111,21 @@ pub fn run(args: SwarmArgs) -> Result<ExitCode> {
         },
     };
     let outcome = run_swarm(&inputs, options, &gates)?;
+    let text = outcome_text(&outcome);
+    print!("{text}");
+    if let Some(out) = &args.out {
+        write_report(out, &outcome, &text)?;
+    }
+    Ok(if outcome.report.gates_failed() {
+        ExitCode::from(2)
+    } else {
+        ExitCode::SUCCESS
+    })
+}
+
+/// The score text `ct-eval swarm` prints (and `score.txt` holds): the
+/// report table, the truth and gateway counts, the join diagnostics.
+pub fn outcome_text(outcome: &SwarmOutcome) -> String {
     let mut text = render(&outcome.report);
     let resolved = &outcome.resolved;
     text.push_str(&format!(
@@ -133,28 +149,27 @@ pub fn run(args: SwarmArgs) -> Result<ExitCode> {
         outcome.detected.exported, outcome.detected.evidence, outcome.detected.predictions
     ));
     text.push_str(&outcome.diagnostics.render());
-    print!("{text}");
-    if let Some(out) = &args.out {
-        fs::create_dir_all(out).with_context(|| format!("creating {}", out.display()))?;
-        let json = serde_json::to_string_pretty(&outcome.report)?;
-        fs::write(out.join("report.json"), json + "\n")?;
-        fs::write(out.join("report.txt"), &text)?;
-        let written = Written {
-            window: outcome.window,
-            resolved: &outcome.resolved,
-            detected: &outcome.detected,
-            key_groups: outcome.key_groups,
-            table: outcome.diagnostics.table(),
-            diagnostics: &outcome.diagnostics.entries,
-        };
-        let json = serde_json::to_string_pretty(&written)?;
-        fs::write(out.join("diagnostics.json"), json + "\n")?;
-    }
-    Ok(if outcome.report.gates_failed() {
-        ExitCode::from(2)
-    } else {
-        ExitCode::SUCCESS
-    })
+    text
+}
+
+/// Writes `report.json`, `report.txt` (`text`) and `diagnostics.json` to
+/// `out`.
+pub fn write_report(out: &std::path::Path, outcome: &SwarmOutcome, text: &str) -> Result<()> {
+    fs::create_dir_all(out).with_context(|| format!("creating {}", out.display()))?;
+    let json = serde_json::to_string_pretty(&outcome.report)?;
+    fs::write(out.join("report.json"), json + "\n")?;
+    fs::write(out.join("report.txt"), text)?;
+    let written = Written {
+        window: outcome.window,
+        resolved: &outcome.resolved,
+        detected: &outcome.detected,
+        key_groups: outcome.key_groups,
+        table: outcome.diagnostics.table(),
+        diagnostics: &outcome.diagnostics.entries,
+    };
+    let json = serde_json::to_string_pretty(&written)?;
+    fs::write(out.join("diagnostics.json"), json + "\n")?;
+    Ok(())
 }
 
 /// One hour past now, in Unix microseconds: the export window's end (the

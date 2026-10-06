@@ -17,6 +17,7 @@ use crosstalk_spec::events::ingest::IngestEvent;
 use crosstalk_spec::events::{BusEvent, Envelope};
 use crosstalk_spec::ids::{CredentialHash, ExchangeId};
 use crosstalk_spec::observed::exchange::Exchange;
+use crosstalk_spec::support::Timestamp;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ExchangeLogError {
@@ -49,6 +50,10 @@ pub struct ExchangeLog {
     pub torn_tail: usize,
     /// Lines whose exchange id was already in the log.
     pub duplicates: usize,
+    /// Each exchange's envelope time: when the gateway captured it and
+    /// published `ExchangeCaptured` (the `at` its pipeline ingested it
+    /// with), by exchange id.
+    pub captured_at: BTreeMap<ExchangeId, Timestamp>,
 }
 
 /// Parses the log's bytes.
@@ -72,6 +77,7 @@ pub fn parse(bytes: &[u8]) -> Result<ExchangeLog, ExchangeLogError> {
                 line: line_no,
                 source,
             })?;
+        let at = envelope.at;
         let exchange = match envelope.event {
             BusEvent::Ingest(IngestEvent::ExchangeCaptured(exchange)) => *exchange,
             other => {
@@ -82,6 +88,7 @@ pub fn parse(bytes: &[u8]) -> Result<ExchangeLog, ExchangeLogError> {
             }
         };
         if seen.insert(exchange.meta.id) {
+            log.captured_at.insert(exchange.meta.id, at);
             log.exchanges.push(exchange);
         } else {
             log.duplicates += 1;

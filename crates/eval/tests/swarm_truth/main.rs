@@ -4,6 +4,7 @@
 
 mod access_only;
 mod fixture;
+mod replay;
 mod scenario;
 mod sessions;
 mod window;

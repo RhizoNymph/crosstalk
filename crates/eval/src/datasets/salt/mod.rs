@@ -10,6 +10,7 @@
 
 pub mod episode;
 pub mod files;
+pub mod forwarding;
 pub mod messages;
 pub mod schema;
 pub mod truth;
