@@ -656,6 +656,32 @@ feeder reads through it. `PgProvenanceStore` does not yet.
   channel names): the rule reads them as the victim's own relay, the
   converter as a delivery. Bench replays: headline 1.000 / 1.000 and
   boilerplate 0.893 (133 correct, 16 false), both unchanged.
+- **Bench run 20261006T021639Z** (boilerplate, staging 8090af0, 135
+  negative controls): 7 `Channel` / `ToolResult` / `Exact` false matches
+  of 32 to 46 bytes besides the 15 `ReaderOutput` ones. Each is a short
+  template run of an earlier (agent-008 on cache-invalidation-2, agent-007
+  on rate-limiting-0, agent-012 on vacuum-tuning-17) or later (agent-001
+  on cache-invalidation-2, three readers) writer of the page, read in the
+  labelled writer's version, held by two or three agents and in a hole of
+  the labelled writer's spans (2e). Not a truth issue: the reader read the
+  labelled version, which the other writer's text does not hold. With the
+  shadowed-fragment rule (`ct-eval replay`, release, 2026-10-06):
+
+  | run | before | after |
+  | --- | --- | --- |
+  | 20261006T021639Z boilerplate | 0.883 (166 / 22) | 0.914 (160 / 15), recall 1.000 |
+  | 20261005T184633Z boilerplate | 0.893 (133 / 16) | 0.893 (133 / 16), matches identical |
+  | 20261005T184212Z headline | 1.000 / 1.000 | 1.000 / 1.000, identical |
+  | 20261006T020835Z headline | 1.000 / 1.000 | 1.000 / 1.000, identical |
+  | SALT `--limit 53`, live, forwarding off | 0.854 / 0.955, 164 false | identical report |
+  | swarm-traces, live | 1.000 / 1.000 | 1.000 / 1.000 |
+
+  The 6 other matches removed on 20261006T021639Z are the labelled
+  writer's (agent-014, incident-review-3) 32-byte run "lback accounts for
+  about 34% of " under six readers, shadowed by agent-011, which holds two
+  of the page's sentences (84 and 88 characters) coincidentally and more
+  counted coverage than agent-014's sparse runs; each reader keeps
+  agent-014's other run (the tradeoff in 2e).
 - **wiki `--demo` "decoded" misses were not a decode-path bug.** At
   b0bd046 the live detector missed 63 `Decoded([JsonString])` wiki labels
   (`dse/BridgeLAProd1782007689`). Every one was a reread: the reader had
