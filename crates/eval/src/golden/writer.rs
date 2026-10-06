@@ -208,11 +208,7 @@ impl PredictionsWriter {
 
     /// A world whose inputs could not be read, written `failed { reason }`
     /// with no rows (nothing to check them against).
-    pub fn failed(
-        &mut self,
-        key: bench::ids::WorldKey,
-        reason: String,
-    ) -> Result<(), GoldenError> {
+    pub fn failed(&mut self, key: bench::ids::WorldKey, reason: String) -> Result<(), GoldenError> {
         self.spill_line(&Spilled::World(PredictionsWorld {
             key,
             status: WorldStatus::Failed { reason },

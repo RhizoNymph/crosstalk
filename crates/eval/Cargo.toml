@@ -12,6 +12,10 @@ workspace = true
 name = "ct-eval"
 path = "src/bin/ct-eval/main.rs"
 
+[[bin]]
+name = "ct-bench-detect"
+path = "src/bin/ct-bench-detect/main.rs"
+
 [dependencies]
 # The bench's on-disk format. A path dependency until the bench repository
 # is pushed (feat/format at 06874bf); it moves to a pinned git tag before

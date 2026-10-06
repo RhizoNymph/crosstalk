@@ -57,8 +57,8 @@ struct PipelineDigested {
 /// The BLAKE3 of `value`'s canonical JSON.
 pub fn digest(value: &impl Serialize) -> Result<Digest, ConfigError> {
     let text = serde_json::to_string(value).map_err(ConfigError::Encode)?;
-    let canonical =
-        CanonicalJson::canonicalize(&text).map_err(|error| ConfigError::Canonical(error.to_string()))?;
+    let canonical = CanonicalJson::canonicalize(&text)
+        .map_err(|error| ConfigError::Canonical(error.to_string()))?;
     Ok(Digest::from_bytes(
         *blake3::hash(canonical.as_str().as_bytes()).as_bytes(),
     ))

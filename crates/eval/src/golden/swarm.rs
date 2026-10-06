@@ -235,12 +235,12 @@ fn export_world<B: Bodies>(
 
 /// The agents ct-eval ties through the evidence (module docs): each
 /// canonical agent's exported exchanges, and every alias's canonical id.
-type Ties = (
+pub type Ties = (
     BTreeMap<AgentId, BTreeSet<ExchangeId>>,
     BTreeMap<AgentId, AgentId>,
 );
 
-fn ties(
+pub fn ties(
     chosen: &[&crosstalk_spec::interfaces::l8_surface::evidence::TransmissionEvidence],
     export: &WorldExport,
 ) -> Ties {

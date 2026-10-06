@@ -25,14 +25,14 @@
 //! tick boundary and at each exchange's capture time, after its processing
 //! has drained.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::time::Duration;
 
 use crosstalk_flow::consumer::FlowConfig;
 use crosstalk_gateway::live::{DEFAULT_BUCKET, Live, LiveClock, LiveConfig};
 use crosstalk_memory::support::ManualClock;
-use crosstalk_spec::ids::{MessageHash, TransmissionId};
+use crosstalk_spec::ids::{ExchangeId, MessageHash, SpanId, TransmissionId};
 use crosstalk_spec::interfaces::l1_canonical::{InvalidNormalizedExchange, NormalizedExchange};
 use crosstalk_spec::interfaces::l8_surface::QueryApi;
 use crosstalk_spec::interfaces::l8_surface::evidence::TransmissionEvidence;
@@ -49,6 +49,7 @@ use super::bodies::{Bodies, BodyError, Cached};
 use super::detected::{DetectedError, Exported, read_export};
 use super::exchange_log::ExchangeLog;
 use super::fetch::export_request;
+use super::queried::{Queried, batches, origin_spans};
 
 /// How long `shutdown` waits for the stages to drain.
 const DRAIN: Duration = Duration::from_secs(5);
@@ -132,6 +133,10 @@ pub struct Replayed {
     pub exported: Exported,
     /// One per exported transmission, in export order.
     pub evidence: Vec<TransmissionEvidence>,
+    /// The conversation reads of every ingested exchange and of every
+    /// span the evidence matched, as `POST /query/exchange-turns` and
+    /// `POST /query/span-points` answer them.
+    pub queried: Queried,
     /// Exchanges ingested.
     pub ingested: usize,
     /// Log entries before `since`, not replayed.
@@ -325,6 +330,10 @@ async fn drive(
 ) -> Result<Replayed, ReplayError> {
     let mut boundary = next_boundary(clock.now(), tick);
     let ingested = entries.len();
+    let ids: BTreeSet<ExchangeId> = entries
+        .iter()
+        .map(|entry| entry.exchange.exchange.meta.id)
+        .collect();
     for Entry { at, exchange } in entries {
         while boundary < at {
             settle(live, boundary).await?;
@@ -368,8 +377,11 @@ async fn drive(
     let settled_at = clock.now();
     let (export_bytes, evidence) = read_back(live, settings.since, settled_at).await?;
     let exported = read_export(&export_bytes)?;
+    let evidence = order_evidence(&exported, evidence)?;
+    let queried = query_back(live, &ids, &origin_spans(&evidence)).await?;
     Ok(Replayed {
-        evidence: order_evidence(&exported, evidence)?,
+        evidence,
+        queried,
         export_bytes,
         exported,
         ingested,
@@ -448,6 +460,37 @@ async fn read_back(
         }
     }
     Ok((bytes, evidence))
+}
+
+/// What the conversation reads answer for `exchanges` and `spans`.
+async fn query_back(
+    live: &Live,
+    exchanges: &BTreeSet<ExchangeId>,
+    spans: &BTreeSet<SpanId>,
+) -> Result<Queried, ReplayError> {
+    let surface = |read: &'static str| move |reason: String| ReplayError::Surface { read, reason };
+    let caller = live
+        .caller(RequestIdentity::Anonymous)
+        .await
+        .map_err(|error| surface("caller")(format!("{error:?}")))?;
+    let mut out = Queried::default();
+    for batch in batches(exchanges) {
+        out.turns.extend(
+            live.surface()
+                .exchange_turns(&caller, &batch)
+                .await
+                .map_err(|error| surface("exchange turns")(format!("{error:?}")))?,
+        );
+    }
+    for batch in batches(spans) {
+        out.spans.extend(
+            live.surface()
+                .span_points(&caller, &batch)
+                .await
+                .map_err(|error| surface("span points")(format!("{error:?}")))?,
+        );
+    }
+    Ok(out)
 }
 
 fn push_line(bytes: &mut Vec<u8>, line: &ExportLine) -> Result<(), ReplayError> {

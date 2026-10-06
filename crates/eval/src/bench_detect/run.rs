@@ -113,11 +113,8 @@ pub fn run(input: &Path, output: &Path, mode: &Mode) -> Result<Summary, RunError
             }
         };
         let outcome = match &mut engine {
-            Engine::Live(detector) => {
-                live_world(detector, &dataset, &inputs, &mut summary.lossy).map(|rows| {
-                    (WorldStatus::Scored, rows)
-                })
-            }
+            Engine::Live(detector) => live_world(detector, &dataset, &inputs, &mut summary.lossy)
+                .map(|rows| (WorldStatus::Scored, rows)),
             Engine::Pipeline(detector) => pipeline_world(detector, &dataset, &inputs)
                 .map(|ingested| (WorldStatus::NoConsumers { ingested }, Vec::new())),
         };

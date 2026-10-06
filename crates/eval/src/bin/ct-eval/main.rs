@@ -537,6 +537,28 @@ fn open_source(args: &SourceArgs) -> Result<AnySource> {
     }
 }
 
+/// `--detector live`'s settings and extractor config, from the flags.
+fn live_config(args: &RunArgs) -> Result<(LiveSettings, ExtractConfig)> {
+    let secs = |value: Option<u64>| value.map(std::time::Duration::from_secs);
+    let settings = LiveSettings::short(args.seed)?
+        .with_windows(
+            secs(args.correlation_window),
+            secs(args.evidence_window),
+            secs(args.suspected_ttl),
+        )?
+        .with_forwarding(args.forwarding.setting());
+    let extract = match &args.extract_config {
+        Some(path) => {
+            let text = std::fs::read_to_string(path)
+                .with_context(|| format!("reading {}", path.display()))?;
+            ExtractConfig::from_json(&text)
+                .with_context(|| format!("parsing {}", path.display()))?
+        }
+        None => ExtractConfig::default(),
+    };
+    Ok((settings, extract))
+}
+
 fn run_command(args: RunArgs) -> Result<ExitCode> {
     // swarm-traces labels hold real attack payloads: its reports carry only
     // counts, lengths and codec chains, never a miss or false-positive
@@ -592,24 +614,8 @@ fn run_command(args: RunArgs) -> Result<ExitCode> {
             (detector.name().to_owned(), summary)
         }
         DetectorChoice::Live => {
-            let secs = |value: Option<u64>| value.map(std::time::Duration::from_secs);
-            let settings = LiveSettings::short(args.seed)?
-                .with_windows(
-                    secs(args.correlation_window),
-                    secs(args.evidence_window),
-                    secs(args.suspected_ttl),
-                )?
-                .with_forwarding(args.forwarding.setting());
-            let backend = match &args.extract_config {
-                Some(path) => {
-                    let text = std::fs::read_to_string(path)
-                        .with_context(|| format!("reading {}", path.display()))?;
-                    let config = ExtractConfig::from_json(&text)
-                        .with_context(|| format!("parsing {}", path.display()))?;
-                    gateway_backend().with_extract(config)
-                }
-                None => gateway_backend(),
-            };
+            let (settings, extract) = live_config(&args)?;
+            let backend = gateway_backend().with_extract(extract);
             let mut detector = LiveDetector::new(backend, settings)?;
             let summary = run_with(&mut source, &mut detector, examples, observe);
             (detector.name().to_owned(), summary)
@@ -621,7 +627,7 @@ fn run_command(args: RunArgs) -> Result<ExitCode> {
     }
     if let (Some((run, spec)), Some(path)) = (golden, &args.predictions_out) {
         let finished = run
-            .finish(&spec, Some(golden::detector_info(&args)))
+            .finish(&spec, Some(golden::detector_info(&args)?))
             .context("writing the a2a-bench/1 predictions")?;
         let rows = crosstalk_eval::golden::verify::predictions_file(path, &finished.manifest)
             .context("checking the a2a-bench/1 predictions")?;

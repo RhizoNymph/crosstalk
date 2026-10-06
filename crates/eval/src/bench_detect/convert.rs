@@ -143,23 +143,25 @@ pub fn body(message: &bench::message::Message) -> Result<MessageBody, WorldFailu
                             signature: String::new(),
                         })
                     }
-                    AssistantPart::ToolCall(call) => spec::AssistantPart::ToolCall(spec::ToolCall {
-                        id: ToolCallId(call.call_id.clone()),
-                        name: ToolName(call.name.clone()),
-                        arguments: match &call.arguments {
-                            ToolArguments::Json(json) => {
-                                spec::ToolArguments::Json(CanonicalJson(json.as_str().to_owned()))
-                            }
-                            ToolArguments::Invalid(text) => {
-                                spec::ToolArguments::Invalid(text.clone())
-                            }
-                        },
-                        execution: match call.execution {
-                            ToolExecution::Client => spec::ToolExecution::Client,
-                            ToolExecution::Server => spec::ToolExecution::Server,
-                        },
-                        signature: None,
-                    }),
+                    AssistantPart::ToolCall(call) => {
+                        spec::AssistantPart::ToolCall(spec::ToolCall {
+                            id: ToolCallId(call.call_id.clone()),
+                            name: ToolName(call.name.clone()),
+                            arguments: match &call.arguments {
+                                ToolArguments::Json(json) => spec::ToolArguments::Json(
+                                    CanonicalJson(json.as_str().to_owned()),
+                                ),
+                                ToolArguments::Invalid(text) => {
+                                    spec::ToolArguments::Invalid(text.clone())
+                                }
+                            },
+                            execution: match call.execution {
+                                ToolExecution::Client => spec::ToolExecution::Client,
+                                ToolExecution::Server => spec::ToolExecution::Server,
+                            },
+                            signature: None,
+                        })
+                    }
                     AssistantPart::ServerToolResult(result) => {
                         spec::AssistantPart::ServerToolResult(tool_result(result)?)
                     }
@@ -174,7 +176,8 @@ pub fn body(message: &bench::message::Message) -> Result<MessageBody, WorldFailu
                 out.push(tool_result(result)?);
             }
             MessageBody::Tool(
-                NonEmpty::from_vec(out).ok_or_else(|| conversion("a tool message without results"))?,
+                NonEmpty::from_vec(out)
+                    .ok_or_else(|| conversion("a tool message without results"))?,
             )
         }
     })
@@ -244,9 +247,8 @@ pub fn upstream_kind(vendor: Option<&str>) -> UpstreamKind {
 /// The wire protocol a vendor speaks. No detection layer reads it.
 pub fn protocol(kind: &UpstreamKind) -> WireProtocol {
     match kind {
-        UpstreamKind::VendorApi(Vendor::Anthropic) | UpstreamKind::Subscription(Vendor::Anthropic) => {
-            WireProtocol::AnthropicMessages
-        }
+        UpstreamKind::VendorApi(Vendor::Anthropic)
+        | UpstreamKind::Subscription(Vendor::Anthropic) => WireProtocol::AnthropicMessages,
         UpstreamKind::VendorApi(Vendor::Google) | UpstreamKind::Subscription(Vendor::Google) => {
             WireProtocol::GeminiGenerate
         }
@@ -260,9 +262,10 @@ pub fn client(
     dataset: &bench::ids::DatasetId,
     client: &bench::exchange::Client,
 ) -> Result<ClientContext, WorldFailure> {
-    let hex = client.credential.strip_prefix("k:").ok_or_else(|| {
-        conversion("a credential that is not a k:<hex> digest".to_owned())
-    })?;
+    let hex = client
+        .credential
+        .strip_prefix("k:")
+        .ok_or_else(|| conversion("a credential that is not a k:<hex> digest".to_owned()))?;
     let digest = Blake3::from_hex(hex)
         .map_err(|error| conversion(format!("a credential digest: {error:?}")))?;
     Ok(ClientContext {

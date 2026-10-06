@@ -217,8 +217,10 @@ impl PipelineDetector {
         )
         .await?;
         let mut captured = subscribe(pipeline.bus()).await?;
-        let result =
-            ingest_exchanges(&pipeline, &mut captured, exchanges, async |at| clock.set(at)).await;
+        let result = ingest_exchanges(&pipeline, &mut captured, exchanges, async |at| {
+            clock.set(at)
+        })
+        .await;
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         pipeline.shutdown(deadline).await;
         result

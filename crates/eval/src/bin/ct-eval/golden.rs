@@ -20,6 +20,7 @@ use a2a_bench_format::files::DetectorInfo;
 use a2a_bench_format::manifest::{Setting, Source};
 use anyhow::{Context, Result};
 use clap::{Args, ValueEnum};
+use crosstalk_eval::bench_detect::config as bench_config;
 use crosstalk_eval::config::{EvalConfig, expand};
 use crosstalk_eval::corpus::TraceSource;
 use crosstalk_eval::golden::manifest::{self, digest_tree, files_under, int, list, revision, text};
@@ -30,8 +31,7 @@ use crosstalk_eval::golden::{
 use crosstalk_eval::reference::ReferenceConfig;
 
 use super::{
-    AnySource, Dataset, DetectorChoice, ForwardingChoice, RunArgs, SourceArgs, VillageMode,
-    crate_file, open_source,
+    AnySource, Dataset, DetectorChoice, RunArgs, SourceArgs, VillageMode, crate_file, open_source,
 };
 
 /// The export formats `ct-eval export` writes.
@@ -231,9 +231,8 @@ pub fn manifest_spec(args: &SourceArgs, source: &AnySource) -> Result<ManifestSp
 
 /// Who wrote a run's predictions: the detector, the crosstalk commit, and
 /// the setting gates select on.
-pub fn detector_info(args: &RunArgs) -> DetectorInfo {
-    let version = manifest::CROSSTALK_COMMIT.to_owned();
-    let (name, variant) = match args.detector {
+pub fn detector_info(args: &RunArgs) -> Result<DetectorInfo> {
+    Ok(match args.detector {
         DetectorChoice::Reference => {
             let config = args.matcher.config();
             let variant = if config == ReferenceConfig::default() {
@@ -248,23 +247,21 @@ pub fn detector_info(args: &RunArgs) -> DetectorInfo {
                     config.max_postings
                 )
             };
-            ("reference", variant)
+            DetectorInfo {
+                name: "reference".to_owned(),
+                version: manifest::CROSSTALK_COMMIT.to_owned(),
+                variant,
+                config_digest: None,
+            }
         }
-        DetectorChoice::Pipeline => ("crosstalk-pipeline", "default".to_owned()),
-        DetectorChoice::Live => (
-            "crosstalk-live",
-            match args.forwarding {
-                ForwardingChoice::Off => "forwarding-off".to_owned(),
-                ForwardingChoice::On => "forwarding-on".to_owned(),
-            },
-        ),
-    };
-    DetectorInfo {
-        name: name.to_owned(),
-        version,
-        variant,
-        config_digest: None,
-    }
+        // The same header `ct-bench-detect` writes, so the two files are
+        // byte-identical (parity stage P5).
+        DetectorChoice::Pipeline => bench_config::pipeline_info(args.seed)?,
+        DetectorChoice::Live => {
+            let (settings, extract) = super::live_config(args)?;
+            bench_config::live_info(&settings, &extract)?
+        }
+    })
 }
 
 /// A run's golden side: its export to sinks and its predictions file.
