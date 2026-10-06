@@ -58,16 +58,16 @@ use crate::store::codec::json;
 
 /// The Postgres channel registry. Clones share the pool, the directory and
 /// the id source.
-pub struct PgChannelRegistry<D> {
+pub struct PgChannelRegistry<D, S> {
     pool: PgPool,
     retry: SerializableRetry,
-    relay: Relay,
+    relay: Relay<S>,
     directory: Supersessions,
     agents: D,
     ids: Arc<dyn ChannelIdSource>,
 }
 
-impl<D: Clone> Clone for PgChannelRegistry<D> {
+impl<D: Clone, S> Clone for PgChannelRegistry<D, S> {
     fn clone(&self) -> Self {
         Self {
             pool: self.pool.clone(),
@@ -80,7 +80,7 @@ impl<D: Clone> Clone for PgChannelRegistry<D> {
     }
 }
 
-impl<D> std::fmt::Debug for PgChannelRegistry<D> {
+impl<D, S> std::fmt::Debug for PgChannelRegistry<D, S> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PgChannelRegistry")
             .field("retry", &self.retry)
@@ -88,7 +88,7 @@ impl<D> std::fmt::Debug for PgChannelRegistry<D> {
     }
 }
 
-impl<D> PgChannelRegistry<D> {
+impl<D, S: EventSink> PgChannelRegistry<D, S> {
     /// The registry on `pool` (whose flow migrations have run), resolving
     /// agents through `agents`, taking declared channel ids from `ids` and
     /// relaying its events to `sink`. Loads the directory.
@@ -96,7 +96,7 @@ impl<D> PgChannelRegistry<D> {
         pool: PgPool,
         agents: D,
         ids: Arc<dyn ChannelIdSource>,
-        sink: EventSink,
+        sink: S,
     ) -> Result<Self, FlowStoreError> {
         let directory = Supersessions::default();
         directory.load(&pool).await?;
@@ -123,9 +123,9 @@ impl<D> PgChannelRegistry<D> {
         self.directory.load(&self.pool).await
     }
 
-    /// The outbox relay: [`Relay::relay`] sends events a crashed writer
-    /// staged and never relayed.
-    pub fn relay(&self) -> &Relay {
+    /// The outbox relay: [`Relay::relay`] publishes events a crashed writer
+    /// staged and never published, under the ids they were stamped with.
+    pub fn relay(&self) -> &Relay<S> {
         &self.relay
     }
 
@@ -163,19 +163,19 @@ async fn staged<T, E: StoreFault>(
     Ok((value, events))
 }
 
-impl<D: AgentDirectory + Send + Sync> PgChannelRegistry<D> {
+impl<D: AgentDirectory + Send + Sync, S: EventSink> PgChannelRegistry<D, S> {
     fn agent(&self) -> impl Fn(AgentId) -> AgentId + Copy + '_ {
         move |agent| self.agents.canonical(agent)
     }
 }
 
-impl<D> ChannelDirectory for PgChannelRegistry<D> {
+impl<D, S> ChannelDirectory for PgChannelRegistry<D, S> {
     fn canonical(&self, id: ChannelId) -> ChannelId {
         self.directory.canonical(id)
     }
 }
 
-impl<D: AgentDirectory + Send + Sync> ChannelRegistry for PgChannelRegistry<D> {
+impl<D: AgentDirectory + Send + Sync, S: EventSink> ChannelRegistry for PgChannelRegistry<D, S> {
     async fn lookup(&self, locator: &Locator) -> Result<ChannelLookup, RegistryError> {
         // One statement: its own snapshot.
         let mut conn = self.pool.acquire().await.map_err(failed)?;
@@ -307,7 +307,7 @@ impl<D: AgentDirectory + Send + Sync> ChannelRegistry for PgChannelRegistry<D> {
     }
 }
 
-impl<D: Send + Sync> ChannelTraffic for PgChannelRegistry<D> {
+impl<D: Send + Sync, S: EventSink> ChannelTraffic for PgChannelRegistry<D, S> {
     async fn add_resource(
         &mut self,
         resource: Resource,
@@ -392,7 +392,7 @@ impl<D: Send + Sync> ChannelTraffic for PgChannelRegistry<D> {
     }
 }
 
-impl<D: AgentDirectory + Send + Sync> ChannelReads for PgChannelRegistry<D> {
+impl<D: AgentDirectory + Send + Sync, S: EventSink> ChannelReads for PgChannelRegistry<D, S> {
     async fn channel(&self, id: ChannelId) -> Result<Option<ChannelWithTraffic>, RegistryError> {
         let mut conn = self.pool.acquire().await.map_err(failed)?;
         reads::channel(&mut conn, id, &self.agent())

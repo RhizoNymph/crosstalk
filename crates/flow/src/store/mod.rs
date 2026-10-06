@@ -14,8 +14,9 @@
 //!
 //! **Publishing.** A store publishes what it decides (`ChannelDiscovered`,
 //! `ChannelPromoted`, `VerdictSet`, `Changed`) through a transactional
-//! outbox: staged in the deciding transaction, relayed to the
-//! [`EventSink`] after commit ([`outbox`]).
+//! outbox: staged in the deciding transaction, stamped with an envelope id
+//! once and published to the [`EventSink`] after commit ([`outbox`],
+//! `flow.outbox.stable-envelope-id`).
 //!
 //! **Transactions.** Every write is one `SERIALIZABLE` transaction under
 //! `crosstalk_store::retry_serializable`; every read one `REPEATABLE READ`
@@ -43,7 +44,7 @@ pub use cursor::prune_cursors;
 pub use directory::{ShardIndex, ShardKey};
 pub use error::FlowStoreError;
 pub use ids::{ChannelIdSource, IdSourceError, UlidChannelIds};
-pub use outbox::{EventSink, Relay};
+pub use outbox::{BusSink, EventSink, Relay, SinkError, Stamp};
 pub use registry::PgChannelRegistry;
 pub use shards::PgShardTicks;
 pub use transmissions::PgTransmissionStore;

@@ -19,7 +19,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crosstalk_spec::support::Timestamp;
 
 use super::support::{Failure, TestResult, agents, at, db, drain, ensure, registry, same};
-use crate::store::{ChannelIdSource, EventSink, IdSourceError, PgChannelRegistry};
+use crate::store::outbox::ChannelSink;
+use crate::store::{ChannelIdSource, IdSourceError, PgChannelRegistry};
 
 /// A fresh id on every call, as ULIDs are.
 struct FreshIds(AtomicU64);
@@ -131,7 +132,7 @@ async fn pg_concurrent_overlapping_declarations_accept_one() -> TestResult {
         db.pool().clone(),
         agents().await?,
         Arc::new(FreshIds(AtomicU64::new(1))),
-        EventSink::new(sender),
+        ChannelSink::new(sender),
     )
     .await?
     .with_retry(patient()?);

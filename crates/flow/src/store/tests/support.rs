@@ -15,9 +15,9 @@ use crosstalk_store::{TestDb, TestDbError};
 use sqlx::PgPool;
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 
+use crate::store::outbox::ChannelSink;
 use crate::store::{
-    ChannelIdSource, EventSink, FlowStoreError, IdSourceError, PgChannelRegistry,
-    PgTransmissionStore, migrate,
+    ChannelIdSource, FlowStoreError, IdSourceError, PgChannelRegistry, PgTransmissionStore, migrate,
 };
 
 /// Why a store test failed.
@@ -109,13 +109,19 @@ pub(crate) async fn agents() -> Result<MemoryAgents, Failure> {
 pub(crate) async fn registry_over(
     pool: &PgPool,
     agents: MemoryAgents,
-) -> Result<(PgChannelRegistry<MemoryAgents>, UnboundedReceiver<BusEvent>), Failure> {
+) -> Result<
+    (
+        PgChannelRegistry<MemoryAgents, ChannelSink>,
+        UnboundedReceiver<BusEvent>,
+    ),
+    Failure,
+> {
     let (sender, events) = unbounded_channel();
     let registry = PgChannelRegistry::open(
         pool.clone(),
         agents,
         Arc::new(SequenceIds(IdSequence::default())),
-        EventSink::new(sender),
+        ChannelSink::new(sender),
     )
     .await?;
     Ok((registry, events))
@@ -124,7 +130,13 @@ pub(crate) async fn registry_over(
 /// A registry on `pool` over the reference directory.
 pub(crate) async fn registry(
     pool: &PgPool,
-) -> Result<(PgChannelRegistry<MemoryAgents>, UnboundedReceiver<BusEvent>), Failure> {
+) -> Result<
+    (
+        PgChannelRegistry<MemoryAgents, ChannelSink>,
+        UnboundedReceiver<BusEvent>,
+    ),
+    Failure,
+> {
     registry_over(pool, agents().await?).await
 }
 
@@ -133,14 +145,14 @@ pub(crate) async fn transmissions(
     pool: &PgPool,
 ) -> Result<
     (
-        PgTransmissionStore<MemoryAgents>,
+        PgTransmissionStore<MemoryAgents, ChannelSink>,
         UnboundedReceiver<BusEvent>,
     ),
     Failure,
 > {
     let (sender, events) = unbounded_channel();
     Ok((
-        PgTransmissionStore::new(pool.clone(), agents().await?, EventSink::new(sender)),
+        PgTransmissionStore::new(pool.clone(), agents().await?, ChannelSink::new(sender)),
         events,
     ))
 }

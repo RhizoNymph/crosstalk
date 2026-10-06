@@ -47,15 +47,25 @@ use super::error::{Fault, failed, finished};
 use super::outbox::{EventSink, Relay, stage};
 
 /// The transmission store on Postgres. Clones share the pool.
-#[derive(Clone)]
-pub struct PgTransmissionStore<D> {
+pub struct PgTransmissionStore<D, S> {
     pool: PgPool,
     retry: SerializableRetry,
-    relay: Relay,
+    relay: Relay<S>,
     agents: D,
 }
 
-impl<D> std::fmt::Debug for PgTransmissionStore<D> {
+impl<D: Clone, S> Clone for PgTransmissionStore<D, S> {
+    fn clone(&self) -> Self {
+        Self {
+            pool: self.pool.clone(),
+            retry: self.retry,
+            relay: self.relay.clone(),
+            agents: self.agents.clone(),
+        }
+    }
+}
+
+impl<D, S> std::fmt::Debug for PgTransmissionStore<D, S> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("PgTransmissionStore")
             .field("retry", &self.retry)
@@ -63,10 +73,10 @@ impl<D> std::fmt::Debug for PgTransmissionStore<D> {
     }
 }
 
-impl<D> PgTransmissionStore<D> {
+impl<D, S: EventSink> PgTransmissionStore<D, S> {
     /// The store on `pool` (whose flow migrations have run), resolving
     /// agents through `agents` and relaying its events to `sink`.
-    pub fn new(pool: PgPool, agents: D, sink: EventSink) -> Self {
+    pub fn new(pool: PgPool, agents: D, sink: S) -> Self {
         Self {
             relay: Relay::new(pool.clone(), sink),
             pool,
@@ -82,7 +92,7 @@ impl<D> PgTransmissionStore<D> {
     }
 
     /// The outbox relay.
-    pub fn relay(&self) -> &Relay {
+    pub fn relay(&self) -> &Relay<S> {
         &self.relay
     }
 }
@@ -223,7 +233,7 @@ async fn set_verdict(
     Ok((recorded, events))
 }
 
-impl<D: Send + Sync> TransmissionStore for PgTransmissionStore<D> {
+impl<D: Send + Sync, S: EventSink> TransmissionStore for PgTransmissionStore<D, S> {
     async fn save(&mut self, transmission: Transmission) -> Result<(), TransmissionStoreError> {
         let (route, channel) = route_columns(&transmission.route);
         let opened = micros("transmissions.opened_at", transmission.opened_at).map_err(failed)?;
@@ -424,7 +434,9 @@ fn key_of(
     })
 }
 
-impl<D: AgentDirectory + Send + Sync> TransmissionVerdicts for PgTransmissionStore<D> {
+impl<D: AgentDirectory + Send + Sync, S: EventSink> TransmissionVerdicts
+    for PgTransmissionStore<D, S>
+{
     async fn set(
         &mut self,
         transmission: TransmissionId,
