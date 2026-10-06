@@ -193,6 +193,7 @@ impl From<BusError> for QueryError {
             BusError::Decode { reason } => format!("decode: {reason}"),
             BusError::GroupSubjectMismatch { .. } => "group subject mismatch".to_owned(),
             BusError::GroupRetryMismatch { .. } => "group retry mismatch".to_owned(),
+            BusError::SpoolFull { bytes } => format!("publish spool full at {bytes} bytes"),
         };
         Self::Store { reason }
     }

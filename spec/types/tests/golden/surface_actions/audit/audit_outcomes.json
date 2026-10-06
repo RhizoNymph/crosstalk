@@ -23,5 +23,8 @@
     "data": {
       "missing": "govern"
     }
+  },
+  {
+    "type": "interrupted"
   }
 ]

@@ -1,0 +1,19 @@
+[invariant]
+id = "transport.durability.pg-publish-persisted"
+statement = "An envelope whose PgBus::publish, or SpoolingBus::publish over a PgBus, returned Ok is in the bus log or durably spooled, and is delivered to every consumer group subscribed when it was published after the publishing process restarts."
+kind = "coordination"
+requires = ["integration"]
+rationale = """
+The INV-128 guarantee for the single-node durable bus. Capture publishes
+ExchangeCaptured and forgets the exchange, and every consumer acks only
+after publishing what it derived, so Ok preceding persistence would lose
+work at a crash. The spool counts as durable because its append is
+fsynced before Ok and it drains into the log on recovery
+(transport.spool.ok-means-durable).
+"""
+
+[evidence]
+integration = "crosstalk_transport::integration::pg_publish_survives_restart"
+
+[evidence-review]
+integration = { agent = "false", human = "false" }

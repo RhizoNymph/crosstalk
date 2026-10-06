@@ -7,10 +7,11 @@ agents, conversations, spans, matches, channels, transmissions, verdicts,
 edges, the watermark, alerts and the audit, and the API shows every
 detection committed before the crash.
 
-**Status: design reviewed; not implemented yet.** The user reviewed it
-(PR #103) and settled every open question; see [Decisions](#decisions).
-The spec changes in [Proposed spec changes](#proposed-spec-changes) are
-not yet applied to `spec/`; they are the first workstream (S).
+**Status: design reviewed; workstream S (the spec changes) landed; W1 to
+W9 not implemented yet.** The user reviewed it (PR #103) and settled
+every open question; see [Decisions](#decisions). The spec surface the
+workstreams build against is in [Spec changes](#spec-changes-landed-workstream-s),
+with the final names and invariant numbers (INV-1200 to INV-1221).
 
 ## Scope
 
@@ -1169,10 +1170,50 @@ around.
      unchanged, `/readyz` turns 503 (`dropping: spool full`), and after
      the drain it is 200 again.
 
-## Proposed spec changes
+## Spec changes (landed, workstream S)
 
-These are accepted by the user's review and not yet applied. They are
-the shared boundary that lands first (workstream S).
+Accepted by the user's review and applied on `feat/pg-spec` (workstream
+S). They are the shared boundary W1 to W9 build against. The final
+surface, with where each piece lives:
+
+| Item | Spec surface | Invariants |
+| --- | --- | --- |
+| Derived envelope ids | `EventId::derive(parent: EventId, label: &'static str, ordinal: u32) -> EventId` (`spec/types/ids.rs`): parent's millisecond, then 80 bits of BLAKE3 over `"crosstalk.envelope.derived.v1"`, the label (u32 BE length + bytes), the parent (u128 BE) and the ordinal (u32 BE); pinned by a test vector | INV-1200 `canonical.ids.derived-event-id` (unit, property: done); INV-1202 `transport.consumer.derived-envelope-ids` (dst per consumer: reconstruct, provenance, flow, topology, gateway classifier) |
+| `PgBus` and durability | `l2_transport.rs` module doc: `PgBus` (single node, durable) among the `EventBus` implementations; durability, idempotent publish and restart redelivery stated there | INV-1203 `transport.durability.pg-publish-persisted`; INV-1204 `transport.publish.idempotent-on-id`; INV-1205 `transport.restart.held-redelivered`; INV-102 and INV-103 rationale scoped to `MpscBus` (their statements already named it) |
+| Publish spool | `BusError::SpoolFull { bytes: u64 }` (not serialized; `QueryError::from(BusError)` maps it to `Store`); `l2_transport.rs` names `SpoolingBus<B>` as the decorator `serve` puts in front of `PgBus` | INV-1206 `transport.spool.ok-means-durable`; INV-1207 `transport.spool.drained-once-under-its-id`; INV-1208 `transport.spool.no-overtaking`; INV-1209 `transport.spool.torn-tail-only`; INV-1210 `transport.spool.bounded` |
+| Outbox ids | none (crate-level relays) | INV-1211 `reconstruct.outbox.stable-envelope-id`; INV-1212 `flow.outbox.stable-envelope-id`; INV-1213 `analysis.outbox.stable-envelope-id`; INV-1214 `topology.outbox.stable-envelope-id` |
+| L5 restore | none (crate-level ports) | INV-1215 `flow.consumer.restore-equivalent`; INV-1216 `flow.checkpoint.ticks-with-state` |
+| Frontier | `FrontierSource` doc (`l7_topology.rs`): spooled envelopes count as pending; `PgFrontierSource` lives in `crosstalk-gateway`. INV-581's integration evidence moved to `crosstalk_gateway::integration::pg_frontier_covers_pending_deliveries` | INV-1217 `topology.frontier.covers-spool` |
+| Audit atomicity (Q3) | `AuditOutcome::Interrupted` (wire `{"type": "interrupted"}`, `OutcomeKind::Interrupted`; `result()` reads it back as `ActionError::Store { reason: INTERRUPTED_REASON }`); `AuditIntent` (checked: `AuditIntent::new(id, at, caller, action)` refuses a caller without the action's permission; `entry(outcome)`, `interrupted()`; wire `{"id", "at", "caller", "action"}`, golden `surface_actions/audit/audit_intent.json`); trait `AuditIntents: AuditLog` with `intend(&AuditIntent)`, `complete(AuditEntry)` (append + remove the intent, one transaction) and `recover_interrupted() -> Vec<AuditId>`. The audit module doc and `OperatorActions::act`'s doc describe the write-ahead flow | INV-1218 `surface.audit.no-silent-effect`; INV-459 gains the `Interrupted` and intent permission tests; INV-364 and INV-458 rationales describe the intent |
+| Cursor keys (Q4) | `KeyedHasher::derive_key(label: &'static str) -> DerivedKey` (`ids/secret.rs`): BLAKE3 `derive_key` mode over the current version's key and the label; `DerivedKey { version(), as_bytes() }`, no serde or `Clone`, redacted `Debug`. Labels: `crosstalk.cursor.v1.<store>` | INV-1201 `canonical.ids.derived-key-per-purpose` (unit: done); INV-1219 `surface.cursor.survives-restart` |
+| Unique ids across restarts | none | INV-1220 `surface.ids.unique-across-restart` |
+| Forwarding | `l0_ingress.rs` module doc | INV-1221 `ingress.proxy.forwarding-independent-of-capture-store` |
+
+Every new invariant's evidence is a planned path with `agent = "false"`,
+except INV-1200 and INV-1201, whose spec tests exist. Each workstream
+flips the evidence it implements. Downstream type-shape fixes:
+`ui/src/pages/audit/entry.rs` shows `Interrupted` as a rejected outcome
+with `INTERRUPTED_REASON`, and `crates/world/tests/history.rs` counts it
+with `Succeeded` (no world history has one).
+
+Deviations from the proposal below:
+- L3 keeps `crosstalk_reconstruct::ids::derived_event_id`. It derives from
+  the exchange id with a byte salt under its own domain, so switching it
+  to `EventId::derive` would change every L3 envelope id, not refactor
+  it. `transport.consumer.derived-envelope-ids` therefore reads "a
+  function of that delivery's envelope (its id, or the id of the input it
+  carries)".
+- Item 7 said no type change was needed for cursor keys, but
+  `KeyedHasher` had no way to derive a key, so `derive_key` and
+  `DerivedKey` were added.
+- Item 6 named no trait for the intent; `AuditIntent` and `AuditIntents`
+  were added so W7 (`PgAuditLog`, the memory reference) and W8 (the
+  surface's `act`) share one contract. `AuditIntents` is a separate trait,
+  so the existing `AuditLog` implementations still build.
+- Item 8 chose `surface.ids.unique-across-restart` (not `canonical`): the
+  composer that seeds the generators upholds it.
+
+The proposal as reviewed:
 
 1. **Derived envelope ids** (`spec/types/ids`): `EventId::derive(parent:
    EventId, label: &'static str, ordinal: u32) -> EventId`. It keeps the
@@ -1264,8 +1305,8 @@ the shared boundary that lands first (workstream S).
    writes or `ExchangePlacements`. They are crate-level ports or existing
    traits.
 
-INV numbers stay `INV-X-<id>.toml` until the coordinator numbers them.
-The current highest number is 1152.
+The coordinator numbered them in the P7.3 block (INV-1200 to INV-1249);
+S used INV-1200 to INV-1221.
 
 ## Implementation plan
 
@@ -1281,7 +1322,7 @@ S (spec, first) ──┬─▶ W1 transport ─┐
 
 | WS | Branch | Owns (files, crates) | Delivers |
 | --- | --- | --- | --- |
-| S | `feat/spec-restart-durability` | `spec/types/ids*`, `spec/types/interfaces/l2_transport.rs`, `l7_topology.rs` (doc), `l8_surface/audit.rs`, `spec/invariants/INV-X-*` | the spec changes above, with type and unit evidence for `EventId::derive` |
+| S (landed) | `feat/pg-spec` | `spec/types/ids*`, `spec/types/interfaces/l2_transport.rs`, `l7_topology.rs` (doc), `l8_surface/audit.rs`, `spec/invariants/INV-X-*` | the spec changes above, with type and unit evidence for `EventId::derive` |
 | W1 | `feat/pg-bus` | `crates/transport/{src/pg/**, src/spool/**, migrations/**, Cargo.toml}`, transport tests and dst made bus-generic; `crates/testkit/src/db_link.rs` | `PgBus`, `PgDeadLetters`, `group_stats`, `prune`, restart reset; **`SpoolingBus`** (segments, cursor, lock, states, drain, bounds, `oldest_at`, stats); `DbLink`; bus conformance over both buses; spool unit, DST and integration tests |
 | W2 | `feat/l3-restart` | `crates/reconstruct/**` | `ExchangePlacements` for `PgConversations`; outbox stamp + awaited bus sink; derived ids checked on redelivery; `0004_outbox_ids.sql` |
 | W3 | `feat/l4-pg-span-index` | `crates/provenance/**` | `SpanIndex` for `PgProvenanceStore`; `started_at` read; retention tests including token observations |
@@ -1366,6 +1407,11 @@ marked):
 | `crates/api/src/pg/{mod,evidence}.rs` | the Postgres store bundle | `PgStores`, `PgEvidence` |
 | `crates/gateway/src/live/{mod,store_set,recovery,frontier}.rs`, `src/store.rs`, `src/ops/mod.rs`, `src/config/sections.rs`, `src/cli.rs` | composition, recovery, frontier, readiness, the `spool` section and `spool` subcommand | `LiveStoreSet`, `PgFrontierSource`, `Recovery`, `PipelineLock`, `SpoolSection` |
 | `crates/e2e/src/restart.rs`, `crates/e2e/tests/restart/**` | restart tests | - |
+| `spec/types/ids.rs`, `spec/types/ids/secret.rs` (exist) | derived envelope ids, derived keys | `EventId::derive`, `KeyedHasher::derive_key`, `DerivedKey` |
+| `spec/types/interfaces/l2_transport.rs` (exists) | bus docs, spool error | `BusError::SpoolFull` |
+| `spec/types/interfaces/l8_surface/audit.rs` (exists) | write-ahead intents | `AuditOutcome::Interrupted`, `INTERRUPTED_REASON`, `AuditIntent`, `AuditIntents` |
+| `spec/types/tests/{derived_ids,audit_intents}.rs` (exist) | spec tests for the above | - |
+| `spec/invariants/INV-1200..1221-*.toml` (exist) | the P7.3 invariants | - |
 | `docs/features/postgres_stores.md` (this page, exists) | the design | - |
 
 ## Invariants and constraints

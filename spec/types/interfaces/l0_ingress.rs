@@ -22,6 +22,12 @@
 //! forwarded and relayed in full; it is counted as uncaptured and produces no
 //! `RawExchange`.
 //!
+//! Forwarding never depends on where captures go: the proxy forwards and
+//! relays every request unchanged whatever the state of the database, the
+//! bus or the publish spool. A capture the spool has no room for is
+//! counted as uncaptured; its client never waits
+//! (`ingress.proxy.forwarding-independent-of-capture-store`).
+//!
 //! Two ingress modes ([`IngressMode`]):
 //! - **Reverse proxy.** The harness's base URL points at a configured route
 //!   (`ANTHROPIC_BASE_URL`, Codex `openai_base_url`, pi `models.json`

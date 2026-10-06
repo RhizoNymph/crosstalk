@@ -1,0 +1,21 @@
+[invariant]
+id = "surface.audit.no-silent-effect"
+statement = "Every operator action call whose effect may have applied has an audit entry, with outcome Interrupted at worst."
+kind = "coordination"
+requires = ["unit", "integration"]
+rationale = """
+An action's effect commits in the owning layer's store and its audit
+entry in the surface's, and the spec's traits cannot share one
+transaction across them (decision Q3). A write-ahead AuditIntent recorded
+before the effect, completed with the entry in one transaction, and
+recovered as Interrupted at start, means a crash can leave an effect
+whose outcome is unknown but never one the log does not mention.
+"""
+
+[evidence]
+unit = "crosstalk_surface::tests::actions::interrupted_call_is_recorded_at_start"
+integration = "crosstalk_surface::integration::pg_leftover_intent_recovered_as_interrupted"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

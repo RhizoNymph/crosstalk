@@ -226,7 +226,7 @@ fn the_audit_log_records_config_operator_actions_and_two_refusals() -> Result {
                 match record.outcome() {
                     AuditOutcome::Forbidden { .. } => forbidden += 1,
                     AuditOutcome::Rejected(_) => rejected += 1,
-                    AuditOutcome::Succeeded(_) => {}
+                    AuditOutcome::Succeeded(_) | AuditOutcome::Interrupted => {}
                 }
             }
             AuditBody::Export(_) => {}

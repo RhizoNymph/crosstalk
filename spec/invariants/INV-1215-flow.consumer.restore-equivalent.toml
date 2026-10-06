@@ -1,0 +1,19 @@
+[invariant]
+id = "flow.consumer.restore-equivalent"
+statement = "A flow consumer restored from its last checkpoint, with the unacked deliveries redelivered and the accesses after the checkpoint re-fed, decides the same transmissions at the same ids and times as one that never stopped."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+The correlator is the one stateful consumer. Its shards are snapshotted
+with the ticks they ran, and the flow group acks only deliveries a
+snapshot covers, so a restart re-feeds exactly what the snapshot has not
+seen. The correlator accepts evidence duplicated, late and in any order,
+and its decisions are keyed by derived ids, so redoing work across the
+checkpoint changes nothing observable.
+"""
+
+[evidence]
+dst = "crosstalk_flow::dst::restore_from_checkpoint_decides_as_uninterrupted"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

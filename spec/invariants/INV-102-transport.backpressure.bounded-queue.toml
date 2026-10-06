@@ -7,7 +7,8 @@ rationale = """
 A slow consumer group must not grow memory without bound on a single node.
 Dropping is not an option under at-least-once, so the bound is enforced by
 backpressure on publishers. Publishers are off the proxy hot path, so
-waiting here slows capture, never forwarding.
+waiting here slows capture, never forwarding. Scoped to MpscBus: PgBus's
+durable log is the queue, so its publish never waits for group room.
 """
 
 [evidence]
