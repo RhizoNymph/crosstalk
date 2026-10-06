@@ -1397,19 +1397,22 @@ sessions per run):
 | `demo-swarm/headline` | channel / tool_result / exact recall | ≥ 0.95 | 1.000 (54 / 54) |
 | `demo-swarm/headline` | channel / tool_result / exact precision | ≥ 0.95 | 1.000 |
 | `demo-swarm/headline` | negative-control violations, reason `reread` | ≤ 0 | 0 (31 discarded predictions dismissed) |
-| `demo-swarm/boilerplate` | `fp_per_1k` | ≤ 105 | 68.5 (17 / 248), 20261006T212129Z (was ≤ 130 from 89.1 on 20261006T021639Z) |
+| `demo-swarm/boilerplate` | `fp_per_1k` | ≤ 115 | 64.8–107.4 over four boilerplate runs replayed at 21a8bcf (was ≤ 130) |
 | `demo-swarm/boilerplate` | overall recall | ≥ 0.95 | 1.000 (50 / 50) |
-| `demo-swarm/boilerplate` | overall precision | ≥ 0.88 | 0.927 (was ≥ 0.80 from 0.883) |
+| `demo-swarm/boilerplate` | overall precision | ≥ 0.86 | 0.875–0.940 over the same runs (was ≥ 0.80) |
 
-The boilerplate bounds are recalibrated on 20261006T212129Z (integration/impl
-21a8bcf, after the L4 shadowed-fragments and verbatim-template fixes). Its 17
-false positives are 14 unobserved/reader_output template sentences, accepted
-with `reader_output.min_chars = 64`, 2 user_turn/normalized and 1
-channel/exact. One false positive moves the rate by about 4 per 1k, and
-Poisson noise on 17 is about ±17 per 1k, so the ceiling (105) and the
-precision floor (0.88) sit about two standard deviations from the measured
-run. The earlier calibration run, 20261006T021639Z, had 22 false positives
-(89.1 per 1k, precision 0.883). The first bench
+The boilerplate bounds are calibrated on the spread of every saved
+boilerplate run replayed at integration/impl 21a8bcf (after the L4
+shadowed-fragments and verbatim-template fixes): 20261005T184633Z (0.909, 67.2
+per 1k), 20261006T021639Z (0.940, 64.8), 20261006T062146Z (0.875, 107.4) and
+the fresh node0 run 20261006T212129Z (0.927, 68.5), all at recall 1.000. The
+false positives are mostly unobserved/reader_output template sentences,
+accepted with `reader_output.min_chars = 64`. The ceiling (115) and the
+precision floor (0.86) sit just outside the worst run, so run-to-run variance
+on the same code passes. A first attempt calibrated on one run (105 / 0.88)
+failed 062146Z. Run 20261005T155320Z predates the `scenario` header field, so
+it scores as headline although its traffic is the templated generator (0.939
+precision on replay); it is not a headline calibration case. The first bench
 (20261005T155320Z, before L4 match quality and unique sessions) scored
 precision 0.175 and is kept above for history only. Each agent's system
 prompt carries `[style:<scenario>]`,
