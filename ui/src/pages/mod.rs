@@ -7,6 +7,8 @@ pub mod channels;
 pub mod common;
 pub mod explore;
 pub mod export;
+#[cfg(test)]
+mod follow_tests;
 pub mod gateway;
 pub mod overview;
 pub mod pipeline;
