@@ -28,7 +28,7 @@ use crosstalk_spec::interfaces::l8_surface::operators::{
 use crate::url::ulid::{InvalidUlid, UlidId};
 
 use http::RawHttp;
-pub use http::{HttpConfig, OperatorPick, TokenError};
+pub use http::{HttpConfig, TokenError};
 
 pub const CONFIG_ENV: &str = "CROSSTALK_UI_CONFIG";
 pub const DEFAULT_PATH: &str = "config.json";
@@ -99,8 +99,8 @@ pub struct ReplayConfig {
 ///
 /// Built by [`Access::trusted`] (the local backends: the configured
 /// operator with every permission) or [`Access::of_operator`] (the http
-/// backend: the operator the server lists for the token, with the
-/// permissions the server's directory gives it).
+/// backend: the operator `QueryApi::me` answers for the token, with the
+/// permissions the token was authenticated with).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Access {
     caller: Caller,
@@ -193,10 +193,7 @@ pub enum ConfigError {
     Access(#[from] AccessError),
     #[error("the {backend} backend needs \"operator\": the trusted operator it acts as")]
     MissingOperator { backend: &'static str },
-    #[error(
-        "the http backend takes no \"operator\": the server names the token's operator \
-         (backend.http.operator picks one by id if it lists several)"
-    )]
+    #[error("the http backend takes no \"operator\": the server says who the token is")]
     OperatorBesideHttp,
     #[error("backend.http.url: {0}")]
     Url(crosstalk_client::InvalidBaseUrl),
@@ -204,8 +201,6 @@ pub enum ConfigError {
     TokenUnset { env: String },
     #[error("backend.http.token (from {env}): {reason}")]
     Token { env: String, reason: TokenError },
-    #[error("backend.http.operator: {0}")]
-    HttpOperator(InvalidUlid),
 }
 
 impl Config {

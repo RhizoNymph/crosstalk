@@ -7,6 +7,7 @@ pub mod channels;
 pub mod common;
 pub mod explore;
 pub mod export;
+pub mod gateway;
 pub mod overview;
 pub mod pipeline;
 #[cfg(test)]
@@ -58,11 +59,18 @@ fn nav_classes(active: bool) -> &'static str {
 async fn root_layout(cx: &Cx, slot: Slot<'_>) -> Result<impl View> {
     let path = uri(cx).path().to_owned();
     let operator_name = access(cx).name().to_owned();
+    // The gateway page (`gateway`) is rendered because the gateway failed:
+    // it neither asks it again for the view state nor opens the live feed.
+    let gateway_down = gateway::carried(cx).is_some();
     // Live updates need View, as `/data/live` does.
-    let live = can(&caller(cx), Permission::View);
+    let live = !gateway_down && can(&caller(cx), Permission::View);
     // Navigation carries the current view state, so the filter follows the
     // user between sections.
-    let query = current_state(cx).await.map(|state| state.to_query());
+    let query = if gateway_down {
+        None
+    } else {
+        current_state(cx).await.map(|state| state.to_query())
+    };
     let sections = SECTIONS.map(|(prefix, label)| {
         let href = match &query {
             Some(query) => format!("{prefix}?{query}"),

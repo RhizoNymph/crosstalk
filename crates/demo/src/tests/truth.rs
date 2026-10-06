@@ -13,8 +13,8 @@ use crate::anthropic::{AssistantMessage, ResponseBlock, StopReason, Usage};
 use crate::http::BaseUrl;
 use crate::knobs::Span;
 use crate::protocol::{
-    CallRefused, HTTP_TOOL, PageSlug, Task, WikiCall, page_url, read_input, tool_definitions,
-    write_input,
+    CallRefused, HTTP_TOOL, PageSlug, Scenario, Task, WikiCall, page_url, read_input,
+    tool_definitions, write_input,
 };
 use crate::swarm::agent::{Agent, Shared};
 use crate::swarm::config::SwarmConfig;
@@ -259,6 +259,7 @@ fn shared_for(wiki_addr: SocketAddr) -> Shared {
         gateway: wiki.client(wiki_addr, Duration::from_secs(5)),
         wiki: wiki.client(wiki_addr, Duration::from_secs(5)),
         config,
+        run: "01J0000000000000000000000A".to_owned(),
         clock: RunClock::start(&crosstalk_spec::support::SystemClock),
     }
 }
@@ -268,7 +269,7 @@ async fn the_agent_runs_http_requests_against_the_wiki() {
     let server = wiki().await;
     let shared = shared_for(server.addr);
     let wiki = shared.config.wiki.clone();
-    let agent = Agent::new(&shared.config, 3);
+    let agent = Agent::new(&shared.config, &shared.run, 3);
     let (events, mut inbox) = mpsc::channel(64);
     let page = slug("release-plan-8");
     let url = page_url(&wiki, &page);
@@ -462,6 +463,7 @@ fn info() -> RunInfo {
     RunInfo {
         run: "01J0000000000000000000000A".to_owned(),
         seed: 42,
+        scenario: Scenario::Boilerplate,
         agents: 5,
         keys: 3,
         agents_per_key: 2,
@@ -527,6 +529,7 @@ fn kind(row: &Row) -> &'static str {
         Row::Miss(_) => "miss",
         Row::UnattributedRead(_) => "unattributed_read",
         Row::AgentCluster(_) => "agent_cluster",
+        Row::Session(_) => "session",
     }
 }
 
@@ -671,6 +674,7 @@ fn rows_have_exactly_the_v2_keys() {
         json!([
             "kind",
             "version",
+            "scenario",
             "world",
             "run",
             "seed",
@@ -685,6 +689,7 @@ fn rows_have_exactly_the_v2_keys() {
     );
     assert_eq!(header["value"]["kind"], "header");
     assert_eq!(header["value"]["version"], 2);
+    assert_eq!(header["value"]["scenario"], "boilerplate");
     assert_eq!(header["value"]["world"], "swarm-01J0000000000000000000000A");
     // One cluster per key group, singletons included.
     let clusters: Vec<Value> = opening[1..]
@@ -778,6 +783,26 @@ fn rows_have_exactly_the_v2_keys() {
     let value = &encoded["value"];
     assert_eq!(value["kind"], "unattributed_read");
     assert_eq!(value["version"], 5);
+
+    // A conversation starting.
+    let session = book.start_session("agent-003".to_owned(), 1, "s-9".to_owned(), 1_010);
+    let encoded = encode(&session);
+    assert_eq!(
+        encoded["order"],
+        json!([
+            "kind",
+            "world",
+            "agent",
+            "key_group",
+            "session",
+            "started_at_unix_ms"
+        ])
+    );
+    assert_eq!(
+        encoded["value"],
+        json!({"kind": "session", "world": "swarm-01J0000000000000000000000A", "agent": "agent-003", "key_group": 1, "session": "s-9", "started_at_unix_ms": 1_010})
+    );
+    assert_eq!(book.counts().sessions, 1);
     assert_eq!(
         keys(&value["content"]),
         BTreeSet::from(["at", "blake3", "excerpt", "sha256"])

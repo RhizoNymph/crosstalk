@@ -3,8 +3,11 @@
 //! give the same message, the same ids and the same timing.
 //!
 //! It reads only what it needs, tolerantly: `model`, `stream`,
-//! `max_tokens`, the declared tool names and the last user turn (system
-//! turns inside `messages` are skipped). A user turn ending in a task
+//! `max_tokens`, the declared tool names, the style marker of the top-level
+//! `system` prompt ([`Scenario::of_system`]) and the last user turn (system
+//! turns inside `messages` are skipped). The style picks the prose
+//! generator for every text it writes (page text, chat and closing
+//! answers): templated for `[style:boilerplate]`, high-entropy otherwise. A user turn ending in a task
 //! marker ([`Task`]) gets the matching `http_request` call against the
 //! wiki URL the marker names (a GET to read, a PUT with generated page text
 //! to write) when the tool is declared; a turn of tool results gets a
@@ -16,9 +19,9 @@ use serde_json::Value;
 
 use crate::anthropic::{AssistantMessage, ResponseBlock, StopReason, Usage};
 use crate::knobs::{Rng, Span};
-use crate::protocol::{HTTP_TOOL, Task, Topic, read_input, write_input};
+use crate::protocol::{HTTP_TOOL, Scenario, Task, Topic, read_input, write_input};
 
-use super::text::paragraph;
+use super::text::{high_entropy_paragraph, prose};
 
 /// What the fake model is configured with.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -69,6 +72,8 @@ pub struct Request {
     pub stream: bool,
     pub max_tokens: u64,
     pub tools: Vec<String>,
+    /// The prose style the system prompt asks for.
+    pub style: Scenario,
     pub last: LastTurn,
 }
 
@@ -118,6 +123,7 @@ pub fn parse_request(body: &[u8]) -> Result<Request, RequestError> {
                 .collect()
         })
         .unwrap_or_default();
+    let style = object.get("system").map_or(Scenario::Headline, read_style);
     let last = messages
         .iter()
         .rev()
@@ -128,8 +134,25 @@ pub fn parse_request(body: &[u8]) -> Result<Request, RequestError> {
         stream,
         max_tokens,
         tools,
+        style,
         last,
     })
+}
+
+/// The style of a `system` prompt: a string, or text blocks (read joined).
+/// Anything else, or no marker, is the headline style.
+fn read_style(system: &Value) -> Scenario {
+    match system {
+        Value::String(text) => Scenario::of_system(text),
+        Value::Array(blocks) => {
+            let text: Vec<&str> = blocks
+                .iter()
+                .filter_map(|b| b.get("text").and_then(Value::as_str))
+                .collect();
+            Scenario::of_system(&text.join("\n"))
+        }
+        _ => Scenario::Headline,
+    }
 }
 
 fn read_turn(message: &Value) -> LastTurn {
@@ -178,44 +201,73 @@ pub fn generate(config: &GenConfig, request: &Request, body: &[u8]) -> Reply {
     let (content, stop_reason) = match &request.last {
         LastTurn::Task(Task::Write { page, topic, base }) if declared(HTTP_TOOL) => {
             let topic = Topic::of(*topic);
-            let page_text = paragraph(&mut rng, &topic, words);
+            let page_text = prose(request.style, &mut rng, &topic, words);
             (
                 vec![
-                    text(format!(
-                        "I'll update the wiki page `{page}` with my notes on {}.",
-                        topic.label
+                    text(lead_in(
+                        request.style,
+                        &mut rng,
+                        &topic,
+                        format!(
+                            "I'll update the wiki page `{page}` with my notes on {}.",
+                            topic.label
+                        ),
+                        Some(page.as_str()),
                     )),
                     tool_use(&mut rng, HTTP_TOOL, write_input(base, page, &page_text)),
                 ],
                 StopReason::ToolUse,
             )
         }
-        LastTurn::Task(Task::Read { page, base }) if declared(HTTP_TOOL) => (
-            vec![
-                text(format!("Let me check `{page}` on the wiki first.")),
-                tool_use(&mut rng, HTTP_TOOL, read_input(base, page)),
-            ],
-            StopReason::ToolUse,
-        ),
+        LastTurn::Task(Task::Read { page, base }) if declared(HTTP_TOOL) => {
+            let lead = match request.style {
+                Scenario::Boilerplate => format!("Let me check `{page}` on the wiki first."),
+                Scenario::Headline => {
+                    let topic = random_topic(&mut rng);
+                    lead_in(
+                        request.style,
+                        &mut rng,
+                        &topic,
+                        String::new(),
+                        Some(page.as_str()),
+                    )
+                }
+            };
+            (
+                vec![
+                    text(lead),
+                    tool_use(&mut rng, HTTP_TOOL, read_input(base, page)),
+                ],
+                StopReason::ToolUse,
+            )
+        }
         LastTurn::Task(Task::Chat { topic }) => {
             let topic = Topic::of(*topic);
             (
-                vec![text(paragraph(&mut rng, &topic, words))],
+                vec![text(prose(request.style, &mut rng, &topic, words))],
                 StopReason::EndTurn,
             )
         }
         LastTurn::ToolResults { errors, total } if errors == total => {
             let topic = random_topic(&mut rng);
-            let answer = format!(
-                "That did not work, so I'll continue from what I know. {}",
-                paragraph(&mut rng, &topic, words)
-            );
+            // The acknowledgement stays in both styles; under headline it is
+            // short (18 bytes) and followed by a high-entropy sentence.
+            let lead = match request.style {
+                Scenario::Boilerplate => {
+                    "That did not work, so I'll continue from what I know.".to_owned()
+                }
+                Scenario::Headline => format!(
+                    "That did not work. {}",
+                    lead_in(request.style, &mut rng, &topic, String::new(), None)
+                ),
+            };
+            let answer = format!("{lead} {}", prose(request.style, &mut rng, &topic, words));
             (vec![text(answer)], StopReason::EndTurn)
         }
         LastTurn::Task(_) | LastTurn::ToolResults { .. } | LastTurn::Other => {
             let topic = random_topic(&mut rng);
             (
-                vec![text(paragraph(&mut rng, &topic, words))],
+                vec![text(prose(request.style, &mut rng, &topic, words))],
                 StopReason::EndTurn,
             )
         }
@@ -235,6 +287,30 @@ pub fn generate(config: &GenConfig, request: &Request, body: &[u8]) -> Reply {
         stream: request.stream,
         first_byte,
         stream_time,
+    }
+}
+
+/// A short sentence before a tool call or an answer. The boilerplate style
+/// says the fixed `boilerplate` sentence, the same for every agent (and draws
+/// nothing from `rng`, so its output stays frozen); the headline style says
+/// one high-entropy sentence instead, ending with the page when there is
+/// one, so agents never share a lead-in.
+fn lead_in(
+    style: Scenario,
+    rng: &mut Rng,
+    topic: &Topic,
+    boilerplate: String,
+    page: Option<&str>,
+) -> String {
+    match style {
+        Scenario::Boilerplate => boilerplate,
+        Scenario::Headline => {
+            let sentence = high_entropy_paragraph(rng, topic, 1);
+            match page {
+                Some(page) => format!("{} `{page}`.", sentence.trim_end_matches(['.', '?'])),
+                None => sentence,
+            }
+        }
     }
 }
 

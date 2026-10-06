@@ -28,6 +28,8 @@ pub enum TimeError {
     BeforeEpoch(String),
     #[error("window from {from} to {to} is empty")]
     EmptyWindow { from: Day, to: Day },
+    #[error("{0} hours is not a slice of a village day (1 to 24)")]
+    Hours(u32),
 }
 
 /// A calendar date.
@@ -186,6 +188,21 @@ impl Window {
         Ok(Self {
             from: first.village_start()?,
             to: last.next().village_start()?,
+        })
+    }
+
+    /// The first `hours` hours (1 to 24) of village day `day`, from its
+    /// 10:00 UTC start.
+    pub fn first_hours(day: Day, hours: u32) -> Result<Self, TimeError> {
+        if hours == 0 || hours > 24 {
+            return Err(TimeError::Hours(hours));
+        }
+        let from = day.village_start()?;
+        Ok(Self {
+            from,
+            to: Timestamp::from_micros(
+                from.as_micros() + u64::from(hours) * 3_600 * MICROS_PER_SECOND,
+            ),
         })
     }
 

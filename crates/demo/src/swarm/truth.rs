@@ -19,7 +19,9 @@
 //! detection of it unjudged instead of counting it as a false positive.
 //!
 //! [`Row`] is the file's JSON-lines schema: a `header` first, one
-//! `agent_cluster` per key group, then a row per read.
+//! `agent_cluster` per key group, then, in the order they happen, a
+//! `session` row when each conversation starts (so every session the
+//! gateway sees maps to its agent, wiki traffic or not) and a row per read.
 
 use std::collections::{BTreeSet, HashMap, HashSet};
 
@@ -27,7 +29,7 @@ use serde::Serialize;
 use serde_json::Value;
 use sha2::Digest;
 
-use crate::protocol::{HTTP_TOOL, PageSlug};
+use crate::protocol::{HTTP_TOOL, PageSlug, Scenario};
 
 /// The schema version in the header.
 pub const VERSION: u32 = 2;
@@ -40,6 +42,7 @@ pub struct RunInfo {
     /// A ULID, minted at start.
     pub run: String,
     pub seed: u64,
+    pub scenario: Scenario,
     pub agents: u32,
     pub keys: u32,
     pub agents_per_key: u32,
@@ -205,6 +208,8 @@ pub struct ReadTool {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Header {
     pub version: u32,
+    /// The run's scenario; a reader treats a missing field as `headline`.
+    pub scenario: Scenario,
     pub world: String,
     pub run: String,
     pub seed: u64,
@@ -277,6 +282,16 @@ pub struct Unattributed {
     pub at_unix_ms: u64,
 }
 
+/// A conversation starting: its session id names one agent.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SessionRow {
+    pub world: String,
+    pub agent: String,
+    pub key_group: u32,
+    pub session: String,
+    pub started_at_unix_ms: u64,
+}
+
 /// The agents sharing one key.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Cluster {
@@ -296,6 +311,7 @@ pub enum Row {
     Miss(Miss),
     UnattributedRead(Unattributed),
     AgentCluster(Cluster),
+    Session(SessionRow),
 }
 
 impl Row {
@@ -305,6 +321,7 @@ impl Row {
         let world = info.world();
         let mut rows = vec![Row::Header(Header {
             version: VERSION,
+            scenario: info.scenario,
             world: world.clone(),
             run: info.run.clone(),
             seed: info.seed,
@@ -339,6 +356,8 @@ pub struct Counts {
     pub misses: u64,
     /// Reads of a version whose write this run never reported.
     pub unattributed: u64,
+    /// Conversations started (one `session` row each).
+    pub sessions: u64,
 }
 
 type VersionKey = (PageSlug, u64);
@@ -442,6 +461,24 @@ impl TruthBook {
                 None
             }
         }
+    }
+
+    /// A conversation started; returns its `session` row.
+    pub fn start_session(
+        &mut self,
+        agent: String,
+        key_group: u32,
+        session: String,
+        started_at_unix_ms: u64,
+    ) -> Row {
+        self.counts.sessions += 1;
+        Row::Session(SessionRow {
+            world: self.world.clone(),
+            agent,
+            key_group,
+            session,
+            started_at_unix_ms,
+        })
     }
 
     /// A conversation ended: nothing more is read in it.

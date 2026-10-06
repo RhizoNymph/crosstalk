@@ -20,10 +20,10 @@ ENV UV_COMPILE_BYTECODE=1 \
 WORKDIR /src
 COPY sidecar/topics/pyproject.toml sidecar/topics/uv.lock sidecar/topics/.python-version ./
 # Dependencies first, so editing the sidecar's code reuses this layer.
-RUN --mount=type=cache,target=/root/.cache/uv \
+RUN --mount=type=cache,sharing=locked,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-install-project
 COPY sidecar/topics/src ./src
-RUN --mount=type=cache,target=/root/.cache/uv \
+RUN --mount=type=cache,sharing=locked,target=/root/.cache/uv \
     uv sync --frozen --no-dev --no-editable
 
 FROM python:3.14.4-slim-trixie

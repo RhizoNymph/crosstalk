@@ -16,6 +16,7 @@ use crate::data::query::parse_strict;
 use crate::error::UiError;
 use crate::pages::common::form::invalid;
 use crate::pages::common::topics::default_version;
+use crate::pages::gateway::{gateway_down, render};
 use crate::url::scope::{align_down, align_up};
 use crate::url::view_state::{Defaults, RawViewState, ViewState};
 use crosstalk_spec::interfaces::l8_surface::QueryError;
@@ -53,7 +54,9 @@ pub async fn defaults(cx: &Cx) -> std::result::Result<Defaults, UiError> {
     })
 }
 
-/// The router error for defaults that could not be read.
+/// The router error for defaults that could not be read: `Forbidden` is
+/// 403, anything else 500. Data routes answer with it; pages go through
+/// [`page_defaults_error`].
 pub fn defaults_error(error: UiError) -> topcoat::Error {
     match error {
         UiError::Query(QueryError::Forbidden { .. }) => forbidden().into(),
@@ -61,6 +64,19 @@ pub fn defaults_error(error: UiError) -> topcoat::Error {
             tracing::error!(error = %other, "view defaults unavailable");
             internal_server_error(other).into()
         }
+    }
+}
+
+/// [`defaults_error`] for a page: a gateway the http backend cannot reach,
+/// or that refused its token, is the full-page gateway state
+/// (`pages::gateway`) instead of a 500.
+pub fn page_defaults_error(cx: &Cx, error: UiError) -> topcoat::Error {
+    match &error {
+        UiError::Query(query) => match gateway_down(cx, query) {
+            Some(down) => render(cx, down),
+            None => defaults_error(error),
+        },
+        UiError::Field { .. } => defaults_error(error),
     }
 }
 
@@ -77,7 +93,7 @@ pub async fn current_state(cx: &Cx) -> Option<ViewState> {
 pub async fn view_state(cx: &Cx) -> Result<ViewState> {
     let raw: RawViewState =
         parse_query_params(cx).map_err(|e| bad_request(format!("query: {e}")))?;
-    let defaults = defaults(cx).await.map_err(defaults_error)?;
+    let defaults = defaults(cx).await.map_err(|e| page_defaults_error(cx, e))?;
     let parsed = ViewState::parse(&raw, defaults).map_err(|e| bad_request(e.to_string()))?;
     if !parsed.complete {
         let path = uri(cx).path().to_owned();

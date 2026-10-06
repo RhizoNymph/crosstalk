@@ -12,10 +12,15 @@
 //!
 //! Every page URL, in a tool call, in the agent's HTTP call and in the
 //! ground truth, comes from [`page_url`], so it is one string everywhere.
+//!
+//! The run's [`Scenario`] reaches the fake model the same way: each agent's
+//! system prompt ends with a style marker, `[style:headline]` or
+//! `[style:boilerplate]`, and the model picks its prose generator from it.
 
 use std::fmt;
 use std::str::FromStr;
 
+use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::http::BaseUrl;
@@ -420,6 +425,71 @@ impl Topic {
     /// Generic phrases every topic's text may use.
     pub fn common() -> &'static [&'static str] {
         COMMON
+    }
+}
+
+/// Which benchmark a swarm run is, and so which prose the fake model
+/// writes for it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Scenario {
+    /// High-entropy prose: unrelated outputs share no long run of bytes,
+    /// so every shared span is a real copy. The headline benchmark.
+    #[default]
+    Headline,
+    /// Templated prose: unrelated outputs share template fragments, as
+    /// real agents share boilerplate. A regression scenario for false
+    /// positives on shared text.
+    Boilerplate,
+}
+
+/// Why a scenario name is refused.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{0:?} is not a scenario (headline or boilerplate)")]
+pub struct BadScenario(pub String);
+
+impl Scenario {
+    pub const ALL: [Scenario; 2] = [Scenario::Headline, Scenario::Boilerplate];
+
+    /// The wire name: `headline` or `boilerplate`.
+    pub const fn name(self) -> &'static str {
+        match self {
+            Scenario::Headline => "headline",
+            Scenario::Boilerplate => "boilerplate",
+        }
+    }
+
+    /// The marker that ends an agent's system prompt.
+    pub fn marker(self) -> String {
+        format!("[style:{}]", self.name())
+    }
+
+    /// The scenario a system prompt asks for: boilerplate only when it
+    /// carries `[style:boilerplate]`; headline otherwise, with or without a
+    /// marker.
+    pub fn of_system(text: &str) -> Scenario {
+        if text.contains(&Scenario::Boilerplate.marker()) {
+            Scenario::Boilerplate
+        } else {
+            Scenario::Headline
+        }
+    }
+}
+
+impl FromStr for Scenario {
+    type Err = BadScenario;
+
+    fn from_str(text: &str) -> Result<Self, BadScenario> {
+        Scenario::ALL
+            .into_iter()
+            .find(|scenario| scenario.name() == text)
+            .ok_or_else(|| BadScenario(text.to_owned()))
+    }
+}
+
+impl fmt::Display for Scenario {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.name())
     }
 }
 

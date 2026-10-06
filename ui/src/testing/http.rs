@@ -13,7 +13,7 @@ use std::sync::Arc;
 use crosstalk_api::http::BearerToken as ServerToken;
 use crosstalk_api::world::{self, seed_world, serve_world};
 use crosstalk_client::{BaseUrl, BearerToken, ClientConfig, HttpClient};
-use crosstalk_spec::ids::{ConfigHash, OperatorId};
+use crosstalk_spec::ids::ConfigHash;
 use crosstalk_spec::interfaces::l8_surface::operators::{
     AccessConfig, OperatorStore, RequestIdentity,
 };
@@ -26,9 +26,8 @@ use super::SEED;
 use crate::backend::AppBackend;
 use crate::backend::http::identity::{IdentityError, resolve};
 use crate::backend::world::{WorldSurface, options};
-use crate::config::{Access, OperatorPick};
+use crate::config::Access;
 use crate::identity::Identity;
-use crate::url::ulid::UlidId;
 
 /// The researcher's token (every permission).
 pub const RESEARCHER_TOKEN: &str = "ui-http-test-researcher-0123456789";
@@ -79,8 +78,8 @@ impl HttpWorld {
     }
 
     /// Who `token` is, as the http backend learns it at startup.
-    pub async fn access(&self, token: &str, pick: OperatorPick) -> Result<Access, IdentityError> {
-        resolve(&self.client(token), pick).await
+    pub async fn access(&self, token: &str) -> Result<Access, IdentityError> {
+        resolve(&self.client(token)).await
     }
 
     /// The UI's router over the http backend, acting as `access`.
@@ -126,19 +125,4 @@ impl HttpWorld {
     pub async fn stop(self) {
         self.served.shutdown().await;
     }
-}
-
-/// The researcher's id, as the UI config names it.
-pub fn researcher() -> OperatorPick {
-    OperatorPick::Id(OPERATOR_RESEARCHER)
-}
-
-/// The on-call operator's id.
-pub fn oncall() -> OperatorPick {
-    OperatorPick::Id(OPERATOR_ONCALL)
-}
-
-/// An operator id the world does not define.
-pub fn stranger() -> OperatorPick {
-    OperatorPick::Id(OperatorId::from_raw(0xdead))
 }

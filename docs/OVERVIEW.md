@@ -256,8 +256,8 @@ Overview:
       where a default view ends (AppBackend::view_end: the present's now,
       unless the fixture replays up to a fixed end). Callers come from the spec's
       operator directory: trusted mode for the local backends, and over
-      HTTP the server's operator for the token (found in
-      QueryApi::operators, refreshed every 30 s); view windows are bucket-aligned
+      HTTP the server's operator for the token (QueryApi::me,
+      refreshed every 30 s); view windows are bucket-aligned
       and every linked view pins the URL's topic version.
   data_flow: >
     Each layer below runs in its own crate (crosstalk-<layer>); layer crates
@@ -1243,7 +1243,10 @@ Features Index:
       under stricter length and rare-token rules, boilerplate Common),
       drops short matches that are template skeletons or that the origin
       was given token for token in its own request, and
-      picks carrier, kind, read range and matched bytes; the index holds
+      picks carrier, kind, read range and matched bytes, leaving out hits
+      the reader's nearer source explains (its own earlier output in the
+      request, and with forwarding on its own direct read of a forward's
+      source); the index holds
       originated spans and, with forwarding on (off by default), forwarded
       ones (relayed from the agent's own input, indexed under the
       forwarder, state left Relayed), with the
@@ -1264,6 +1267,7 @@ Features Index:
       - crates/provenance/src/engine.rs
       - crates/provenance/src/consumer.rs
       - crates/provenance/src/scan/mod.rs
+      - crates/provenance/src/scan/nearer.rs
       - crates/provenance/src/segment/mod.rs
       - crates/provenance/src/decode/mod.rs
       - crates/provenance/src/fingerprint/mod.rs
@@ -1300,6 +1304,11 @@ Features Index:
       POST /v1/messages, streaming SSE or JSON, in the real wire format,
       answered with text and tool_use deterministically from a seed and the
       request body, with a configurable first-byte wait and stream pacing.
+      Its prose is high-entropy (unrelated outputs share no 32-byte run) or
+      templated boilerplate, picked per request by a [style:headline] /
+      [style:boilerplate] marker the swarm puts in each agent's system
+      prompt from its --scenario headline|boilerplate (default headline),
+      so one stateless upstream serves both scenarios.
       wiki is an in-memory HTTP page store with versions and authors, the
       shared channel. swarm runs N agents through the crosstalk proxy. Each
       keeps a growing conversation, resent whole every turn, with fake
@@ -1310,7 +1319,7 @@ Features Index:
       L5 can discover the wiki as a channel. swarm reports throughput,
       p50/p95/p99 time to first byte and total time, and the expected
       transmissions, self-reads, rereads and misses, optionally as a
-      ground-truth JSONL file (schema v2: header, agent clusters, and per
+      ground-truth JSONL file (schema v2: header with the scenario, agent clusters, and per
       read the writer's and reader's session, turn and tool_use id, the
       content's hashes and its exact message/block in the reader's request),
       which ct-eval scores against.
@@ -1345,7 +1354,11 @@ Features Index:
       service). Prints precision, recall and the gate result and passes
       ct-eval's exit code through (2 = a gate failed). Fails fast unless
       /readyz has the `live` and `api` tasks running and the API takes the
-      token. ct-eval ships in the crosstalk-demo image.
+      token. ct-eval ships in the crosstalk-demo image. --scenario
+      headline (default, high-entropy prose: the headline precision and
+      recall) or boilerplate (templated prose unrelated agents share: a
+      regression scenario for false positives on shared text), recorded in
+      bench.env.
     entry_points:
       - deploy/run.sh
       - deploy/bench.sh
@@ -1436,7 +1449,10 @@ Features Index:
       http backend (crosstalk_client::HttpClient over the gateway's L8 API,
       `"backend": {"http": {"url", "token": {"env"}}}`; the operator and
       its permissions are the server's for the token; transport and auth
-      failures render as the UI's error states and are logged). The UI declares no traits of its own: the
+      failures render as the UI's error states and are logged, and a page
+      that cannot read the present because the gateway is unreachable or
+      refused the token is a full-page gateway state, 503 or 502, showing
+      the gateway's URL). The UI declares no traits of its own: the
       clock, bucket width, export formats and rule version come from
       QueryApi::present (app::present, once per request), and where a
       default view ends from AppBackend::view_end.
@@ -1468,7 +1484,8 @@ Features Index:
     description: >
       crosstalk-eval and the ct-eval CLI (a composer): dataset converters
       (SALT-NLP, AgentDojo, tau2-bench, AI Village, collusion-wiki (synthesised
-      http_request reads and writes of public wiki pages) and swarm-traces (a
+      http_request reads and writes of public wiki pages; a reader's second
+      read of lines it already received is a reread control, INV-1122) and swarm-traces (a
       decode-chain corpus reported by chain, count and length only))
       streaming worlds of checked
       spec NormalizedExchanges on a deterministic virtual clock (datasets
@@ -1477,14 +1494,19 @@ Features Index:
       growing conversation), with typed,
       JSONL-serialisable ground truth (expected transmissions, out of reach
       when undecodable or read from a medium the sender never wrote
-      (INV-963), negative controls, exemptions, agent clusters, with tiers); predictions converted from
+      (INV-963), access-only expectations that only suspected or discarded
+      evidence finds (a co-access whose write carries no spans, such as a
+      git push), negative controls, exemptions, agent clusters, with
+      tiers); predictions converted from
       spec Transmissions (one per ContentMatch, and one per CoAccess of a
       suspected or discarded transmission) through a read seam over the
       spec's SpanIndex, AccessStore and channel reads; one documented
       alignment rule and a scorer with TP/FP/FN by dataset, route, carrier
       kind, match or access class and tier, negative-control violations
-      (content classes only; access-only ones reported apart) and a DetectionQuality bridge keyed by QualityMatch; a Detector seam
-      with the naive reference matcher (escape-aware matching classed as
+      (content classes only; access-only ones reported apart) and a
+      DetectionQuality bridge keyed by QualityMatch; a Detector seam
+      with the naive reference matcher (channel rereads of a span already
+      reported to the reader dropped; escape-aware matching classed as
       Exact, Normalized or Decoded([JsonString | YamlString]) through one
       classifier, with hits only two string levels explain out of reach
       and unreported, decoding, opaque-blob exclusion, a boilerplate cutoff
@@ -1535,12 +1557,11 @@ Features Index:
       time order, and read back only through QueryApi (agents by session,
       the A to B channel edge, the confirmed transmission, its evidence,
       and the channel the cross-agent transmission created, dated by its
-      opening, listed and confirmed). The composition is shaped like
-      crosstalk_gateway::live::Live and is wired today from InProcess plus
-      a pipeline over its blob store and bus; the assertions needing L3 to
-      L7 are ignored until Live composes them. The scenario and readers are
-      a library, so a UI demo can feed the same traffic into a running
-      Live.
+      opening, listed and confirmed). The composition is a
+      crosstalk_gateway::live::Live process with every layer consuming the
+      bus, and every assertion runs against it: the first end-to-end proof
+      of detection. The scenario and readers are a library, so a UI demo
+      can feed the same traffic into a running Live.
     entry_points:
       - crates/e2e/src/lib.rs
       - crates/e2e/src/scenario/mod.rs
@@ -1690,21 +1711,26 @@ Features Index:
       (default 2026-07-13..17): every standard agent, one world per village
       day, requests rebuilt from responses (system prompt from goals and
       memory, session history, chat since the previous call), structural
-      chat labels, heuristic repository-channel labels from bash accesses
-      on canonical repository URLs, GUI edits counted. Bash accesses follow
-      the agreed L5 HttpTool contract: curl, wget and gh/glab api keep
-      their equivalent http_request {method, url, body} call, git and the
-      forge CLIs' issue commands are marked Bash-only, every resource is a
-      canonical URL (L5's url_locator off the forges, the repository's web
-      URL on them), and each write carries the spec's WriteOutcome
-      (rejected writes never pair). Its streaming table passes, resource
-      normalizer and bash access tagger are reusable.
+      chat labels, heuristic channel labels from bash accesses, GUI edits
+      counted. Every bash command goes through crosstalk-flow's
+      ToolExtractors as the bash call the agent made, so each access's
+      locator (Locator::Repository for git push/pull/clone, the
+      repository's File for a clone's or a raw URL's file, the issue or
+      merge request page, else L5's URL locator), op and WriteOutcome are
+      the gateway's; the converter adds the shell's true state (the
+      persistent working directory, ~, clones learnt from a push's or
+      pull's printed remote) and keeps shared resources only. A pair whose
+      write is a git push (no spans) is an access-only expectation on the
+      repository; a pair whose writer's typed text reaches the reader's
+      output through one file, thread or page is a content label. Its
+      streaming table passes, resource lookup and bash access tagger are
+      reusable.
     entry_points:
       - crates/eval/src/datasets/ai_village/mod.rs
       - crates/eval/src/datasets/ai_village/tables.rs
       - crates/eval/src/datasets/ai_village/resource.rs
       - crates/eval/src/datasets/ai_village/access/mod.rs
-      - crates/eval/src/datasets/ai_village/access/http.rs
+      - crates/eval/src/datasets/ai_village/window/repo.rs
     depends_on: [eval, flow_extract]
     doc: docs/features/eval_ai_village.md
 ```

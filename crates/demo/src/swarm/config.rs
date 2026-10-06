@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use crate::http::BaseUrl;
 use crate::knobs::{Fraction, PositiveSpan, Span};
+use crate::protocol::Scenario;
 
 /// How often a turn writes, reads or just chats: `write + read <= 1`, the
 /// rest is chat.
@@ -66,6 +67,9 @@ pub struct SwarmConfig {
     /// Agents start evenly spread over this.
     pub ramp: Duration,
     pub seed: u64,
+    /// Which benchmark this is: the prose style every agent's system prompt
+    /// asks the model for.
+    pub scenario: Scenario,
     /// Puts a `role: "system"` turn inside `messages` before each prompt.
     pub claude_code_shape: bool,
     /// Requests that ask for a stream.
@@ -99,6 +103,7 @@ impl SwarmConfig {
             duration: Duration::from_secs(300),
             ramp: Duration::from_secs(20),
             seed: 42,
+            scenario: Scenario::Headline,
             claude_code_shape: false,
             stream_fraction: Fraction::ONE,
             model: "claude-opus-5-5".to_owned(),

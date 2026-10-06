@@ -13,6 +13,9 @@ through the wiki. The compose override `deploy/compose.demo.yaml` and
   - `POST /v1/messages`, streaming (SSE) and not, in the real wire format;
   - text and `tool_use` blocks, generated deterministically from a seed
     and the request body;
+  - two prose generators, high-entropy (default) and templated, picked per
+    request by a style marker in the system prompt
+    ([Scenarios](#scenarios-and-prose-generators));
   - a configurable wait before the first byte, and stream pacing;
   - `POST /v1/messages/count_tokens` (an estimate) and `GET /healthz`.
 - A shared wiki (`wiki`): an in-memory HTTP page store with versions and
@@ -48,7 +51,7 @@ crates/demo/src/
   lib.rs                crate doc, modules
   cli.rs                Command, UsageError, USAGE
   knobs.rs              Span (A..B), PositiveSpan, Fraction, parse_duration, Rng
-  protocol.rs           HTTP_TOOL, tool_definitions, page_url, read_input/write_input, WikiCall, CallRefused, PageSlug, Topic/TOPICS, Task (the marker)
+  protocol.rs           HTTP_TOOL, tool_definitions, page_url, read_input/write_input, WikiCall, CallRefused, PageSlug, Topic/TOPICS, Scenario (the style marker), Task (the marker)
   http.rs               DemoBody, serve (accept loop), BaseUrl, request, healthcheck, shutdown_signal
   logging.rs            JSON logs on stderr
   anthropic/mod.rs      Role, Block, Content, Message, ResponseBlock, StopReason, Usage, AssistantMessage
@@ -56,7 +59,7 @@ crates/demo/src/
   anthropic/assemble.rs assemble / assemble_stream (event stream -> message), AssembleError
   upstream/mod.rs       the fake upstream server, paced feeder, frame_offset
   upstream/generate.rs  parse_request, generate (the fake model), GenConfig, Reply
-  upstream/text.rs      deterministic prose from templates
+  upstream/text.rs      deterministic prose: prose (by scenario), high_entropy_paragraph, templated_paragraph (frozen), TEMPLATES
   wiki/mod.rs           the wiki server and the task owning the pages
   wiki/store.rs         Wiki, Page, Author, Summary, WriteError (pure)
   swarm/mod.rs          run: resolve, mint the run id, spawn agents, stop, drain, report; RunClock, Stamp, run_id, ulid_text
@@ -66,7 +69,7 @@ crates/demo/src/
   swarm/tools.rs        execute: http_request against the wiki, PendingRead
   swarm/truth.rs        ground truth v2: WriteRecord, ReadRecord, Reader, Content, Row, RunInfo, TruthBook
   swarm/stats.rs        Event, RequestSample, Outcome, collect, Report, percentile
-  tests/                sse, generate, conversation, units, servers, deploy, truth, truth_run
+  tests/                sse, generate, text, conversation, units, servers, deploy, truth, truth_run
 ```
 
 **Decision: a workspace crate, not a standalone one.** The architecture
@@ -154,6 +157,65 @@ The fake model reads the marker of the last `user` message. It skips
 So the swarm's knobs decide how often the wiki is written and read, while
 the words still come from the model.
 
+### Scenarios and prose generators
+
+A swarm run is one of two scenarios (`protocol::Scenario`, snake_case on
+the wire), chosen with `crosstalk-demo swarm --scenario headline|boilerplate`
+(default `headline`) and kept in `SwarmConfig::scenario`:
+
+| Scenario | Generator | What it measures |
+| --- | --- | --- |
+| `headline` | `text::high_entropy_paragraph` | The headline precision and recall: unrelated model outputs share no run of 32 bytes, so every shared span the gateway finds is a real copy |
+| `boilerplate` | `text::templated_paragraph` | A regression scenario: unrelated outputs share template fragments (30–64 bytes, e.g. `Open question: does consumer lag interact with …`), as real agents share boilerplate; the gateway must not call those transmissions |
+
+**The style marker.** The scenario reaches the fake model inside each
+request, so the upstream stays stateless and one running upstream serves
+both scenarios with no restart. `Agent::new` ends every agent's system
+prompt with a blank line and `Scenario::marker()`: `[style:headline]` or
+`[style:boilerplate]`. `parse_request` reads the top-level `system` field
+(a string, or blocks whose `text` fields are read joined) into
+`Request::style` (`Scenario::of_system`): `boilerplate` only when the text
+contains `[style:boilerplate]`; `headline` otherwise, including no marker,
+no `system` field, an unknown style or a malformed field. A marker in a
+user turn does not count. `generate` passes the style to `text::prose` on
+every path that writes prose: the PUT body of a write, chat answers, the
+closing answer after tool results, and unmarked prompts. The sentence
+before a tool call or a closing answer (`lead_in`) depends on the style
+too. Under `boilerplate` it is the fixed sentence every agent says ("I'll
+update the wiki page `<page>` with my notes on <label>.", "Let me check
+`<page>` on the wiki first.", "That did not work, so I'll continue from what
+I know.") and draws nothing from the rng, so boilerplate output is frozen.
+Under `headline` it is one high-entropy sentence ending with the page,
+when there is one; a failed tool call is still acknowledged with the short
+"That did not work." (18 bytes) before it. Two agents writing the same page
+then share no lead-in text beyond the page name.
+
+**High-entropy generator.** Sentences of 8 to 16 whitespace words (a drawn
+target of 8–14, the last token may push past it). Each token is drawn in
+turn: after an invented word, a topic term (22%) or a number (10%: a count
+10–999 or a percentage 5–64%); otherwise, and always at the start and
+after a term or number, an invented word. So no two fixed tokens are ever
+adjacent. An invented word is 2 to 4 syllables, each one of 30 onsets
+times 10 nuclei (300 consonant-vowel syllables), plus an optional coda.
+Sentences start capitalised and end in `.` (or `?` one time in eight).
+`tests::text` generates 2000 paragraphs (about 1.9 MB) from different
+seeds and bodies across 40 topics and checks no two share a 32-byte
+substring (the longest shared run is 28 bytes: a 19-byte topic term with
+the edges of the invented words around it); the same corpus from the
+templated generator shares runs of 64 bytes.
+
+**Templated generator.** 16 sentence templates filled from the topic's
+terms, its label, 8 common phrases and numbers; unchanged since it was
+the only generator. It is frozen: `tests::text::templated_paragraph_is_frozen`
+pins its bytes and the rng state it leaves for fixed seeds. Boilerplate
+request bodies differ from bodies before the scenarios existed (the
+system prompt carries the marker), so a given run's text is not the same
+as an earlier run's, but its distribution is.
+
+Both generators stop at the first sentence end at or past the drawn word
+budget (`--words`, capped by `max_tokens`), so lengths are the same in
+both scenarios.
+
 ### Fake upstream
 
 1. `handle` routes the request:
@@ -226,8 +288,15 @@ Each agent works like this:
 
 - **Identity.** It is named `agent-NNN`. Its key group is
   `i / agents-per-key`, and its `x-api-key` is `sk-ant-demoGGGG-<40 hex>`
-  for group `GGGG`, stable per seed. Its system prompt names its focus
-  topic (`i mod topics`) and the wiki's URL.
+  for group `GGGG`, derived from the seed and the run id. Its conversations'
+  session ids are too, from their own random stream. So two runs with the
+  same seed (every bench run uses `--seed 42`) never share a key or a
+  session: a long-lived gateway does not thread a new run into an old
+  run's conversations, and a scorer joining on sessions cannot mix runs.
+  Everything else an agent does (tasks, pages, timing) depends on the seed
+  alone, so same-seed runs stay comparable. Its system prompt names its focus
+  topic (`i mod topics`) and the wiki's URL, and ends with the scenario's
+  style marker.
 - **Conversations.** Each has a fresh UUID-shaped
   `x-claude-code-session-id` and a drawn `turns` count of prompts.
 - **A prompt.** The agent draws the task:
@@ -298,7 +367,7 @@ The collector logs progress every 10 s and returns these figures:
 - the expected transmissions (first reads in a session of a version another
   agent wrote), the distinct writer→reader pairs, rereads, and reads it
   could not attribute;
-- the run id.
+- the scenario and the run id.
 
 The counts of transmissions, self-reads, rereads and misses are exactly the
 ground-truth file's rows of each kind. With `--ground-truth PATH`, it
@@ -312,7 +381,7 @@ requests (POST /v1/messages) the agent sent in that session, counting
 failed and retried ones and nothing else.
 
 ```
-{"kind":"header","version":2,"world":"swarm-<run>","run":"<ulid>","seed":42,"agents":150,"keys":150,"agents_per_key":1,
+{"kind":"header","version":2,"scenario":"headline","world":"swarm-<run>","run":"<ulid>","seed":42,"agents":150,"keys":150,"agents_per_key":1,
  "claude_code_shape":true,"started_at_unix_ms":…,"gateway_url":"<the --target base the swarm uses>","wiki_url":"<the wiki base>"}
 
 {"kind":"transmission","world":…,"writer":"a017","reader":"a042","page":"p12","version":3,
@@ -330,6 +399,7 @@ failed and retried ones and nothing else.
  "read_tool":{…},"at_ms":…,"at_unix_ms":…}
 {"kind":"unattributed_read","world":…,"reader":…,"reader_key_group":…,"page":…,"version":…,"reader_session":…,"reader_turn":…,"reader_tool_use_id":…,
  "read_tool":{…},"content":{…},"at_ms":…,"at_unix_ms":…}   (written at the end of the run)
+{"kind":"session","world":…,"agent":…,"key_group":…,"session":…,"started_at_unix_ms":…}   (one per conversation, when it starts)
 {"kind":"agent_cluster","world":…,"key_group":2,"agents":["a004","a005"]}   (one per key group, singletons included, written once)
 ```
 
@@ -348,6 +418,9 @@ Meanings, and where each value comes from:
   `swarm-<run>`.
 - **`gateway_url`, `wiki_url`.** `--gateway` and `--wiki` as
   `BaseUrl::url` renders them.
+- **`scenario`.** `headline` or `boilerplate`, right after `version`
+  (`--scenario`). The schema version stays 2: a reader treats a header
+  without the field (older files) as `headline`.
 - **`agent_cluster`.** Written once, right after the header, one per key
   group `0..keys` (singletons included): agents `g × agents_per_key` up to
   the next group.
@@ -384,6 +457,10 @@ Meanings, and where each value comes from:
   when the wiki's answer to the PUT arrived at the writer: the wiki's API
   is unchanged and carries no timestamp, so this is the client's view of
   acceptance, at most one local round trip late.
+
+Every conversation also gets a `session` row when it starts, before its
+first request, so a scorer can map each session the gateway saw to its
+agent even when the conversation never touched the wiki.
 
 Classification (`truth::TruthBook`, owned by the collector, the one place
 that sees both sides). It keeps a map from (page, version) to the
@@ -424,7 +501,9 @@ published and logged all 437. Once L3 to L5 exist, the traffic carries:
   request's messages of the same session. Tool follow-ups continue a
   prompt.
 - **Originated spans.** The `body` of each `http_request` PUT is 40–160
-  words of model output, distinct across writes.
+  words of model output, distinct across writes. In the `headline`
+  scenario unrelated outputs share no 32-byte run; in `boilerplate` they
+  share template fragments, which are not transmissions.
 - **Cross-agent content matches.** When agent B reads a page agent A wrote,
   that text is the `content` of a `tool_result` in B's next request,
   verbatim (`ContentMatched`).
@@ -485,6 +564,7 @@ To run it through a gateway, add a gateway on 8080 whose route points at
 | | `--duration D` | 5m | Run time |
 | | `--ramp D` | 20s | Agents start spread over this |
 | | `--seed N` | 42 | Agents' choices and keys |
+| | `--scenario S` | headline | `headline` (high-entropy prose) or `boilerplate` (templated prose), via the system prompt's style marker |
 | | `--stream-fraction F` | 1 | Requests asking for a stream |
 | | `--model NAME`, `--max-tokens N` | claude-opus-5-5, 4096 | Sent as is |
 | | `--idle-timeout D`, `--grace D` | 120s, 30s | Give up on a silent response; let in-flight work finish |
@@ -521,6 +601,7 @@ demo services.
 | Module | What it shows |
 | --- | --- |
 | `tests::sse` | The event sequence and the fields of each event. Tool blocks start with empty input and an empty JSON delta. Deltas concatenate to the block. Frames parse with testkit's `EventStream`, concatenate to the exact bytes and reassemble to the message, under three splits. Broken streams are refused with typed errors. The non-streaming document round-trips |
+| `tests::text` | The templated generator's bytes and rng use are pinned. `prose` picks the generator by scenario. The high-entropy generator is deterministic, keeps the length and sentence shape, is mostly invented words, and 2000 paragraphs from different seeds and bodies share no 32-byte substring (the templated ones do). The style comes from the system prompt (string or blocks; no marker, no `system`, unknown or malformed is headline; a user turn's marker is ignored). Every prose path (PUT body, chat, closing, failed closing, unmarked) honours it. Headline answers to 400 bodies over 4 seeds share no 32 bytes. Agents' system prompts end with the marker. Scenario names round-trip |
 | `tests::generate` | Identical bytes for the same seed and body; another seed or body changes them. Write and read markers produce the matching tool call. Undeclared tools are never called. Tool results get a closing answer. System turns are skipped. Malformed requests are refused. Timing and length stay in range, and `max_tokens` caps the length |
 | `tests::conversation` | Each body's messages extend the previous body's. A tool call is answered by its result, refusing out-of-order and foreign results. The Claude Code shape puts a system turn before each prompt. Agent A's generated page reaches agent B's next request verbatim, through the real wiki store and the fake model |
 | `tests::truth` | Page URLs from one function (trailing slash, host case, port 80, IPv6) and their round trip through the marker. The one declared tool's schema. `WikiCall` accepts GET/PUT of a wiki page and refuses other tools, methods, URLs and body-less PUTs. The fake model's GET and PUT carry the marker's base URL, deterministically. The agent runs a batch of calls against a real wiki: results, the `WikiWrite` with its turn, and the pending reads. `locate_result` with and without the system turn. Turn claiming, excerpts, digests (sha256 known answer), run ids. The book: every kind, rereads per session, reads waiting for their write, unattributed reads, counts. Every row kind's exact keys and order |
@@ -532,7 +613,11 @@ demo services.
 ## Invariants and constraints
 
 - **Determinism.** The fake upstream's answer, ids and timing are a
-  function of its seed and the request body bytes. It holds no state.
+  function of its seed and the request body bytes. It holds no state; the
+  prose style is part of the body (the system prompt's marker).
+- **Headline prose shares nothing by accident.** Unrelated high-entropy
+  paragraphs share no 32-byte run (`tests::text`). The templated generator
+  is frozen byte for byte.
 - **The wiki is the only shared state between agents.** Agents share
   read-only configuration and clients behind an `Arc`. Figures go to the
   collector over a channel, and wiki pages live in the one task that owns

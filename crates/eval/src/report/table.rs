@@ -103,6 +103,15 @@ pub fn render(report: &Report) -> String {
             access.expected
         );
     }
+    if access.expected_access > 0 {
+        let _ = writeln!(
+            out,
+            "access-only labels (expect a suspected transmission; not in overall): {} ({} / {})\n",
+            rate(access.access_recall),
+            access.found_access,
+            access.expected_access
+        );
+    }
     let reach = &report.out_of_reach;
     if reach.counts.expected > 0 || reach.counts.predicted > 0 {
         let _ = writeln!(

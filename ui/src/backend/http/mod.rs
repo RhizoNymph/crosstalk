@@ -4,10 +4,10 @@
 //! exports as JSONL).
 //!
 //! ```text
-//! start(HttpConfig { url, token, operator })
+//! start(HttpConfig { url, token })
 //!   HttpClient::new(url, ClientConfig::default()).with_token(token)
-//!   identity::resolve: operators() ─▶ the token's operator ─▶ Access   (error: no start)
-//!   identity::spawn_refresh: every 30 s, the same operator ─▶ watch ─▶ Identity
+//!   identity::resolve: me() ─▶ the token's operator ─▶ Access   (error: no start)
+//!   identity::spawn_refresh: every 30 s, me() again ─▶ watch ─▶ Identity
 //! ```
 //!
 //! The server derives the caller from the token; the `&Caller` the trait
@@ -24,6 +24,7 @@
 //!
 //! Failures render as the pages' error states and are logged ([`log`]).
 
+pub mod failure;
 pub mod identity;
 pub mod log;
 
@@ -48,17 +49,17 @@ pub struct HttpStarted {
 pub async fn start(config: &HttpConfig) -> Result<HttpStarted, IdentityError> {
     let client = HttpClient::new(config.url.clone(), ClientConfig::default())
         .with_token(config.token.clone());
-    let access = identity::resolve(&client, config.operator).await?;
+    let access = identity::resolve(&client).await?;
     let operator = access.caller().operator();
     tracing::info!(
-        url = %config.url,
+        url = %failure::public_url(&config.url),
         operator = %operator.to_ulid(),
         name = access.name(),
         permissions = ?access.caller().permissions(),
         "acting as the token's operator"
     );
     let (sender, receiver) = watch::channel(access);
-    let refresh = identity::spawn_refresh(client.clone(), operator, sender, REFRESH);
+    let refresh = identity::spawn_refresh(client.clone(), sender, REFRESH);
     Ok(HttpStarted {
         client,
         identity: Identity::watching(receiver),
