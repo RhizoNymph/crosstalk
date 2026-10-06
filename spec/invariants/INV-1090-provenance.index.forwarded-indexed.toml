@@ -18,20 +18,23 @@ indexing beside the span (pending, indexed, expired), so hits on it count
 no Propagated state and expiry evicts it like an originated span.
 
 A reader that read the same upstream source itself, rather than the
-forward, also matches the forwarded span. That is a shared-upstream match,
-and L5 keeps it from confirming a channel: the sender never wrote the
-resource the reader read (flow.route.shared-upstream-stays-suspected).
-Text relayed from another agent's indexed span stays unindexed: its
-author is that span's agent, whose span the reader already matches.
+forward, does not match the forward on what its own read holds
+(provenance.match.forward-direct-read), and a forward of the reader's own
+text matches nobody (provenance.match.own-output-replay); where a direct
+read cannot be told apart (a forward of the whole source), L5 keeps the
+shared-upstream match from confirming a channel
+(flow.route.shared-upstream-stays-suspected). Text relayed from another
+agent's indexed span stays unindexed: its author is that span's agent,
+whose span the reader already matches.
 
-Forwarding is off by default. Measured on SALT (--limit 53, live) it
-raised recall from 0.792 to 0.957 but dropped precision from 0.703 to
-0.310: agents paste their own tool output (a database schema), and every
-peer's own read of the same upstream matches the forward through a tool
-result that records no access, which INV-963 does not hold back. Before it
-is turned on, shared-upstream matches on forwards need handling for
-ToolResult reads without an access, and for SystemPrompt and UserTurn
-reads of text forwarded from a shared prompt or an orchestrator's turn.
+Forwarding is off by default. Measured on SALT (--limit 53, live) before
+the nearer-source rules it raised recall from 0.854 to 0.920 but dropped
+precision from 0.840 to 0.143: every peer's own read of a schema another
+agent pasted matched the forward. With them, forwarding on gives 0.894 /
+0.882 against 0.854 / 0.955 off, but SALT's forwarding-row gate fails
+(0.885 against 0.94) and splice keeps 77 false positives per 1k exchanges
+against 3.6, mostly user-turn reads of text forwarded from a shared task
+prompt.
 """
 
 [evidence]

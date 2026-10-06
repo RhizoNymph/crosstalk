@@ -1,6 +1,6 @@
 [invariant]
 id = "provenance.match.own-output-replay"
-statement = "A lookup hit of a read on another agent's span does not count toward a ContentMatch when the reader's own earlier output holds the same k-gram or short-span run: any text, reasoning or tool-call argument part of an assistant message in the exchange's request (history and new inputs), through any of its decode layers (server tool results excluded). Only those hits are dropped: the match keeps the extents of its other hits, and is made from them when any remain."
+statement = "A lookup hit of a read on another agent's span, where the read is a tool result (Carrier::ToolResult) or the span is a forwarded one (Relayed from an input, any carrier), does not count toward a ContentMatch when the reader's own earlier output holds the same k-gram or short-span run: any text, reasoning or tool-call argument part of an assistant message in the exchange's request (history and new inputs), through any of its decode layers (server tool results excluded). Only those hits are dropped: the match keeps the extents of its other hits, and is made from them when any remain. Hits read in a user turn or system prompt on an originated span are not affected. Whether the match is a skeleton or an inherited fragment is judged on all its hits."
 kind = "domain"
 property = "postcondition"
 requires = ["unit"]
@@ -10,7 +10,12 @@ own queries (SALT get_log), a confirmation echoing the call's arguments
 (AgentDojo send_money: "Transaction to US1330... sent."). When a peer's
 span shares that text (task phrasing both derive from the same prompt, an
 IBAN both copied from one injection), the replay matched the peer: most of
-SALT's 570 direct/tool_result false positives and AgentDojo's 108. The
+SALT's 570 direct/tool_result false positives and AgentDojo's 108.
+Measured (live, forwarding off, against integration/impl 2adbed4): SALT
+tool-result false positives 558 -> 62, precision 0.840 -> 0.955 at the
+same recall; AgentDojo 148 -> 92; splice 58 -> 8. AgentDojo loses 9
+labels, every one a tool result echoing the victim's own call into which
+it had pasted the injection: the converter labels the echo a delivery. The
 reader's own output is the nearer source of text it wrote itself, so the
 replay is the reader's own relay, not a delivery.
 
@@ -19,8 +24,15 @@ before the read (it is in the request), whoever wrote it first. That loses
 no transmission: if the peer's span is the actual source, the read that
 first brought the text to the reader came before the reader wrote it, held
 no own copy, and was matched then; only the later replay is withheld. A
-peer message that repeats text the reader wrote is no delivery of that
-text either, even when the peer had it first.
+forward is never its forwarder's own text, so a forward of what the
+reader wrote (a peer quoting the reader back, with forwarding on) hands
+the reader's text back, whatever carries it.
+
+Scope: a user turn or system prompt holding a peer's originated span is
+the peer's writing and stays a delivery even where it repeats the
+reader. Applying the rule to every carrier was measured on SALT (--limit
+53, live, forwarding off): it lost 16 construction and 29 forwarding
+labels and removed one more false positive than the tool-result scope.
 
 The granularity is per run (per hit), not per match: a read holding the
 reader's own text next to text only the peer wrote still matches the peer
@@ -32,7 +44,7 @@ increment, a truncated history) is not covered.
 """
 
 [evidence]
-unit = ["crosstalk_provenance::tests::nearer_source::tool_result_replaying_the_readers_own_call_matches_no_peer", "crosstalk_provenance::tests::nearer_source::tool_result_echoing_the_readers_own_relay_matches_no_peer", "crosstalk_provenance::tests::nearer_source::own_output_explains_only_its_own_runs"]
+unit = ["crosstalk_provenance::tests::nearer_source::tool_result_replaying_the_readers_own_call_matches_no_peer", "crosstalk_provenance::tests::nearer_source::tool_result_echoing_the_readers_own_relay_matches_no_peer", "crosstalk_provenance::tests::nearer_source::own_output_explains_only_its_own_runs", "crosstalk_provenance::tests::nearer_source::user_turn_repeating_the_reader_still_matches_the_peer", "crosstalk_provenance::tests::nearer_source::forward_of_the_readers_own_text_matches_no_peer"]
 
 [evidence-review]
 unit = { agent = "true", human = "false" }

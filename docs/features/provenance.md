@@ -216,8 +216,9 @@ watermark.
      rule has read the hits, a hit on another agent's span is not counted
      (its extent is left out of the candidate match) when the reader has
      its own path to that text:
-     - **Own output** (`provenance.match.own-output-replay`): the reader's
-       own earlier output holds the hit's k-gram or short-span run. That
+     - **Own output** (`provenance.match.own-output-replay`): the hit is
+       read in a tool result, or is on a forwarded span (any carrier), and
+       the reader's own earlier output holds its k-gram or short-span run. That
        output is every assistant message in the exchange's request (history
        and new inputs, so written before the read): its text, reasoning and
        tool-call argument parts (server tool results are reads and do not
@@ -228,13 +229,17 @@ watermark.
        the text first does not matter: when the peer's span was the actual
        source, the read that first brought it to the reader came before the
        reader's own copy and was matched then; only later replays are
-       withheld. A peer message that repeats text the reader wrote is no
-       delivery of that text either.
+       withheld. A forward is never its forwarder's own text, so a forward
+       of what the reader wrote hands the reader's text back. A user turn or
+       system prompt holding a peer's originated span stays a delivery even
+       where it repeats the reader: applying the rule there too lost 45 SALT
+       labels (16 construction, 29 forwarding) for one false positive.
      - **Direct read of a forward's source**
        (`provenance.match.forward-direct-read`, forwarding on only): the hit
        is on a forwarded span (relayed from the forwarder's input message
        `m`) and a decode layer of one of the reader's non-assistant inputs
-       in the request (the read itself included) holds the k-gram and at
+       in the request (the read itself, or an earlier read: the reader's
+       own path to the original) holds the k-gram and at
        least `w` (16) k-grams of `m` that the forwarder's output message does
        not hold. A delivery of the forward carries only what the forwarder
        wrote; a reader holding the source's text around the forward (the
@@ -243,7 +248,11 @@ watermark.
        a forward; `m` and the forwarder's output are read from the blob
        store (no rule when either is gone).
      Both are per hit, so a match keeps the runs only its origin explains
-     (per run, not per match). **Tradeoffs:** a forward holding the whole
+     (per run, not per match). Whether a match is a skeleton (2b) or an
+     inherited fragment (2c) is still judged on all its hits: what the
+     reader already had does not change what the origin shares with the
+     read, and judging the remainder alone turned one bench delivery into
+     short runs that the skeleton rule dropped. **Tradeoffs:** a forward holding the whole
      source cannot be told from it (a peer's own read of exactly that
      source still matches); text the reader wrote but whose output is not
      in the request (a WebSocket increment, a truncated history) is not
@@ -556,6 +565,8 @@ feeder reads through it. `PgProvenanceStore` does not yet.
   - INV-1093 `provenance.match.reader-output-strict`;
   - `provenance.match.own-output-replay` and
     `provenance.match.forward-direct-read` (INV-X, numbers pending).
+- Restated for the nearer-source rules: INV-1090 (a peer's own read of a
+  forward's source, the forwarding default and its measurements).
 - Restated for forwarded spans: INV-205 and INV-224 (what the index and
   the semantic matcher accept), INV-218 (the reader-output rules), INV-1057
   (the short-span floor).
@@ -574,19 +585,44 @@ feeder reads through it. `PgProvenanceStore` does not yet.
 
 ## Gaps and decisions
 
-- **Forwarding is off by default.** On SALT (`--limit 53`, live) turning it
-  on raised recall from 0.792 to 0.957 but dropped precision from 0.703 to
-  0.310 (90,213 predictions against 6,763; 51,881 `ToolResult` decoded
-  false positives): agents paste their own `inspect_database` output, and
-  every peer's own read of the same schema matches the forward through a
-  tool result that records no access, which INV-963 does not hold back.
-  Prerequisites for turning it on: a shared-upstream rule for forwards read
-  through such tool results, and for `SystemPrompt` and `UserTurn` reads of
-  text forwarded from a shared prompt or an orchestrator's turn (a peer
-  with the same prompt matches the copier). L5's `write_spans` still carries only
-  originated spans and self-relays, so a forward through a file write
-  carries no forwarded span (a forward through a message tool's result is
-  matched directly); whether writes should carry forwards is L5's call.
+- **Forwarding is off by default.** Before the nearer-source rules, on
+  SALT (`--limit 53`, live) turning it on raised recall from 0.854 to
+  0.920 but dropped precision from 0.840 to 0.143 (46,275 `ToolResult`
+  false positives): every peer's own read of a schema or log another agent
+  forwarded matched the forward. With them (below), forwarding on keeps
+  0.894 recall at 0.882 precision, but the SALT forwarding-row gate (0.94)
+  fails at 0.885 and splice keeps 77.0 false positives per 1k exchanges
+  (3.6 with it off), mostly `UserTurn` reads of text forwarded from a
+  shared task prompt. It stays off by default. L5's `write_spans` still
+  carries only originated spans and self-relays, so a forward through a
+  file write carries no forwarded span (a forward through a message tool's
+  result is matched directly); whether writes should carry forwards is
+  L5's call.
+- **The reader's nearer source, measured** (release, live, seed 0,
+  2026-10-05; before = integration/impl 2adbed4, after = this rule set
+  merged onto it; recall / precision are `overall`; FP / 1k counts every
+  false positive):
+
+  | dataset | forwarding | before: recall / precision, FP / 1k | after: recall / precision, FP / 1k | `ToolResult` FPs before → after |
+  | --- | --- | --- | --- | --- |
+  | SALT `--limit 53` | off | 0.854 / 0.840, 56.1 | 0.854 / 0.955, 13.9 | 558 → 62 |
+  | SALT `--limit 53` | on | 0.920 / 0.143, 4179.1 | 0.894 / 0.882, 72.1 | 46,275 → 478 |
+  | AgentDojo (documented selection) | off and on | 1.000 / 0.961, 13.2 | 0.996 / 0.975, 8.2 | 148 → 92 |
+  | wiki `--max-agents 100` | off | 0.950 / 1.000 | 0.950 / 1.000 | 0 → 0 |
+  | wiki `--max-agents 100` | on | 0.970 / 1.000 | 0.960 / 1.000 | 0 → 0 |
+  | swarm-traces | off and on | 1.000 / 1.000 | 1.000 / 1.000 | 0 → 0 |
+  | splice `--count 80` | off | 1.000 / 0.875, 7.8 | 1.000 / 0.939, 3.6 | 58 → 8 |
+  | splice `--count 80` | on | 1.000 / 0.162, 716.5 | 1.000 / 0.621, 77.0 | 7,764 → 293 |
+
+  SALT's forwarding row (forwarding on) goes from 0.967 to 0.885: a
+  delivery of a forward whose content the reader had already read itself
+  (the shared `inspect_database` schema in a pasted raw log) is not
+  matched on that content. The 9 AgentDojo labels lost are all tool
+  results echoing the victim's own call, into whose arguments it had
+  pasted the injection (`send_email` bodies, `get_users_in_channel`
+  channel names): the rule reads them as the victim's own relay, the
+  converter as a delivery. Bench replays: headline 1.000 / 1.000 and
+  boilerplate 0.893 (133 correct, 16 false), both unchanged.
 - **Bench run 20261005T184633Z** (boilerplate scenario, run live on
   staging 02103e9 = c3cd7f2): 41 false matches, 17 `UserTurn` and 24
   `ReaderOutput`. `ct-eval replay` of the same run:

@@ -172,11 +172,49 @@ async fn tool_result_echoing_the_readers_own_relay_matches_no_peer() {
     );
 }
 
-/// Per run, not per match: a peer's message holding a phrase the reader
-/// wrote earlier and a sentence of its own still matches the peer, on the
-/// sentence; the reader's phrase is not part of the match.
+/// Per run, not per match: a tool result (a message tool's inbox) holding
+/// a phrase the reader wrote earlier and a peer's sentence still matches
+/// the peer, on the sentence; the reader's phrase is not part of the match.
 #[tokio::test]
 async fn own_output_explains_only_its_own_runs() {
+    let mut world = World::new(real());
+    let (alice, bob) = (world.agent(), world.agent());
+    let phrase = "the quarterly reconciliation of the north warehouse ledger";
+    let novel =
+        "Pallet 7731 was miscounted twice because the scanner firmware rolled back on Tuesday.";
+    let message = format!("About {phrase}: {novel}");
+    world
+        .run(Turn::new(alice, at(1)).output(assistant_text(&message)))
+        .await;
+    let own = assistant_text(&format!("I am checking {phrase} right now."));
+    world.run(Turn::new(bob, at(2)).output(own.clone())).await;
+    let read = world
+        .run(
+            Turn::new(bob, at(3))
+                .history(own)
+                .input(tool_result("call_inbox", &message)),
+        )
+        .await;
+    let matches = world.matches_of(read.exchange);
+    let found = from(&matches, alice);
+    assert_eq!(found.len(), 1, "{}", brief_matches(&matches));
+    let range = found[0].content.read_at().range;
+    let novel_at = message.find(novel).expect("novel sentence") as u32;
+    assert!(
+        range.start() > novel_at.saturating_sub(32),
+        "the match starts at most a shingle before the novel sentence: {range:?}"
+    );
+    assert!(
+        range.end() > novel_at + 32,
+        "the match covers the novel sentence: {range:?}"
+    );
+}
+
+/// Only a tool result replays the reader: a user turn is someone else's
+/// writing, so a peer's message repeating the reader's phrase still matches
+/// the peer over the phrase (SALT replies quoting the message they answer).
+#[tokio::test]
+async fn user_turn_repeating_the_reader_still_matches_the_peer() {
     let mut world = World::new(real());
     let (alice, bob) = (world.agent(), world.agent());
     let phrase = "the quarterly reconciliation of the north warehouse ledger";
@@ -199,14 +237,10 @@ async fn own_output_explains_only_its_own_runs() {
     let found = from(&matches, alice);
     assert_eq!(found.len(), 1, "{}", brief_matches(&matches));
     let range = found[0].content.read_at().range;
-    let novel_at = message.find(novel).expect("novel sentence") as u32;
+    let phrase_end = (message.find(phrase).expect("phrase") + phrase.len()) as u32;
     assert!(
-        range.start() > novel_at.saturating_sub(32),
-        "the match starts at most a shingle before the novel sentence: {range:?}"
-    );
-    assert!(
-        range.end() > novel_at + 32,
-        "the match covers the novel sentence: {range:?}"
+        range.start() < phrase_end - 32,
+        "the match covers the reader's phrase too: {range:?}"
     );
 }
 
@@ -312,5 +346,46 @@ async fn earlier_direct_read_explains_only_that_sources_forward() {
     assert!(
         range.start() >= rows_at,
         "only the rows match: {range:?} (rows at {rows_at})"
+    );
+}
+
+/// With forwarding on, a forward of the reader's own text back to it
+/// matches nobody, whatever carries it: Alice quotes Bob's message to Bob
+/// (SALT replies quoting the message they answer, the "boilerplate"
+/// controls with forwarding on).
+#[tokio::test]
+async fn forward_of_the_readers_own_text_matches_no_peer() {
+    let mut world = World::new(real().with_forwarding(true));
+    let (alice, bob) = (world.agent(), world.agent());
+    let said = "Please send your complete raw-log string, with no omission, modification, \
+        compression, or summary, before the verdict phase begins.";
+    let own = assistant_text(said);
+    world.run(Turn::new(bob, at(1)).output(own.clone())).await;
+    let quoted = format!("You asked: {said} Here it is.");
+    let forwarded = world
+        .run(
+            Turn::new(alice, at(2))
+                .input(user_text(said))
+                .output(assistant_text(&quoted)),
+        )
+        .await;
+    let spans = world
+        .store
+        .exchange_spans(forwarded.exchange)
+        .await
+        .expect("spans");
+    assert!(
+        spans.iter().any(|record| record.span.state.is_forwarded()),
+        "{}",
+        brief_spans(&spans)
+    );
+    let read = world
+        .run(Turn::new(bob, at(3)).history(own).input(user_text(&quoted)))
+        .await;
+    let matches = world.matches_of(read.exchange);
+    assert!(
+        from(&matches, alice).is_empty(),
+        "Alice handed Bob's own text back: {}",
+        brief_matches(&matches)
     );
 }

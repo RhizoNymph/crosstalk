@@ -24,6 +24,15 @@ reader that read the source itself earlier does not receive the same text
 again from the forwarder; only what it never read itself (another source,
 the forwarder's own text) still matches.
 
+Measured with forwarding on (live, against integration/impl 2adbed4,
+together with provenance.match.own-output-replay): SALT precision 0.143
+-> 0.882 (tool-result false positives 46,275 -> 478), splice 0.162 ->
+0.621. Counting earlier reads costs SALT's forwarding row 0.967 -> 0.885:
+a peer's paste of a raw log holding the schema the reader had read itself
+is not matched on the schema. Counting only the read being scanned kept
+that row at 0.967 but left precision at 0.702 (prompt text forwarded back
+and forth in user turns).
+
 Tradeoff: a forward that holds the whole source (nothing of m outside the
 forward) cannot be told from it, so a peer's own read of exactly that
 source still matches the forwarder; and a direct read that holds less

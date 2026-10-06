@@ -5,40 +5,47 @@
 //! short-span run, on one span), so a match loses only the runs its reader
 //! already had and keeps the rest:
 //!
-//! - **Own output** (`provenance.match.own-output-replay`). A hit is not
-//!   counted when the reader's own earlier output holds the same k-gram
+//! - **Own output** (`provenance.match.own-output-replay`). A hit read in
+//!   a tool result, or a hit on a forwarded span through any carrier, is
+//!   not counted when the reader's own earlier output holds the same k-gram
 //!   (or short-span run): any text, reasoning or tool-call argument of an
 //!   assistant message in the exchange's request (its history and new
-//!   inputs, so written before this read), through every decode layer. A
-//!   tool result that replays the reader's call (a `get_log`, a
-//!   `send_money` confirmation) or a message quoting the reader back is
-//!   the reader's own relay, not a delivery. Server tool results inside
-//!   assistant messages are reads, not output, and do not count. The
-//!   reader's own output holding the text is the whole condition: whoever
-//!   wrote it first, the reader cannot receive from a peer what it already
-//!   wrote itself. A transmission is never lost to this rule, because the
-//!   read that first brought the text to the reader came before the
-//!   reader's own copy and was matched then.
+//!   inputs, so written before this read), through every decode layer.
+//!   Server tool results inside assistant messages are reads, not output,
+//!   and do not count. A tool's result can replay the reader's own call (a
+//!   `get_log`, a `send_money` confirmation): that is the reader's own
+//!   relay, not a delivery. A forward is never its forwarder's own text, so
+//!   a forward of what the reader wrote hands the reader's text back. A
+//!   user turn or system prompt holding an originated span is someone
+//!   else's writing and stays a delivery even where it repeats the reader
+//!   (measured on SALT: applying the rule there too lost 45 labels for one
+//!   false positive). Whoever wrote the text first does not matter: when
+//!   the peer's span is the actual source, the read that first brought the
+//!   text to the reader came before the reader's own copy and was matched
+//!   then; only later replays are withheld.
 //! - **Direct read of a forward's source** (`provenance.match.forward-direct-read`,
 //!   only with forwarding on). A hit on a forwarded span (text the
 //!   forwarder relayed from its input message `m`) is not counted when one
 //!   of the reader's own reads holding that k-gram is a direct read of
 //!   `m`: a layer of a non-assistant input of the exchange (the read being
-//!   scanned included) that holds at least `w` (the winnowing window)
-//!   k-grams of `m` that the forwarder's output message does not hold. A
-//!   peer's delivery of the forward carries only what the forwarder wrote,
-//!   so only a reader with its own copy of the source sees the source's
-//!   text around the forward.
+//!   scanned included, and the reader's earlier reads: its own path to the
+//!   original) that holds at least `w` (the winnowing window) k-grams of
+//!   `m` that the forwarder's output message does not hold. A peer's
+//!   delivery of the forward carries only what the forwarder wrote, so only
+//!   a reader with its own copy of the source sees the source's text around
+//!   the forward.
 //!
 //! **Tradeoffs.** A forward that holds the whole source (nothing of `m`
 //! left outside it) cannot be told from the source, so a peer's own read of
-//! it still matches. A peer message repeating text the reader wrote is no
-//! delivery of that text, even when the peer had it first.
+//! it still matches. A delivery of a forward whose content the reader had
+//! already read itself is not matched on that content, though the eval
+//! labels it a delivery.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use crosstalk_spec::derived::provenance::fingerprint::{Fingerprint, FingerprintHit};
+use crosstalk_spec::derived::provenance::matching::Carrier;
 use crosstalk_spec::derived::provenance::span::{RelaySource, SpanState};
 use crosstalk_spec::ids::MessageHash;
 use crosstalk_spec::interfaces::l4_provenance::{FingerprintIndex, SemanticMatcher};
@@ -214,6 +221,7 @@ impl Scanner {
         &self,
         session: &mut Session<'_, I, S, M, L>,
         hits: &[FingerprintHit],
+        carrier: &Carrier,
     ) -> Result<Vec<FingerprintHit>, ScanError>
     where
         I: FingerprintIndex + Sync,
@@ -221,6 +229,10 @@ impl Scanner {
         M: SemanticMatcher + Sync,
         L: MessageSource + Sync,
     {
+        // A tool's result can replay the reader's own call; a user turn or
+        // a system prompt is someone else's writing, a delivery even when it
+        // repeats the reader.
+        let replays = matches!(carrier, Carrier::ToolResult(_));
         let mut kept = Vec::with_capacity(hits.len());
         let (mut own, mut direct) = (0_usize, 0_usize);
         for hit in hits {
@@ -232,10 +244,6 @@ impl Scanner {
                 kept.push(*hit);
                 continue;
             }
-            if session.nearer.own_holds(hit.fingerprint) {
-                own += 1;
-                continue;
-            }
             let forward = match (&record.span.state, record.forward) {
                 (
                     SpanState::Relayed {
@@ -245,6 +253,13 @@ impl Scanner {
                 ) => Some((*source, record.span.location.part.message)),
                 _ => None,
             };
+            // A forward is never its forwarder's own text: when the reader
+            // wrote it, the forward hands the reader's text back, whatever
+            // carries it.
+            if (replays || forward.is_some()) && session.nearer.own_holds(hit.fingerprint) {
+                own += 1;
+                continue;
+            }
             if let Some(key) = forward
                 && self.read_directly(session, key, hit.fingerprint).await?
             {
