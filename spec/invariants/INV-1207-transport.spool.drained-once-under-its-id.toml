@@ -1,0 +1,19 @@
+[invariant]
+id = "transport.spool.drained-once-under-its-id"
+statement = "Every spooled envelope reaches the inner bus under the id it was spooled with, and a drain repeated after a crash adds nothing to the bus log."
+kind = "coordination"
+requires = ["dst", "integration"]
+rationale = """
+The spool stores the envelope bytes unchanged, so the id minted at
+capture (or derived by a consumer) is the id the log gets. A crash
+between a drained batch's commit and the cursor advance resends the
+batch, which the log deduplicates (transport.publish.idempotent-on-id).
+"""
+
+[evidence]
+dst = "crosstalk_transport::dst::spool_drains_each_record_once_under_its_id"
+integration = "crosstalk_transport::integration::spool_drain_after_outage_publishes_each_id_once"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

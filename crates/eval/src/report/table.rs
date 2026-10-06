@@ -5,6 +5,7 @@ use std::fmt::Write;
 use serde::Serialize;
 
 use super::{Report, ReportRow};
+use crate::predict::EvidenceClass;
 use crate::report::gates::GateStatus;
 
 /// A value's snake_case serde name (`user_turn`), for table cells.
@@ -20,7 +21,7 @@ fn rate(value: Option<f64>) -> String {
     value.map_or_else(|| "-".to_owned(), |v| format!("{:.3}", v))
 }
 
-const HEADER: [&str; 13] = [
+const HEADER: [&str; 14] = [
     "route",
     "carrier",
     "class",
@@ -33,10 +34,11 @@ const HEADER: [&str; 13] = [
     "correct",
     "false",
     "unjudged",
+    "dismissed",
     "precision",
 ];
 
-fn cells(row: &ReportRow) -> [String; 13] {
+fn cells(row: &ReportRow) -> [String; 14] {
     let c = &row.counts;
     [
         name(&row.key.route),
@@ -51,6 +53,7 @@ fn cells(row: &ReportRow) -> [String; 13] {
         c.correct.to_string(),
         c.false_positive.to_string(),
         c.unjudged.to_string(),
+        c.dismissed.to_string(),
         rate(row.precision),
     ]
 }
@@ -100,6 +103,15 @@ pub fn render(report: &Report) -> String {
             access.expected
         );
     }
+    if access.expected_access > 0 {
+        let _ = writeln!(
+            out,
+            "access-only labels (expect a suspected transmission; not in overall): {} ({} / {})\n",
+            rate(access.access_recall),
+            access.found_access,
+            access.expected_access
+        );
+    }
     let reach = &report.out_of_reach;
     if reach.counts.expected > 0 || reach.counts.predicted > 0 {
         let _ = writeln!(
@@ -108,7 +120,18 @@ pub fn render(report: &Report) -> String {
             reach.counts.found, reach.counts.expected, reach.counts.predicted
         );
     }
-    let rows: Vec<[String; 13]> = report.rows.iter().map(cells).collect();
+    let forwarding = &report.forwarding;
+    if forwarding.counts.expected > 0 || forwarding.counts.predicted > 0 {
+        let _ = writeln!(
+            out,
+            "forwarding (sender relayed its own tool output, not in overall): recall {} ({} / {}), {} predictions\n",
+            rate(forwarding.recall),
+            forwarding.counts.found,
+            forwarding.counts.expected,
+            forwarding.counts.predicted
+        );
+    }
+    let rows: Vec<[String; 14]> = report.rows.iter().map(cells).collect();
     let mut widths: Vec<usize> = HEADER.iter().map(|h| h.len()).collect();
     for row in &rows {
         for (width, cell) in widths.iter_mut().zip(row.iter()) {
@@ -139,6 +162,25 @@ pub fn render(report: &Report) -> String {
         let _ = writeln!(out, "\nnegative-control violations:");
         for row in &report.violations {
             let _ = writeln!(out, "  {:<20} {}", name(&row.reason), row.count);
+        }
+    }
+    if !report.access_only_under_controls.is_empty() {
+        let _ = writeln!(
+            out,
+            "\naccess-only predictions under negative controls (not violations, not gated):"
+        );
+        for row in &report.access_only_under_controls {
+            let verdict = if row.class == EvidenceClass::Discarded {
+                "dismissed on"
+            } else {
+                "suspected under"
+            };
+            let _ = writeln!(
+                out,
+                "  {verdict} {} controls: {}",
+                name(&row.reason),
+                row.count
+            );
         }
     }
     if let Some(background) = &report.background {

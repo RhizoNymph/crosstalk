@@ -1,9 +1,39 @@
 //! L2 transport: the only path between components.
 //!
 //! Implementations:
-//! - `EventBus`: `MpscBus` (single node, tokio channels) and `JetStreamBus`
-//!   (multi node).
+//! - `EventBus`: `MpscBus` (single node, tokio channels, not durable;
+//!   memory mode and the simulation tests), `PgBus` (single node, durable:
+//!   an append-only log in the `transport` schema, with each group's
+//!   deliveries and dead letters beside it) and `JetStreamBus` (multi
+//!   node).
+//! - `SpoolingBus<B>`: the `EventBus` decorator `serve` puts in front of
+//!   `PgBus` whenever a database is configured. A publish the database
+//!   cannot take ([`BusError::Disconnected`]) is appended to an fsynced
+//!   spool on the data volume and sent, in order and under its own id,
+//!   when the database returns; until the spool is empty every later
+//!   publish queues behind it. A full spool refuses with
+//!   [`BusError::SpoolFull`] and never waits.
 //! - `BlobStore`: `PgBlobStore` and `ObjectStoreBlobs`.
+//!
+//! **Durability.** On a durable bus (`PgBus`, `JetStreamBus`, and
+//! `SpoolingBus` over either), `publish` returning `Ok` means the envelope
+//! is in the bus log or durably spooled, and every group subscribed then
+//! receives it until the group acks it, across restarts
+//! (`transport.durability.pg-publish-persisted`,
+//! `transport.spool.ok-means-durable`). `PgBus` is idempotent on
+//! [`Envelope::id`]: publishing an id the log already holds is `Ok` and
+//! delivers nothing new (`transport.publish.idempotent-on-id`), which is
+//! what makes outbox relays and consumer republishes after a crash
+//! harmless. A delivery held by a process that stopped is redelivered with
+//! its attempt counted (`transport.restart.held-redelivered`). `MpscBus`
+//! keeps the consumer-side dedup instead, and only it bounds a group's
+//! queue and makes `publish` wait for room (`transport.backpressure.*`):
+//! a durable log is the queue.
+//!
+//! **Derived envelope ids.** Every envelope a pipeline consumer publishes
+//! because of a delivery has an id that is a function of that delivery
+//! ([`EventId::derive`]), so a redelivery republishes the same ids
+//! (`transport.consumer.derived-envelope-ids`).
 
 use std::num::NonZeroU32;
 use std::time::Duration;
@@ -199,6 +229,13 @@ pub enum BusError {
     },
     /// A cursor the store did not issue, or issued for another group.
     InvalidCursor,
+    /// `SpoolingBus` could not reach its inner bus and its spool has no
+    /// room for the envelope: the spool already holds `bytes` and the
+    /// envelope would take it past its configured bound. Nothing was
+    /// written; the publish did not wait (`transport.spool.bounded`).
+    SpoolFull {
+        bytes: u64,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

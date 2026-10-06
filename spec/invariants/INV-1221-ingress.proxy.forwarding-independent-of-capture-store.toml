@@ -1,0 +1,17 @@
+[invariant]
+id = "ingress.proxy.forwarding-independent-of-capture-store"
+statement = "The proxy forwards and relays every request unchanged whatever the state of the database, the bus or the publish spool."
+kind = "coordination"
+requires = ["integration"]
+rationale = """
+Capture never blocks the client. A database outage spools captures, and
+a full spool counts them as uncaptured; neither may delay, alter or fail
+a harness's request, because readiness keeps harness traffic flowing
+through an outage.
+"""
+
+[evidence]
+integration = "crosstalk_e2e::spool::proxy_forwards_through_outage_and_full_spool"
+
+[evidence-review]
+integration = { agent = "false", human = "false" }

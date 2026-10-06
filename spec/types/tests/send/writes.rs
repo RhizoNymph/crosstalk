@@ -21,7 +21,7 @@ use crate::interfaces::l5_flow::channels::{
     DetectionUpdate, TrafficError,
 };
 use crate::interfaces::l5_flow::transmissions::{
-    TransmissionQuery, TransmissionStore, TransmissionStoreError,
+    MatchKey, TransmissionQuery, TransmissionStore, TransmissionStoreError,
 };
 use crate::interfaces::l5_flow::{Discovery, RegistryError};
 use crate::interfaces::l6_analysis::RuleError;
@@ -137,6 +137,12 @@ impl TransmissionStore for Dummy {
     ) -> Result<Page<Transmission, TransmissionList>, TransmissionStoreError> {
         match *self {}
     }
+    async fn holding(
+        &self,
+        _matches: &std::collections::BTreeSet<MatchKey>,
+    ) -> Result<BTreeMap<MatchKey, TransmissionId>, TransmissionStoreError> {
+        match *self {}
+    }
 }
 
 fn channel_traffic<T: ChannelTraffic>(x: &mut T, never: &Dummy) {
@@ -157,6 +163,7 @@ fn transmission_store<T: TransmissionStore>(x: &mut T, never: &Dummy) {
     assert_send(x.save(arg(never)));
     assert_send(x.transmission(arg(never)));
     assert_send(x.list(arg(never), arg(never)));
+    assert_send(x.holding(arg(never)));
 }
 
 // ── L6 analysis ────────────────────────────────────────────────────────

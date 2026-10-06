@@ -117,6 +117,14 @@ fn every_route() -> Vec<Route> {
             | Route::Agents
             | Route::Agent
             | Route::AgentNames
+            | Route::Conversations
+            | Route::Conversation
+            | Route::ConversationTurns
+            | Route::SpanReaders
+            | Route::ExchangeTurns
+            | Route::SpanPoints
+            | Route::ConversationText
+            | Route::PartText
             | Route::AlertRules
             | Route::AlertRule
             | Route::Sinks

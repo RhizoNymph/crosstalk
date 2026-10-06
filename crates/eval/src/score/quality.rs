@@ -4,8 +4,9 @@
 //! Each transmission's matches are judged through the same [`Judge`] the
 //! scorer uses. A transmission is `Genuine` when any match aligns with a
 //! label, `FalseDetection` when none does and some match is judged false,
-//! and has no verdict (unlabeled) otherwise, including every transmission
-//! the detector has not confirmed (it names no sender to judge).
+//! and has no verdict (unlabeled) otherwise, including a discarded one whose
+//! co-access aligns with no label (`Outcome::Dismissed`: the detector
+//! rejected it itself).
 //!
 //! `DetectionQuality` only counts what the detector opened; the scorer's
 //! `missed` counts are what it cannot see.

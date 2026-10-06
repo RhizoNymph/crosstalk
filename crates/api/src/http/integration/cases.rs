@@ -8,15 +8,20 @@ use crosstalk_spec::aggregates::filter::TopicVersionSelector;
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::batch::IdBatch;
 use crosstalk_spec::derived::flow::resource::ResourcePattern;
-use crosstalk_spec::ids::{AgentId, AlertId, AlertRuleId, ChannelId, ProjectionId, TransmissionId};
+use crosstalk_spec::ids::{
+    AgentId, AlertId, AlertRuleId, ChannelId, ConversationId, ExchangeId, ProjectionId, SpanId,
+    TransmissionId,
+};
 use crosstalk_spec::interfaces::l2_transport::ConsumerGroup;
 use crosstalk_spec::interfaces::l8_surface::AlertFilter;
 use crosstalk_spec::interfaces::l8_surface::audit::AuditFilter;
 use crosstalk_spec::interfaces::l8_surface::channel_traffic::ChannelTransmissionFilter;
+use crosstalk_spec::interfaces::l8_surface::conversation::text::TextLimit;
+use crosstalk_spec::interfaces::l8_surface::conversation::{ConversationFilter, TurnWindow};
 use crosstalk_spec::interfaces::l8_surface::excerpt::ExcerptWindow;
 use crosstalk_spec::interfaces::l8_surface::http::bodies::{
-    EdgeTransmissionsBody, FitProjectionBody, GraphBody, OverviewBody, SearchBody, SeriesBody,
-    TransmissionsBody,
+    EdgeTransmissionsBody, FitProjectionBody, GraphBody, OverviewBody, PartTextBody, SearchBody,
+    SeriesBody, TransmissionsBody,
 };
 use crosstalk_spec::interfaces::l8_surface::http::{
     EncodedRequest, PathArg, Place, RequestBuilder, Route, Source,
@@ -184,6 +189,50 @@ pub(super) fn cases() -> Vec<Case> {
         Case::new(Route::AgentNames)
             .body::<IdBatch<AgentId>>(&golden_text("paging/id_batch"))
             .returns(golden_text("agents/agent_names_several")),
+        Case::new(Route::Conversations)
+            .query::<ConversationFilter>(
+                "filter",
+                &golden_text("surface_reads/conversation/filter_agent_forks_one_corpus"),
+            )
+            .query::<PageRequest<()>>("page", &page)
+            .returns(format!(
+                "{{\"items\": [{}], \"next\": null}}",
+                golden_text("surface_reads/conversation/row_fork_replayed")
+            )),
+        Case::new(Route::Conversation)
+            .path::<ConversationId>("id", &quoted(AGENT))
+            .returns(golden_text("surface_reads/conversation/head")),
+        Case::new(Route::ConversationTurns)
+            .path::<ConversationId>("id", &quoted(AGENT))
+            .query::<TurnWindow>(
+                "window",
+                &golden_text("surface_reads/conversation/turn_window"),
+            )
+            .returns(golden_text("surface_reads/conversation/turn_page")),
+        Case::new(Route::SpanReaders)
+            .path::<SpanId>("id", &quoted(ALERT))
+            .query::<PageRequest<()>>("page", &page)
+            .returns(golden_text("surface_reads/conversation/span_readers_page")),
+        Case::new(Route::ExchangeTurns)
+            .body::<IdBatch<ExchangeId>>(&golden_text("paging/id_batch"))
+            .returns(golden_text("surface_reads/conversation/exchange_turns")),
+        Case::new(Route::SpanPoints)
+            .body::<IdBatch<SpanId>>(&golden_text("paging/id_batch"))
+            .returns(golden_text("surface_reads/conversation/span_points")),
+        Case::new(Route::ConversationText)
+            .path::<ConversationId>("id", &quoted(AGENT))
+            .query::<TurnWindow>(
+                "window",
+                &golden_text("surface_reads/conversation/turn_window"),
+            )
+            .query::<TextLimit>(
+                "limit",
+                &golden_text("surface_reads/conversation/text_limit_default"),
+            )
+            .returns(golden_text("surface_reads/conversation/conversation_text")),
+        Case::new(Route::PartText)
+            .body::<PartTextBody>(&golden_text("surface_reads/conversation/part_text_body"))
+            .returns(golden_text("surface_reads/conversation/part_text_slice")),
         Case::new(Route::AlertRules)
             .query::<AlertRuleFilter>(
                 "filter",

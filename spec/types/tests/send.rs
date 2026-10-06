@@ -19,6 +19,7 @@
 //! dummy implements the trait. Nothing is ever called: `Dummy` has no
 //! values, so the futures and arguments exist only for the type checker.
 
+mod conversations;
 mod detection;
 mod pipeline;
 mod surface;

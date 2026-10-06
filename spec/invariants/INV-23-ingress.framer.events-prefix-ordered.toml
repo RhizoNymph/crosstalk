@@ -1,6 +1,6 @@
 [invariant]
 id = "ingress.framer.events-prefix-ordered"
-statement = "The FrameEvents reported across all pushes for one HTTP response, or for one WebSocket turn, form a prefix of the sequence FirstContent, Finished."
+statement = "The FrameEvents reported across all pushes for one HTTP response, or for one WebSocket turn, form a prefix of the sequence FirstContent, Finished, however the bytes are chunked; once a response framer reports Finished, it reports no further event and no FrameError for that response."
 kind = "coordination"
 requires = ["property"]
 rationale = """

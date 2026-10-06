@@ -14,8 +14,10 @@
 //!  "eviction_interval_secs": 3600, "semantic_threshold": 0.85,
 //!  "locator_keys": ["file_path", "path", "notebook_path", "url", "uri"],
 //!  "short_spans": {"min_chars": 24, "max_chars": 46},
-//!  "reader_output": {"min_chars": 64},
-//!  "spread": {"agents": 4, "window_secs": 60, "distinctive_chars": 64},
+//!  "reader_output": {"min_chars": 64, "rare_token": true},
+//!  "spread": {"agents": 4, "distinctive_chars": 64, "distinctive_ratio": 2,
+//!             "tokens_per_text": 512, "drop_inherited": true,
+//!             "drop_shadowed": true},
 //!  "forwarding": false}
 //! ```
 
@@ -67,6 +69,8 @@ pub enum ConfigError {
     EmptyLocatorKey,
     #[error("the spread rule needs at least 2 agents, got {agents}")]
     SpreadAgents { agents: u32 },
+    #[error("the spread rule's distinctive_ratio must be at least 1")]
+    DistinctiveRatio,
     #[error("short spans need {MIN_SHORT_CHARS} <= min_chars <= max_chars, got {min}..={max}")]
     ShortSpanRange { min: u16, max: u16 },
 }
@@ -140,101 +144,224 @@ impl Default for ShortSpans {
 pub const DEFAULT_SHORT_MIN: u16 = 24;
 pub const DEFAULT_SHORT_MAX: u16 = 46;
 
+/// Whether a `ReaderOutput` stretch must carry a rare token
+/// (`provenance.match.reader-output-rare-token`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum RareToken {
+    /// The stretch must hold a whole token (`fingerprint::token`) seen in
+    /// at most `SpreadRule::rare_bound(holders)` texts, the holders being
+    /// the source span's originations, copies and reads.
+    #[default]
+    Required,
+    /// Any stretch passing the length floor is matched, however common its
+    /// words.
+    NotRequired,
+}
+
 /// The stricter rules a `ReaderOutput` match must pass
 /// (`provenance.match.reader-output-strict`): text a reader writes that
 /// another agent wrote, with no visible input holding it, is often domain
 /// text both derived from the same task (SQL, shell idioms, stock phrases).
-/// The relayed stretch must have at least `min_chars` normalized
-/// characters, and at least one of the hit fingerprints in it must not be
-/// boilerplate by the spread rule ([`SpreadRule`]). Other carriers keep no
+/// The relayed stretch, one contiguous run, must have at least `min_chars`
+/// normalized characters, and, unless `rare_token` is `NotRequired`, hold a
+/// token rare world-wide relative to the source's holders
+/// (`provenance.match.reader-output-rare-token`): two agents filling the
+/// same sentence template with the same words write 64 characters or more
+/// alike with no transmission (bench run 20261005T184633Z, 24 matches),
+/// while a copied message carries a token seen only in its own copies and
+/// reads. A broadcast copied by many agents keeps matching its first
+/// writer: every copy and read raises the bound. Other carriers keep no
 /// length floor.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReaderOutputRules {
     min_chars: u32,
+    rare_token: RareToken,
 }
 
 impl ReaderOutputRules {
+    /// `min_chars`, with a rare token required (the default).
     pub fn new(min_chars: u32) -> Self {
-        Self { min_chars }
+        Self {
+            min_chars,
+            rare_token: RareToken::default(),
+        }
+    }
+
+    /// These rules with another rare-token requirement.
+    pub fn with_rare_token(mut self, rare_token: RareToken) -> Self {
+        self.rare_token = rare_token;
+        self
     }
 
     /// The fewest normalized characters a `ReaderOutput` match covers.
     pub fn min_chars(&self) -> usize {
         usize::try_from(self.min_chars).unwrap_or(usize::MAX)
     }
+
+    /// Whether a `ReaderOutput` stretch must carry a rare token.
+    pub fn rare_token(&self) -> RareToken {
+        self.rare_token
+    }
 }
 
 impl Default for ReaderOutputRules {
-    /// 64 characters.
+    /// 64 characters, a rare token required.
     fn default() -> Self {
-        Self { min_chars: 64 }
+        Self::new(64)
     }
 }
 
-/// The cross-agent spread rule (`provenance.match.cross-agent-spread`),
-/// which tells a template from a broadcast by time order.
+/// Whether a short match whose runs repeat, token for token, parts the
+/// origin agent was given is dropped
+/// (`provenance.match.inherited-fragment-dropped`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum InheritedFragments {
+    /// Dropped: the origin agent added nothing of its own to the fragment,
+    /// so a reader holding it is explained by the upstream both share.
+    #[default]
+    Dropped,
+    /// Matched like any other short fragment.
+    Kept,
+}
+
+/// Whether a short, common-word match lying inside the text of another
+/// agent present in the same read is dropped
+/// (`provenance.match.shadowed-fragment-dropped`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ShadowedFragments {
+    /// Dropped: the read is the present agent's text; writers filling one
+    /// template with one topic's words share such fragments.
+    #[default]
+    Dropped,
+    /// Matched like any other short fragment.
+    Kept,
+}
+
+/// The cross-agent spread rule (`provenance.match.cross-agent-spread`)
+/// and skeleton matches (`provenance.match.skeleton-dropped`).
 ///
-/// For a fingerprint (or short-span hash), the earliest origination is the
-/// earliest indexing time among its live postings' spans. It is
-/// boilerplate for matching when at least `agents` distinct agents
-/// originated it within `window` of that earliest origination: there is no
-/// clear first writer. Copies made after a single first writer, beyond the
-/// window, are a broadcast: not boilerplate, and they match the first
-/// writer. The rule applies only to short or low-information fragments:
-/// short-span hashes, and fingerprints whose supporting run is shorter than
-/// `distinctive_chars` normalized characters; a longer run is never
-/// suppressed by spread (the index's text cutoff still applies). The index
-/// cutoff counts texts, which a world of a few agents never reaches.
+/// A fingerprint (or short-span hash) is boilerplate for short runs when at
+/// least `agents` distinct agents originated or copied it, at any time,
+/// world-wide (its live postings' spans and the spans relayed from them),
+/// **and** it is not distinctive. It is distinctive when one of the whole
+/// tokens it covers (`fingerprint::token`) is (nearly) never seen outside
+/// the fragment's own occurrences: observed in at most
+/// `distinctive_ratio` texts per holder plus one, the holders being its
+/// originations and copies. A short secret broadcast to many agents (a
+/// key, an id) carries such a token; template prose is made of words seen
+/// everywhere. A match none of whose contiguous runs reaches
+/// `distinctive_chars` normalized characters, and that holds at least one
+/// boilerplate run, is a template skeleton filled with different slot
+/// words, and is dropped whole. A match with a contiguous run of
+/// `distinctive_chars` or more is kept whatever the spread. Each scanned
+/// text observes at most `tokens_per_text` distinct tokens. With
+/// `inherited` [`InheritedFragments::Dropped`] (the default), a match of
+/// short runs each of which repeats, token for token, one part its origin
+/// agent was given in its own request is dropped too, whatever the spread
+/// (`provenance.match.inherited-fragment-dropped`). With `shadowed`
+/// [`ShadowedFragments::Dropped`] (the default), a match of an agent with no
+/// run of `distinctive_chars` in the layer, whose runs all lie inside the
+/// extent of another agent with such a run on an originated span and more
+/// coverage, and hold no rare token, is dropped too
+/// (`provenance.match.shadowed-fragment-dropped`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SpreadRule {
     agents: NonZeroU32,
-    window: Duration,
     distinctive_chars: u32,
+    distinctive_ratio: u32,
+    tokens_per_text: u32,
+    inherited: InheritedFragments,
+    shadowed: ShadowedFragments,
 }
 
 impl SpreadRule {
-    pub fn new(agents: u32, window: Duration, distinctive_chars: u32) -> Result<Self, ConfigError> {
+    pub fn new(
+        agents: u32,
+        distinctive_chars: u32,
+        distinctive_ratio: u32,
+        tokens_per_text: u32,
+    ) -> Result<Self, ConfigError> {
         let agents = NonZeroU32::new(agents)
             .filter(|agents| agents.get() >= 2)
             .ok_or(ConfigError::SpreadAgents { agents })?;
+        if distinctive_ratio == 0 {
+            return Err(ConfigError::DistinctiveRatio);
+        }
         Ok(Self {
             agents,
-            window,
             distinctive_chars,
+            distinctive_ratio,
+            tokens_per_text,
+            inherited: InheritedFragments::default(),
+            shadowed: ShadowedFragments::default(),
         })
     }
 
-    /// How many distinct agents within the window make a fragment
-    /// boilerplate.
+    /// This rule with inherited fragments dropped or kept.
+    pub fn with_inherited(mut self, inherited: InheritedFragments) -> Self {
+        self.inherited = inherited;
+        self
+    }
+
+    /// Whether a short match whose runs repeat parts its origin agent was
+    /// given is dropped (`provenance.match.inherited-fragment-dropped`).
+    pub fn inherited(&self) -> InheritedFragments {
+        self.inherited
+    }
+
+    /// This rule with shadowed fragments dropped or kept.
+    pub fn with_shadowed(mut self, shadowed: ShadowedFragments) -> Self {
+        self.shadowed = shadowed;
+        self
+    }
+
+    /// Whether a short, common-word match inside another present agent's
+    /// text in the same read is dropped
+    /// (`provenance.match.shadowed-fragment-dropped`).
+    pub fn shadowed(&self) -> ShadowedFragments {
+        self.shadowed
+    }
+
+    /// How many distinct originating agents make a non-distinctive fragment
+    /// boilerplate for short runs.
     pub fn agents(&self) -> usize {
         usize::try_from(self.agents.get()).unwrap_or(usize::MAX)
     }
 
-    /// How long after the earliest origination an origination counts as
-    /// simultaneous.
-    pub fn window(&self) -> Duration {
-        self.window
-    }
-
-    /// The window in microseconds, saturating.
-    pub fn window_micros(&self) -> u64 {
-        u64::try_from(self.window.as_micros()).unwrap_or(u64::MAX)
-    }
-
-    /// The run length (normalized characters) from which a match is
-    /// distinctive and exempt from the rule.
+    /// The contiguous run length (normalized characters) from which a
+    /// match is distinctive and exempt from the rule.
     pub fn distinctive_chars(&self) -> usize {
         usize::try_from(self.distinctive_chars).unwrap_or(usize::MAX)
+    }
+
+    /// The most texts a token may be seen in, for a fragment with
+    /// `holders` originations and copies, and still be distinctive:
+    /// `distinctive_ratio * holders + 1`.
+    pub fn rare_bound(&self, holders: usize) -> u64 {
+        let holders = u64::try_from(holders).unwrap_or(u64::MAX);
+        u64::from(self.distinctive_ratio)
+            .saturating_mul(holders)
+            .saturating_add(1)
+    }
+
+    /// How many distinct tokens one scanned text observes at most.
+    pub fn tokens_per_text(&self) -> usize {
+        usize::try_from(self.tokens_per_text).unwrap_or(usize::MAX)
     }
 }
 
 impl Default for SpreadRule {
-    /// 4 agents within 60 s; runs of 64 characters are exempt.
+    /// 4 agents; runs of 64 characters are exempt; a token seen in at most
+    /// two texts per holder (its writing and one read of it) plus one is
+    /// distinctive; 512 tokens per text.
     fn default() -> Self {
         Self {
             agents: NonZeroU32::new(4).unwrap_or(NonZeroU32::MIN),
-            window: Duration::from_secs(60),
             distinctive_chars: 64,
+            distinctive_ratio: 2,
+            tokens_per_text: 512,
+            inherited: InheritedFragments::default(),
+            shadowed: ShadowedFragments::default(),
         }
     }
 }
@@ -731,18 +858,32 @@ struct RawConfig {
 struct RawSpread {
     #[serde(default = "default_spread_agents")]
     agents: u32,
-    #[serde(default = "default_spread_window")]
-    window_secs: u64,
     #[serde(default = "default_distinctive")]
     distinctive_chars: u32,
+    #[serde(default = "default_ratio")]
+    distinctive_ratio: u32,
+    #[serde(default = "default_tokens")]
+    tokens_per_text: u32,
+    #[serde(default = "default_true")]
+    drop_inherited: bool,
+    #[serde(default = "default_true")]
+    drop_shadowed: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_ratio() -> u32 {
+    2
+}
+
+fn default_tokens() -> u32 {
+    512
 }
 
 fn default_spread_agents() -> u32 {
     4
-}
-
-fn default_spread_window() -> u64 {
-    60
 }
 
 fn default_distinctive() -> u32 {
@@ -753,8 +894,11 @@ impl Default for RawSpread {
     fn default() -> Self {
         Self {
             agents: default_spread_agents(),
-            window_secs: default_spread_window(),
             distinctive_chars: default_distinctive(),
+            distinctive_ratio: default_ratio(),
+            tokens_per_text: default_tokens(),
+            drop_inherited: true,
+            drop_shadowed: true,
         }
     }
 }
@@ -790,6 +934,8 @@ impl Default for RawShortSpans {
 struct RawReaderOutput {
     #[serde(default = "default_reader_output_chars")]
     min_chars: u32,
+    #[serde(default = "default_true")]
+    rare_token: bool,
 }
 
 fn default_reader_output_chars() -> u32 {
@@ -800,6 +946,7 @@ impl Default for RawReaderOutput {
     fn default() -> Self {
         Self {
             min_chars: default_reader_output_chars(),
+            rare_token: true,
         }
     }
 }
@@ -840,12 +987,29 @@ impl TryFrom<RawConfig> for ProvenanceConfig {
             Similarity::new(raw.semantic_threshold).map_err(|_| ConfigError::Threshold)?;
         let locator_keys = LocatorKeys::new(raw.locator_keys)?;
         let short_spans = ShortSpans::new(raw.short_spans.min_chars, raw.short_spans.max_chars)?;
-        let reader_output = ReaderOutputRules::new(raw.reader_output.min_chars);
+        let reader_output = ReaderOutputRules::new(raw.reader_output.min_chars).with_rare_token(
+            if raw.reader_output.rare_token {
+                RareToken::Required
+            } else {
+                RareToken::NotRequired
+            },
+        );
         let spread = SpreadRule::new(
             raw.spread.agents,
-            Duration::from_secs(raw.spread.window_secs),
             raw.spread.distinctive_chars,
-        )?;
+            raw.spread.distinctive_ratio,
+            raw.spread.tokens_per_text,
+        )?
+        .with_inherited(if raw.spread.drop_inherited {
+            InheritedFragments::Dropped
+        } else {
+            InheritedFragments::Kept
+        })
+        .with_shadowed(if raw.spread.drop_shadowed {
+            ShadowedFragments::Dropped
+        } else {
+            ShadowedFragments::Kept
+        });
         Self::new(
             winnow,
             decode,

@@ -1,0 +1,19 @@
+[invariant]
+id = "transport.publish.idempotent-on-id"
+statement = "Publishing to PgBus an envelope whose id the bus log already holds returns Ok and delivers nothing new to any group."
+kind = "coordination"
+requires = ["integration"]
+rationale = """
+Outbox relays that crash after publishing and before deleting, consumers
+that republish after a redelivery, and a spool drain repeated after a
+crash all publish an id the log may already hold. Deduplicating at the
+log makes each of them a no-op, so every store event lands once per
+envelope id without a cross-crate transaction. MpscBus is not durable and
+keeps the consumer-side dedup instead.
+"""
+
+[evidence]
+integration = "crosstalk_transport::integration::pg_publish_is_idempotent_on_id"
+
+[evidence-review]
+integration = { agent = "false", human = "false" }

@@ -5,7 +5,8 @@
 //!
 //! ```text
 //! build      Live::start(LiveConfig::new(LiveClock::Manual(clock at start), FlowConfig, seed)
-//!              with the backend's ExtractConfig)
+//!              with the backend's ExtractConfig and LiveSettings::forwarding
+//!              as ProvenanceConfig::forwarding)
 //!              Ticking::OnSettle: nothing time-driven runs between settles
 //! ingest     clock.set(at); live.pipeline().ingest(exchange, at)
 //! settle     live.settle(until)                         clock to until, stages ticked, drained to a fixpoint
@@ -63,6 +64,28 @@ impl GatewayBackend {
     }
 }
 
+impl GatewayBackend {
+    /// The `LiveConfig` a world's `Live` starts from: `LiveConfig::new` on
+    /// `clock` with `settings`' timing and seed, this backend's extractors,
+    /// and L4's forwarding as `settings.forwarding` says
+    /// (`ProvenanceConfig::with_forwarding`).
+    pub fn live_config(
+        &self,
+        settings: &LiveSettings,
+        clock: LiveClock,
+    ) -> Result<LiveConfig, BackendError> {
+        let mut config = LiveConfig::new(clock, flow_config(settings.timing)?, settings.seed)
+            .map_err(|error| BackendError::Build {
+                reason: error.to_string(),
+            })?;
+        config.extract = self.extract.clone();
+        config.provenance = config
+            .provenance
+            .with_forwarding(settings.forwarding.is_on());
+        Ok(config)
+    }
+}
+
 /// One world's `Live`, with handles on what the eval reads.
 pub struct GatewayWorld {
     live: Live,
@@ -97,15 +120,7 @@ impl LiveBackend for GatewayBackend {
         start: Timestamp,
     ) -> Result<GatewayWorld, BackendError> {
         let clock = ManualClock::at(start);
-        let mut config = LiveConfig::new(
-            LiveClock::Manual(clock.clone()),
-            flow_config(settings.timing)?,
-            settings.seed,
-        )
-        .map_err(|error| BackendError::Build {
-            reason: error.to_string(),
-        })?;
-        config.extract = self.extract.clone();
+        let config = self.live_config(settings, LiveClock::Manual(clock.clone()))?;
         let live = Live::start(config)
             .await
             .map_err(|error| BackendError::Build {

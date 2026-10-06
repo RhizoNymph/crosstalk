@@ -1,0 +1,18 @@
+[invariant]
+id = "transport.restart.held-redelivered"
+statement = "A PgBus delivery held by a process that stopped without acking it is redelivered to its group after a restart with its attempt counted."
+kind = "coordination"
+requires = ["integration"]
+rationale = """
+A crash between next and ack must neither lose the delivery nor retry it
+forever: counting the attempt, as MpscBus counts a dropped subscription,
+lets a delivery that crashes its consumer reach max_attempts and be
+dead-lettered. Resetting held rows at start is safe because only one
+pipeline process holds the database's pipeline lock.
+"""
+
+[evidence]
+integration = "crosstalk_transport::integration::pg_held_delivery_redelivered_after_restart"
+
+[evidence-review]
+integration = { agent = "false", human = "false" }

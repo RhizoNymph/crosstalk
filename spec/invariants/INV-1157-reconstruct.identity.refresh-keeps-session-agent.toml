@@ -1,0 +1,29 @@
+[invariant]
+id = "reconstruct.identity.refresh-keeps-session-agent"
+statement = "Two exchanges with the same harness session id in the same identity scope, whose rotating credentials differ, resolve to the same agent; two sessions sharing one rotating credential resolve to different agents without a conflict."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+A subscription harness refreshes its OAuth access token directly with the
+vendor (platform.claude.com), never through the gateway, so the gateway
+sees token A and later token B under one x-claude-code-session-id. The
+token's digest changes at the refresh and is only RotatingCredential
+evidence, which never decides; the session id does. Without this an agent
+would split at every refresh, and its conversation, sends and receipts
+would be divided between strangers.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_reconstruct::tests::refresh::refresh_inside_session_keeps_agent",
+    "crosstalk_reconstruct::tests::refresh::sessions_sharing_a_token_are_separate_agents",
+]
+integration = [
+    "crosstalk_gateway::subscription::subscription_tokens_pass_through_and_never_persist",
+    "crosstalk_e2e::smoke::subscription::the_relay_is_detected_and_no_answer_holds_a_token",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "true", human = "false" }

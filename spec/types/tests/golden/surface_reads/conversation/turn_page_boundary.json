@@ -1,0 +1,152 @@
+{
+  "conversation": "01J9Z3S8V9W0X1Y2Z3A4B5C6D7",
+  "total": 1,
+  "turns": [
+    {
+      "index": 0,
+      "exchange": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3",
+      "agent": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+      "started_at": "2026-10-04T09:41:30.000000Z",
+      "protocol": "open_ai_responses",
+      "transport": "web_socket",
+      "model": "gpt-5-codex",
+      "harness": null,
+      "ingress": {
+        "type": "replay",
+        "data": {
+          "corpus": "salt-nlp"
+        }
+      },
+      "continuation": {
+        "type": "increment",
+        "data": {
+          "connection": "01J9FKX2JCFCPSW7RA7D65TVKZ",
+          "history": "unseen"
+        }
+      },
+      "outcome": {
+        "type": "failed",
+        "data": {
+          "failed_at": "2026-10-04T09:41:31.000000Z",
+          "failure": {
+            "type": "upstream",
+            "data": {
+              "status": 529
+            }
+          }
+        }
+      },
+      "inputs": [
+        {
+          "hash": "50575e656c737a81888f969da4abb2b9c0c7ced5dce3eaf1f8ff060d141b2229",
+          "role": "user",
+          "placement": "carried_over",
+          "parts": {
+            "type": "body_dropped",
+            "data": [
+              {
+                "index": 0,
+                "inbound": [
+                  {
+                    "range": {
+                      "start": 12,
+                      "end": 59
+                    },
+                    "matched_bytes": 47,
+                    "kind": {
+                      "type": "decoded",
+                      "data": [
+                        "json_string"
+                      ]
+                    },
+                    "carrier": {
+                      "type": "tool_result",
+                      "data": "toolu_01VfA7wiki"
+                    },
+                    "origin": {
+                      "span": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3",
+                      "agent": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+                      "exchange": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+                      "turn": {
+                        "conversation": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+                        "turn": 3
+                      },
+                      "location": {
+                        "part": {
+                          "message": "10171e252c333a41484f565d646b727980878e959ca3aab1b8bfc6cdd4dbe2e9",
+                          "index": 1
+                        },
+                        "range": {
+                          "start": 40,
+                          "end": 87
+                        }
+                      }
+                    },
+                    "transmission": {
+                      "id": "01J9Z3S8V9W0X1Y2Z3A4B5C6D7",
+                      "route": {
+                        "type": "channel",
+                        "data": "01J9Z3P5R6S7T8V9W0X1Y2Z3A4"
+                      },
+                      "state": "confirmed"
+                    }
+                  }
+                ],
+                "spans": []
+              }
+            ]
+          }
+        },
+        {
+          "hash": "60676e757c838a91989fa6adb4bbc2c9d0d7dee5ecf3fa01080f161d242b3239",
+          "role": "user",
+          "placement": "new",
+          "parts": {
+            "type": "shown",
+            "data": [
+              {
+                "index": 0,
+                "kind": {
+                  "type": "text"
+                },
+                "text_bytes": 2048,
+                "inbound": [],
+                "spans": []
+              },
+              {
+                "index": 1,
+                "kind": {
+                  "type": "media",
+                  "data": "image"
+                },
+                "text_bytes": null,
+                "inbound": [],
+                "spans": []
+              },
+              {
+                "index": 2,
+                "kind": {
+                  "type": "unknown",
+                  "data": {
+                    "kind": "container_upload"
+                  }
+                },
+                "text_bytes": null,
+                "inbound": [],
+                "spans": []
+              }
+            ]
+          }
+        }
+      ],
+      "output": null,
+      "provenance": {
+        "type": "failed",
+        "data": {
+          "at": "2026-10-04T09:41:32.000000Z",
+          "failure": "body_missing"
+        }
+      }
+    }
+  ]
+}

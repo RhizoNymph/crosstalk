@@ -1,0 +1,387 @@
+{
+  "conversation": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+  "total": 84,
+  "turns": [
+    {
+      "index": 37,
+      "exchange": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+      "agent": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+      "started_at": "2026-10-04T09:31:04.000000Z",
+      "protocol": "anthropic_messages",
+      "transport": "sse",
+      "model": "claude-sonnet-4-5",
+      "harness": {
+        "family": "claude_code",
+        "version": "2.1.4",
+        "user_agent": "claude-cli/2.1.4 (external, cli)"
+      },
+      "ingress": {
+        "type": "reverse_proxy",
+        "data": {
+          "route": "anthropic"
+        }
+      },
+      "continuation": {
+        "type": "full_history"
+      },
+      "outcome": {
+        "type": "completed",
+        "data": {
+          "finished_at": "2026-10-04T09:31:09.500000Z",
+          "stop": "tool_use",
+          "usage": {
+            "input": 18204,
+            "output": 911,
+            "cache_read": 17002,
+            "cache_write": null,
+            "reasoning": null
+          }
+        }
+      },
+      "inputs": [
+        {
+          "hash": "20272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f9",
+          "role": "tool",
+          "placement": "new",
+          "parts": {
+            "type": "shown",
+            "data": [
+              {
+                "index": 0,
+                "kind": {
+                  "type": "tool_result",
+                  "data": {
+                    "call": "toolu_01VfA7wiki",
+                    "outcome": "success"
+                  }
+                },
+                "text_bytes": 4180,
+                "inbound": [
+                  {
+                    "range": {
+                      "start": 12,
+                      "end": 59
+                    },
+                    "matched_bytes": 47,
+                    "kind": {
+                      "type": "decoded",
+                      "data": [
+                        "json_string"
+                      ]
+                    },
+                    "carrier": {
+                      "type": "tool_result",
+                      "data": "toolu_01VfA7wiki"
+                    },
+                    "origin": {
+                      "span": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3",
+                      "agent": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+                      "exchange": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+                      "turn": {
+                        "conversation": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+                        "turn": 3
+                      },
+                      "location": {
+                        "part": {
+                          "message": "10171e252c333a41484f565d646b727980878e959ca3aab1b8bfc6cdd4dbe2e9",
+                          "index": 1
+                        },
+                        "range": {
+                          "start": 40,
+                          "end": 87
+                        }
+                      }
+                    },
+                    "transmission": {
+                      "id": "01J9Z3S8V9W0X1Y2Z3A4B5C6D7",
+                      "route": {
+                        "type": "channel",
+                        "data": "01J9Z3P5R6S7T8V9W0X1Y2Z3A4"
+                      },
+                      "state": "confirmed"
+                    }
+                  }
+                ],
+                "spans": []
+              }
+            ]
+          }
+        },
+        {
+          "hash": "30373e454c535a61686f767d848b9299a0a7aeb5bcc3cad1d8dfe6edf4fb0209",
+          "role": "system",
+          "placement": "new",
+          "parts": {
+            "type": "shown",
+            "data": [
+              {
+                "index": 0,
+                "kind": {
+                  "type": "text"
+                },
+                "text_bytes": 312,
+                "inbound": [],
+                "spans": []
+              }
+            ]
+          }
+        }
+      ],
+      "output": {
+        "hash": "40474e555c636a71787f868d949ba2a9b0b7bec5ccd3dae1e8eff6fd040b1219",
+        "role": "assistant",
+        "placement": "output",
+        "parts": {
+          "type": "shown",
+          "data": [
+            {
+              "index": 0,
+              "kind": {
+                "type": "reasoning",
+                "data": {
+                  "visible": false
+                }
+              },
+              "text_bytes": null,
+              "inbound": [],
+              "spans": []
+            },
+            {
+              "index": 1,
+              "kind": {
+                "type": "text"
+              },
+              "text_bytes": 1210,
+              "inbound": [],
+              "spans": [
+                {
+                  "span": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3",
+                  "range": {
+                    "start": 40,
+                    "end": 87
+                  },
+                  "origin": {
+                    "type": "originated",
+                    "data": {
+                      "status": {
+                        "type": "propagated",
+                        "data": {
+                          "indexed_at": "2026-10-04T09:31:10.000000Z",
+                          "first_hit_at": "2026-10-04T09:35:00.000000Z",
+                          "hits": 4
+                        }
+                      },
+                      "read_by": {
+                        "first": [
+                          {
+                            "agent": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+                            "exchange": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+                            "turn": {
+                              "conversation": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+                              "turn": 7
+                            },
+                            "read_at": {
+                              "part": {
+                                "message": "20272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f9",
+                                "index": 2
+                              },
+                              "range": {
+                                "start": 12,
+                                "end": 59
+                              }
+                            },
+                            "carrier": {
+                              "type": "tool_result",
+                              "data": "toolu_01VfA7wiki"
+                            },
+                            "kind": {
+                              "type": "exact"
+                            },
+                            "transmission": {
+                              "id": "01J9Z3S8V9W0X1Y2Z3A4B5C6D7",
+                              "route": {
+                                "type": "channel",
+                                "data": "01J9Z3P5R6S7T8V9W0X1Y2Z3A4"
+                              },
+                              "state": "confirmed"
+                            }
+                          },
+                          {
+                            "agent": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+                            "exchange": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+                            "turn": {
+                              "conversation": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+                              "turn": 7
+                            },
+                            "read_at": {
+                              "part": {
+                                "message": "20272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f9",
+                                "index": 2
+                              },
+                              "range": {
+                                "start": 12,
+                                "end": 59
+                              }
+                            },
+                            "carrier": {
+                              "type": "tool_result",
+                              "data": "toolu_01VfA7wiki"
+                            },
+                            "kind": {
+                              "type": "exact"
+                            },
+                            "transmission": {
+                              "id": "01J9Z3S8V9W0X1Y2Z3A4B5C6D7",
+                              "route": {
+                                "type": "channel",
+                                "data": "01J9Z3P5R6S7T8V9W0X1Y2Z3A4"
+                              },
+                              "state": "confirmed"
+                            }
+                          }
+                        ],
+                        "total": 2
+                      }
+                    }
+                  }
+                },
+                {
+                  "span": "01J9Z3P5R6S7T8V9W0X1Y2Z3A4",
+                  "range": {
+                    "start": 90,
+                    "end": 300
+                  },
+                  "origin": {
+                    "type": "forwarded",
+                    "data": {
+                      "input": "20272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f9",
+                      "status": {
+                        "type": "indexed",
+                        "data": {
+                          "at": "2026-10-04T09:31:10.000000Z"
+                        }
+                      },
+                      "read_by": {
+                        "first": [],
+                        "total": 0
+                      }
+                    }
+                  }
+                },
+                {
+                  "span": "01J9Z3Q6S7T8V9W0X1Y2Z3A4B5",
+                  "range": {
+                    "start": 400,
+                    "end": 480
+                  },
+                  "origin": {
+                    "type": "relayed",
+                    "data": {
+                      "type": "span",
+                      "data": {
+                        "span": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3",
+                        "agent": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+                        "exchange": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+                        "turn": {
+                          "conversation": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+                          "turn": 3
+                        },
+                        "location": {
+                          "part": {
+                            "message": "10171e252c333a41484f565d646b727980878e959ca3aab1b8bfc6cdd4dbe2e9",
+                            "index": 1
+                          },
+                          "range": {
+                            "start": 40,
+                            "end": 87
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              ]
+            },
+            {
+              "index": 2,
+              "kind": {
+                "type": "tool_call",
+                "data": {
+                  "call": "toolu_01Task",
+                  "name": "Task",
+                  "execution": "client"
+                }
+              },
+              "text_bytes": 96,
+              "inbound": [],
+              "spans": [
+                {
+                  "span": "01J9Z3R7T8V9W0X1Y2Z3A4B5C6",
+                  "range": {
+                    "start": 0,
+                    "end": 96
+                  },
+                  "origin": {
+                    "type": "originated",
+                    "data": {
+                      "status": {
+                        "type": "indexed",
+                        "data": {
+                          "at": "2026-10-04T09:31:10.000000Z"
+                        }
+                      },
+                      "read_by": {
+                        "first": [
+                          {
+                            "agent": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+                            "exchange": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+                            "turn": {
+                              "conversation": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+                              "turn": 7
+                            },
+                            "read_at": {
+                              "part": {
+                                "message": "20272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f9",
+                                "index": 2
+                              },
+                              "range": {
+                                "start": 12,
+                                "end": 59
+                              }
+                            },
+                            "carrier": {
+                              "type": "tool_result",
+                              "data": "toolu_01VfA7wiki"
+                            },
+                            "kind": {
+                              "type": "exact"
+                            },
+                            "transmission": {
+                              "id": "01J9Z3T9W0X1Y2Z3A4B5C6D7E8",
+                              "route": {
+                                "type": "delegation",
+                                "data": "parent_to_child"
+                              },
+                              "state": "classified"
+                            }
+                          }
+                        ],
+                        "total": 1
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          ]
+        }
+      },
+      "provenance": {
+        "type": "indexed",
+        "data": {
+          "at": "2026-10-04T09:31:10.000000Z"
+        }
+      }
+    }
+  ]
+}

@@ -127,7 +127,10 @@ Overview:
     detect: >
       Crates crosstalk-provenance and crosstalk-flow. L4 provenance (span extraction, novelty classification, fingerprint
       index, content matching over part text only, strict decoding,
-      escape-folded normalization) and L5 flow detection (resource
+      escape-folded normalization, boilerplate rules: template skeletons,
+      fragments the origin was given by its own upstream, short
+      common-word fragments inside another present writer's text, and
+      unobserved copies without a rare token are not matched) and L5 flow detection (resource
       extraction with write outcomes, channel registry with promotion and
       supersession, in which a channel exists only once a transmission
       between different agents goes through it, write/read correlation
@@ -196,16 +199,31 @@ Overview:
       resources are read back through the spec's read traits (SpanIndex,
       AccessStore, ChannelReads); the scorer aligns them with the labels
       and reports per dataset, route, carrier, match or access class and
-      tier against regression gates.
+      tier against regression gates. Out-of-reach and forwarding labels
+      (SALT deliveries pasting the sender's own tool output) are reported
+      apart from overall; ct-eval run --detector live --forwarding on|off
+      sets L4's ProvenanceConfig::forwarding, and gates select by detector
+      and forwarding setting.
       The swarm benchmark (ct-eval swarm) instead scores the live gateway:
       it joins the demo swarm's ground truth to the gateway's exchange log
-      and blobs, and scores a saved L8 transmissions export and its evidence,
+      (cut to the run window, so a reused session id's earlier-run
+      exchanges and detections are excluded and reported) and blobs, and
+      scores a saved L8 transmissions export and its evidence,
       suspected and discarded transmissions as access-only predictions
       from their evidence's accesses (reported as access-only recall,
-      apart from overall). The truth's session rows map every gateway
+      apart from overall; a suspected one under a negative control is
+      reported apart from the violations, never gated). The truth's session rows map every gateway
       session to its swarm agent; it scores under
       demo-swarm/<scenario> (headline or boilerplate), and its gates are
-      those named detector "gateway-export".
+      those named detector "gateway-export". A discarded co-access that
+      aligns with no label is dismissed (the detector's own "no"), never a
+      false positive or a control violation; the control it fell under is
+      recorded ("dismissed on reread controls: N"). ct-eval replay --run <dir>
+      replays a saved bench run's exchange log and blobs through
+      crosstalk_gateway::live::Live in memory with the run's flow windows
+      (bench.env), reads the export and evidence back through the same L8
+      surface, and scores them as ct-eval swarm does, offline and
+      deterministically.
     e2e: >
       Crate crosstalk-e2e (a composer): the end-to-end smoke harness. A
       scripted two-agent Claude Code scenario as wire traffic, captured
@@ -378,7 +396,10 @@ Features Index:
       decisions it takes from the transaction that makes them (the topic
       catalog owns TopicVersionDropped, the channel registry
       ChannelDiscovered), and every store method that
-      depends on the time takes it as an argument (the types are also the
+      depends on the time takes it as an argument; consumer-published
+      envelope ids derive from their input (EventId::derive) and MAC keys
+      from the deployment secret (KeyedHasher::derive_key), so both
+      survive a restart (the types are also the
       JSON wire format: wire_contract), with tests for the invariants
       checked at runtime and one TOML file per invariant in
       spec/invariants. Harness and server wire behavior it is based on is
@@ -423,13 +444,33 @@ Features Index:
       compaction), compaction boundaries, WebSocket increments and replayed traffic
       (labelled, filterable). Structure
       with View, text with Content; turns paged by citeable index windows.
-      Reads the spec's conversation reads
-      (docs/handoff/conversation-view-spec.md, INV-1000..1029).
+      Reads through the L8 conversation reads (conversation_reads,
+      INV-1000..1029).
     entry_points:
       - ui/src/pages/conversation/mod.rs
       - ui/src/backend/fixture/world/conversations/mod.rs
-    depends_on: [ui, query_surface, type_spec]
+    depends_on: [ui, query_surface, type_spec, conversation_reads]
     doc: docs/features/conversation_view.md
+  conversation_reads:
+    description: >
+      The read side of the conversation view. QueryApi conversations,
+      conversation (head: origin, successors, delegation, traffic, claims),
+      conversation_turns (turns by citeable index window, structure and
+      provenance marks, no text), span_readers, exchange_turns and
+      span_points (View), conversation_text and part_text (Content), with
+      their routes. Backed by L1's exchange store (ExchangeStore,
+      ExchangeReads), L3's ConversationReads (transcript with the
+      carried-over flag, a per-turn index, traffic source, successors),
+      L4's ProvenanceReads (scan status, output spans of every origin,
+      matches by reader exchange, a span's readers) and L5's
+      TransmissionStore::holding.
+    entry_points:
+      - spec/types/interfaces/l8_surface/conversation.rs
+      - spec/types/interfaces/l3_reconstruction/conversations.rs
+      - spec/types/interfaces/l4_provenance/reads.rs
+      - spec/types/interfaces/l1_canonical/exchanges.rs
+    depends_on: [type_spec, query_surface, reconstruct, provenance, flow_store, surface_service]
+    doc: docs/features/conversation_reads.md
   query_surface:
     description: >
       The L8 contract the UI reads and acts through: callers from the
@@ -795,6 +836,39 @@ Features Index:
       - crates/topology/migrations/0001_topology.sql
     depends_on: [type_spec, store, memory, transport, channel_semantics]
     doc: docs/features/topology_store.md
+  postgres_stores:
+    description: >
+      Reviewed design (roadmap P7.3, PR #103; workstream S, the spec
+      changes, landed: EventId::derive, KeyedHasher::derive_key,
+      BusError::SpoolFull, AuditOutcome::Interrupted with AuditIntent and
+      AuditIntents, PgBus/SpoolingBus/PgFrontierSource docs, INV-1200 to
+      INV-1221; W1 to W9 not implemented): detections that survive
+      a gateway restart. Surveys what is persisted today (serve runs Live
+      on memory stores and MpscBus; the L3 to L7 Postgres stores exist but
+      are unwired, and crosstalk migrate runs no layer migrations) and
+      proposes a durable PgBus (transport schema: event log, groups,
+      deliveries, dead letters), outbox rows stamped with a stable
+      envelope id before an idempotent publish, derived envelope ids for
+      every consumer (EventId::derive), L5 correlator checkpoints with
+      deferred acks plus a held-writes table, an access sequence and an
+      extraction ledger, a fsynced on-disk publish spool (SpoolingBus) that
+      keeps captures made while the database is down and drains them in
+      order under their envelope ids, PgTopicCatalog, PgProjectionStore, PgAuditLog,
+      PgOperatorStore and PgSinkRegistry, PgFrontierSource in the
+      composer, one pipeline process per database (advisory lock),
+      retention per store, and the restart semantics of /readyz, /healthz
+      and the API. Includes the test strategy (reference-model agreement,
+      restart equivalence, conformance on Postgres), the spec changes
+      (landed), the parallel workstreams and the nine recorded decisions.
+    entry_points:
+      - docs/features/postgres_stores.md
+      - spec/types/ids.rs
+      - spec/types/interfaces/l2_transport.rs
+      - spec/types/interfaces/l8_surface/audit.rs
+      - crates/gateway/src/live/mod.rs
+      - crates/store/src/migrate.rs
+    depends_on: [store, gateway, transport, reconstruct, provenance, flow_store, flow_correlator, search_alerts, topology_store, surface_service, conformance]
+    doc: docs/features/postgres_stores.md
   sim:
     description: >
       crosstalk-sim, the deterministic simulation kit for every dst
@@ -1001,6 +1075,26 @@ Features Index:
       - crates/ingress/src/config.rs
     depends_on: [type_spec, workspace, sim, testkit]
     doc: docs/features/ingress.md
+  claude_code_oauth:
+    description: >
+      Capturing Claude Code on a Claude Pro/Max subscription through
+      ANTHROPIC_BASE_URL. The OAuth bearer token and anthropic-beta's OAuth
+      capability pass through unchanged; the token is hashed on arrival
+      with the KeyedHasher and never stored; refresh goes to
+      platform.claude.com and never through the gateway. L0 classifies a
+      Bearer sent with an oauth- beta value as OauthAccessToken whatever
+      its shape (identify::OauthCapability); L3 keeps one agent per harness
+      session across token refreshes; tests prove no piece of a token
+      reaches a log, blob, exchange-log record, bus envelope or L8 answer.
+      Known limit: with no account, a client can claim another user's
+      session id on the same route.
+    entry_points:
+      - crates/ingress/src/identify.rs
+      - crates/ingress/src/credential.rs
+      - crates/reconstruct/src/evidence/scope.rs
+      - crates/e2e/src/scenario/mod.rs
+    depends_on: [ingress, reconstruct, gateway, testkit, e2e_smoke]
+    doc: docs/features/claude_code_oauth.md
   spec_primitives:
     description: >
       Roadmap P0.7: what several layers must compute identically, moved
@@ -1225,8 +1319,15 @@ Features Index:
       prompt and the output (k-grams, plus exact hashes of short token
       runs for whole values of 24 to 46 characters), resolves originated
       text against the index (hidden relays become ReaderOutput matches
-      under stricter length and frequency rules, boilerplate Common) and
-      picks carrier, kind, read range and matched bytes; the index holds
+      under stricter length and rare-token rules, boilerplate Common),
+      drops short matches that are template skeletons, that the origin
+      was given token for token in its own request, or that lie, with no
+      rare token, inside the text of another writer present in the read,
+      and
+      picks carrier, kind, read range and matched bytes, leaving out hits
+      the reader's nearer source explains (its own earlier output in the
+      request, and with forwarding on its own direct read of a forward's
+      source); the index holds
       originated spans and, with forwarding on (off by default), forwarded
       ones (relayed from the agent's own input, indexed under the
       forwarder, state left Relayed), with the
@@ -1247,6 +1348,8 @@ Features Index:
       - crates/provenance/src/engine.rs
       - crates/provenance/src/consumer.rs
       - crates/provenance/src/scan/mod.rs
+      - crates/provenance/src/scan/nearer.rs
+      - crates/provenance/src/scan/shadowed.rs
       - crates/provenance/src/segment/mod.rs
       - crates/provenance/src/decode/mod.rs
       - crates/provenance/src/fingerprint/mod.rs
@@ -1463,7 +1566,8 @@ Features Index:
     description: >
       crosstalk-eval and the ct-eval CLI (a composer): dataset converters
       (SALT-NLP, AgentDojo, tau2-bench, AI Village, collusion-wiki (synthesised
-      http_request reads and writes of public wiki pages) and swarm-traces (a
+      http_request reads and writes of public wiki pages; a reader's second
+      read of lines it already received is a reread control, INV-1122) and swarm-traces (a
       decode-chain corpus reported by chain, count and length only))
       streaming worlds of checked
       spec NormalizedExchanges on a deterministic virtual clock (datasets
@@ -1472,14 +1576,19 @@ Features Index:
       growing conversation), with typed,
       JSONL-serialisable ground truth (expected transmissions, out of reach
       when undecodable or read from a medium the sender never wrote
-      (INV-963), negative controls, exemptions, agent clusters, with tiers); predictions converted from
+      (INV-963), access-only expectations that only suspected or discarded
+      evidence finds (a co-access whose write carries no spans, such as a
+      git push), negative controls, exemptions, agent clusters, with
+      tiers); predictions converted from
       spec Transmissions (one per ContentMatch, and one per CoAccess of a
       suspected or discarded transmission) through a read seam over the
       spec's SpanIndex, AccessStore and channel reads; one documented
       alignment rule and a scorer with TP/FP/FN by dataset, route, carrier
       kind, match or access class and tier, negative-control violations
-      and a DetectionQuality bridge keyed by QualityMatch; a Detector seam
-      with the naive reference matcher (escape-aware matching classed as
+      (content classes only; access-only ones reported apart) and a
+      DetectionQuality bridge keyed by QualityMatch; a Detector seam
+      with the naive reference matcher (channel rereads of a span already
+      reported to the reader dropped; escape-aware matching classed as
       Exact, Normalized or Decoded([JsonString | YamlString]) through one
       classifier, with hits only two string levels explain out of reach
       and unreported, decoding, opaque-blob exclusion, a boilerplate cutoff
@@ -1490,7 +1599,11 @@ Features Index:
       channel resources and L3 attribution), whose adapter
       (detect::live::gateway) drives the merged crosstalk_gateway::live::Live
       (ct-eval run --detector live, with overridable correlation windows and
-      a --predictions JSONL dump); reports (overall, out of reach,
+      a --predictions JSONL dump), and ct-eval replay, which re-runs a
+      saved node0 bench run (exchange log, blobs, truth, bench.env)
+      through Live offline and scores it like ct-eval swarm, discarded
+      co-access aligned with no label counted dismissed rather than false;
+      reports (overall, out of reach,
       access-only recall, background) and regression gates per detector
       (reference or live), found through --gates, CT_EVAL_GATES, the bench
       image's installed file or the crate's own, else none. Every converter labels escaped text with the spec's
@@ -1507,6 +1620,7 @@ Features Index:
       - crates/eval/src/datasets/agentdojo/mod.rs
       - crates/eval/src/datasets/tau2/mod.rs
       - crates/eval/src/datasets/swarm_truth/mod.rs
+      - crates/eval/src/datasets/swarm_truth/replay.rs
       - crates/eval/src/predict/reads.rs
       - crates/eval/src/detect/live/mod.rs
       - crates/eval/src/detect/live/gateway.rs
@@ -1525,12 +1639,11 @@ Features Index:
       time order, and read back only through QueryApi (agents by session,
       the A to B channel edge, the confirmed transmission, its evidence,
       and the channel the cross-agent transmission created, dated by its
-      opening, listed and confirmed). The composition is shaped like
-      crosstalk_gateway::live::Live and is wired today from InProcess plus
-      a pipeline over its blob store and bus; the assertions needing L3 to
-      L7 are ignored until Live composes them. The scenario and readers are
-      a library, so a UI demo can feed the same traffic into a running
-      Live.
+      opening, listed and confirmed). The composition is a
+      crosstalk_gateway::live::Live process with every layer consuming the
+      bus, and every assertion runs against it: the first end-to-end proof
+      of detection. The scenario and readers are a library, so a UI demo
+      can feed the same traffic into a running Live.
     entry_points:
       - crates/e2e/src/lib.rs
       - crates/e2e/src/scenario/mod.rs
@@ -1680,21 +1793,26 @@ Features Index:
       (default 2026-07-13..17): every standard agent, one world per village
       day, requests rebuilt from responses (system prompt from goals and
       memory, session history, chat since the previous call), structural
-      chat labels, heuristic repository-channel labels from bash accesses
-      on canonical repository URLs, GUI edits counted. Bash accesses follow
-      the agreed L5 HttpTool contract: curl, wget and gh/glab api keep
-      their equivalent http_request {method, url, body} call, git and the
-      forge CLIs' issue commands are marked Bash-only, every resource is a
-      canonical URL (L5's url_locator off the forges, the repository's web
-      URL on them), and each write carries the spec's WriteOutcome
-      (rejected writes never pair). Its streaming table passes, resource
-      normalizer and bash access tagger are reusable.
+      chat labels, heuristic channel labels from bash accesses, GUI edits
+      counted. Every bash command goes through crosstalk-flow's
+      ToolExtractors as the bash call the agent made, so each access's
+      locator (Locator::Repository for git push/pull/clone, the
+      repository's File for a clone's or a raw URL's file, the issue or
+      merge request page, else L5's URL locator), op and WriteOutcome are
+      the gateway's; the converter adds the shell's true state (the
+      persistent working directory, ~, clones learnt from a push's or
+      pull's printed remote) and keeps shared resources only. A pair whose
+      write is a git push (no spans) is an access-only expectation on the
+      repository; a pair whose writer's typed text reaches the reader's
+      output through one file, thread or page is a content label. Its
+      streaming table passes, resource lookup and bash access tagger are
+      reusable.
     entry_points:
       - crates/eval/src/datasets/ai_village/mod.rs
       - crates/eval/src/datasets/ai_village/tables.rs
       - crates/eval/src/datasets/ai_village/resource.rs
       - crates/eval/src/datasets/ai_village/access/mod.rs
-      - crates/eval/src/datasets/ai_village/access/http.rs
+      - crates/eval/src/datasets/ai_village/window/repo.rs
     depends_on: [eval, flow_extract]
     doc: docs/features/eval_ai_village.md
 ```

@@ -601,6 +601,7 @@ gracefully.
 | `src/tests/` | `crosstalk_gateway::tests::*`: the capture stage simulation (`dst.rs`), the `ingest` simulations (`ingest.rs`) and the refusal counts (`refusals.rs`) over raw exchanges built from the corpus (`raw.rs`), with recording store and bus wrappers (`record.rs`) | — |
 | `tests/e2e/` | `crosstalk_gateway::e2e::*`: end-to-end tests (`support.rs` starts a gateway in front of testkit's fake upstream) | — |
 | `tests/logs.rs` | The log redaction test (its own binary: it installs the global subscriber) | — |
+| `tests/subscription.rs` | Claude Code on a subscription through the running gateway: fake OAuth tokens refreshed mid-session pass through unchanged, keep one agent, and never reach a log line, file under the data directory or bus envelope (its own binary; [claude_code_oauth](claude_code_oauth.md)) | — |
 | `tests/architecture.rs` | The workspace dependency rule ([workspace](workspace.md)) | — |
 | `scripts/try-claude-code.sh` | The manual Claude Code check | — |
 
@@ -703,3 +704,10 @@ store; the cluster stores (JetStream, Postgres or object storage) are P9.
 - **No cross-node bus yet.** `proxy` and `pipeline` as separate processes
   cannot talk (P9).
 - **Readiness of migrations is vacuous** until a layer has migrations.
+
+## Conversation reads in the live process
+
+`LayerStores` (L1 exchanges, L3 conversations, L4 records) is the
+surface's `ConversationStores` (`InProcess::start_with_reads`); the L3
+stage puts each `ExchangeCaptured` exchange into the exchange store before
+threading it. See [conversation_reads.md](conversation_reads.md).

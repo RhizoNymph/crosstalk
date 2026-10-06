@@ -8,6 +8,8 @@ use crosstalk_spec::interfaces::l8_surface::audit::{
 };
 use crosstalk_spec::interfaces::l8_surface::export::{ExportEnd, ExportEvent};
 use crosstalk_spec::interfaces::l8_surface::{ActionOutcome, Permission, QueryError};
+use topcoat::Result;
+use topcoat::view::{View, component, view};
 
 use super::describe::{describe, note};
 use crate::components::format_time;
@@ -33,6 +35,24 @@ pub enum OutcomeView {
     Rejected(String),
     /// The caller lacked this permission; nothing was attempted.
     Forbidden(Permission),
+    /// The call began but the gateway stopped before recording what came
+    /// of it (`AuditOutcome::Interrupted`): the effect may or may not have
+    /// applied. Neither a success nor a refusal.
+    Interrupted,
+}
+
+/// How an interrupted call reads.
+pub const INTERRUPTED_LABEL: &str = "interrupted, outcome unknown";
+/// Why, and what to do about it.
+pub const INTERRUPTED_TITLE: &str = "The action began but the gateway restarted before recording its outcome; check the subject's current state.";
+
+/// The badge of an interrupted call: amber, neither the applied nor the
+/// rejected styling, with the reason as its tooltip.
+#[component]
+pub async fn interrupted_badge() -> Result<impl View> {
+    Ok(view! {
+        <span class="rounded bg-amber-100 px-1.5 py-0.5 text-xs text-amber-800 dark:bg-amber-950 dark:text-amber-300" title=(INTERRUPTED_TITLE)>(INTERRUPTED_LABEL)</span>
+    })
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -91,6 +111,7 @@ fn outcome(body: &AuditBody) -> OutcomeView {
             },
             AuditOutcome::Forbidden { missing } => OutcomeView::Forbidden(*missing),
             AuditOutcome::Rejected(why) => OutcomeView::Rejected(describe_error(&rejection(why))),
+            AuditOutcome::Interrupted => OutcomeView::Interrupted,
         },
         AuditBody::Config(record) => match &record.outcome {
             ConfigOutcome::Applied => OutcomeView::Applied {
@@ -292,6 +313,29 @@ pub mod tests {
         assert_eq!(
             view.outcome,
             OutcomeView::Rejected("the gateway's store failed: disk full".to_owned())
+        );
+    }
+
+    #[test]
+    fn an_interrupted_call_is_neither_applied_nor_rejected() {
+        use crosstalk_spec::ids::AlertId;
+        let caller = crate::testing::caller_of(ADA, &[Permission::View, Permission::Triage]);
+        let record = OperatorRecord::new(
+            caller,
+            OperatorAction::Acknowledge {
+                alert: AlertId::from_ulid(7),
+            },
+            AuditOutcome::Interrupted,
+        )
+        .expect("record");
+        let entry = AuditEntry {
+            id: AuditId::from_ulid(1),
+            at: Timestamp::from_micros(1_790_985_600_000_000),
+            body: AuditBody::Operator(record),
+        };
+        assert_eq!(
+            entry_view(&entry, &names()).outcome,
+            OutcomeView::Interrupted
         );
     }
 }

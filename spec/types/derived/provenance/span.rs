@@ -18,8 +18,8 @@ use crate::ids::{AgentId, ExchangeId, MessageHash, SpanId};
 use crate::observed::message::PartRef;
 use crate::support::{ByteRange, Timestamp};
 
-/// Where a span's text sits.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// Where a span's text sits. Ordered by part, then range start.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct SpanLocation {
     pub part: PartRef,

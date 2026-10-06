@@ -13,10 +13,11 @@
 //!
 //! Everything before the header runs under the state's write lock, so the
 //! plan reads one snapshot and the `Started` entry is appended before the
-//! header is returned. The row digest uses [`digest::RowDigest`], a
-//! stand-in for the spec's BLAKE3.
+//! header is returned. Rows are sealed with the surface's own row hasher
+//! (`crosstalk_surface::export::Blake3RowHasher`: BLAKE3 under the spec's
+//! `ROW_DIGEST_CONTEXT`), so a fixture export verifies wherever a surface
+//! export does, through `crosstalk-client` included.
 
-pub mod digest;
 mod plan;
 mod rows;
 mod stream;

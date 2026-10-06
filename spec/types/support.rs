@@ -194,7 +194,7 @@ impl TimeWindow {
 
 /// A half-open byte range `[start, end)` into UTF-8 text, with
 /// `start < end`. Both ends fall on char boundaries of the text it indexes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", try_from = "RawByteRange")]
 pub struct ByteRange {
     start: u32,

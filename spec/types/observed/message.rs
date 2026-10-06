@@ -103,7 +103,9 @@ pub enum MessageBody {
     Tool(NonEmpty<ToolResult>),
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// On the wire, snake_case strings (`"system"`, `"user"`, ...).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Role {
     System,
     User,
@@ -278,7 +280,9 @@ impl TryFrom<RawMediaBlob> for MediaBlob {
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// On the wire, snake_case strings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum MediaKind {
     Image,
     Audio,
@@ -341,7 +345,9 @@ pub struct ToolCall {
     pub signature: Option<String>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// On the wire, snake_case strings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ToolExecution {
     Client,
     Server,
@@ -372,7 +378,9 @@ pub enum ToolResultContent {
 /// (`WriteOutcome`).
 ///
 /// [`WriteOutcome`]: crate::derived::flow::access::WriteOutcome
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// On the wire, snake_case strings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ToolOutcome {
     Success,
     Error,
@@ -381,7 +389,8 @@ pub enum ToolOutcome {
 }
 
 /// Points at one part of one message, by position in its part list.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+/// Ordered by message hash, then index.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
 pub struct PartRef {
     pub message: MessageHash,

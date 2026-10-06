@@ -1,0 +1,17 @@
+[invariant]
+id = "surface.conversation.increment-unseen"
+statement = "A turn's continuation is Increment { history: Unseen } iff its exchange's Continuation is Increment and its stored threading outcome is Starts, Increment { history: Resolved } for any other increment, and FullHistory otherwise; an Unseen turn is turn 0 of a Root conversation."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+An increment whose previous response went around the proxy starts a
+conversation holding only the increment; the view must say the history
+before it was not seen rather than imply it was empty.
+"""
+
+[evidence]
+unit = "crosstalk_surface::tests::conversations::an_unseen_increment_is_marked"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

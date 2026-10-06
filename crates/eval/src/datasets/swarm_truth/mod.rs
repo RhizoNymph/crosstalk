@@ -4,10 +4,17 @@
 //! ```text
 //! truth.jsonl (swarm --ground-truth) ─▶ truth_file::read ─┐
 //! exchange-log.jsonl + blobs/ ─▶ exchange_log, bodies ────┴▶ resolve ─▶ World (labels over real exchange ids)
-//!                                                                         + AgentIndex + Diagnostics
+//!          (window::split: only exchanges inside the run window)          + AgentIndex + Diagnostics
 //! export.jsonl + evidence.jsonl (fetch, or saved) ─▶ detected::predictions(AgentIndex) ─▶ Vec<Prediction>
 //!                                                    ─▶ Scorer::add_world ─▶ Report (+ gates) + diagnostics
 //! ```
+//!
+//! The exchange log accumulates across runs and a reused seed reuses
+//! session ids, so the log is first cut to the run window ([`window`]):
+//! the exchanges of the truth's sessions outside it are reported
+//! (`session_reused_outside_run`) and left out of the traffic count, the
+//! session ordinals and the agent map, and a detection read outside it is
+//! reported (`outside_run_window`) and not scored.
 //!
 //! Everything runs from saved files, so a run is offline and
 //! deterministic; [`fetch`] saves the gateway's side over HTTP.
@@ -18,9 +25,11 @@ pub mod diagnostics;
 pub mod exchange_log;
 pub mod fetch;
 pub mod locate;
+pub mod replay;
 pub mod resolve;
 pub mod schema;
 pub mod truth_file;
+pub mod window;
 
 use std::fs::File;
 use std::io::BufReader;
@@ -40,6 +49,7 @@ use bodies::{BlobBodies, Bodies, Cached};
 use detected::{Exported, read_evidence, read_export};
 use exchange_log::{ExchangeLog, Sessions};
 use truth_file::TruthFile;
+use window::{Margins, RunWindow};
 
 /// The prefix of every swarm-benchmark dataset id: a run scores under
 /// `demo-swarm/<scenario>` ([`schema::Scenario::dataset`]).
@@ -73,6 +83,8 @@ pub enum SwarmTruthError {
     Bodies(#[from] bodies::OpenBodiesError),
     #[error(transparent)]
     Resolve(#[from] resolve::ResolveError),
+    #[error(transparent)]
+    Replay(#[from] replay::ReplayError),
     #[error("export {path}: {source}")]
     Detected {
         path: String,
@@ -121,6 +133,8 @@ pub struct DetectedCounts {
 #[derive(Debug)]
 pub struct SwarmOutcome {
     pub report: Report,
+    /// The run window the exchange log was cut to.
+    pub window: RunWindow,
     pub resolved: ResolveCounts,
     pub detected: DetectedCounts,
     pub diagnostics: Diagnostics,
@@ -136,30 +150,68 @@ pub struct Detections<'a> {
     pub evidence: &'a [TransmissionEvidence],
 }
 
+/// How a run is scored, beyond its files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Options {
+    /// How many misses and false positives to keep as examples.
+    pub examples: usize,
+    /// How far the run window reaches before the header's start and past
+    /// the truth's latest row time ([`window::RunWindow::of`]).
+    pub margins: Margins,
+}
+
+impl Options {
+    /// `examples` examples and the default margins ([`Margins::default`]).
+    pub fn new(examples: usize) -> Self {
+        Self {
+            examples,
+            margins: Margins::default(),
+        }
+    }
+}
+
 /// Scores the gateway's detections against the resolved truth, checking
 /// the gates tuned on [`DETECTOR`] only. `truth_name` names the truth file in labels' source references.
+/// Only the log's exchanges inside the run window count ([`window`]).
 pub fn score<B: Bodies>(
     truth: &TruthFile,
     truth_name: &str,
     log: ExchangeLog,
     bodies: B,
     detections: Detections<'_>,
-    examples: usize,
+    options: Options,
     gates: &Gates,
 ) -> Result<SwarmOutcome, SwarmTruthError> {
     let Detections { exported, evidence } = detections;
-    let sessions = Sessions::index(log.exchanges);
+    let run_window = RunWindow::of(truth, options.margins);
+    let split = window::split(log.exchanges, run_window, &window::truth_sessions(truth));
+    let sessions = Sessions::index(split.inside);
     let mut bodies = Cached::new(bodies);
     let resolved = resolve(truth, truth_name, &sessions, &mut bodies)?;
+    let mut counts = resolved.counts;
+    counts.excluded_outside_window = split.reused.len() as u64;
     let mut diagnostics = resolved.diagnostics;
+    for reused in split.reused {
+        diagnostics.push(Diagnostic {
+            line: None,
+            row: None,
+            side: Side::Row,
+            failure: JoinFailure::SessionReusedOutsideRun {
+                session: reused.session,
+                exchange: reused.exchange,
+            },
+            effect: Effect::Excluded,
+        });
+    }
     let predictions = detected::predictions(
         exported,
         evidence,
         &resolved.agents,
+        &split.outside,
         &mut bodies,
         &mut diagnostics,
     );
-    let mut scorer = Scorer::new(examples);
+    let mut scorer = Scorer::new(options.examples);
     scorer.add_world(&resolved.world, &predictions);
     let mut score: Score = scorer.finish();
     // The world holds labels over the log's exchange ids, not the
@@ -179,7 +231,8 @@ pub fn score<B: Bodies>(
     );
     Ok(SwarmOutcome {
         report,
-        resolved: resolved.counts,
+        window: run_window,
+        resolved: counts,
         detected: DetectedCounts {
             exported: exported.transmissions.len() as u64,
             evidence: evidence.len() as u64,
@@ -200,11 +253,20 @@ fn open(path: &Path) -> Result<BufReader<File>, SwarmTruthError> {
         })
 }
 
-/// Reads every input file and scores, reading bodies from the gateway's
-/// blob directory.
+/// Reads every input file and scores with the default run-window margins,
+/// reading bodies from the gateway's blob directory.
 pub fn run(
     inputs: &Inputs,
     examples: usize,
+    gates: &Gates,
+) -> Result<SwarmOutcome, SwarmTruthError> {
+    run_with(inputs, Options::new(examples), gates)
+}
+
+/// [`run`] with explicit [`Options`].
+pub fn run_with(
+    inputs: &Inputs,
+    options: Options,
     gates: &Gates,
 ) -> Result<SwarmOutcome, SwarmTruthError> {
     let shown = inputs.truth.display().to_string();
@@ -233,5 +295,85 @@ pub fn run(
         exported: &exported,
         evidence: &evidence,
     };
-    score(&truth, &name, log, bodies, detections, examples, gates)
+    score(&truth, &name, log, bodies, detections, options, gates)
+}
+
+/// The files `ct-eval replay` reads: a run's truth, and the exchange log
+/// and blobs its gateway wrote.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ReplayInputs {
+    pub truth: PathBuf,
+    pub exchanges: PathBuf,
+    pub blobs: PathBuf,
+}
+
+/// How to replay a run; `since` defaults to the truth header's
+/// `started_at_unix_ms`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ReplayOptions {
+    pub flow: crosstalk_flow::consumer::FlowConfig,
+    pub seed: u64,
+    pub since: Option<crosstalk_spec::support::Timestamp>,
+    pub until: Option<crosstalk_spec::support::Timestamp>,
+}
+
+/// A replayed and scored run.
+#[derive(Debug)]
+pub struct ReplayOutcome {
+    pub replayed: replay::Replayed,
+    pub settings: replay::ReplaySettings,
+    pub scored: SwarmOutcome,
+}
+
+/// Replays the run's exchanges through the live composition
+/// ([`replay::replay`]) and scores the export and evidence it serves
+/// exactly as [`run`] scores a fetched one, against the log's run window
+/// (default margins).
+pub fn run_replay(
+    inputs: &ReplayInputs,
+    options: &ReplayOptions,
+    examples: usize,
+    gates: &Gates,
+) -> Result<ReplayOutcome, SwarmTruthError> {
+    let shown = inputs.truth.display().to_string();
+    let truth =
+        truth_file::read(open(&inputs.truth)?).map_err(|source| SwarmTruthError::Truth {
+            path: shown.clone(),
+            source,
+        })?;
+    let log = exchange_log::read(&inputs.exchanges)?;
+    let settings = replay::ReplaySettings {
+        flow: options.flow,
+        seed: options.seed,
+        since: options.since.unwrap_or_else(|| {
+            crosstalk_spec::support::Timestamp::from_micros(
+                truth.header.started_at_unix_ms.saturating_mul(1000),
+            )
+        }),
+        until: options.until,
+    };
+    let mut bodies = Cached::new(BlobBodies::open(&inputs.blobs)?);
+    let replayed = replay::replay(&log, &mut bodies, &settings)?;
+    let name = inputs
+        .truth
+        .file_name()
+        .map_or_else(|| shown.clone(), |name| name.to_string_lossy().into_owned());
+    let detections = Detections {
+        exported: &replayed.exported,
+        evidence: &replayed.evidence,
+    };
+    let scored = score(
+        &truth,
+        &name,
+        log,
+        BlobBodies::open(&inputs.blobs)?,
+        detections,
+        Options::new(examples),
+        gates,
+    )?;
+    Ok(ReplayOutcome {
+        replayed,
+        settings,
+        scored,
+    })
 }

@@ -114,42 +114,38 @@ pub fn extents_by_span(
     by_span
 }
 
-/// The fingerprints among `hits` that are boilerplate by the spread rule
-/// (`provenance.match.cross-agent-spread`): at least `rule.agents()`
-/// distinct agents originated them within `rule.window()` of their
-/// earliest origination, so there is no clear first writer. A lookup
-/// returns every posting of each queried fingerprint, so the indexing
-/// times and agents of its live hit spans, and of their copies in other
-/// outputs (spans relayed from them), are its originations within
-/// retention. Copies a single first writer's text gets later, beyond the
-/// window, are a broadcast and stay matchable.
+/// The fingerprints among `hits` that are boilerplate for short runs by
+/// the spread rule (`provenance.match.cross-agent-spread`): at least
+/// `rule.agents()` distinct agents originated or copied them, at any time.
+/// A lookup returns every posting of each queried fingerprint, so the
+/// agents of its live hit spans, and of their copies in other outputs
+/// (spans relayed from them), are its originating agents within retention.
+///
+/// Returns each such fingerprint with its holders: how many originations
+/// and copies it has. Whether it is boilerplate also needs its
+/// distinctiveness, which the scanner reads from token frequencies.
 pub fn spread_boilerplate(
     hits: &[FingerprintHit],
     live: &LiveSpans,
     rule: SpreadRule,
-) -> BTreeSet<Fingerprint> {
-    let mut originations: BTreeMap<Fingerprint, Vec<(Timestamp, AgentId)>> = BTreeMap::new();
+) -> BTreeMap<Fingerprint, usize> {
+    let mut found: BTreeMap<Fingerprint, (BTreeSet<SpanId>, Vec<AgentId>)> = BTreeMap::new();
     for hit in hits {
-        originations
-            .entry(hit.fingerprint)
-            .or_default()
-            .extend(live.originations(hit.span));
+        let (spans, agents) = found.entry(hit.fingerprint).or_default();
+        if spans.insert(hit.span) {
+            agents.extend(
+                live.originations(hit.span)
+                    .into_iter()
+                    .map(|(_, agent)| agent),
+            );
+        }
     }
-    originations
+    found
         .into_iter()
-        .filter(|(_, found)| {
-            let Some(earliest) = found.iter().map(|(at, _)| at.as_micros()).min() else {
-                return false;
-            };
-            let horizon = earliest.saturating_add(rule.window_micros());
-            let agents: BTreeSet<AgentId> = found
-                .iter()
-                .filter(|(at, _)| at.as_micros() <= horizon)
-                .map(|(_, agent)| *agent)
-                .collect();
-            agents.len() >= rule.agents()
+        .filter_map(|(fingerprint, (_, agents))| {
+            let distinct: BTreeSet<&AgentId> = agents.iter().collect();
+            (distinct.len() >= rule.agents()).then_some((fingerprint, agents.len()))
         })
-        .map(|(fingerprint, _)| fingerprint)
         .collect()
 }
 
@@ -169,4 +165,22 @@ pub fn merge(mut extents: Vec<(u32, u32)>) -> Vec<(u32, u32)> {
 /// How many bytes the merged intervals cover.
 pub fn covered(merged: &[(u32, u32)]) -> u32 {
     merged.iter().map(|(start, end)| end - start).sum()
+}
+
+/// The runs of `extents` (merged, offsets into `layer`) holding at least
+/// `min_chars` normalized characters, trimmed.
+pub fn long_runs(layer: &str, extents: &[(u32, u32)], min_chars: usize) -> Vec<(u32, u32)> {
+    merge(extents.to_vec())
+        .into_iter()
+        .filter(|(start, end)| {
+            let slice = layer
+                .get(
+                    usize::try_from(*start).unwrap_or(usize::MAX)
+                        ..usize::try_from(*end).unwrap_or(usize::MAX),
+                )
+                .unwrap_or_default();
+            crate::text::normalize::trimmed_len(&crate::text::normalize::normalize(slice))
+                >= min_chars
+        })
+        .collect()
 }

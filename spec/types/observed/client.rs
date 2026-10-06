@@ -47,6 +47,36 @@ pub enum IngressMode {
     Replay { corpus: CorpusId },
 }
 
+impl IngressMode {
+    /// Where traffic that reached the gateway this way came from: a replay
+    /// corpus, or live.
+    pub fn source(&self) -> TrafficSource {
+        match self {
+            Self::Replay { corpus } => TrafficSource::Replay {
+                corpus: corpus.clone(),
+            },
+            Self::ReverseProxy { .. } | Self::ForwardProxy { .. } => TrafficSource::Live,
+        }
+    }
+}
+
+/// Where traffic came from: live, through the gateway as reverse or
+/// forward proxy, or replayed from a dataset corpus
+/// ([`IngressMode::source`]). A conversation's source is its first turn's
+/// (`surface.conversation.traffic-source`). On the wire `{"type": "live"}`
+/// or `{"type": "replay", "data": {"corpus": "salt-nlp"}}`.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(
+    tag = "type",
+    content = "data",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
+pub enum TrafficSource {
+    Live,
+    Replay { corpus: CorpusId },
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct RouteName(pub String);

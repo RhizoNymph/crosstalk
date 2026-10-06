@@ -1,0 +1,17 @@
+[invariant]
+id = "topology.frontier.covers-spool"
+statement = "FrontierSource::frontier returns an oldest_pending no later than the at of every envelope still in the publish spool."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+A spooled capture is input the pipeline has not seen. Without counting
+it, the watermark could advance past a bucket the capture belongs to
+while the database was down, and the capture's contribution would arrive
+late (LateContribution) after the drain.
+"""
+
+[evidence]
+dst = "crosstalk_gateway::dst::frontier_covers_spooled_envelopes"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

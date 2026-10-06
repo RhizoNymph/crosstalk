@@ -14,6 +14,13 @@
 //! A [`NormalizedExchange`] crosses only in process (normalizer to capture
 //! task); its serde, in the wire contract's conventions, pins the
 //! normalizers' goldens.
+//!
+//! Capture keeps every exchange it announces in the exchange store
+//! ([`exchanges::ExchangeStore`], read back through
+//! [`exchanges::ExchangeReads`]): the exchange record without its bodies,
+//! which stay in the blob store.
+
+pub mod exchanges;
 
 use std::collections::BTreeSet;
 

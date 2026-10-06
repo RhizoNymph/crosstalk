@@ -1,0 +1,22 @@
+[invariant]
+id = "reconstruct.conversation.carried-over"
+statement = "A transcript entry is carried_over iff it is on a Compacts conversation's turn 0 and its hash is in the predecessor's stored non-system history; OriginLink::Compaction::carried_over counts those entries and MessagePlacement::CarriedOver marks exactly them."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+The compaction boundary shows what survived the summary, folded;
+computing it on read would need the predecessor's history at read time,
+while threading already decides it.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_reconstruct::tests::conversation_reads::carried_over_marks_exactly_the_predecessors_messages",
+    "crosstalk_surface::tests::conversations::carried_over_messages_are_placed_and_counted",
+]
+integration = "crosstalk_reconstruct::tests::pg_conversation_reads::pg_carried_over_survives_a_round_trip"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

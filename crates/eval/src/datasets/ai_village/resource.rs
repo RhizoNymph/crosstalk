@@ -1,250 +1,86 @@
-//! Canonical shared resources: one `Locator` per repository or site, however
-//! an agent named it.
+//! Shared resources: the locator L5's extractor gives every form of a
+//! repository, its files, threads and other web pages.
 //!
-//! Agents reach the same repository as a git remote, a web URL, a REST API
-//! path, raw file URLs or its Pages site. [`from_url`] (and
-//! [`from_remote`] for git remotes) maps every such form to one
-//! `Locator::Url { scheme: "https", host: <forge>, path: "/<owner>/<repo>" }`
-//! with a lower-cased path, so accesses through any of them meet on one
-//! channel:
+//! Nothing here normalizes on its own: every locator is
+//! `crosstalk_flow::extract`'s, so a label's resource is exactly what the
+//! gateway records for the same access.
 //!
-//! | Form | Resource |
+//! | Form | Locator |
 //! | --- | --- |
-//! | `https://github.com/o/r(.git)(/…)`, `git@github.com:o/r.git`, `ssh://git@github.com/o/r` | `github.com/o/r` |
-//! | `https://api.github.com/repos/o/r/…`, `https://raw.githubusercontent.com/o/r/…` | `github.com/o/r` |
-//! | `https://o.github.io/r/…` | `github.com/o/r` (`github.com/o/o.github.io` for root files) |
-//! | `https://gitlab.com/g/s/p(.git)(/-/…)` | `gitlab.com/g/s/p` |
-//! | `https://gitlab.com/api/v4/projects/g%2Fs%2Fp/…` | `gitlab.com/g/s/p` |
-//! | `https://gitlab.com/api/v4/projects/<id>/…` | `gitlab.com/api/v4/projects/<id>` (the id is all there is) |
-//! | `https://g.gitlab.io/p/…` | `gitlab.com/g/p` |
-//! | `https://<name>-<6 hex>.gitlab.io/…` (a unique Pages domain) | `https://<that host>/` (the site; its project is not in the name) |
-//! | any other http(s) URL | L5's locator for it ([`url_locator`]): the URL normalized, query parameters sorted, fragment dropped |
+//! | a git remote (`https://github.com/o/n(.git)`, `git@github.com:o/n.git`, `ssh://…`), `github.com/o/n`, `…/tree/<ref>`, `codeload.github.com/o/n/…`, `api.github.com/repos/o/n/…`, Pages `o.github.io/n/…` (`o.github.io/` is `o/o.github.io`), `gitlab.com/g/s/p(/-/…)`, `gitlab.com/api/v4/projects/g%2Fs%2Fp/…`, `g.gitlab.io/p/…` | `Locator::Repository { host, owner, name }`, lower case, no `.git`, nested GitLab groups joined with `/` ([`RepoId`]) |
+//! | `github.com/o/n/blob\|raw/<ref>/<path>`, `raw.githubusercontent.com/o/n/<ref>/<path>`, `api.github.com/repos/o/n/contents/<path>`, `gitlab.com/…/-/blob\|raw/<ref>/<path>`, a file inside a clone whose remote is known | `File { host: "<host>/<owner>/<name>", path }` |
+//! | `github.com/o/n/issues\|pull/<N>`, the API's `issues\|pulls/<N>` | `https://github.com/o/n/issues/<N>` |
+//! | GitLab `…/-/issues/<N>`, `…/-/merge_requests/<N>` (web or API) | that page |
+//! | an issue or change collection (`gh issue create`, `…/issues`) | `/issues`, `/pulls`, `/-/issues`, `/-/merge_requests` |
+//! | any other http(s) URL (a numeric GitLab project id, a unique Pages domain, any site) | L5's URL locator ([`tool_url_locator`]): normalized, query sorted, fragment and credentials dropped; a scheme-less host is `https` |
 //!
-//! Credentials in the authority (`https://oauth2:[REDACTED]@gitlab.com/…`)
-//! are dropped, a forge's `www.` too; hosts are lower-cased.
-//!
-//! **The L5 contract.** Every resource here is a canonical URL an L5
-//! extractor produces or coarsens: a URL off the forges is exactly the
-//! locator L5's `HttpTool` extractor gives a `GET` of it, and a repository
-//! is the locator of its lower-cased web URL. [`canonical`] maps any L5
-//! locator (a URL, or a GitHub file `File { host: "github.com/o/r" }`) to
-//! the converter's resource, so a label's resource is a function of what
-//! the extractor saw.
+//! [`kind`] says which of these a locator is, and whether it is shared at
+//! all: a file on an agent's own computer (`File` without a host, a local
+//! bare repository) is not, since every village agent has its own machine.
 
-use crosstalk_flow::extract::resource::{url_locator, url_text};
-use crosstalk_spec::derived::flow::resource::{Host, Locator};
+use std::sync::LazyLock;
 
-/// A code forge with a canonical repository form.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
-pub enum Forge {
-    GitHub,
-    GitLab,
+use crosstalk_flow::extract::SitesConfig;
+use crosstalk_flow::extract::http::HttpRequest;
+use crosstalk_flow::extract::resource::{RepoId, tool_url_locator};
+use crosstalk_spec::derived::flow::resource::Locator;
+use serde::{Deserialize, Serialize};
+
+/// The extractor's default site rules, which the gateway runs with.
+static SITES: LazyLock<SitesConfig> = LazyLock::new(SitesConfig::default);
+
+/// What kind of shared resource a locator is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ResourceKind {
+    /// A forge repository itself (`Locator::Repository`): what `git push`,
+    /// `pull`, `fetch` and `clone` touch.
+    Repository,
+    /// A file of a forge repository (`File { host: "<host>/<o>/<n>" }`).
+    RepoFile,
+    /// A web page: an issue or change thread or collection, an API URL,
+    /// any other site.
+    Url,
 }
 
-impl Forge {
-    pub fn host(self) -> &'static str {
+impl ResourceKind {
+    pub fn as_str(self) -> &'static str {
         match self {
-            Self::GitHub => "github.com",
-            Self::GitLab => "gitlab.com",
+            Self::Repository => "repository",
+            Self::RepoFile => "repo_file",
+            Self::Url => "url",
         }
     }
 }
 
-/// The repository `slug` (`owner/repo`, or a GitLab group path) on `forge`.
-/// `None` when the slug has fewer than two segments.
-pub fn repo(forge: Forge, slug: &str) -> Option<Locator> {
-    let slug = slug.trim().trim_matches('/');
-    let slug = slug.strip_suffix(".git").unwrap_or(slug);
-    let segments: Vec<&str> = slug.split('/').filter(|s| !s.is_empty()).collect();
-    if segments.len() < 2 || segments.iter().any(|s| !valid_segment(s)) {
-        return None;
-    }
-    let segments = match forge {
-        Forge::GitHub => &segments[..2],
-        Forge::GitLab => &segments[..],
-    };
-    Some(site(
-        forge.host(),
-        &format!("/{}", segments.join("/").to_ascii_lowercase()),
-    ))
-}
-
-fn valid_segment(segment: &str) -> bool {
-    !segment.is_empty()
-        && segment
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
-}
-
-fn site(host: &str, path: &str) -> Locator {
-    Locator::Url {
-        scheme: "https".to_owned(),
-        host: Host(host.to_owned()),
-        path: path.to_owned(),
-        query: None,
-    }
-}
-
-/// A git remote: an http(s) URL, `git@host:path` or `ssh://git@host/path`.
-pub fn from_remote(text: &str) -> Option<Locator> {
-    let text = text.trim();
-    if let Some(rest) = text.strip_prefix("git@") {
-        let (host, path) = rest.split_once(':')?;
-        return forge_path(&host.to_ascii_lowercase(), path);
-    }
-    if let Some(rest) = text.strip_prefix("ssh://") {
-        let rest = rest.split_once('@').map_or(rest, |(_, rest)| rest);
-        let (host, path) = rest.split_once('/')?;
-        let host = host.split(':').next().unwrap_or(host);
-        return forge_path(&host.to_ascii_lowercase(), path);
-    }
-    from_url(text)
-}
-
-fn forge_path(host: &str, path: &str) -> Option<Locator> {
-    match host {
-        "github.com" => repo(Forge::GitHub, path),
-        "gitlab.com" => repo(Forge::GitLab, path),
-        _ => None,
-    }
-}
-
-/// The canonical resource of an http(s) URL.
-pub fn from_url(text: &str) -> Option<Locator> {
-    let text = text
-        .trim()
-        .trim_end_matches(['.', ',', ')', ';', '\'', '"']);
-    let (scheme, rest) = text.split_once("://")?;
-    let scheme = scheme.to_ascii_lowercase();
-    if scheme != "http" && scheme != "https" {
-        return None;
-    }
-    let whole = rest;
-    let rest = rest.split(['#', '?']).next().unwrap_or(rest);
-    let (authority, path) = match rest.find('/') {
-        Some(at) => (&rest[..at], &rest[at..]),
-        None => (rest, "/"),
-    };
-    let authority = authority
-        .rsplit_once('@')
-        .map_or(authority, |(_, host)| host);
-    let host = authority.to_ascii_lowercase();
-    let host = host.strip_prefix("www.").unwrap_or(&host);
-    let host = match host.rsplit_once(':') {
-        Some((name, "80" | "443")) => name,
-        _ => host,
-    };
-    if host.is_empty() || host.chars().any(|c| c.is_whitespace() || c == '`') {
-        return None;
-    }
-    let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
-    if let Some(locator) = forge_resource(host, &segments) {
-        return Some(locator);
-    }
-    url_locator(&format!("{scheme}://{whole}")).ok()
-}
-
-/// The converter's resource for a locator an L5 extractor produced: a URL
-/// through [`from_url`], a GitHub or GitLab file (`File { host:
-/// "<forge>/<repo>" }`) or repository (`Repository`) as its repository. `None` for local files, MCP and
-/// opaque resources.
-pub fn canonical(locator: &Locator) -> Option<Locator> {
+/// The kind of a shared resource; `None` for one only its agent's own
+/// computer holds (a local file or bare repository), an MCP resource or
+/// an opaque key.
+pub fn kind(locator: &Locator) -> Option<ResourceKind> {
     match locator {
-        Locator::Url { .. } => from_url(&url_text(locator)?),
+        Locator::Repository { .. } => Some(ResourceKind::Repository),
         Locator::File {
             host: Some(host), ..
-        } => {
-            let (forge, slug) = host.0.split_once('/')?;
-            forge_path(&forge.to_ascii_lowercase(), slug)
-        }
-        Locator::Repository { host, owner, name } => {
-            forge_path(&host.0, &format!("{owner}/{name}"))
-        }
-        Locator::File { host: None, .. } | Locator::Mcp { .. } | Locator::Opaque { .. } => None,
+        } if host.0.contains('/') && !host.0.starts_with('/') => Some(ResourceKind::RepoFile),
+        Locator::Url { .. } => Some(ResourceKind::Url),
+        Locator::File { .. } | Locator::Mcp { .. } | Locator::Opaque { .. } => None,
     }
 }
 
-fn forge_resource(host: &str, segments: &[&str]) -> Option<Locator> {
-    match host {
-        "github.com" => repo(Forge::GitHub, &segments.get(..2)?.join("/")),
-        "raw.githubusercontent.com" => repo(Forge::GitHub, &segments.get(..2)?.join("/")),
-        "api.github.com" => match segments {
-            ["repos", owner, name, ..] => repo(Forge::GitHub, &format!("{owner}/{name}")),
-            _ => None,
-        },
-        "gitlab.com" => gitlab(segments),
-        _ => {
-            if let Some(owner) = host.strip_suffix(".github.io") {
-                return pages(Forge::GitHub, host, owner, segments);
-            }
-            if let Some(group) = host.strip_suffix(".gitlab.io") {
-                if unique_pages_domain(group) {
-                    return Some(site(host, "/"));
-                }
-                return pages(Forge::GitLab, host, group, segments);
-            }
-            None
-        }
-    }
+/// The locator L5 gives a `GET` of `text`: the site rules' (a forge
+/// repository, file or thread), else the URL's own.
+pub fn from_url(text: &str) -> Option<Locator> {
+    let url = tool_url_locator(text).ok()?;
+    let site = SITES
+        .apply(&HttpRequest::get(url.clone()))
+        .and_then(|access| access.locators.into_iter().next());
+    Some(site.unwrap_or(url))
 }
 
-fn gitlab(segments: &[&str]) -> Option<Locator> {
-    match segments {
-        ["api", "v4", "projects", project, ..] => {
-            let decoded = project.replace("%2F", "/").replace("%2f", "/");
-            if decoded.contains('/') {
-                repo(Forge::GitLab, &decoded)
-            } else {
-                Some(site(
-                    "gitlab.com",
-                    &format!("/api/v4/projects/{}", project.to_ascii_lowercase()),
-                ))
-            }
-        }
-        _ => {
-            let end = segments
-                .iter()
-                .position(|s| *s == "-")
-                .unwrap_or(segments.len());
-            repo(Forge::GitLab, &segments[..end].join("/"))
-        }
-    }
-}
-
-/// A Pages site of `owner` (a user or group): the project is the first path
-/// segment, or the `<owner>.<pages host>` project for root files.
-fn pages(forge: Forge, host: &str, owner: &str, segments: &[&str]) -> Option<Locator> {
-    match segments.first() {
-        Some(first) if !first.contains('.') => repo(forge, &format!("{owner}/{first}")),
-        _ => repo(forge, &format!("{owner}/{host}")),
-    }
-}
-
-/// GitLab's unique Pages domains: `<project>-<6 hex>`.
-fn unique_pages_domain(name: &str) -> bool {
-    name.rsplit_once('-').is_some_and(|(_, suffix)| {
-        suffix.len() == 6 && suffix.chars().all(|c| c.is_ascii_hexdigit())
-    })
-}
-
-/// Every http(s) URL in `text`, in order (for command lines and outputs).
-pub fn urls(text: &str) -> Vec<&str> {
-    let mut out = Vec::new();
-    let mut from = 0;
-    while let Some(at) = text[from..].find("http") {
-        let start = from + at;
-        let rest = &text[start..];
-        if rest.starts_with("http://") || rest.starts_with("https://") {
-            let end = rest
-                .find(|c: char| {
-                    c.is_whitespace() || matches!(c, '"' | '\'' | '<' | '>' | '`' | '|' | '\\')
-                })
-                .unwrap_or(rest.len());
-            out.push(&rest[..end]);
-            from = start + end.max(1);
-        } else {
-            from = start + 4;
-        }
-    }
-    out
+/// The repository a git remote names (`RepoId::parse`), when it is a
+/// forge's; `None` for a local path or anything else.
+pub fn from_remote(text: &str) -> Option<Locator> {
+    let repo = RepoId::parse(text, None)?;
+    repo.forge_parts()?;
+    Some(repo.locator().clone())
 }

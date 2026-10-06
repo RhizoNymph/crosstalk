@@ -1,0 +1,16 @@
+[invariant]
+id = "reconstruct.conversation.turns-rebuild-history"
+statement = "Over turns 0 .. total, the base (a fork's shared prefix, otherwise nothing) followed by each turn's non-system entries in order is exactly the conversation's stored non-system history."
+kind = "domain"
+property = "model-based"
+requires = ["property"]
+rationale = """
+The turn view must account for every message of the conversation once:
+no stored message is outside every turn and none is shown twice.
+"""
+
+[evidence]
+property = "crosstalk_reconstruct::tests::conversation_reads::turns_rebuild_the_stored_history"
+
+[evidence-review]
+property = { agent = "true", human = "false" }

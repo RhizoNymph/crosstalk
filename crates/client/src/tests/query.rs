@@ -8,10 +8,16 @@ use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::batch::IdBatch;
 use crosstalk_spec::derived::flow::channel::confirmation::Confirmation;
 use crosstalk_spec::derived::flow::resource::{Host, ResourcePattern};
-use crosstalk_spec::ids::{AlertId, AlertRuleId, ProjectionId};
+use crosstalk_spec::ids::{
+    AlertId, AlertRuleId, ConversationId, ExchangeId, MessageHash, ProjectionId, SpanId,
+};
 use crosstalk_spec::interfaces::l2_transport::ConsumerGroup;
 use crosstalk_spec::interfaces::l8_surface::audit::AuditFilter;
 use crosstalk_spec::interfaces::l8_surface::channel_traffic::ChannelTransmissionFilter;
+use crosstalk_spec::interfaces::l8_surface::conversation::text::{TextLimit, TextSlice};
+use crosstalk_spec::interfaces::l8_surface::conversation::{
+    ConversationFilter, TurnIndex, TurnWindow,
+};
 use crosstalk_spec::interfaces::l8_surface::excerpt::ExcerptWindow;
 use crosstalk_spec::interfaces::l8_surface::export::{ExportDataset, ExportFormat, ExportRequest};
 use crosstalk_spec::interfaces::l8_surface::http::bodies::{
@@ -27,7 +33,10 @@ use crosstalk_spec::interfaces::l8_surface::lists::{
 };
 use crosstalk_spec::interfaces::l8_surface::summary::TransmissionSelection;
 use crosstalk_spec::interfaces::l8_surface::{AlertFilter, QueryApi, QueryError};
+use crosstalk_spec::observed::message::PartRef;
 use crosstalk_spec::paging::AgentList;
+use crosstalk_spec::paging::PageSize;
+use crosstalk_spec::support::Blake3;
 use crosstalk_spec::support::NonBlank;
 
 use super::stub::{Recorded, Reply, Stub};
@@ -51,6 +60,23 @@ async fn every_call(client: &HttpClient, with_none: bool) -> Vec<(Route, Result<
         path_prefix: "/eng".into(),
     };
     let channels = IdBatch::new([channel()]).unwrap_or_else(|error| panic!("{error:?}"));
+    let conversation = id::<ConversationId>(ULID_A);
+    let span = id::<SpanId>(ULID_B);
+    let turns = TurnWindow {
+        from: TurnIndex(20),
+        size: PageSize::new(20).unwrap_or_else(|error| panic!("{error:?}")),
+    };
+    let exchanges =
+        IdBatch::new([id::<ExchangeId>(ULID_B)]).unwrap_or_else(|error| panic!("{error:?}"));
+    let spans = IdBatch::new([span]).unwrap_or_else(|error| panic!("{error:?}"));
+    let part = PartRef {
+        message: MessageHash::from_digest(Blake3::from_bytes([7; 32])),
+        index: 1,
+    };
+    let slice = TextSlice {
+        from: 8192,
+        limit: TextLimit::DEFAULT,
+    };
     let agents =
         IdBatch::new([agent(ULID_A), agent(ULID_C)]).unwrap_or_else(|error| panic!("{error:?}"));
     let selection =
@@ -121,6 +147,43 @@ async fn every_call(client: &HttpClient, with_none: bool) -> Vec<(Route, Result<
         (
             Route::AgentNames,
             none(client.agent_names(c, &agents).await),
+        ),
+        (
+            Route::Conversations,
+            none(
+                client
+                    .conversations(c, &ConversationFilter::default(), &page())
+                    .await,
+            ),
+        ),
+        (
+            Route::Conversation,
+            none(client.conversation(c, conversation).await),
+        ),
+        (
+            Route::ConversationTurns,
+            none(client.conversation_turns(c, conversation, &turns).await),
+        ),
+        (
+            Route::SpanReaders,
+            none(client.span_readers(c, span, &page()).await),
+        ),
+        (
+            Route::ExchangeTurns,
+            none(client.exchange_turns(c, &exchanges).await),
+        ),
+        (Route::SpanPoints, none(client.span_points(c, &spans).await)),
+        (
+            Route::ConversationText,
+            none(
+                client
+                    .conversation_text(c, conversation, &turns, TextLimit::DEFAULT)
+                    .await,
+            ),
+        ),
+        (
+            Route::PartText,
+            none(client.part_text(c, part, slice).await),
         ),
         (
             Route::AlertRules,

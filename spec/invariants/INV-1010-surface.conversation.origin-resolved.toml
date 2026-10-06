@@ -1,0 +1,22 @@
+[invariant]
+id = "surface.conversation.origin-resolved"
+statement = "OriginLink is the stored ConversationOrigin with its agents canonical at the read; a Fork's branch_turn is the greatest turn of the parent whose history_end is at most shared_prefix (ConversationReads::branch_turn), None when there is none."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+The fork link opens the parent at the turn the branch leaves it; a
+branch turn past the shared prefix would point at a turn the fork never
+saw.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_reconstruct::tests::conversation_reads::branch_turn_is_the_last_turn_inside_the_prefix",
+    "crosstalk_surface::tests::conversations::origin_links_are_resolved",
+]
+integration = "crosstalk_reconstruct::tests::pg_conversation_reads::pg_conversation_reads_agree_with_memory"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

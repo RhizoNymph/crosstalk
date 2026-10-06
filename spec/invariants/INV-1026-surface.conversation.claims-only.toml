@@ -1,0 +1,16 @@
+[invariant]
+id = "surface.conversation.claims-only"
+statement = "A turn's harness field is its exchange's ClientContext::harness, and the head's claims are the ClaimSet observed from its turns' harness claims at their start times; neither is read from identity evidence or used as identity."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Harness claims are what a request says about itself; showing them as
+identity would let any client name itself as another harness.
+"""
+
+[evidence]
+unit = "crosstalk_surface::tests::conversations::claims_come_from_the_turns_harness_claims"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

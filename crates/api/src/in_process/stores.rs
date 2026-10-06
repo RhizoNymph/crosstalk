@@ -32,6 +32,8 @@ use crosstalk_surface::{EvidenceRecords, RecordReadError, SurfaceStores};
 use crosstalk_transport::blob::MemoryBlobStore;
 use crosstalk_transport::{DeadLetters, MpscBus};
 
+use super::reads::{ConversationStores, Unrecorded};
+
 /// L3's merges and L5's supersessions, as the stores that resolve ids read
 /// them.
 #[derive(Clone)]
@@ -160,9 +162,10 @@ impl SpanIndex for MemoryEvidence {
 /// Every reference store, as handles that share state with the surface's:
 /// seed the world through the spec's write traits on these. `B` is the
 /// blob store evidence excerpts are cut from: in memory by default, or
-/// whatever the composer that hosts the surface stores bodies in.
+/// whatever the composer that hosts the surface stores bodies in. `R`
+/// holds the conversation reads' stores ([`ConversationStores`]).
 #[derive(Clone)]
-pub struct MemoryStores<B = MemoryBlobStore> {
+pub struct MemoryStores<B = MemoryBlobStore, R = Unrecorded> {
     pub agents: MemoryAgents,
     pub channels: MemoryChannels<MemoryAgents>,
     pub transmissions: MemoryVerdicts,
@@ -181,11 +184,13 @@ pub struct MemoryStores<B = MemoryBlobStore> {
     pub evidence: MemoryEvidence,
     pub export: Export,
     pub nodes: NodeCache,
+    pub reads: R,
 }
 
-impl<B> SurfaceStores for MemoryStores<B>
+impl<B, R> SurfaceStores for MemoryStores<B, R>
 where
     B: BlobStore + Send + Sync + 'static,
+    R: ConversationStores,
 {
     type Agents = MemoryAgents;
     type Channels = MemoryChannels<MemoryAgents>;
@@ -204,6 +209,9 @@ where
     type Blobs = B;
     type Evidence = MemoryEvidence;
     type Export = Export;
+    type Exchanges = R::Exchanges;
+    type Conversations = R::Conversations;
+    type Provenance = R::Provenance;
 
     fn agents(&self) -> &MemoryAgents {
         &self.agents
@@ -255,5 +263,14 @@ where
     }
     fn export_source(&self) -> &Export {
         &self.export
+    }
+    fn exchanges(&self) -> &R::Exchanges {
+        self.reads.exchanges()
+    }
+    fn conversations(&self) -> &R::Conversations {
+        self.reads.conversations()
+    }
+    fn provenance(&self) -> &R::Provenance {
+        self.reads.provenance()
     }
 }

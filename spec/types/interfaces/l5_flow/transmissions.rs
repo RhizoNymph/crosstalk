@@ -8,10 +8,12 @@
 //! touches its verdict log, and a verdict never changes the stored
 //! transmission (`flow.verdict.state-untouched`).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::derived::flow::transmission::Transmission;
-use crate::ids::{ChannelId, TransmissionId};
+use crate::derived::provenance::matching::ContentMatch;
+use crate::derived::provenance::span::SpanLocation;
+use crate::ids::{ChannelId, ExchangeId, SpanId, TransmissionId};
 use crate::interfaces::l8_surface::summary::TransmissionStateKind;
 use crate::paging::{Page, PageRequest, TransmissionList};
 use crate::support::TimeWindow;
@@ -53,6 +55,29 @@ impl TransmissionQuery {
     }
 }
 
+/// One content match as a transmission holds it: its origin span, its
+/// reader exchange and where it was read. A transmission is one (reader
+/// exchange, sender, route), and every match it holds names its reader
+/// exchange and an origin span of its sender, so at most one stored
+/// transmission holds a given key.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct MatchKey {
+    pub origin: SpanId,
+    pub reader_exchange: ExchangeId,
+    pub read_at: SpanLocation,
+}
+
+impl MatchKey {
+    /// The key of `content`.
+    pub fn of(content: &ContentMatch) -> Self {
+        Self {
+            origin: content.origin(),
+            reader_exchange: content.reader_exchange(),
+            read_at: content.read_at(),
+        }
+    }
+}
+
 pub trait TransmissionStore {
     /// Store `transmission` as its current state, replacing the stored one
     /// with its id: the flow consumer applies each correlator update this
@@ -83,6 +108,18 @@ pub trait TransmissionStore {
         query: &TransmissionQuery,
         page: &PageRequest<TransmissionList>,
     ) -> impl Future<Output = Result<Page<Transmission, TransmissionList>, TransmissionStoreError>> + Send;
+
+    /// For each key of `matches` that a stored transmission holds (a match
+    /// among its `Confirmed::content`, in any state that keeps one), the id
+    /// of that transmission, read in one snapshot; a key no transmission
+    /// holds is absent. The conversation view marks each content match it
+    /// shows with the transmission holding it
+    /// (`surface.conversation.inbound-transmission`). At most
+    /// `IdBatch::MAX` keys per call; a caller with more splits them.
+    fn holding(
+        &self,
+        matches: &BTreeSet<MatchKey>,
+    ) -> impl Future<Output = Result<BTreeMap<MatchKey, TransmissionId>, TransmissionStoreError>> + Send;
 }
 
 /// Why a transmission store call failed.

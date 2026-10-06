@@ -20,6 +20,7 @@
 
 pub mod hash;
 pub mod short;
+pub mod token;
 
 use std::collections::VecDeque;
 

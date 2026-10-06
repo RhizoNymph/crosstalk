@@ -8,11 +8,14 @@ The watermark is only as sound as this lower bound. A dead-lettered
 delivery holds it back on purpose: its input is unprocessed, so its
 buckets are not settled until it is replayed. Refit classifications are
 left out because they build a version that is not active yet, and
-activation waits for all of them.
+activation waits for all of them. PgFrontierSource reads the bus (L2),
+the shard ticks (L5) and the proxy, so it and its integration evidence
+live in the composer (crosstalk-gateway). Envelopes still in the publish
+spool are pending too (topology.frontier.covers-spool).
 """
 
 [evidence]
-integration = "crosstalk_topology::integration::pg_frontier_covers_pending_deliveries"
+integration = "crosstalk_gateway::integration::pg_frontier_covers_pending_deliveries"
 dst = "crosstalk_topology::dst::frontier_bounds_every_pending_input"
 
 [evidence-review]

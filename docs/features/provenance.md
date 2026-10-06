@@ -30,6 +30,9 @@ only. `crosstalk-memory`, `crosstalk-sim`, `crosstalk-testkit` and
 - Forwarded spans indexed under the forwarding agent, and context k-grams
   that keep an originated remainder next to a forward matchable.
 - The stricter rules for `ReaderOutput` matches.
+- The reader's nearer source: hits explained by the reader's own earlier
+  output, or (forwarding on) by its own direct read of a forward's source,
+  are not counted.
 - The scanner and the engine (`Provenance`): what one delta means, its
   index writes, replay on redelivery, and eviction.
 - `PgFingerprintIndex` (`FingerprintIndex`) on Postgres.
@@ -153,20 +156,137 @@ watermark.
      before the reader's time and before this scan began
      (index sequence at most the watermark). Hits on the reader's own spans
      are skipped.
-  2b. **The spread rule** (INV-1094, `SpreadRule`). For each hit
-     fingerprint, the originations are its live postings' spans (their
-     agent and indexing time) and their copies in other outputs (spans
-     relayed from them, `ProvenanceStore::relays`: agent and exchange
-     start). The fingerprint is boilerplate when at least `spread.agents`
-     (4) distinct agents originated it within `spread.window` (60 s) of the
-     earliest origination: there is no clear first writer, so it is a
-     template. Later copies of one first writer's text, beyond the window,
-     are a broadcast and stay matchable. The rule applies only to short or
-     low-information runs: a match whose merged run on an origin span in
-     the layer holds `spread.distinctive_chars` (64) normalized characters
-     keeps all its hits; a shorter one drops the hits on boilerplate
-     fingerprints. The index cutoff counts texts, which a world of a few
-     agents never reaches.
+  2b. **The spread rule and skeleton matches** (INV-1094, INV-1150,
+     `SpreadRule`). For each hit fingerprint, the originating agents are
+     the agents of its live postings' spans and of their copies in other
+     outputs (spans relayed from them, `ProvenanceStore::relays`), at any
+     time within retention; its holders are those originations and
+     copies. A fingerprint held by at least `spread.agents` (4) distinct
+     agents is boilerplate for short runs unless it is distinctive: one of
+     the whole tokens its k-gram covers in the read (`fingerprint::token`:
+     a normalized alphanumeric run of 4 or more characters, or holding a
+     digit; a word cut by the window's edge does not count) is observed in
+     at most `spread.distinctive_ratio` (2) texts per holder plus one. A
+     short secret passed around carries such a token (a key, an id, a
+     time); template prose is made of words seen throughout the world. A
+     candidate match on an origin span in a layer whose merged hit runs are
+     all shorter than `spread.distinctive_chars` (64) normalized
+     characters, and that holds a boilerplate hit, is a template skeleton
+     filled with other slot words (bench transmission
+     01M46CB4DFC573NNYA711QRNC2) and is dropped whole. A match with a
+     contiguous run of 64 characters or more is kept whatever the spread.
+     **Tradeoff:** a template carrying a token seen nowhere else (a header
+     such as "ROUTINE-NOTES-v2"), or whose words occur only inside the
+     template, reads as distinctive and is matched like a broadcast; and
+     distinctiveness is relative to the world, so in a world with little
+     other text most words are rare. Every scanned text (each span, each
+     scanned input part) observes its distinct token hashes as one
+     observation of its own, at most `spread.tokens_per_text` (512) of
+     them, within the index's retention; a capped text undercounts, which
+     errs toward keeping matches.
+  2c. **Inherited fragments** (`provenance.match.inherited-fragment-dropped`,
+     `SpreadRule::inherited`, on by default, `scan::inherited`). A
+     candidate match on an originated span whose merged hit runs are all
+     shorter than `spread.distinctive_chars`, and that covers less than half
+     of the origin span's bytes, is dropped whole when every
+     run holds at least two whole tokens and each run's token sequence
+     occurs consecutively in one carrying part (tool result, user turn,
+     system prompt) of the origin span's own exchange's request
+     (`inherited::Given`: the stored request list, bodies through the
+     `MessageSource`, each message's per-part token sequences cached by
+     hash in a bounded `TokenCache`). The origin added nothing of its own:
+     on the bench the orchestrator names a page to its writer ("... team
+     wiki, page `queue-backpressure-39`.") and to its readers, the writer
+     narrates "I'll update the wiki page `queue-backpressure-39` ...", and
+     every reader's prompt shares a k-gram with the narration (17
+     `UserTurn` false matches, held by one or two writers, so the spread
+     rule never applied). Requiring the tokens in order in one part keeps
+     replies composed from words seen apart, and judging only partial
+     overlaps keeps deliveries of a whole message the writer pasted from
+     its own input (SALT's forwarding labels, split into short runs by
+     escapes): an earlier version that accepted tokens from anywhere in the
+     request cut SALT recall from 0.765 to 0.672, and one without the
+     coverage bound lost about 65 SALT labels. A made-up secret holds a token its writer was not
+     given and is kept. **Tradeoff:** a short re-punctuated copy of text
+     the writer was given in one part is not matched, as a forwarded copy
+     is not with forwarding off. Forwarded spans, runs of 64 characters or
+     more, and matches whose origin request is no longer recorded are not
+     affected.
+  2d. **The reader's nearer source** (`scan::nearer`). After the spread
+     rule has read the hits, a hit on another agent's span is not counted
+     (its extent is left out of the candidate match) when the reader has
+     its own path to that text:
+     - **Own output** (`provenance.match.own-output-replay`): the hit is
+       read in a tool result, or is on a forwarded span (any carrier), and
+       the reader's own earlier output holds its k-gram or short-span run. That
+       output is every assistant message in the exchange's request (history
+       and new inputs, so written before the read): its text, reasoning and
+       tool-call argument parts (server tool results are reads and do not
+       count), all k-grams and short-span token runs of every decode layer.
+       A tool result that replays the reader's call (SALT `get_log`, reader
+       `01KDVDP6XWRHKQWFYAC1XBWMJN`; AgentDojo `send_money`, reader
+       `01KDVDP3JH5FRHDFQ2CC1ZXZPG`) is the reader's own relay. Whoever wrote
+       the text first does not matter: when the peer's span was the actual
+       source, the read that first brought it to the reader came before the
+       reader's own copy and was matched then; only later replays are
+       withheld. A forward is never its forwarder's own text, so a forward
+       of what the reader wrote hands the reader's text back. A user turn or
+       system prompt holding a peer's originated span stays a delivery even
+       where it repeats the reader: applying the rule there too lost 45 SALT
+       labels (16 construction, 29 forwarding) for one false positive.
+     - **Direct read of a forward's source**
+       (`provenance.match.forward-direct-read`, forwarding on only): the hit
+       is on a forwarded span (relayed from the forwarder's input message
+       `m`) and a decode layer of one of the reader's non-assistant inputs
+       in the request (the read itself, or an earlier read: the reader's
+       own path to the original) holds the k-gram and at
+       least `w` (16) k-grams of `m` that the forwarder's output message does
+       not hold. A delivery of the forward carries only what the forwarder
+       wrote; a reader holding the source's text around the forward (the
+       tool's header, rows not pasted) read the source itself. The reader's
+       inputs are indexed by fingerprint once per scan, on the first hit on
+       a forward; `m` and the forwarder's output are read from the blob
+       store (no rule when either is gone).
+     Both are per hit, so a match keeps the runs only its origin explains
+     (per run, not per match). Whether a match is a skeleton (2b) or an
+     inherited fragment (2c) is still judged on all its hits: what the
+     reader already had does not change what the origin shares with the
+     read, and judging the remainder alone turned one bench delivery into
+     short runs that the skeleton rule dropped. **Tradeoffs:** a forward holding the whole
+     source cannot be told from it (a peer's own read of exactly that
+     source still matches); text the reader wrote but whose output is not
+     in the request (a WebSocket increment, a truncated history) is not
+     covered.
+  2e. **Shadowed fragments** (`provenance.match.shadowed-fragment-dropped`,
+     `SpreadRule::shadowed`, on by default, `scan::shadowed`). In one
+     layer, an agent is *present* when one of its originated spans has a
+     counted run (after 2d) of `spread.distinctive_chars` (64) normalized
+     characters or more; its *extent* runs from the first to the last byte
+     of its counted runs. A candidate on a span of an agent with no run of
+     64 or more in the layer (all hits) is dropped whole when every run of
+     it lies inside the extent of another present agent whose counted runs
+     cover more bytes than all of its own agent's runs, and no whole token
+     of its runs is rare (seen in at most `SpreadRule::rare_bound(h)` texts,
+     `h` its originations, copies and matched reads). The read is that
+     agent's text. On the bench (run 20261006T021639Z, 7 `ToolResult`
+     false matches of 32 to 46 bytes) writers of one page fill one topic's
+     templates with its slot words; when the page's writer repeats an
+     earlier span's run, output resolution relays it to that span, so the
+     writer's own spans leave a hole there and the k-gram straddling the
+     relay's end is posted under nobody. A reader of the page then matched
+     the earlier writer through the relay, or a later writer that wrote
+     the same run itself (originated, since nobody held it). Two or three
+     agents held each run, so neither the spread rule nor the skeleton
+     rule applied, and their writers were not given its tokens (2c).
+     Requiring a long *counted* run, and more coverage than the dropped
+     agent, keeps text the reader already had and a coincident long
+     sentence of a lesser holder from shadowing the page's writer; the
+     rarity check keeps a secret pasted into someone else's page matched
+     to its writer. **Tradeoff:** a page writer whose own runs are sparse
+     (its template k-grams above the index cutoff) can lose a short
+     common-word run inside a coincident holder's extent when that holder
+     covers more; on the bench run, 6 of the labelled writer's matches on
+     one page, each reader keeping its other run (recall unchanged).
   3. For each origin span, one layer wins. A layer whose text holds the
      whole origin text (normalized) beats one that does not; then the one
      covering the most part bytes wins, then the shorter chain. That way
@@ -196,12 +316,21 @@ watermark.
     bodies, the merged hit extents are used.
   - When `s` is another agent's span, a `ReaderOutput` match covers the
     same bytes, if the stretch passes the stricter reader-output rules
-    (INV-1093): at least `reader_output.min_chars` (64) normalized
-    characters, and one of the hit fingerprints inside it naming `s` not
-    boilerplate by the spread rule (below). Otherwise the stretch is still
-    `Relayed(Span(s))` and no match is made. Other carriers keep no length
-    floor. A broadcast (one first writer, copies later) keeps matching the
-    first writer however many copies there are.
+    (INV-1093): the stretch is one contiguous run, so it needs at least
+    `reader_output.min_chars` (64) normalized characters and a hit on `s`;
+    and, with `reader_output.rare_token` on (the default,
+    `provenance.match.reader-output-rare-token`), a whole token seen in at
+    most `SpreadRule::rare_bound(h)` texts, `h` being `s`'s originations,
+    copies and matched reads (`Propagated` hits). Two agents filling one
+    sentence template with the same words write 64 characters or more
+    alike (24 bench false matches, rarest tokens seen in 7 to 74 texts).
+    Otherwise the stretch is still `Relayed(Span(s))` and no match is
+    made. Other carriers keep no length floor. A broadcast (one writer,
+    many later copies) keeps matching that writer however many copies
+    there are: the spread rule never applies, and each copy and read
+    raises the bound. **Tradeoff (flagged for decision):** an unobserved
+    copy of 64 characters or more made only of words common in the world
+    yields no match; `"rare_token": false` restores it.
   - The rest is resolved again.
   - A candidate without hits is `Common` when every fingerprint is above
     the cutoff, else `Originated`. A whole short value's short-span hash
@@ -248,8 +377,10 @@ are published as `SpanRelayed`. The store records their indexing beside the
 state (`store::Forwarding`: `Pending`, then `Indexed { at }` with an index
 sequence, then `Expired`), hits on them count no `Propagated` state, and
 expiry evicts them like originated spans. A reader that read the same
-upstream source as the forwarder also matches the forward; L5 keeps such a
-shared-upstream match from confirming a channel (INV-963).
+upstream source as the forwarder itself does not match the forward on the
+text its own read holds (`provenance.match.forward-direct-read`, Reads
+step 2c); where that cannot be told (a forward of the whole source), L5
+keeps the shared-upstream match from confirming a channel (INV-963).
 
 ### The engine
 
@@ -356,7 +487,10 @@ and changes span states only through `SpanState::advance`.
 | `semantic_threshold` | 0.85 |
 | `short_spans.min_chars`, `short_spans.max_chars` | 24, 46: whole values of this many normalized characters take the short-span exact path; `min_chars` is also the floor for originated text without a k-gram |
 | `reader_output.min_chars` | 64 normalized characters |
-| `spread.agents`, `spread.window_secs`, `spread.distinctive_chars` | 4, 60, 64: four agents originating a fragment within 60 s of its earliest origination make it boilerplate for runs under 64 characters |
+| `reader_output.rare_token` | true: a `ReaderOutput` stretch must hold a token rare relative to its source's originations, copies and reads (`RareToken`) |
+| `spread.drop_inherited` | true: a short match whose runs each repeat, token for token, one part its origin was given in its own request is dropped (`InheritedFragments`) |
+| `spread.drop_shadowed` | true: a short, common-word match of an agent with no long run in the layer, lying inside the extent of another agent present in the read (a long counted run on an originated span, more coverage), is dropped (`ShadowedFragments`) |
+| `spread.agents`, `spread.distinctive_chars`, `spread.distinctive_ratio`, `spread.tokens_per_text` | 4, 64, 2, 512: a fragment four agents originated or copied, at any time, with no token seen in at most 2 texts per holder plus one, is boilerplate for matches whose runs are all under 64 characters; such a match is dropped whole; each text observes at most 512 tokens |
 | `forwarding` | false: forwarded spans are not indexed (INV-1090) |
 
 Every value is checked: `k` at least 4, depth 1 to 8, a non-zero retention,
@@ -415,13 +549,16 @@ feeder reads through it. `PgProvenanceStore` does not yet.
 | File | Role | Key exports |
 | --- | --- | --- |
 | `src/lib.rs` | Crate doc, modules | — |
-| `src/config.rs` | Typed config | `ProvenanceConfig`, `IndexSettings`, `DecodeLimits`, `ShortSpans`, `ReaderOutputRules`, `SpreadRule`, `winnow_params`, `ConfigError` |
+| `src/config.rs` | Typed config | `ProvenanceConfig`, `IndexSettings`, `DecodeLimits`, `ShortSpans`, `ReaderOutputRules`, `RareToken`, `SpreadRule`, `InheritedFragments`, `ShadowedFragments`, `winnow_params`, `ConfigError` |
 | `src/text/{mod,normalize,mapped}.rs` | Normalization with source ranges; decoded text with byte maps | `normalize`, `trimmed_len`, `NormChar`, `MappedText`, `MappedBuilder`, `trim_range` |
-| `src/fingerprint/{mod,hash}.rs` | Winnowing, the stable hash, prefix window hashes | `Winnowing`, `KGram`, `positioned`, `hash::rolling`, `hash::Prefix`, `hash::short` |
+| `src/fingerprint/{mod,hash}.rs` | Winnowing, the stable hash, prefix window hashes | `Winnowing`, `KGram`, `positioned`, `hash::rolling`, `hash::Prefix`, `hash::short`, `hash::token` |
+| `src/fingerprint/token.rs` | Tokens for world-wide rarity: what a text observes, the whole tokens in a window | `observed`, `whole_tokens_in`, `MIN_TOKEN_CHARS` |
 | `src/fingerprint/short.rs` | The short-span exact path: a whole value's hash, a read's token runs | `whole`, `token_runs` |
 | `src/decode/{mod,base64,hex,url,unicode,escape}.rs` | Decoders and the pipeline | `Step`, `TextDecoder`, `DecodedText`, `DecodePipeline`, `Layer`, `AnyDecoder`, the six decoders |
 | `src/segment/{mod,coverage,view}.rs` | The segmenter, input coverage, part views | `NovelRunSegmenter`, `Coverage`, `message_kgrams`, `runs`, `text_parts`, `view`, `PartKind` |
-| `src/scan/{mod,reads,output,hits,kind,cache,messages}.rs` | The scanner | `Scanner`, `Loaded`, `ScanEnv`, `IndexWork`, `ScanError`, `LiveSpans`, `match_kind`, `KGramCache`, `MessageSource`, `BlobMessages`, `MemoryMessages` |
+| `src/scan/{mod,reads,output,hits,kind,cache,messages}.rs` | The scanner | `Scanner`, `Loaded`, `ScanEnv`, `IndexWork`, `ScanError`, `LiveSpans`, `match_kind`, `KGramCache`, `TokenCache` (`cache::Bounded`), `MessageSource`, `BlobMessages`, `MemoryMessages` |
+| `src/scan/shadowed.rs` | Shadowed fragments: the agents present in one layer of a read, their extents and coverage | `Shadows`, `Shadows::shadower`, `holders` (crate) |
+| `src/scan/nearer.rs` | The reader's nearer source: own output and direct reads of a forward's source | `Nearer`, `OwnCache` (`cache::Bounded`), `Scanner::nearer_hits` (crate) |
 | `src/scan/postings.rs` | What a span is posted under beyond its own fingerprints: context k-grams, short-span hashes | `Scanner::context_kgrams`, `Scanner::short_fingerprint` (crate) |
 | `src/engine.rs` | Processing, replay, eviction | `Provenance`, `Processed`, `EngineError`, `envelopes`, `exchange_record` |
 | `src/consumer.rs` | The bus consumer | `GROUP`, `SUBJECTS`, `subscribe`, `run`, `ConsumerSettings`, `ConsumerStats` |
@@ -447,13 +584,22 @@ feeder reads through it. `PgProvenanceStore` does not yet.
   - `integration` for INV-206 and INV-225: they name a semantic store that
     awaits P6.2;
   - the lint for INV-227.
-- New invariants (also INV-1094 `provenance.match.cross-agent-spread`):
+- New invariants (also INV-1094 `provenance.match.cross-agent-spread`,
+  INV-1150 `provenance.match.skeleton-dropped`, and, numbers pending,
+  `provenance.match.inherited-fragment-dropped` and
+  `provenance.match.reader-output-rare-token`; INV-1093 and INV-1094
+  restated to point at them):
   - `provenance.decode.utf8-lossless`;
   - `provenance.scan.status-terminal`;
   - INV-1090 `provenance.index.forwarded-indexed`;
   - INV-1091 `provenance.index.remainder-around-relay-matchable`;
   - INV-1092 `provenance.match.short-span-exact`;
-  - INV-1093 `provenance.match.reader-output-strict`.
+  - INV-1093 `provenance.match.reader-output-strict`;
+  - `provenance.match.own-output-replay` and
+    `provenance.match.forward-direct-read` (INV-X, numbers pending).
+  - `provenance.match.shadowed-fragment-dropped` (INV-X, number pending).
+- Restated for the nearer-source rules: INV-1090 (a peer's own read of a
+  forward's source, the forwarding default and its measurements).
 - Restated for forwarded spans: INV-205 and INV-224 (what the index and
   the semantic matcher accept), INV-218 (the reader-output rules), INV-1057
   (the short-span floor).
@@ -472,19 +618,121 @@ feeder reads through it. `PgProvenanceStore` does not yet.
 
 ## Gaps and decisions
 
-- **Forwarding is off by default.** On SALT (`--limit 53`, live) turning it
-  on raised recall from 0.792 to 0.957 but dropped precision from 0.703 to
-  0.310 (90,213 predictions against 6,763; 51,881 `ToolResult` decoded
-  false positives): agents paste their own `inspect_database` output, and
-  every peer's own read of the same schema matches the forward through a
-  tool result that records no access, which INV-963 does not hold back.
-  Prerequisites for turning it on: a shared-upstream rule for forwards read
-  through such tool results, and for `SystemPrompt` and `UserTurn` reads of
-  text forwarded from a shared prompt or an orchestrator's turn (a peer
-  with the same prompt matches the copier). L5's `write_spans` still carries only
-  originated spans and self-relays, so a forward through a file write
-  carries no forwarded span (a forward through a message tool's result is
-  matched directly); whether writes should carry forwards is L5's call.
+- **Forwarding is off by default.** Before the nearer-source rules, on
+  SALT (`--limit 53`, live) turning it on raised recall from 0.854 to
+  0.920 but dropped precision from 0.840 to 0.143 (46,275 `ToolResult`
+  false positives): every peer's own read of a schema or log another agent
+  forwarded matched the forward. With them (below), forwarding on keeps
+  0.894 recall at 0.882 precision, but the SALT forwarding-row gate (0.94)
+  fails at 0.885 and splice keeps 77.0 false positives per 1k exchanges
+  (3.6 with it off), mostly `UserTurn` reads of text forwarded from a
+  shared task prompt. It stays off by default. L5's `write_spans` still
+  carries only originated spans and self-relays, so a forward through a
+  file write carries no forwarded span (a forward through a message tool's
+  result is matched directly); whether writes should carry forwards is
+  L5's call.
+- **The reader's nearer source, measured** (release, live, seed 0,
+  2026-10-05; before = integration/impl 2adbed4, after = this rule set
+  merged onto it; recall / precision are `overall`; FP / 1k counts every
+  false positive):
+
+  | dataset | forwarding | before: recall / precision, FP / 1k | after: recall / precision, FP / 1k | `ToolResult` FPs before → after |
+  | --- | --- | --- | --- | --- |
+  | SALT `--limit 53` | off | 0.854 / 0.840, 56.1 | 0.854 / 0.955, 13.9 | 558 → 62 |
+  | SALT `--limit 53` | on | 0.920 / 0.143, 4179.1 | 0.894 / 0.882, 72.1 | 46,275 → 478 |
+  | AgentDojo (documented selection) | off and on | 1.000 / 0.961, 13.2 | 0.996 / 0.975, 8.2 | 148 → 92 |
+  | wiki `--max-agents 100` | off | 0.950 / 1.000 | 0.950 / 1.000 | 0 → 0 |
+  | wiki `--max-agents 100` | on | 0.970 / 1.000 | 0.960 / 1.000 | 0 → 0 |
+  | swarm-traces | off and on | 1.000 / 1.000 | 1.000 / 1.000 | 0 → 0 |
+  | splice `--count 80` | off | 1.000 / 0.875, 7.8 | 1.000 / 0.939, 3.6 | 58 → 8 |
+  | splice `--count 80` | on | 1.000 / 0.162, 716.5 | 1.000 / 0.621, 77.0 | 7,764 → 293 |
+
+  SALT's forwarding row (forwarding on) goes from 0.967 to 0.885: a
+  delivery of a forward whose content the reader had already read itself
+  (the shared `inspect_database` schema in a pasted raw log) is not
+  matched on that content. The 9 AgentDojo labels lost are all tool
+  results echoing the victim's own call, into whose arguments it had
+  pasted the injection (`send_email` bodies, `get_users_in_channel`
+  channel names): the rule reads them as the victim's own relay, the
+  converter as a delivery. Bench replays: headline 1.000 / 1.000 and
+  boilerplate 0.893 (133 correct, 16 false), both unchanged.
+- **Bench run 20261006T021639Z** (boilerplate, staging 8090af0, 135
+  negative controls): 7 `Channel` / `ToolResult` / `Exact` false matches
+  of 32 to 46 bytes besides the 15 `ReaderOutput` ones. Each is a short
+  template run of an earlier (agent-008 on cache-invalidation-2, agent-007
+  on rate-limiting-0, agent-012 on vacuum-tuning-17) or later (agent-001
+  on cache-invalidation-2, three readers) writer of the page, read in the
+  labelled writer's version, held by two or three agents and in a hole of
+  the labelled writer's spans (2e). Not a truth issue: the reader read the
+  labelled version, which the other writer's text does not hold. With the
+  shadowed-fragment rule (`ct-eval replay`, release, 2026-10-06):
+
+  | run | before | after |
+  | --- | --- | --- |
+  | 20261006T021639Z boilerplate | 0.883 (166 / 22) | 0.914 (160 / 15), recall 1.000 |
+  | 20261005T184633Z boilerplate | 0.893 (133 / 16) | 0.893 (133 / 16), matches identical |
+  | 20261005T184212Z headline | 1.000 / 1.000 | 1.000 / 1.000, identical |
+  | 20261006T020835Z headline | 1.000 / 1.000 | 1.000 / 1.000, identical |
+  | SALT `--limit 53`, live, forwarding off | 0.854 / 0.955, 164 false | identical report |
+  | swarm-traces, live | 1.000 / 1.000 | 1.000 / 1.000 |
+
+  The 6 other matches removed on 20261006T021639Z are the labelled
+  writer's (agent-014, incident-review-3) 32-byte run "lback accounts for
+  about 34% of " under six readers, shadowed by agent-011, which holds two
+  of the page's sentences (84 and 88 characters) coincidentally and more
+  counted coverage than agent-014's sparse runs; each reader keeps
+  agent-014's other run (the tradeoff in 2e).
+- **wiki `--demo` "decoded" misses were not a decode-path bug.** At
+  b0bd046 the live detector missed 63 `Decoded([JsonString])` wiki labels
+  (`dse/BridgeLAProd1782007689`). Every one was a reread: the reader had
+  read the same revision's lines on that page at an earlier edit, and
+  that first read was found. L5 folds a reread into the first delivery
+  (INV-1122). The labels are `Decoded([JsonString])` only because a run of
+  several lines holds a newline, which the writer's `POST` arguments
+  escape; the tool-argument view already undoes that. The eval now labels
+  rereads as controls (eval.md, collusion-wiki labels). No L4 change.
+- **Bench run 20261005T184633Z** (boilerplate scenario, run live on
+  staging 02103e9 = c3cd7f2): 41 false matches, 17 `UserTurn` and 24
+  `ReaderOutput`. `ct-eval replay` of the same run:
+
+  | build | precision | correct / false | `UserTurn` false | `ReaderOutput` false | headline replay (20261005T184212Z) |
+  | --- | ---: | ---: | ---: | ---: | --- |
+  | c3cd7f2 (live) | 0.763 | 132 / 41 | 17 | 24 | - |
+  | a0f2f3a (skeleton, rarity) | 0.704 | 133 / 56 | 17 | 39 | 1.000 / 1.000 |
+  | this branch | 0.893 | 133 / 16 | 0 | 16 | 1.000 / 1.000 |
+
+  - The skeleton and rarity rules removed none of the 41: the 17
+    `UserTurn` matches are one k-gram held by one or two writers, under
+    the four agents the spread rule needs; the `ReaderOutput` path never
+    passes through the spread rule. They added 15 `ReaderOutput` matches:
+    c3cd7f2 left spread-boilerplate fingerprints (four agents within 60 s)
+    out of a stretch's supporting hits, and withheld a stretch with no
+    other support; a0f2f3a dropped that filter so that long broadcasts
+    keep matching, which re-admitted stretches supported only by template
+    pieces many agents write.
+  - The inherited-fragment rule removes the 17; the rare-token requirement
+    removes 23 of the 39 `ReaderOutput` matches.
+  - **The 16 left** are single generated sentences of 64 to 98 characters
+    ("I recommend a short spike on deletion proof before committing to data
+    retention (track 3).") that two agents filled alike. In a 253-exchange
+    world a topic's terms are seen in only 2 to 16 texts, and a source page
+    read several times has a raised bound, so no token-based rule separates
+    them from a copy. Raising `reader_output.min_chars` to 100 would remove
+    all 16; no evaluated dataset labels a `ReaderOutput` transmission, so
+    its measured recall cost is nil, but unobserved copies of 64 to 99
+    characters would go unmatched. Not done: flagged for decision.
+- **Live evaluation of these rules** (integration b2bd28f against this
+  branch, `--detector live`, forwarding off, 2026-10-05):
+
+  | dataset | b2bd28f recall / precision | this branch | `ReaderOutput` false | other |
+  | --- | --- | --- | --- | --- |
+  | SALT `--limit 53` | 0.856 / 0.810 | 0.854 / 0.840 | 243 to 84 | forwarding row 456 to 453 of 941; 6 construction labels lost; FP/1k 70.6 to 56.1 |
+  | wiki `--max-agents 100` | 0.950 / 1.000 | 0.950 / 1.000 | 4 unjudged, unchanged | |
+  | swarm-traces | 1.000 / 1.000 | 1.000 / 1.000 | - | |
+  | splice `--count 80` | 1.000 / 0.871 | 1.000 / 0.875 | 38 to 34 | the 58 structural tool-result matches ("pkg/credentials/file_aws_config.") unchanged |
+  | open-swe `--count 16` | FP/1k 21.5 | FP/1k 18.8 | 126 to 94 | |
+  | lmcache `--count 16` | FP/1k 128.5 | FP/1k 98.3 | 120 to 51 | the 203 user-turn Django setup matches: 196 left |
+
 - **Short spans** take only whole values. A short originated piece that is
   not a whole value (a remainder) is matched only through context
   k-grams; one that sits next to no posted span has no posting.
@@ -510,3 +758,12 @@ feeder reads through it. `PgProvenanceStore` does not yet.
   fingerprints, not all its k-grams. Windows lying inside a text select the
   same k-grams in any text containing it, so boilerplate spans still read
   as frequent.
+
+## Conversation reads
+
+`store/reads.rs` serves the spec's `ProvenanceReads` over both stores
+(scan status, output spans of every origin with their state, relayed and
+forwarded ones included, matches by reader exchange, a span's readers
+newest first with keyed-tag cursors) and `SpanIndex` on
+`PgProvenanceStore`. See [conversation_reads.md](conversation_reads.md);
+INV-1012, 1014, 1015, 1023.

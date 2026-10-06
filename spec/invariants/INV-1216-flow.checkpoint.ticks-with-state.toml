@@ -1,0 +1,18 @@
+[invariant]
+id = "flow.checkpoint.ticks-with-state"
+statement = "flow.shard_ticks never names a tick later than the stored checkpoint of that shard."
+kind = "coordination"
+requires = ["integration"]
+rationale = """
+The frontier reads ticked_through to bound what the correlator can still
+emit. If the tick record ran ahead of the snapshot, a restored shard
+would re-run ticks the frontier already counted as done, and the
+watermark could settle buckets those ticks still change. Writing both in
+one transaction keeps them together.
+"""
+
+[evidence]
+integration = "crosstalk_flow::integration::shard_ticks_never_ahead_of_checkpoint"
+
+[evidence-review]
+integration = { agent = "false", human = "false" }

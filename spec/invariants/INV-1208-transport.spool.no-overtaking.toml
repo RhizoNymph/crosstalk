@@ -1,0 +1,17 @@
+[invariant]
+id = "transport.spool.no-overtaking"
+statement = "While the spool holds a record, no envelope published after it reaches the inner bus before it."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+Once anything is spooled, every later publish appends behind it until the
+spool is empty, so envelopes reach the bus log in publish order. That
+keeps the Ingester's ids reaching the bus in increasing order, and the
+frontier's view of the oldest pending input honest.
+"""
+
+[evidence]
+dst = "crosstalk_transport::dst::spool_backlog_is_never_overtaken"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

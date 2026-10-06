@@ -16,7 +16,7 @@ pub mod model;
 #[cfg(test)]
 mod tests;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
 use crosstalk_spec::aggregates::quality::DetectionQuality;
@@ -31,7 +31,7 @@ use crosstalk_spec::ids::{AgentId, OperatorId, TransmissionId};
 use crosstalk_spec::interfaces::l3_reconstruction::AgentDirectory;
 use crosstalk_spec::interfaces::l5_flow::ChannelDirectory;
 use crosstalk_spec::interfaces::l5_flow::transmissions::{
-    TransmissionQuery, TransmissionStore, TransmissionStoreError,
+    MatchKey, TransmissionQuery, TransmissionStore, TransmissionStoreError,
 };
 use crosstalk_spec::interfaces::l5_flow::verdicts::{TransmissionVerdicts, VerdictError};
 use crosstalk_spec::paging::{Page, PageRequest, TransmissionList};
@@ -272,5 +272,29 @@ impl TransmissionStore for MemoryVerdicts {
         .map_err(|error| TransmissionStoreError::Store {
             reason: error.to_string(),
         })
+    }
+
+    /// Every stored transmission's content matches, keyed, kept where
+    /// asked for. Identity (reader exchange, sender, route) makes each key
+    /// held by at most one transmission; were two to hold one, the newest
+    /// id would answer.
+    async fn holding(
+        &self,
+        matches: &BTreeSet<MatchKey>,
+    ) -> Result<BTreeMap<MatchKey, TransmissionId>, TransmissionStoreError> {
+        let state = self.state.read();
+        let mut held = BTreeMap::new();
+        for transmission in state.transmissions.values() {
+            let Some(confirmed) = transmission.state.confirmed() else {
+                continue;
+            };
+            for content in confirmed.content().iter() {
+                let key = MatchKey::of(content);
+                if matches.contains(&key) {
+                    held.insert(key, transmission.id);
+                }
+            }
+        }
+        Ok(held)
     }
 }

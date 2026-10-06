@@ -74,6 +74,7 @@ use crosstalk_spec::paging::{AuditList, PageRequest};
 use crosstalk_testkit::build::{ResourceBuilder, TransmissionBuilder, TransmissionParts};
 use crosstalk_testkit::ids::Ids;
 
+use super::conversation_fakes::{TestConversations, TestExchanges, TestProvenance};
 use super::fakes::{CountingEmbedder, RecordingBus, TestEvidence};
 use crate::export::SpecExportSource;
 use crate::live::{FeedHandle, FeedWriter};
@@ -159,6 +160,9 @@ pub struct World {
     pub evidence: TestEvidence,
     pub export: Export,
     pub nodes: NodeCache,
+    pub exchanges: TestExchanges,
+    pub conversations: TestConversations,
+    pub provenance: TestProvenance,
     /// Keeps the dead letters' bus running.
     pub _bus: MpscBus,
 }
@@ -181,6 +185,9 @@ impl SurfaceStores for World {
     type Blobs = MemoryBlobStore;
     type Evidence = TestEvidence;
     type Export = Export;
+    type Exchanges = TestExchanges;
+    type Conversations = TestConversations;
+    type Provenance = TestProvenance;
 
     fn agents(&self) -> &MemoryAgents {
         &self.agents
@@ -232,6 +239,15 @@ impl SurfaceStores for World {
     }
     fn export_source(&self) -> &Export {
         &self.export
+    }
+    fn exchanges(&self) -> &TestExchanges {
+        &self.exchanges
+    }
+    fn conversations(&self) -> &TestConversations {
+        &self.conversations
+    }
+    fn provenance(&self) -> &TestProvenance {
+        &self.provenance
     }
 }
 
@@ -427,6 +443,9 @@ impl Fixture {
             evidence: TestEvidence::default(),
             export,
             nodes,
+            exchanges: TestExchanges::default(),
+            conversations: TestConversations::default(),
+            provenance: TestProvenance::default(),
             _bus: mpsc,
         };
         let feed = FeedWriter::spawn(config.live, FeedEpoch(7));

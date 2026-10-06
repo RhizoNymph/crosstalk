@@ -31,7 +31,7 @@
 //! Those parts' texts come from the gateway's blobs. They are access-only
 //! predictions: counted in their own rows, never finding a label.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::io::BufRead;
 
 use crosstalk_spec::derived::flow::access::Access;
@@ -52,6 +52,7 @@ use crosstalk_spec::support::Blake3;
 use super::bodies::{Bodies, Cached};
 use super::diagnostics::{Diagnostic, Diagnostics, Effect, JoinFailure, Side};
 use super::resolve::AgentIndex;
+use super::window::outside_reader;
 use crate::keys::AgentKey;
 use crate::location::whole_part;
 use crate::predict::{Directory, PredictError, Prediction, from_transmission};
@@ -288,11 +289,15 @@ impl Directory for SwarmDirectory {
 /// default states holds confirmed ones only, and access-only transmissions
 /// outside the export are scored from their evidence lines alone. An exported transmission without evidence, or
 /// with an agent no exchange ties to a truth agent, is reported and yields
-/// none. The parts co-access records name are read from `bodies`.
+/// none. A transmission whose every reader exchange is in `outside` (the
+/// log's exchanges outside the run window) is another run's: it is
+/// reported (`outside_run_window`) and neither predicts nor maps agents.
+/// The parts co-access records name are read from `bodies`.
 pub fn predictions<B: Bodies>(
     exported: &Exported,
     evidence: &[TransmissionEvidence],
     index: &AgentIndex,
+    outside: &HashSet<ExchangeId>,
     bodies: &mut Cached<B>,
     diagnostics: &mut Diagnostics,
 ) -> Vec<Prediction> {
@@ -320,6 +325,22 @@ pub fn predictions<B: Bodies>(
             .filter(|(id, item)| !in_export.contains(id) && access_only(item))
             .map(|(_, item)| *item),
     );
+    chosen.retain(|item| match outside_reader(item, outside) {
+        Some(exchange) => {
+            diagnostics.push(Diagnostic {
+                line: None,
+                row: None,
+                side: Side::Row,
+                failure: JoinFailure::OutsideRunWindow {
+                    transmission: item.transmission().id,
+                    exchange,
+                },
+                effect: Effect::Excluded,
+            });
+            false
+        }
+        None => true,
+    });
     let directory = SwarmDirectory::learn(&chosen, index, bodies, diagnostics);
     let mut out = Vec::new();
     for item in chosen {

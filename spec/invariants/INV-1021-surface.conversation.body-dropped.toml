@@ -1,0 +1,16 @@
+[invariant]
+id = "surface.conversation.body-dropped"
+statement = "A message whose body the blob store no longer holds is MessageParts::BodyDropped (its marks kept, by part) in conversation_turns and BodyText::BodyDropped in conversation_text, and the rest of the read is returned."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Content retention drops old bodies; one dropped body must not hide a
+whole window of turns or the marks L4 already made.
+"""
+
+[evidence]
+unit = "crosstalk_surface::tests::conversations::a_dropped_body_is_reported_and_the_rest_returned"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

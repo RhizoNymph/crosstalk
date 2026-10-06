@@ -1,0 +1,26 @@
+[invariant]
+id = "transport.consumer.derived-envelope-ids"
+statement = "Every envelope a pipeline consumer publishes because of a delivery has an id that is a function of that delivery's envelope (its id, or the id of the input it carries) and the event's place among the delivery's outputs."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+Consumers are at least once: a crash between publishing and acking
+redelivers the input, and the consumer publishes its outputs again. With
+ids derived from the input (EventId::derive, or L3's exchange-keyed
+derivation) the republish lands on ids the bus log already holds
+(transport.publish.idempotent-on-id) and that downstream consumers
+already deduplicate. A fresh id minted at the clock would make every
+redelivery a second event.
+"""
+
+[evidence]
+dst = [
+    "crosstalk_reconstruct::dst::redelivery_republishes_the_same_envelope_ids",
+    "crosstalk_provenance::dst::redelivery_republishes_the_same_envelope_ids",
+    "crosstalk_flow::dst::redelivery_republishes_the_same_envelope_ids",
+    "crosstalk_topology::dst::redelivery_republishes_the_same_envelope_ids",
+    "crosstalk_gateway::dst::classifier_redelivery_republishes_the_same_envelope_ids",
+]
+
+[evidence-review]
+dst = { agent = "false", human = "false" }
