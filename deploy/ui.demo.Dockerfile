@@ -18,13 +18,13 @@ FROM rust:1.98.1-slim-trixie AS build
 ARG RUST_TOOLCHAIN=nightly-2026-10-02
 ENV RUSTUP_TOOLCHAIN=${RUST_TOOLCHAIN}
 RUN rustup toolchain install "${RUST_TOOLCHAIN}" --profile minimal
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
+RUN --mount=type=cache,sharing=locked,target=/usr/local/cargo/registry \
     cargo install topcoat-cli --version =0.9.0 --locked --root /tools
 WORKDIR /src
 COPY . .
 COPY --from=elements /elements/dist ./ui/elements/dist
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/src/target \
+RUN --mount=type=cache,sharing=locked,target=/usr/local/cargo/registry \
+    --mount=type=cache,sharing=locked,target=/src/target \
     cargo build -p crosstalk-ui --release --locked \
     && /tools/bin/topcoat asset bundle -p crosstalk-ui --release \
     && install -D target/release/crosstalk-ui /out/crosstalk-ui \

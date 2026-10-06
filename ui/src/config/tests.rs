@@ -1,5 +1,4 @@
 use crosstalk_client::{BaseUrl, BearerToken as ClientToken, InvalidBaseUrl};
-use crosstalk_spec::ids::OperatorId;
 use crosstalk_spec::interfaces::l8_surface::PermissionSet;
 use crosstalk_spec::interfaces::l8_surface::operators::InvalidOperatorName;
 
@@ -95,22 +94,15 @@ fn parses_the_shipped_http_config_with_the_token_from_the_environment() {
         BaseUrl::parse("http://crosstalk:8081").expect("url")
     );
     assert_eq!(http.token, ClientToken::new(TOKEN).expect("token"));
-    assert_eq!(http.operator, OperatorPick::TheOnlyOne);
 }
 
 #[test]
-fn an_http_backend_may_name_its_operator() {
-    let text = http(
-        r#"{"url":"http://127.0.0.1:8081/api/","token":{"env":"CROSSTALK_API_TOKEN"},"operator":"00000000000000000000000002"}"#,
-    );
+fn an_http_url_may_carry_a_prefix() {
+    let text =
+        http(r#"{"url":"http://127.0.0.1:8081/api/","token":{"env":"CROSSTALK_API_TOKEN"}}"#);
     let BackendConfig::Http(http) = parse(&text).ok().expect("parses").backend else {
         panic!("an http backend");
     };
-    assert_eq!(
-        http.operator,
-        OperatorPick::Id(OperatorId::from_ulid(2)),
-        "the operator id"
-    );
     assert_eq!(http.url.to_string(), "http://127.0.0.1:8081/api");
 }
 
@@ -181,14 +173,13 @@ fn an_invalid_url_fails() {
 }
 
 #[test]
-fn an_invalid_http_operator_id_fails() {
+fn the_http_backend_names_no_operator() {
+    // The server says who the token is (`QueryApi::me`): an operator id in
+    // the http section is an unknown key.
     let text = http(
-        r#"{"url":"http://crosstalk:8081","token":{"env":"CROSSTALK_API_TOKEN"},"operator":"nope"}"#,
+        r#"{"url":"http://crosstalk:8081","token":{"env":"CROSSTALK_API_TOKEN"},"operator":"00000000000000000000000002"}"#,
     );
-    assert!(matches!(
-        parse(&text),
-        Err(ParseError::Config(ConfigError::HttpOperator(_)))
-    ));
+    assert!(matches!(parse(&text), Err(ParseError::Json(_))));
 }
 
 #[test]

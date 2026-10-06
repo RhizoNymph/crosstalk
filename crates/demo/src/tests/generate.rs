@@ -296,3 +296,50 @@ fn usage_reflects_the_request_and_answer() {
     assert!(reply.message.usage.output_tokens > 0);
     assert_eq!(reply.message.model, "claude-opus-5-5");
 }
+
+/// The lead-in text of a write reply for agent `agent` in `style`.
+fn write_lead_in(agent: &str, style: &str) -> String {
+    let task = Task::Write {
+        page: page("shared-1"),
+        topic: 3,
+        base: wiki(),
+    };
+    let body = serde_json::to_vec(&json!({
+        "model": "claude-opus-5-5",
+        "max_tokens": 4096,
+        "system": format!("You are {agent}.\n\n[style:{style}]"),
+        "tools": tool_definitions(),
+        "messages": user_task(&task),
+        "stream": false,
+    }))
+    .expect("encode");
+    let request = parse_request(&body).expect("request");
+    let reply = generate(&config(), &request, &body);
+    let ResponseBlock::Text { text } = &reply.message.content[0] else {
+        panic!("a lead-in")
+    };
+    text.clone()
+}
+
+/// Two agents writing the same page share their lead-in in the boilerplate
+/// style and share nothing but the page name in the headline style.
+#[test]
+fn headline_lead_ins_differ_between_agents() {
+    let (a, b) = (
+        write_lead_in("agent-001", "boilerplate"),
+        write_lead_in("agent-002", "boilerplate"),
+    );
+    assert_eq!(a, b);
+    assert!(a.starts_with("I'll update the wiki page `shared-1`"));
+    let (a, b) = (
+        write_lead_in("agent-001", "headline"),
+        write_lead_in("agent-002", "headline"),
+    );
+    assert!(a.ends_with("`shared-1`.") && b.ends_with("`shared-1`."));
+    let common = a
+        .as_bytes()
+        .windows(16)
+        .filter(|w| !b"`shared-1`.".windows(w.len()).any(|p| p == *w))
+        .any(|w| b.as_bytes().windows(16).any(|v| v == w));
+    assert!(!common, "headline lead-ins share 16 bytes: {a:?} / {b:?}");
+}

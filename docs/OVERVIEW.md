@@ -252,8 +252,8 @@ Overview:
       where a default view ends (AppBackend::view_end: the present's now,
       unless the fixture replays up to a fixed end). Callers come from the spec's
       operator directory: trusted mode for the local backends, and over
-      HTTP the server's operator for the token (found in
-      QueryApi::operators, refreshed every 30 s); view windows are bucket-aligned
+      HTTP the server's operator for the token (QueryApi::me,
+      refreshed every 30 s); view windows are bucket-aligned
       and every linked view pins the URL's topic version.
   data_flow: >
     Each layer below runs in its own crate (crosstalk-<layer>); layer crates
@@ -1300,6 +1300,11 @@ Features Index:
       POST /v1/messages, streaming SSE or JSON, in the real wire format,
       answered with text and tool_use deterministically from a seed and the
       request body, with a configurable first-byte wait and stream pacing.
+      Its prose is high-entropy (unrelated outputs share no 32-byte run) or
+      templated boilerplate, picked per request by a [style:headline] /
+      [style:boilerplate] marker the swarm puts in each agent's system
+      prompt from its --scenario headline|boilerplate (default headline),
+      so one stateless upstream serves both scenarios.
       wiki is an in-memory HTTP page store with versions and authors, the
       shared channel. swarm runs N agents through the crosstalk proxy. Each
       keeps a growing conversation, resent whole every turn, with fake
@@ -1310,7 +1315,7 @@ Features Index:
       L5 can discover the wiki as a channel. swarm reports throughput,
       p50/p95/p99 time to first byte and total time, and the expected
       transmissions, self-reads, rereads and misses, optionally as a
-      ground-truth JSONL file (schema v2: header, agent clusters, and per
+      ground-truth JSONL file (schema v2: header with the scenario, agent clusters, and per
       read the writer's and reader's session, turn and tool_use id, the
       content's hashes and its exact message/block in the reader's request),
       which ct-eval scores against.
@@ -1345,7 +1350,11 @@ Features Index:
       service). Prints precision, recall and the gate result and passes
       ct-eval's exit code through (2 = a gate failed). Fails fast unless
       /readyz has the `live` and `api` tasks running and the API takes the
-      token. ct-eval ships in the crosstalk-demo image.
+      token. ct-eval ships in the crosstalk-demo image. --scenario
+      headline (default, high-entropy prose: the headline precision and
+      recall) or boilerplate (templated prose unrelated agents share: a
+      regression scenario for false positives on shared text), recorded in
+      bench.env.
     entry_points:
       - deploy/run.sh
       - deploy/bench.sh
@@ -1436,7 +1445,10 @@ Features Index:
       http backend (crosstalk_client::HttpClient over the gateway's L8 API,
       `"backend": {"http": {"url", "token": {"env"}}}`; the operator and
       its permissions are the server's for the token; transport and auth
-      failures render as the UI's error states and are logged). The UI declares no traits of its own: the
+      failures render as the UI's error states and are logged, and a page
+      that cannot read the present because the gateway is unreachable or
+      refused the token is a full-page gateway state, 503 or 502, showing
+      the gateway's URL). The UI declares no traits of its own: the
       clock, bucket width, export formats and rule version come from
       QueryApi::present (app::present, once per request), and where a
       default view ends from AppBackend::view_end.

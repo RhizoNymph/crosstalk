@@ -4,7 +4,8 @@
 //! pacing. Also `POST /v1/messages/count_tokens` (an estimate) and
 //! `GET /healthz`. No state at all: every answer is a function of the seed
 //! and the request body, so any number of connections are served
-//! independently.
+//! independently, and one upstream serves every scenario (the prose style
+//! is read from each request's system prompt).
 
 pub mod generate;
 pub mod text;
@@ -177,6 +178,7 @@ async fn messages(request: Request<Incoming>, config: &UpstreamConfig) -> Respon
     );
     tracing::debug!(
         model = %parsed.model,
+        style = %parsed.style,
         stream = reply.stream,
         message = %reply.message.id,
         blocks = reply.message.content.len(),

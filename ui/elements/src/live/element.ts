@@ -11,8 +11,13 @@
  *   shows a notice with a reload button instead.
  * - Closes the stream on `pagehide` and, when the page comes back from the
  *   back/forward cache, opens a new one and refreshes (`lifecycle.ts`).
+ * - On the stream's `end` event, reconnects as `EventSource` does, except
+ *   when the UI's backend can no longer reach the gateway (`unreachable`):
+ *   then it closes the stream and shows "Live updates lost: gateway
+ *   unreachable" (`end.ts`).
  */
 
+import { endStep, parseEnd } from './end.ts';
 import { lifecycleStep } from './lifecycle.ts';
 import { type RefreshOutcome, refreshRegions } from './refresh.ts';
 import { refreshDelay } from './throttle.ts';
@@ -152,11 +157,28 @@ export class LiveElement extends HTMLElement {
       if (declaredTokens().length > 0) this.#schedule();
     });
     source.addEventListener('heartbeat', (event) => this.#received(event));
+    source.addEventListener('end', (event) => this.#ended(source, event));
     source.addEventListener('error', () => {
       if (source.readyState === EventSource.CLOSED) {
         this.#show('Live updates stopped. Reload to see the latest data.');
       }
     });
+  }
+
+  /** The stream's last event: resume, or stop and say why. */
+  #ended(source: EventSource, event: Event): void {
+    if (!(event instanceof MessageEvent)) return;
+    const reason = parseEnd(String(event.data));
+    if (!reason.ok) {
+      console.warn(`ct-live: ignoring an end event: ${reason.error}`);
+      return;
+    }
+    const step = endStep(reason.value);
+    if (step.kind === 'stop') {
+      source.close();
+      if (this.#source === source) this.#source = null;
+      this.#show(step.message);
+    }
   }
 
   #received(event: Event): void {
