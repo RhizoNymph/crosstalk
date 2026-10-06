@@ -8,6 +8,12 @@
 //!         inputs drained, twice in a row
 //! ```
 //!
+//! Between two looks at the bus the settle first yields to the scheduler
+//! ([`Backoff`]): on a current-thread runtime every runnable stage runs
+//! before the settle resumes, so an already quiet process settles without
+//! waiting on the timer. After [`YIELDS`] waits in a row it sleeps
+//! [`POLL`] instead, so a settle waiting on slow work does not spin.
+//!
 //! What a pass decides depends only on what was ingested and the clock's
 //! time: every id the stages mint is derived from its input or drawn from
 //! a seeded generator in input order, the stages tick in a fixed order,
@@ -25,6 +31,27 @@ use super::{Live, LiveClock, POLL, Running};
 /// More passes than this and the process is not converging: a stage keeps
 /// producing work on every tick.
 const MAX_PASSES: u32 = 64;
+
+/// How many waits in a row yield before they sleep.
+const YIELDS: u32 = 64;
+
+/// How a settle waits between two looks at the bus: a yield to the
+/// scheduler for the first [`YIELDS`] waits, then a [`POLL`] sleep each.
+#[derive(Debug, Default)]
+pub(super) struct Backoff {
+    waits: u32,
+}
+
+impl Backoff {
+    pub(super) async fn wait(&mut self) {
+        if self.waits < YIELDS {
+            self.waits += 1;
+            tokio::task::yield_now().await;
+        } else {
+            tokio::time::sleep(POLL).await;
+        }
+    }
+}
 
 /// Where a settle got to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -79,8 +106,9 @@ impl Live {
     ) -> Result<(), SettleError> {
         let bus = &self.backend.stores.bus;
         let mut quiet = 0;
+        let mut backoff = Backoff::default();
         while quiet < 2 {
-            idle(bus, slots).await?;
+            idle_with(bus, slots, &mut backoff).await?;
             let (done, flushed) = oneshot::channel();
             self.flushes
                 .send(Flush(done))
@@ -99,7 +127,7 @@ impl Live {
                 0 => quiet + 1,
                 _ => 0,
             };
-            tokio::time::sleep(POLL).await;
+            backoff.wait().await;
         }
         Ok(())
     }
@@ -180,8 +208,17 @@ pub(super) async fn group_idle(
 
 /// Wait until every one of `slots`' groups is empty.
 pub(super) async fn idle(bus: &MpscBus, slots: &[Slot]) -> Result<(), SettleError> {
+    idle_with(bus, slots, &mut Backoff::default()).await
+}
+
+/// [`idle`], waiting through `backoff`.
+async fn idle_with(
+    bus: &MpscBus,
+    slots: &[Slot],
+    backoff: &mut Backoff,
+) -> Result<(), SettleError> {
     while busy(bus, slots).await? {
-        tokio::time::sleep(POLL).await;
+        backoff.wait().await;
     }
     Ok(())
 }

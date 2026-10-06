@@ -43,7 +43,7 @@ pub mod exchanges;
 pub mod sse;
 
 pub use anthropic::AnthropicMessages;
-pub use capture::{StoreError, store};
+pub use capture::{StoreError, store, store_unless};
 
 #[cfg(test)]
 mod tests;

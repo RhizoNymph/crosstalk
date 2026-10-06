@@ -70,6 +70,8 @@ pub struct Coverage {
     /// Each input's message; `None` for a bare text ([`Coverage::add_text`]).
     inputs: Vec<Option<MessageHash>>,
     layers: usize,
+    /// How many k-gram positions were added: what the coverage weighs.
+    positions: usize,
 }
 
 impl Coverage {
@@ -106,6 +108,7 @@ impl Coverage {
         for fingerprints in layers {
             let layer = self.layers;
             self.layers += 1;
+            self.positions += fingerprints.len();
             for (position, fingerprint) in fingerprints.iter().enumerate() {
                 let entry = self.occurrences.entry(*fingerprint).or_default();
                 if entry.len() < MAX_OCCURRENCES {
@@ -149,5 +152,15 @@ impl Coverage {
 
     pub fn is_empty(&self) -> bool {
         self.occurrences.is_empty()
+    }
+
+    /// How many inputs were added.
+    pub fn inputs(&self) -> usize {
+        self.inputs.len()
+    }
+
+    /// How many k-gram positions were added (each layer's fingerprints).
+    pub fn positions(&self) -> usize {
+        self.positions
     }
 }
