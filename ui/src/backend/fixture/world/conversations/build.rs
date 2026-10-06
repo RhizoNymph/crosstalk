@@ -23,7 +23,8 @@ use super::super::agents::Family;
 use super::super::{GenError, World, states};
 use super::messages;
 use super::{
-    Cases, ConversationRecord, Conversations, Ending, Entry, RelayedSpan, SpanRecord, TurnRecord,
+    Cases, ConversationRecord, Conversations, Ending, Entry, MatchRef, RelayedSpan, SpanRecord,
+    TurnRecord,
 };
 
 /// A gap longer than this starts a new conversation.
@@ -743,6 +744,22 @@ impl Builder<'_> {
                 .or_default()
                 .push(*id);
         }
+        let mut reads: HashMap<ExchangeId, Vec<MatchRef>> = HashMap::new();
+        let mut readers: HashMap<SpanId, Vec<MatchRef>> = HashMap::new();
+        for record in &self.world.transmissions {
+            let Some(confirmed) = states::confirmed(&record.transmission.state) else {
+                continue;
+            };
+            for (index, content) in confirmed.content().iter().enumerate() {
+                let index = u16::try_from(index).map_err(|e| GenError::invalid("match", e))?;
+                let at = MatchRef {
+                    transmission: record.transmission.id,
+                    index,
+                };
+                reads.entry(content.reader_exchange()).or_default().push(at);
+                readers.entry(content.origin()).or_default().push(at);
+            }
+        }
         let mut pending = HashSet::new();
         pending.insert(cases.pending_scan);
         Ok(Conversations {
@@ -751,6 +768,8 @@ impl Builder<'_> {
             spans: self.spans,
             spans_by_exchange,
             relayed: self.relayed,
+            reads,
+            readers,
             bodies: Arc::new(self.bodies),
             pending,
             cases: Some(cases),

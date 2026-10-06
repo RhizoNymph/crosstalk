@@ -43,7 +43,9 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use crosstalk_spec::derived::provenance::span::{RelaySource, SpanLocation};
-use crosstalk_spec::ids::{AgentId, ConversationId, ExchangeId, MessageHash, SpanId};
+use crosstalk_spec::ids::{
+    AgentId, ConversationId, ExchangeId, MessageHash, SpanId, TransmissionId,
+};
 use crosstalk_spec::observed::client::{CorpusId, HarnessClaim, IngressMode};
 use crosstalk_spec::observed::conversation::ConversationOrigin;
 use crosstalk_spec::observed::exchange::{
@@ -143,6 +145,14 @@ pub struct RelayedSpan {
     pub source: RelaySource,
 }
 
+/// One content match of a stored transmission: the transmission and the
+/// match's position in its confirmation.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
+pub struct MatchRef {
+    pub transmission: TransmissionId,
+    pub index: u16,
+}
+
 /// Where the named cases are.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cases {
@@ -176,6 +186,10 @@ pub struct Conversations {
     spans_by_exchange: HashMap<ExchangeId, Vec<SpanId>>,
     /// Relayed spans by the exchange whose output holds them.
     relayed: HashMap<ExchangeId, Vec<RelayedSpan>>,
+    /// The content matches read in each exchange, in transmission order.
+    reads: HashMap<ExchangeId, Vec<MatchRef>>,
+    /// The content matches whose origin is each span.
+    readers: HashMap<SpanId, Vec<MatchRef>>,
     /// The bodies of generated messages.
     bodies: Arc<HashMap<MessageHash, Message>>,
     /// Exchanges whose provenance scan has not finished.
@@ -220,6 +234,17 @@ impl Conversations {
 
     pub fn relayed_in(&self, exchange: ExchangeId) -> &[RelayedSpan] {
         self.relayed.get(&exchange).map_or(&[], Vec::as_slice)
+    }
+
+    /// The content matches read in `exchange`. A replay's world may no
+    /// longer hold every transmission named; readers skip those.
+    pub fn reads_in(&self, exchange: ExchangeId) -> &[MatchRef] {
+        self.reads.get(&exchange).map_or(&[], Vec::as_slice)
+    }
+
+    /// The content matches whose origin is `span`.
+    pub fn readers_of(&self, span: SpanId) -> &[MatchRef] {
+        self.readers.get(&span).map_or(&[], Vec::as_slice)
     }
 
     /// A generated message's body; `None` for a body the traffic generator
@@ -306,6 +331,8 @@ impl Conversations {
             spans,
             spans_by_exchange,
             relayed,
+            reads: self.reads.clone(),
+            readers: self.readers.clone(),
             bodies: Arc::clone(&self.bodies),
             pending: self.pending.clone(),
             cases: self.cases.clone(),
