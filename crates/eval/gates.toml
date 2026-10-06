@@ -323,15 +323,26 @@ max = 150.0
 # scores under `demo-swarm/<scenario>`, the truth header's `scenario`
 # (missing: headline).
 #
-# Headline: a little below the first live bench (2026-10-05,
-# docs/features/eval.md "Swarm benchmark"): channel / tool_result / exact
-# recall 1.000 (58 / 58), precision 0.951. Rereads must not be reported at
-# all (the first bench had 9; L4's reread dedup removes them).
+# Calibrated on the clean node0 runs of 2026-10-06 (staging 8090af0, unique
+# sessions per run; docs/features/eval.md "Swarm benchmark"):
 #
-# Overall precision (0.175) is not gated: its false positives are
-# template-phrase ReaderOutput false positives (mostly 34–46-byte
-# unobserved/reader_output template matches), pending the L4 ReaderOutput
-# floor and more entropy in the swarm's generator.
+# Headline 20261006T020835Z: 254 exchanges, recall 1.000 (55 / 55), precision
+# 1.000 (0 false), channel / tool_result / exact 54 / 54. Gates sit a little
+# below; rereads must not be reported at all.
+
+[[gate]]
+name = "demo-swarm/headline: every wiki transmission is found"
+detector = "gateway-export"
+dataset = "demo-swarm/headline"
+metric = "recall"
+min = 0.95
+
+[[gate]]
+name = "demo-swarm/headline: detections are transmissions"
+detector = "gateway-export"
+dataset = "demo-swarm/headline"
+metric = "precision"
+min = 0.95
 
 [[gate]]
 name = "demo-swarm/headline: wiki pages read through tool results are found"
@@ -351,7 +362,7 @@ route = "channel"
 carrier = "tool_result"
 class = "exact"
 metric = "precision"
-min = 0.90
+min = 0.95
 
 [[gate]]
 name = "demo-swarm/headline: no reread is reported as a transmission"
@@ -361,13 +372,31 @@ metric = "violations"
 reason = "reread"
 max = 0
 
-# Boilerplate: agents write template-heavy text, so this bench measures the
-# background false-positive rate. PLACEHOLDER, loose on purpose: calibrate
-# after L4 match-quality lands, from a measured boilerplate run.
+# Boilerplate 20261006T021639Z: agents write template-heavy text, so this
+# bench measures the false-positive rate on boilerplate. 247 exchanges, recall
+# 1.000 (50 / 50), precision 0.883, 22 false positives = 89.1 per 1k (15
+# unobserved/reader_output template sentences, accepted with
+# reader_output.min_chars = 64; 7 channel/exact). One false positive moves the
+# rate by about 4 per 1k and Poisson noise on 22 is about ±19 per 1k, so the
+# ceiling sits about two standard deviations above the measured rate.
 
 [[gate]]
 name = "demo-swarm/boilerplate: false positives per 1k exchanges stay bounded"
 detector = "gateway-export"
 dataset = "demo-swarm/boilerplate"
 metric = "fp_per_1k"
-max = 10000.0
+max = 130.0
+
+[[gate]]
+name = "demo-swarm/boilerplate: every wiki transmission is still found"
+detector = "gateway-export"
+dataset = "demo-swarm/boilerplate"
+metric = "recall"
+min = 0.95
+
+[[gate]]
+name = "demo-swarm/boilerplate: template text does not swamp detections"
+detector = "gateway-export"
+dataset = "demo-swarm/boilerplate"
+metric = "precision"
+min = 0.80

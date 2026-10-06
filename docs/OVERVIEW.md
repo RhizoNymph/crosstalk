@@ -810,6 +810,32 @@ Features Index:
       - crates/topology/migrations/0001_topology.sql
     depends_on: [type_spec, store, memory, transport, channel_semantics]
     doc: docs/features/topology_store.md
+  postgres_stores:
+    description: >
+      Reviewed design (roadmap P7.3, PR #103, not implemented): detections that survive
+      a gateway restart. Surveys what is persisted today (serve runs Live
+      on memory stores and MpscBus; the L3 to L7 Postgres stores exist but
+      are unwired, and crosstalk migrate runs no layer migrations) and
+      proposes a durable PgBus (transport schema: event log, groups,
+      deliveries, dead letters), outbox rows stamped with a stable
+      envelope id before an idempotent publish, derived envelope ids for
+      every consumer (EventId::derive), L5 correlator checkpoints with
+      deferred acks plus a held-writes table, an access sequence and an
+      extraction ledger, a fsynced on-disk publish spool (SpoolingBus) that
+      keeps captures made while the database is down and drains them in
+      order under their envelope ids, PgTopicCatalog, PgProjectionStore, PgAuditLog,
+      PgOperatorStore and PgSinkRegistry, PgFrontierSource in the
+      composer, one pipeline process per database (advisory lock),
+      retention per store, and the restart semantics of /readyz, /healthz
+      and the API. Includes the test strategy (reference-model agreement,
+      restart equivalence, conformance on Postgres), the spec changes
+      proposed, the parallel workstreams and the nine recorded decisions.
+    entry_points:
+      - docs/features/postgres_stores.md
+      - crates/gateway/src/live/mod.rs
+      - crates/store/src/migrate.rs
+    depends_on: [store, gateway, transport, reconstruct, provenance, flow_store, flow_correlator, search_alerts, topology_store, surface_service, conformance]
+    doc: docs/features/postgres_stores.md
   sim:
     description: >
       crosstalk-sim, the deterministic simulation kit for every dst
