@@ -628,7 +628,7 @@ the bounds, the order and the determinism.
 
 The golden export writes ct-eval's worlds, labels and predictions in the
 detector-neutral bench format `a2a-bench/1` (crate `a2a-bench-format`,
-the bench repository's `crates/format`, feat/format at 06874bf; its
+the bench repository's `crates/format`, fix/cli-parity-followups at b347f83; its
 normative doc is `docs/features/format.md` there), so the standalone benchmark proves
 parity with ct-eval by byte diffs (separation design §7.1). It is a pure
 serialisation of existing types: nothing is re-derived, and what the
@@ -740,13 +740,12 @@ whose detection or predictions failed `failed { reason }` and no rows.
   entry per `CoAccess` (the write's and the read's whole parts, and one
   resource: the channel's when it holds exactly one, else the read
   access's own);
-  detected and awaiting-content ones carry their state only. A
-  transmission's matches are ordered by their bench read location, then
-  origin; its co-access records by read, then write location. (The
-  detector's own order follows ids derived from spec message hashes,
-  which differ when a bench reader rebuilds messages without what the
-  bench dropped, so ordering by bench locations is what keeps
-  `ct-bench-detect` byte-identical to `ct-eval run` on SALT.)
+  detected and awaiting-content ones carry their state only. As the
+  format requires (`PredictionError::Unsorted`), a transmission's
+  matches are sorted by `read_at` and its co-access records by
+  `(read_at, write_at)`, by `Location`'s derived order; ties by origin
+  (or write), then the row, never the detector's own order, which
+  follows ids derived from spec message hashes.
 - **Manifest.** Dataset, `dataset_version` 1, split `dev`; the source's
   path under the data root, its revision (a Hugging Face snapshot's hash
   from the symlink target, a local-dir download's commit from

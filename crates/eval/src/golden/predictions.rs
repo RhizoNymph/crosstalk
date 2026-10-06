@@ -15,8 +15,9 @@
 //!    per `CoAccess` record of a suspected or discarded one, none for a
 //!    detected or awaiting-content one.
 //!
-//! A transmission's matches, and its co-access records, are ordered by
-//! their bench locations (read, then origin or write).
+//! A transmission's matches are sorted by their read location and its
+//! co-access records by (read, write), by `Location`'s order, as the format
+//! requires; ties by origin, then the row.
 //!
 //! Locations translate as labels' do: a content match's read location is in
 //! its reader exchange, its origin (the matched span's `IndexedSpan`) in the
@@ -29,6 +30,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use a2a_bench_format as bench;
+use bench::location::Location;
 use bench::predictions::{
     Attribution, CoAccess, ContentEvidence, PredictedRoute, Prediction, Quality, State,
     Transmission, TransmissionFields, Unattributed,
@@ -184,21 +186,22 @@ fn convert(
             }
         }
     }
-    // The detector's own order of matches and co-access records follows
-    // ids derived from spec message hashes, which a bench reader re-derives
-    // differently (dropped signatures): order them by their bench
-    // locations, so the same detection writes the same bytes from either
-    // side (parity stage P5).
-    fields.matches.sort_by_cached_key(|evidence| {
-        (
-            evidence.read_at,
-            evidence.origin_at,
-            format!("{evidence:?}"),
-        )
+    // a2a-bench/1 requires a transmission's matches sorted by `read_at` and
+    // its co-access records by `(read_at, write_at)`, by `Location`'s order.
+    // Ties keep a fixed order (origin, then the rest of the row), never the
+    // detector's: that follows ids derived from spec message hashes, which
+    // a bench reader re-derives differently (dropped signatures), so this
+    // keeps one detection's bytes the same from either side (parity P5).
+    fields.matches.sort_by(|a, b| {
+        Location::cmp(&a.read_at, &b.read_at)
+            .then_with(|| a.origin_at.cmp(&b.origin_at))
+            .then_with(|| format!("{a:?}").cmp(&format!("{b:?}")))
     });
-    fields
-        .co_access
-        .sort_by_cached_key(|record| (record.read_at, record.write_at, format!("{record:?}")));
+    fields.co_access.sort_by(|a, b| {
+        Location::cmp(&a.read_at, &b.read_at)
+            .then_with(|| Location::cmp(&a.write_at, &b.write_at))
+            .then_with(|| format!("{a:?}").cmp(&format!("{b:?}")))
+    });
     Transmission::new(fields).map_err(|source| GoldenError::Transmission {
         transmission: id.to_string(),
         source,
