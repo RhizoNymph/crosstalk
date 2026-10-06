@@ -18,9 +18,10 @@
 //! | a003 | 1 | GET p2 → `P2` (a transmission from a001) | GET p1 |
 //! | a003 | 2 | GET p1 → `P1` (a transmission from a001) | text |
 //!
-//! The run's exchanges start one second apart from the header's start
-//! (`T0`), inside the run window its rows imply (they end at `T0` + 2 s,
-//! plus the default minute of slack). [`write_with_prior_run`] also logs,
+//! The run's exchanges start ten seconds apart from `T0` + 10 s (the
+//! header's start is `T0`), inside the run window its rows imply: the rows
+//! are timed near the run's end (`T0` + 100 s, the miss at `T0` + 101 s),
+//! plus the default minute of slack. [`write_with_prior_run`] also logs,
 //! an hour before, an earlier run that reused a002's session id.
 
 use std::num::NonZeroU32;
@@ -142,7 +143,7 @@ impl Log {
     /// afterwards the history holds the response and `result`, if any.
     fn turn(&mut self, agent: &mut Agent, response: MessageBody, result: Option<MessageBody>) {
         self.clock += 1;
-        let at = after(self.base, Duration::from_secs(self.clock));
+        let at = after(self.base, Duration::from_secs(self.clock * 10));
         let session = agent.session.clone();
         let credential = agent.credential;
         let normalized = NormalizedExchangeBuilder::new(&mut self.ids)
@@ -222,8 +223,8 @@ pub fn delivery(
         "content": {"blake3": blake3_hex(text), "sha256": "00".repeat(32),
             "excerpt": text.chars().take(80).collect::<String>(),
             "at": {"message": 3, "block": 0, "tool_use_id": reader_call}},
-        "at_ms": 1000, "at_unix_ms": 1_790_812_801_000_u64,
-        "written_at_unix_ms": 1_790_812_800_500_u64, "read_at_unix_ms": 1_790_812_801_000_u64})
+        "at_ms": 100_000, "at_unix_ms": 1_790_812_900_000_u64,
+        "written_at_unix_ms": 1_790_812_899_500_u64, "read_at_unix_ms": 1_790_812_900_000_u64})
 }
 
 /// The truth rows the fixture's run implies, plus two the exchange log
@@ -265,7 +266,7 @@ pub fn truth_rows() -> Vec<serde_json::Value> {
         json!({"kind": "miss", "world": WORLD, "reader": "a002", "reader_key_group": 1, "page": "p9",
             "reader_session": "session-a002", "reader_turn": 3, "reader_tool_use_id": "toolu_m",
             "read_tool": {"name": "http_request", "input": {"method": "GET", "url": url("p9")}},
-            "at_ms": 2000, "at_unix_ms": 1_790_812_802_000_u64}),
+            "at_ms": 101_000, "at_unix_ms": 1_790_812_901_000_u64}),
         // Line 7: the turn is off by one.
         delivery(
             "transmission",
@@ -364,8 +365,8 @@ pub fn write_with_prior_run(dir: &Path, truth: &[serde_json::Value]) -> Written 
 }
 
 /// [`write`], with the run's clock `behind_secs` seconds behind the
-/// header's: its exchanges start at `T0` + 1 s − `behind_secs`, one second
-/// apart, as when the swarm's host and the gateway's disagree.
+/// header's: its exchanges start at `T0` + 10 s − `behind_secs`, ten
+/// seconds apart, as when the swarm's host and the gateway's disagree.
 pub fn write_skewed(dir: &Path, truth: &[serde_json::Value], behind_secs: u64) -> Written {
     write_runs(dir, truth, false, behind_secs)
 }
@@ -670,7 +671,7 @@ pub fn unattributed(reader: (&str, &str, u32, &str), page: &str, text: &str) -> 
         "content": {"blake3": blake3_hex(text), "sha256": "00".repeat(32),
             "excerpt": text.chars().take(80).collect::<String>(),
             "at": {"message": 3, "block": 0, "tool_use_id": reader_call}},
-        "at_ms": 1000, "at_unix_ms": 1_790_812_801_000_u64})
+        "at_ms": 100_000, "at_unix_ms": 1_790_812_900_000_u64})
 }
 
 /// Appends to the fixture's evidence file one access-only transmission
@@ -720,17 +721,17 @@ fn access_only(written: &Written, discarded: bool) -> (TransmissionParts, Resour
     )
 }
 
-/// Appends to the fixture's evidence file one discarded transmission
-/// a001 → a002 over p1 read at a002's turn 2: the read the truth calls a
-/// reread (line 5), which the gateway's confirmed reread detection also
-/// lands on.
-pub fn append_discarded_reread(written: &Written) {
+/// Appends to the fixture's evidence file one access-only transmission
+/// a001 → a002 over p1 read at a002's turn 2, `discarded` or else
+/// suspected: the read the truth calls a reread (line 5), which the
+/// gateway's confirmed reread detection also lands on.
+pub fn append_access_only_reread(written: &Written, discarded: bool) {
     let mut ids = Ids::seeded(31);
     let (writer, reader) = (ids.agent(), ids.agent());
     let p1 = ResourceBuilder::new(&mut ids)
         .url("http", "wiki:8090", "/pages/p1", None)
         .build();
-    let parts = TransmissionBuilder::new(&mut ids)
+    let builder = TransmissionBuilder::new(&mut ids)
         .between(writer, reader)
         .opened_at(after(T0, Duration::from_secs(500)))
         .accesses(|cross| {
@@ -748,10 +749,13 @@ pub fn append_discarded_reread(written: &Written) {
                         index: 0,
                     })
                 })
-        })
-        .discarded()
-        .build_parts()
-        .expect("a discarded transmission");
+        });
+    let builder = if discarded {
+        builder.discarded()
+    } else {
+        builder.suspected()
+    };
+    let parts = builder.build_parts().expect("an access-only transmission");
     append_evidence(written, &evidence_of(&parts, &p1));
 }
 

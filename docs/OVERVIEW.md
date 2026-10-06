@@ -210,13 +210,14 @@ Overview:
       scores a saved L8 transmissions export and its evidence,
       suspected and discarded transmissions as access-only predictions
       from their evidence's accesses (reported as access-only recall,
-      apart from overall; one under a negative control is reported apart
-      from the violations, never gated). The truth's session rows map every gateway
+      apart from overall; a suspected one under a negative control is
+      reported apart from the violations, never gated). The truth's session rows map every gateway
       session to its swarm agent; it scores under
       demo-swarm/<scenario> (headline or boilerplate), and its gates are
       those named detector "gateway-export". A discarded co-access that
       aligns with no label is dismissed (the detector's own "no"), never a
-      false positive or a control violation. ct-eval replay --run <dir>
+      false positive or a control violation; the control it fell under is
+      recorded ("dismissed on reread controls: N"). ct-eval replay --run <dir>
       replays a saved bench run's exchange log and blobs through
       crosstalk_gateway::live::Live in memory with the run's flow windows
       (bench.env), reads the export and evidence back through the same L8

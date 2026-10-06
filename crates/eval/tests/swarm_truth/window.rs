@@ -23,8 +23,8 @@ use super::{inputs, judged, key, read_rows};
 
 /// The fixture header's start, in Unix milliseconds.
 const START_MS: u64 = 1_790_812_800_000;
-/// The latest time the fixture's rows name (the miss, at `START_MS` + 2 s).
-const LATEST_MS: u64 = 1_790_812_802_000;
+/// The latest time the fixture's rows name (the miss, at `START_MS` + 101 s).
+const LATEST_MS: u64 = 1_790_812_901_000;
 
 fn margins(lead_ms: u64, slack_ms: u64) -> Margins {
     Margins { lead_ms, slack_ms }
@@ -106,6 +106,7 @@ fn a_rows_read_and_write_times_extend_the_window() {
         "p1",
         P1,
     );
+    late["at_unix_ms"] = json!(START_MS + 1_000);
     late["read_at_unix_ms"] = json!(START_MS + 9_000);
     late["written_at_unix_ms"] = json!(START_MS + 7_000);
     let truth = read_rows(&[fixture::header(), late.clone()]).expect("decodes");
@@ -185,22 +186,22 @@ fn a_smaller_slack_leaves_out_the_later_exchanges() {
         ..Options::new(50)
     };
     let outcome = run_with(&inputs(&written), options, &Gates::default()).expect("scores");
-    // The run's exchanges start at T0 + 1 s, + 2 s, …, + 11 s; the rows end
-    // at T0 + 2 s.
+    // The run's exchanges start at T0 + 10 s, + 20 s, …, + 110 s; the rows
+    // end at T0 + 101 s, so only a003's last turn is past it.
     assert_eq!(outcome.window.end_unix_ms, LATEST_MS);
-    assert_eq!(outcome.resolved.exchanges, 2);
-    assert_eq!(outcome.resolved.excluded_outside_window, 9);
-    assert_eq!(outcome.report.totals.exchanges, 2);
+    assert_eq!(outcome.resolved.exchanges, 10);
+    assert_eq!(outcome.resolved.excluded_outside_window, 1);
+    assert_eq!(outcome.report.totals.exchanges, 10);
 }
 
 // ---- the lead ----
 
 #[test]
 fn an_exchange_just_before_the_headers_start_is_in_the_run() {
-    // The run's clock is 3 s behind the header's: its first exchange
+    // The run's clock is 12 s behind the header's: its first exchange
     // started 2 s before `started_at_unix_ms`.
     let dir = fixture::dir("window-lead");
-    let written = fixture::write_skewed(&dir, &fixture::truth_rows(), 3);
+    let written = fixture::write_skewed(&dir, &fixture::truth_rows(), 12);
     let outcome = run(&inputs(&written), 50, &Gates::default()).expect("scores");
     assert_eq!(outcome.resolved.exchanges, 11);
     assert_eq!(outcome.resolved.excluded_outside_window, 0);
@@ -213,20 +214,20 @@ fn an_exchange_just_before_the_headers_start_is_in_the_run() {
     );
     assert_eq!(outcome.diagnostics.named("turn_mismatch").count(), 1);
 
-    // Without the lead, the two exchanges before the start (a001's turns
-    // 0 and 1, at -2 s and -1 s) are left out.
+    // Without the lead, the exchange before the start (a001's turn 0, at
+    // -2 s) is left out.
     let options = Options {
         margins: margins(0, DEFAULT_SLACK_MS),
         ..Options::new(50)
     };
     let outcome = run_with(&inputs(&written), options, &Gates::default()).expect("scores");
-    assert_eq!(outcome.resolved.excluded_outside_window, 2);
+    assert_eq!(outcome.resolved.excluded_outside_window, 1);
     let excluded: Vec<_> = outcome
         .diagnostics
         .named("session_reused_outside_run")
         .map(|diagnostic| diagnostic.failure.clone())
         .collect();
-    let expected: Vec<_> = written.a001[..2]
+    let expected: Vec<_> = written.a001[..1]
         .iter()
         .map(|turn| JoinFailure::SessionReusedOutsideRun {
             session: "session-a001".to_owned(),

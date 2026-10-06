@@ -370,8 +370,10 @@ rule is decided in `Judge::judge` after alignment and before exemptions
 and controls, so the scorer and `quality::verdicts` agree by
 construction. A discarded co-access that does align with a label is still
 `correct` in its row, and that label is still `missed` and `suspected`.
-Suspected predictions are unchanged: unconfirmed but not rejected, they
-are judged like any prediction. Before this rule the node0 bench charged
+When a dismissed prediction falls under a negative control,
+`Judge::judge` returns that control (the most specific) beside
+`Dismissed`, and the scorer records it in the one access-only breakdown
+below; it is still only `dismissed`, never counted twice. Before this rule the node0 bench charged
 every reread's discarded co-access (INV-1122 discards it by design) to
 the `reread` control: 1 violation on the headline run, 5 on the
 boilerplate run, and 12 and 21 `discarded` rows scored false
@@ -391,16 +393,23 @@ discarded only, not in overall)") and in `report.json`, never added to
 `overall`, and the line is left out of the table when no label is
 access-only.
 
-**Only content violates a control.** By the same rule, an access-only
-prediction that falls under a negative control is not a violation: a
-`discarded` (or `suspected`) transmission is the detector declining to
-confirm, not a claim. It is still a false positive in its own access-class
-row, but it is counted in `Score::access_only_violations` /
-`Report::access_only_violations` instead of `violations`, printed on its
-own line ("access-only predictions under negative controls (not
-violations, not gated)", left out when empty), and left out of the
-violation sources tally. `violations` gates and `Score::violation_count`
-read content-class violations only.
+**Only content violates a control.** `violations` (and so the violation
+gates, `Score::violation_count` and the sources tally) count content-class
+predictions only. An access-only prediction under a negative control is
+recorded in `Score::access_only_under_controls` /
+`Report::access_only_under_controls` (`AccessOnlyControlRow`: dataset,
+class, reason, count), one breakdown for both access classes:
+
+- `discarded`: always `Dismissed` (above); the row says which controls
+  the dismissed predictions fell under, printed as "dismissed on reread
+  controls: N". Not a second counter: those predictions are counted once,
+  in `dismissed`.
+- `suspected`: unconfirmed but not rejected, so still a false positive in
+  its own access-class row, but never charged to the control; printed as
+  "suspected under reread controls: N".
+
+Both print under "access-only predictions under negative controls (not
+violations, not gated):", left out when there are none.
 
 - A label is found when any prediction aligns with it. Several predictions
   aligned with one label are each correct. One prediction aligned with
@@ -1142,9 +1151,9 @@ exchanges (257 and 511 excluded), and every `turn_mismatch` row (120 and
 111 joins that the content-hash fallback had rescued) disappears: the
 ordinals had counted the earlier runs' exchanges. The 5 s lead changes
 neither count. The reread violations (1 and 5) were unchanged by the
-window: every one was a `discarded` prediction, and with access-only
-violations kept apart (below, under the alignment rule) both runs have 0;
-the boilerplate run's false positives per 1k go
+window: every one was a `discarded` prediction, now dismissed (above,
+under the alignment rule), so both runs have 0 and print "dismissed on
+reread controls" (1 and 5); the boilerplate run's false positives per 1k go
 from 53.7 (41 over 764) to 162.1 (41 over 253).
 
 ### Join rules (`resolve.rs`)
@@ -1395,7 +1404,7 @@ rows map them, and they are scored as false positives.
 | `src/datasets/swarm_truth/replay.rs` | a saved run through `Live`, export and evidence read back | `replay`, `ReplaySettings`, `Replayed`, `ReplayError`, `BenchEnv`, `read_bench_env`, `demo_flow` |
 | `src/bin/ct-eval/swarm.rs` | `ct-eval swarm` and `swarm-fetch` | `outcome_text`, `write_report` |
 | `src/bin/ct-eval/replay.rs` | `ct-eval replay` | |
-| `tests/swarm_truth/` | a synthetic run built with testkit (truth, exchange log and blobs, export, evidence; its exchanges 1 s apart from the header's start; `write_with_prior_run` adds an earlier run reusing a002's session and a detection read in it, `write_skewed` a run clock behind the header's); `replay.rs` replays it through `Live` (the reread's co-access is discarded and dismissed; deterministic; `since`) | |
+| `tests/swarm_truth/` | a synthetic run built with testkit (truth, exchange log and blobs, export, evidence; its truth rows are timed near the run's end, so the run window holds every exchange; `write_with_prior_run` adds an earlier run reusing a002's session and a detection read in it, `write_skewed` a run clock behind the header's); `replay.rs` replays it through `Live` (the reread's co-access is discarded and dismissed; deterministic; `since`) | |
 
 **Invariants.**
 - Every truth row becomes a label or a diagnostic; every exported

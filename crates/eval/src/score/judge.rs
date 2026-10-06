@@ -106,6 +106,10 @@ impl<'w> Judge<'w> {
     /// exemption covers it, else the most specific negative control it
     /// violates, else what the world's coverage makes of an unlabelled
     /// prediction.
+    ///
+    /// The control is the one the outcome is about: the violated one of a
+    /// `False`, or, for a `Dismissed` prediction, the most specific control
+    /// it falls under (recorded, never charged).
     pub fn judge(&self, prediction: &Prediction) -> (Outcome, Option<&'w NegativeControl>) {
         let candidates = self
             .by_reader
@@ -126,7 +130,7 @@ impl<'w> Judge<'w> {
             );
         }
         if prediction.class == EvidenceClass::Discarded {
-            return (Outcome::Dismissed, None);
+            return (Outcome::Dismissed, self.control_over(prediction));
         }
         if self
             .exemptions
@@ -135,11 +139,7 @@ impl<'w> Judge<'w> {
         {
             return (Outcome::Unjudged, None);
         }
-        if let Some(control) = self
-            .negatives
-            .iter()
-            .find(|control| violates(prediction, control))
-        {
+        if let Some(control) = self.control_over(prediction) {
             let label = control.label();
             return (
                 Outcome::False {
@@ -159,5 +159,13 @@ impl<'w> Judge<'w> {
             ),
             Coverage::Partial => (Outcome::Unjudged, None),
         }
+    }
+
+    /// The most specific negative control `prediction` falls under.
+    fn control_over(&self, prediction: &Prediction) -> Option<&'w NegativeControl> {
+        self.negatives
+            .iter()
+            .copied()
+            .find(|control| violates(prediction, control))
     }
 }

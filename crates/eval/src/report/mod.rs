@@ -10,7 +10,8 @@ pub use gates::{Check, Gate, GateDetector, GateOutcome, GateStatus, Gates};
 use crate::keys::DatasetId;
 use crate::pipeline::Unscored;
 use crate::score::{
-    Counts, FalsePositive, Miss, RowKey, Score, SourceCount, Totals, TransmissionRow, ViolationRow,
+    AccessOnlyControlRow, Counts, FalsePositive, Miss, RowKey, Score, SourceCount, Totals,
+    TransmissionRow, ViolationRow,
 };
 use crate::truth::Tier;
 
@@ -66,9 +67,10 @@ pub struct Report {
     /// Negative-control violations by content-class predictions: what the
     /// violation gates check.
     pub violations: Vec<ViolationRow>,
-    /// Access-only predictions under a negative control: reported apart,
-    /// never gated ([`Score::access_only_violations`]).
-    pub access_only_violations: Vec<ViolationRow>,
+    /// Access-only predictions under a negative control, by class:
+    /// reported apart, never gated ([`Score::access_only_under_controls`]).
+    #[serde(default)]
+    pub access_only_under_controls: Vec<AccessOnlyControlRow>,
     pub gates: Vec<GateOutcome>,
     /// Worlds that could not be scored, with why.
     pub failures: Vec<String>,
@@ -171,7 +173,7 @@ impl Report {
             rows,
             transmissions: score.transmissions,
             violations: score.violations,
-            access_only_violations: score.access_only_violations,
+            access_only_under_controls: score.access_only_under_controls,
             gates,
             failures,
             unscored,
