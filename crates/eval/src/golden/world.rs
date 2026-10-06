@@ -87,6 +87,15 @@ pub struct MessageIndex {
 }
 
 impl MessageIndex {
+    /// Records that `exchange` carries the spec message `hash`, whose bench
+    /// id is `id`: how a reader of bench files (`bench_detect`), which
+    /// converted the bench message to the spec one, builds the index.
+    pub fn insert(&mut self, exchange: ExchangeId, hash: MessageHash, id: MessageId) {
+        self.ids.insert(hash, id);
+        self.first.entry(hash).or_insert(exchange);
+        self.exchanges.insert(exchange);
+    }
+
     pub fn id(&self, hash: MessageHash) -> Result<MessageId, GoldenError> {
         self.ids
             .get(&hash)

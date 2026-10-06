@@ -25,6 +25,7 @@ pub mod diagnostics;
 pub mod exchange_log;
 pub mod fetch;
 pub mod locate;
+pub mod queried;
 pub mod replay;
 pub mod resolve;
 pub mod schema;

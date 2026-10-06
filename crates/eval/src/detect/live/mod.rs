@@ -41,6 +41,7 @@ use crosstalk_spec::support::{TimeWindow, Timestamp};
 use serde::{Deserialize, Serialize};
 
 use crate::corpus::World;
+use crate::detect::Timed;
 use crate::pipeline::{DetectError, Detection, DetectionStatus, Detector};
 use crate::predict::reads::{ChannelResources, ReadError, Reads, Resolved};
 use crate::predict::{AgentMap, AgentMapError};
@@ -278,33 +279,40 @@ impl<B: LiveBackend> LiveDetector<B> {
         after(last, self.settings.timing.settle_after())
     }
 
+    /// Detects over `exchanges` (one world's, in time order) without a
+    /// corpus world: the detector's transmissions, its own attribution of
+    /// the exchanges (L3's agent of each placed one) and what the
+    /// transmissions name. `None` when there is no exchange.
+    pub fn detect_exchanges(
+        &mut self,
+        exchanges: &[Timed<'_>],
+    ) -> Result<Option<RawDetection>, LiveError> {
+        self.runtime
+            .block_on(Self::run(&mut self.backend, &self.settings, exchanges))
+    }
+
     async fn run(
         backend: &mut B,
         settings: &LiveSettings,
-        world: &World,
-    ) -> Result<Detection, LiveError> {
-        let (Some(first), Some(last)) = (world.exchanges().first(), world.exchanges().last())
-        else {
-            return Ok(Detection {
-                agents: AgentMap::of_world(world),
-                ..Detection::default()
-            });
+        exchanges: &[Timed<'_>],
+    ) -> Result<Option<RawDetection>, LiveError> {
+        let (Some(first), Some(last)) = (exchanges.first(), exchanges.last()) else {
+            return Ok(None);
         };
-        let mut live = backend.build(settings, first.at()).await?;
-        let detected = Self::drive(&mut live, settings, world, last.at()).await;
+        let mut live = backend.build(settings, first.at).await?;
+        let detected = Self::drive(&mut live, settings, exchanges, last.at).await;
         live.shutdown().await;
-        detected
+        detected.map(Some)
     }
 
     async fn drive(
         live: &mut B::World,
         settings: &LiveSettings,
-        world: &World,
+        exchanges: &[Timed<'_>],
         last: Timestamp,
-    ) -> Result<Detection, LiveError> {
-        for exchange in world.exchanges() {
-            live.ingest(exchange.normalized().clone(), exchange.at())
-                .await?;
+    ) -> Result<RawDetection, LiveError> {
+        for timed in exchanges {
+            live.ingest(timed.exchange.clone(), timed.at).await?;
         }
         live.settle(after(last, settings.timing.settle_after()))
             .await?;
@@ -321,13 +329,15 @@ impl<B: LiveBackend> LiveDetector<B> {
             .count();
         if undecided > 0 {
             tracing::warn!(
-                world = %world.key(),
                 undecided,
                 "transmissions still undecided after settling; they make no predictions"
             );
         }
         let mut attribution = BTreeMap::new();
-        let ids: Vec<ExchangeId> = world.exchanges().iter().map(|e| e.id()).collect();
+        let ids: Vec<ExchangeId> = exchanges
+            .iter()
+            .map(|timed| timed.exchange.exchange.meta.id)
+            .collect();
         for chunk in ids.chunks(IdBatch::<ExchangeId>::MAX) {
             let batch = IdBatch::new(chunk.iter().copied()).map_err(ReadError::from)?;
             attribution.extend(
@@ -337,20 +347,29 @@ impl<B: LiveBackend> LiveDetector<B> {
                     .map(|(exchange, attributed)| (exchange, attributed.agent)),
             );
         }
-        let agents = AgentMap::from_attribution(world, &attribution)?;
         let reads = Reads {
             spans: live.spans(),
             accesses: live.accesses(),
             channels: live.channels(),
         };
         let resolved = Resolved::gather(&transmissions, reads).await?;
-        Ok(Detection {
-            status: DetectionStatus::Detected,
+        Ok(RawDetection {
             transmissions,
-            agents,
+            attribution,
             resolved,
         })
     }
+}
+
+/// A live detection before its agents are read as corpus agents: what
+/// [`LiveDetector::detect_exchanges`] returns.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct RawDetection {
+    /// Every transmission, sorted by id.
+    pub transmissions: Vec<Transmission>,
+    /// L3's agent of each exchange it placed.
+    pub attribution: BTreeMap<ExchangeId, AgentId>,
+    pub resolved: Resolved,
 }
 
 impl<B: LiveBackend> Detector for LiveDetector<B> {
@@ -359,9 +378,20 @@ impl<B: LiveBackend> Detector for LiveDetector<B> {
     }
 
     fn detect(&mut self, world: &World) -> Result<Detection, DetectError> {
-        let detection =
-            self.runtime
-                .block_on(Self::run(&mut self.backend, &self.settings, world))?;
+        let timed = Timed::of_world(world);
+        let detection = match self.detect_exchanges(&timed)? {
+            Some(raw) => Detection {
+                status: DetectionStatus::Detected,
+                agents: AgentMap::from_attribution(world, &raw.attribution)
+                    .map_err(LiveError::from)?,
+                transmissions: raw.transmissions,
+                resolved: raw.resolved,
+            },
+            None => Detection {
+                agents: AgentMap::of_world(world),
+                ..Detection::default()
+            },
+        };
         tracing::debug!(
             world = %world.key(),
             transmissions = detection.transmissions.len(),

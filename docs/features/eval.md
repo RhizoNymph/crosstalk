@@ -817,6 +817,180 @@ dropped swarm transmissions and swarm agent conflicts.
 - The swarm-traces export holds its labels' text, which is the attack
   payload itself: keep it out of anything shared.
 
+## ct-bench-detect
+
+`ct-bench-detect` (`crosstalk_eval::bench_detect`, binary
+`src/bin/ct-bench-detect/`) is crosstalk's side of the bench's detector
+contract (separation design §4, §4.1): it turns the bench's
+detector-neutral input files into predictions from crosstalk's real
+detector, and turns saved node0 bench runs into bench files.
+
+Scope: the contract's invocation and failure rules, the reverse mapping
+of the golden export (bench → spec), the live and pipeline detectors over
+bench inputs, the node0 run conversion (`from-export`, `replay`) and the
+fetch of the gateway's conversation reads. Non-scope: labels (the bench's
+converters), scoring and gates (`a2a-bench score`), and the format itself
+(`a2a-bench-format`, owned by the bench).
+
+### Commands
+
+```text
+ct-bench-detect --input DIR --output FILE [--mode live|pipeline] [--forwarding off|on]
+                [--extract-config FILE] [--correlation-window S] [--evidence-window S]
+                [--suspected-ttl S] [--seed N]
+ct-bench-detect from-export --run RUNDIR --out DIR [--detector-version TEXT]
+ct-bench-detect replay      --run RUNDIR --out DIR [--evidence-window-ms MS]
+                            [--suspected-ttl-ms MS] [--since-unix-ms MS] [--seed N]
+ct-bench-detect fetch       --api URL [--token-env VAR] --truth FILE --out RUNDIR
+```
+
+- **Input.** `DIR` holds `manifest.json` (the input view),
+  `messages.jsonl` and `exchanges.jsonl`; `labels.jsonl` is never read.
+  Both files are read with the format's `FileReader` in lockstep
+  (`input::InputDir`): their headers must name the manifest's dataset,
+  the n-th world of each must be the manifest's n-th world with its
+  exchange count, and both trailers' digests must be the manifest's.
+  Anything else is a run failure (non-zero exit, no predictions file).
+- **Exit.** 0 means a complete predictions file with its trailer, read
+  back through its framing (`golden::verify::predictions_file`).
+- **Failed worlds.** A world that cannot be processed is a world row
+  `failed { reason }` with no rows, and the run goes on. The reason starts
+  with a stable code and a colon (`FailureCode`): `part_text_mismatch`,
+  `conversion` (a bench row with no spec form: a media kind `other`, a
+  credential that is not `k:<hex>`, two response messages, an unreadable
+  `response.error`; or rows `check_predictions` refuses), `ingest`
+  (`BackendError::Build`/`Ingest`), `settle`, `read` (a world whose rows do
+  not pass `WorldInputs::new`, a store read), `unlocated_access` (a
+  transmission naming an access or part the world does not hold). Reasons
+  name ids and byte counts, never text.
+- **Agent merges** are not failures: the attribution is written as L3
+  made it (`RawDetection::attribution`), and the scorer fails the world.
+  (`ct-eval run` fails such a world `AgentMapError::Merged`; the two files
+  differ there by design.)
+
+### Header
+
+| mode | `detector.name` | `variant` | `config_digest` |
+| --- | --- | --- | --- |
+| live | `crosstalk-live` | `forwarding-off` / `forwarding-on` | BLAKE3 of the canonical JSON of `{correlation_window_ms, evidence_window_ms, suspected_ttl_ms, seed, forwarding, extract}` |
+| pipeline | `crosstalk-pipeline` | `default` | BLAKE3 of `{seed}` |
+| from-export | `crosstalk-gateway-export` | `default` | none; `version` is `bench.env`'s `crosstalk_image` (or `--detector-version`, else `unrecorded`) |
+| replay | `crosstalk-live` | `forwarding-off` | BLAKE3 of the flow config, seed, `since_us`, `until_us` |
+
+`version` is `golden::manifest::CROSSTALK_COMMIT` (recorded at build) for
+every mode but from-export; `manifest_digest` is `Manifest::digest()` of
+the manifest read (or written). `ct-eval run --predictions-out` builds
+its live and pipeline headers with the same functions
+(`bench_detect::config`), so P5 compares whole files.
+
+### Data and control flow (`--input`)
+
+```text
+InputDir::next_world ──▶ WorldInputs (checked)       | unreadable ─▶ failed { read: … }
+convert::world
+  convert::message per bench message: convert::body (part for part) ─▶ spec Message::new
+      check_part_text: bench part_text(i) == spec part_text(i) for every i, same count  (P1, live)
+  convert::exchange per bench exchange, in file order:
+      id = ExchangeId::from_ulid(bench raw), started_at = at_us, request/response by hash,
+      Completed { stop } or Failed { failure } from response.error, NormalizedExchange::check
+      client: Replay { eval-<dataset> }, upstream eval-<dataset> + vendor, ApiKey
+              CredentialHash::from_keyed_digest(SecretVersion(0), <hex of k:>), session; turn dropped
+  MessageIndex::insert(exchange, spec hash, bench id) for each carried message
+live:     LiveDetector::detect_exchanges(&[Timed]) (fresh composition: build, ingest at at_us,
+          settle, list transmissions, L3 attribution, Resolved::gather) ─▶ RawDetection
+          golden::predictions::rows(transmissions, BenchDirectory, held(attribution), Unlocated::Fail,
+                                    index) ─▶ attribution, unattributed, transmission rows
+pipeline: PipelineDetector::ingest(&[Timed]) ─▶ no_consumers { ingested }
+PredictionsWriter::world (check_predictions) ─▶ finish(header) ─▶ predictions_file read-back
+```
+
+The reverse mapping keeps what the bench dropped absent: a reasoning or
+tool-call signature is `None`, `reasoning_opaque` is `Reasoning::Opaque`
+with an empty signature, an `unknown` block is kind `unknown` with raw
+`{}`, a media part names the empty media blob (held once in the
+exchange's `media`). The protocol, which the bench does not carry and no
+detection layer reads, follows the vendor. A spec `MessageHash` therefore
+differs from the original's when anything was dropped; parity is on part
+order and text, and the detector's ids (transmissions from exchange,
+sender and route; agents minted in ingest order) do not depend on it.
+
+`LiveDetector::detect_exchanges` and `PipelineDetector::ingest` are the
+world-free cores `Detector::detect` now calls too (`detect::Timed`), so
+ct-eval and ct-bench-detect drive one code path.
+
+### from-export, replay and fetch
+
+```text
+<run>/truth.jsonl         header (dataset demo-swarm/<scenario>, world, run ULID), the run window,
+                          every agent name (public); session owners for the same-µs report only
+<run>/exchange-log.jsonl  the exchanges that started in the run window (lead 5000 ms, slack 60000 ms),
+<run>/blobs/                every session's and the session-less ones, (started_at, id) order,
+                            the gateway's ids, client.session, client.turn = ordinal in the session
+<run>/export.jsonl        detected::choose: exported transmissions with evidence, plus every
+<run>/evidence.jsonl        suspected/discarded one, less those read only outside the window
+<run>/exchange-turns.json attribution: each world exchange under its canonical agent
+<run>/span-points.json    origin_at of content matches whose span's exchange is in the world
+──▶ <out>/manifest.json, messages.jsonl, exchanges.jsonl, predictions.jsonl, from-export.json
+```
+
+- **Attribution.** With the two saved query answers (`Queried`), every
+  exchange L3 placed is attributed (`attribution: query`). Without them
+  (`attribution: evidence`), ct-eval's ties: a confirmed transmission's
+  reader exchanges are its reader's, an access's exchange its canonical
+  agent's; a sender tied to nothing is `unattributed`; no `origin_at`.
+  An access's own agent id is always an alias of its canonical one.
+- **Manifest** (input view): `demo-swarm/<scenario>`, version 1, split
+  `dev`, one world keyed by the header's `world`; `source.path` = the run
+  directory's name, `source.revision` = the header's `run`,
+  `source.digest` over the files read (truth, exchange log, export,
+  evidence, and the query answers when used; blobs are content-addressed
+  by the log's hashes); converter `ct-bench-detect <crate version>` at
+  `CROSSTALK_COMMIT`; selection `{run_lead_ms, run_slack_ms}`; pace `{}`;
+  no labels, no notes.
+- **Same-microsecond exchanges** of one agent (by the truth's session
+  owner) are reported in `from-export.json` (`same_micros`) and logged,
+  never nudged.
+- **replay** runs `swarm_truth::replay` (as `ct-eval replay`: the log
+  through `Live` in memory, windows from `bench.env`) and reads its
+  conversation reads back from the composition's surface
+  (`Replayed::queried`), so its predictions (`crosstalk-live`) are always
+  attributed by query and carry origins.
+- **fetch** asks a running gateway's `POST /query/exchange-turns` (every
+  in-window exchange) and `POST /query/span-points` (every origin span the
+  saved evidence names), in batches of `IdBatch::MAX`, and saves the
+  merged answers beside the export, so from-export runs offline.
+
+### Files
+
+| File | Role | Key exports |
+| --- | --- | --- |
+| `src/bench_detect/mod.rs` | the contract's failure codes | `FailureCode`, `WorldFailure`, `converter_version` |
+| `src/bench_detect/config.rs` | detector names, variants, config digests | `live_info`, `pipeline_info`, `digest`, `live_variant`, `LIVE`, `PIPELINE` |
+| `src/bench_detect/input.rs` | the input directory in lockstep | `InputDir`, `WorldRead`, `InputError`, `read_manifest` |
+| `src/bench_detect/convert.rs` | bench → spec messages and exchanges, the live P1 check | `world`, `message`, `body`, `check_part_text`, `exchange`, `client`, `failure`, `stop`, `ConvertedWorld` |
+| `src/bench_detect/directory.rs` | `Directory` over a converted world | `BenchDirectory` |
+| `src/bench_detect/run.rs` | `--input` runs | `run`, `Mode`, `Summary`, `RunError`, `live_world`, `pipeline_world` |
+| `src/bench_detect/from_export/mod.rs` | node0 runs: files, detections, writing | `RunFiles`, `Detections`, `Outcome`, `write`, `saved_detections`, `replayed_detections`, `query_ids`, `gateway_version` |
+| `src/bench_detect/from_export/capture.rs` | the capture world | `build`, `Capture`, `SameMicros`, `agent_names`, `session_owners` |
+| `src/bench_detect/from_export/predict.rs` | the gateway's rows | `rows`, `Predicted`, `AttributionSource` |
+| `src/datasets/swarm_truth/queried.rs` | the saved conversation reads | `Queried`, `EXCHANGE_TURNS_FILE`, `SPAN_POINTS_FILE`, `batches`, `origin_spans` |
+| `src/datasets/swarm_truth/fetch.rs` | `fetch_queried` beside the export fetch | `fetch_queried` |
+| `src/bin/ct-bench-detect/main.rs` | the CLI | |
+| `tests/bench_detect/` | P5 against `ct-eval run` (live on five fixtures, forwarding on, pipeline), reruns, failed worlds, world order, part text on every fixture message, from-export (evidence and query attribution, prior runs), replay | |
+
+### Invariants
+
+- A predictions file exists only complete: every world's rows passed
+  `check_predictions`, the trailer is written, and the file is read back.
+- No state crosses worlds: each live world is a fresh composition.
+- Every converted part's spec text equals its bench text, or the world
+  fails `part_text_mismatch`.
+- P5: on the same build and input, `ct-bench-detect` and `ct-eval run
+  --predictions-out` write the same bytes (tested on the SALT, wiki,
+  swarm-traces, AgentDojo and τ²-bench fixtures, live and pipeline).
+- from-export reads no truth beyond the header, the agents' names and (for
+  the same-µs report) the session owners; it never writes labels.
+
 ## SALT specifics
 
 - **Exchanges.**

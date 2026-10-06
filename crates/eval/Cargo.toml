@@ -12,6 +12,10 @@ workspace = true
 name = "ct-eval"
 path = "src/bin/ct-eval/main.rs"
 
+[[bin]]
+name = "ct-bench-detect"
+path = "src/bin/ct-bench-detect/main.rs"
+
 [dependencies]
 # The bench's on-disk format, pinned to the bench repository's
 # a2a-bench-format-v1.0.0 tag (commit c289eda, which includes b347f83).

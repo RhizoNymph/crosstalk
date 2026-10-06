@@ -10,6 +10,7 @@
 //! `LiveBackend` seam. Reports and
 //! regression gates are in [`report`]; [`pipeline`] runs the whole thing.
 
+pub mod bench_detect;
 pub mod config;
 pub mod corpus;
 pub mod datasets;

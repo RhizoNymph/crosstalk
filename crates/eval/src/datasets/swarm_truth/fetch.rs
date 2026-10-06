@@ -35,6 +35,10 @@ use hyper_util::client::legacy::connect::HttpConnector;
 use hyper_util::rt::TokioExecutor;
 
 use super::detected::{DetectedError, read_export};
+use super::queried::{Queried, batches};
+use crosstalk_spec::ids::{ExchangeId, SpanId};
+use crosstalk_spec::interfaces::l8_surface::conversation::{ExchangePlacement, SpanPoint};
+use std::collections::{BTreeMap, BTreeSet};
 
 /// What to fetch and from where.
 #[derive(Debug, Clone)]
@@ -80,6 +84,12 @@ pub enum FetchError {
     },
     #[error("{url} did not answer a transmission's evidence: {source}")]
     Evidence {
+        url: String,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("{url} did not answer the read's shape: {source}")]
+    Answer {
         url: String,
         #[source]
         source: serde_json::Error,
@@ -278,6 +288,54 @@ async fn fetch_async(config: &FetchConfig, out: &Path) -> Result<Fetched, FetchE
         evidence: evidence_path,
         transmissions: exported.transmissions.len(),
         without_evidence,
+    })
+}
+
+/// Asks the API's conversation reads for `exchanges` and `spans`
+/// (`POST /query/exchange-turns`, `POST /query/span-points`), in batches
+/// of `IdBatch::MAX` ids, and merges the answers.
+pub fn fetch_queried(
+    api: &str,
+    token: Option<String>,
+    exchanges: &BTreeSet<ExchangeId>,
+    spans: &BTreeSet<SpanId>,
+) -> Result<Queried, FetchError> {
+    let runtime = tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .map_err(FetchError::Runtime)?;
+    let api = Api {
+        client: Client::builder(TokioExecutor::new()).build_http(),
+        base: api.to_owned(),
+        token,
+    };
+    runtime.block_on(async {
+        let mut out = Queried::default();
+        for batch in batches(exchanges) {
+            let body = serde_json::to_vec(&batch).map_err(FetchError::Encode)?;
+            let bytes = api
+                .call(Method::POST, "/query/exchange-turns", Some(body))
+                .await?;
+            let answer: BTreeMap<ExchangeId, ExchangePlacement> = serde_json::from_slice(&bytes)
+                .map_err(|source| FetchError::Answer {
+                    url: "/query/exchange-turns".to_owned(),
+                    source,
+                })?;
+            out.turns.extend(answer);
+        }
+        for batch in batches(spans) {
+            let body = serde_json::to_vec(&batch).map_err(FetchError::Encode)?;
+            let bytes = api
+                .call(Method::POST, "/query/span-points", Some(body))
+                .await?;
+            let answer: BTreeMap<SpanId, SpanPoint> =
+                serde_json::from_slice(&bytes).map_err(|source| FetchError::Answer {
+                    url: "/query/span-points".to_owned(),
+                    source,
+                })?;
+            out.spans.extend(answer);
+        }
+        Ok(out)
     })
 }
 
