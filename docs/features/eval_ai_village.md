@@ -460,6 +460,59 @@ week's bash turns. Exchange ids are each turn's own exchange (its call).
    above): access `01KXE46805TY443EM5HE3VE2YF`; the eval's prediction
    conversion fails the world (`PredictError::UnlocatedAccess`).
 
+### L5 shell fixes (fix/l5-village-shell, 2026-10-06)
+
+The four findings above are fixed in L5 (see flow_extract.md):
+
+1. A read for a command that never ran: bash's failure lines and the
+   script's `&&`/`||`/`;` joins decide which commands ran
+   (`flow.extract.shell-skipped-command-no-access`); the `sed` after the
+   failed `cd` of `01KXED5HV034DD2CSEZCVNJ0FV` reads nothing.
+2. A stale binding: a lone push's `To <url>` (a pull's `From <url>`) wins
+   over the clone binding (`flow.extract.printed-remote-wins`): the stale
+   push is `Rejected` on the bound repository, a pull reads the printed
+   one, and the context rebinds the clone for the next call.
+3. The unlocated read: not a history-pairing bug. The read's part was its
+   own exchange's, but empty (a `glab api … | jq` that printed nothing,
+   and a turn's second call, whose result the converter leaves empty);
+   the eval's `whole_part` refuses an empty part and reports it as "not
+   in its exchange". The gateway now records no read of a result without
+   text (`flow.extract.read-locates-its-result`).
+4. The shell's state: the gateway's extraction step keeps one context per
+   agent and conversation and observes every result
+   (`flow.extract.shell-state-from-observed`): persistent directory
+   (`persistent_shells: ["bash"]`, `crates/eval/extract/ai-village.json`),
+   `cd -`, `~`/`$HOME` as home-relative places until an output shows the
+   home, remotes by name, learnt from `git remote`, clones and printed
+   push/pull remotes.
+
+The converter's re-extraction after a printed remote now checks the
+context before the command (the extractor's context learns the remote
+itself). Measured on the sped-up Live (base `a69a524`, after the merge
+of this branch; outputs in `runs/fix-l5-village-shell/runs3`):
+
+| run | labels (content / access-only) | overall recall / precision | channel content found | access-only found | time |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| 8 h slice, before | 15 / 15 | 0.996 / 1.000 (4074 / 4089) | 0 / 15 | 0 / 15 | 6 min 23 s |
+| 8 h slice, after (`--extract-config ai-village.json`) | 15 / 11 | 0.997 / 1.000 (4076 / 4089) | 2 / 15 | 3 / 11 | 3 min 45 s |
+| 8 h slice, `--correlation-window 86400`, before | - | world fails (`UnlocatedAccess`) | - | - | 3 min 31 s |
+| 8 h slice, `--correlation-window 86400`, after | 15 / 11 | 0.997 / 1.000 | 2 / 15 | 10 / 11 | 6 min 44 s |
+| full day 2026-07-13, before | 59 / 53 | 0.996 / 1.000 (19884 / 19966) | 0 / 59 | 0 / 53 | 15 min 25 s |
+| full day 2026-07-13, after | 59 / 47 | 0.996 / 1.000 (19887 / 19966) | 3 / 59 | 7 / 47 | 13 min 28 s |
+| Claude Code, 993 contexts, before / after | 15798 | 0.998 / 1.000 (15761 / 15798) both | - | - | 20 / 24 min |
+
+Channel precision on the found rows is 1.000 (4 correct exact channel
+predictions, 0 false). Access-only labels drop (15 to 11, 53 to 47)
+because the converter no longer pairs pushes the output shows went
+elsewhere or were refuted. Without the persistent-shell configuration
+the slice and the day give byte-identical reports: the context does
+track the shell (a known directory after 1,955 of the slice's 3,290
+observed `bash` results), but the scored pairs were reached through
+printed remotes, `git remote`, clones and `cd /abs` within the call.
+Claude Code: same recall; 413 fewer unjudged predictions. SALT `--limit
+53` (0.854 / 0.955, 2484 / 2909) and swarm-traces (1.000 / 1.000, 629 /
+629) are unchanged.
+
 ## Invariants and constraints
 
 - **Streaming.** No table is held whole except the Claude Code stream
@@ -506,7 +559,10 @@ week's bash turns. Exchange ids are each turn's own exchange (its call).
 - **Spec: no replayed-request fidelity marker.** Exchanges with a rebuilt
   request travel as ordinary full-history exchanges; only the eval's
   `Fidelity` says so.
-- **Gateway context: the shell's state.** The converter knows what the
+- **Gateway context: the shell's state** (largely addressed by
+  fix/l5-village-shell, above; what remains: a push to a repository its
+  binding did not name is recorded only from the next call, and the home
+  is known only once an output shows it). The converter knows what the
   gateway's per-conversation context cannot, and the live detector misses
   accesses for it (counted over the week window, 2026-07-13..17, against
   the extractor run as the gateway runs it; see Reference baselines):
