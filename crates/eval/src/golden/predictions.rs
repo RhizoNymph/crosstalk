@@ -15,6 +15,9 @@
 //!    per `CoAccess` record of a suspected or discarded one, none for a
 //!    detected or awaiting-content one.
 //!
+//! A transmission's matches, and its co-access records, are ordered by
+//! their bench locations (read, then origin or write).
+//!
 //! Locations translate as labels' do: a content match's read location is in
 //! its reader exchange, its origin (the matched span's `IndexedSpan`) in the
 //! span's exchange, a co-access's read and write in their accesses'
@@ -181,6 +184,21 @@ fn convert(
             }
         }
     }
+    // The detector's own order of matches and co-access records follows
+    // ids derived from spec message hashes, which a bench reader re-derives
+    // differently (dropped signatures): order them by their bench
+    // locations, so the same detection writes the same bytes from either
+    // side (parity stage P5).
+    fields.matches.sort_by_cached_key(|evidence| {
+        (
+            evidence.read_at,
+            evidence.origin_at,
+            format!("{evidence:?}"),
+        )
+    });
+    fields
+        .co_access
+        .sort_by_cached_key(|record| (record.read_at, record.write_at, format!("{record:?}")));
     Transmission::new(fields).map_err(|source| GoldenError::Transmission {
         transmission: id.to_string(),
         source,

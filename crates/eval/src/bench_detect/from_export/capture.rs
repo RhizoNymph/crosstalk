@@ -156,7 +156,7 @@ pub fn build<B: Bodies>(
                 },
                 |hash| messages.get(&hash),
             )
-            .map_err(FromExportError::Golden)?;
+            .map_err(FromExportError::from)?;
         if let Some(owner) = exchange
             .meta
             .client
@@ -189,7 +189,7 @@ pub fn build<B: Bodies>(
         );
     }
     let key = bench::ids::WorldKey::new(truth.header.world.as_str())
-        .map_err(|error| FromExportError::Golden(GoldenError::Key(error)))?;
+        .map_err(|error| FromExportError::from(GoldenError::Key(error)))?;
     let agents = agent_names(truth)
         .iter()
         .map(|name| {

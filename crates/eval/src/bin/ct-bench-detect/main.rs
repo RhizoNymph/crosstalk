@@ -184,7 +184,10 @@ fn live_mode(args: &DetectArgs) -> Result<Mode> {
         }
         None => ExtractConfig::default(),
     };
-    Ok(Mode::Live { settings, extract })
+    Ok(Mode::Live {
+        settings,
+        extract: Box::new(extract),
+    })
 }
 
 fn detect(args: DetectArgs) -> Result<ExitCode> {

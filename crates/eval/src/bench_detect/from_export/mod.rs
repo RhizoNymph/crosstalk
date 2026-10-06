@@ -69,17 +69,29 @@ pub enum FromExportError {
         source: std::io::Error,
     },
     #[error(transparent)]
-    Swarm(#[from] SwarmTruthError),
+    Swarm(Box<SwarmTruthError>),
     #[error(transparent)]
     Queried(#[from] QueriedError),
     #[error(transparent)]
-    Golden(#[from] GoldenError),
+    Golden(Box<GoldenError>),
     #[error("the run's world does not check: {0}")]
     Inputs(#[source] bench::check::InputError),
     #[error("the detector's settings: {0}")]
     Config(String),
     #[error("the capture is empty: no exchange started in the run window")]
     Empty,
+}
+
+impl From<SwarmTruthError> for FromExportError {
+    fn from(error: SwarmTruthError) -> Self {
+        Self::Swarm(Box::new(error))
+    }
+}
+
+impl From<GoldenError> for FromExportError {
+    fn from(error: GoldenError) -> Self {
+        Self::Golden(Box::new(error))
+    }
 }
 
 impl FromExportError {
@@ -162,7 +174,7 @@ pub fn read_truth(files: &RunFiles) -> Result<TruthFile, FromExportError> {
     let file =
         File::open(&files.truth).map_err(|source| FromExportError::io(&files.truth, source))?;
     truth_file::read(BufReader::new(file)).map_err(|source| {
-        FromExportError::Swarm(SwarmTruthError::Truth {
+        FromExportError::from(SwarmTruthError::Truth {
             path: files.truth.display().to_string(),
             source,
         })
@@ -174,7 +186,7 @@ pub fn read_truth(files: &RunFiles) -> Result<TruthFile, FromExportError> {
 pub fn saved_detections(files: &RunFiles, version: String) -> Result<Detections, FromExportError> {
     let detected = |path: &Path| {
         let path = path.display().to_string();
-        move |source| FromExportError::Swarm(SwarmTruthError::Detected { path, source })
+        move |source| FromExportError::from(SwarmTruthError::Detected { path, source })
     };
     let bytes = std::fs::read(&files.export)
         .map_err(|source| FromExportError::io(&files.export, source))?;
@@ -244,7 +256,7 @@ pub fn write(
     let predicted = predict::rows(&capture, detections, &mut bodies, &mut lossy)?;
     std::fs::create_dir_all(out).map_err(|source| FromExportError::io(out, source))?;
     let dataset =
-        ids::dataset(&truth.header.scenario().dataset()).map_err(FromExportError::Golden)?;
+        ids::dataset(&truth.header.scenario().dataset()).map_err(FromExportError::from)?;
     let world = &capture.world;
     let inputs = WorldInputs::new(
         &world.key,
@@ -435,7 +447,7 @@ pub fn query_ids(
     let file = File::open(&files.evidence)
         .map_err(|source| FromExportError::io(&files.evidence, source))?;
     let evidence = read_evidence(BufReader::new(file)).map_err(|source| {
-        FromExportError::Swarm(SwarmTruthError::Detected {
+        FromExportError::from(SwarmTruthError::Detected {
             path: files.evidence.display().to_string(),
             source,
         })

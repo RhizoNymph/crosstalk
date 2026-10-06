@@ -37,7 +37,7 @@ pub enum Mode {
     /// The live composition (`crosstalk-live`).
     Live {
         settings: LiveSettings,
-        extract: ExtractConfig,
+        extract: Box<ExtractConfig>,
     },
     /// The bare gateway pipeline (`crosstalk-pipeline`).
     Pipeline { seed: u64 },
@@ -63,7 +63,13 @@ pub enum RunError {
     #[error("starting the pipeline: {0}")]
     Pipeline(#[source] PipelineError),
     #[error("writing the predictions: {0}")]
-    Write(#[from] GoldenError),
+    Write(Box<GoldenError>),
+}
+
+impl From<GoldenError> for RunError {
+    fn from(error: GoldenError) -> Self {
+        Self::Write(Box::new(error))
+    }
 }
 
 /// What a run wrote.
@@ -89,7 +95,7 @@ pub fn run(input: &Path, output: &Path, mode: &Mode) -> Result<Summary, RunError
     let mut engine = match mode {
         Mode::Live { settings, extract } => Engine::Live(Box::new(
             LiveDetector::new(
-                GatewayBackend::default().with_extract(extract.clone()),
+                GatewayBackend::default().with_extract(ExtractConfig::clone(extract)),
                 *settings,
             )
             .map_err(RunError::Live)?,

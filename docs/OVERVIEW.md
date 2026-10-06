@@ -231,6 +231,10 @@ Overview:
       writes an export directory, ct-eval run --predictions-out and ct-eval
       swarm --export-out/--predictions-out write predictions naming its
       manifest, and every file passes the format's own checks.
+      ct-bench-detect (crosstalk_eval::bench_detect) is the detector side
+      of the bench's contract: an export's input view in, predictions out,
+      byte-identical to ct-eval run --predictions-out; from-export and
+      replay turn saved node0 bench runs into bench inputs and predictions.
     e2e: >
       Crate crosstalk-e2e (a composer): the end-to-end smoke harness. A
       scripted two-agent Claude Code scenario as wire traffic, captured
@@ -1624,9 +1628,23 @@ Features Index:
       (ct-eval export, run --predictions-out, swarm --export-out
       --predictions-out, verify): controls no exchange carries are dropped
       and counted in the manifest's per-world notes, and what the format
-      cannot express is refused.
+      cannot express is refused. ct-bench-detect is crosstalk's side of the
+      bench's detector contract: --input DIR --output FILE turns an
+      export's input view (manifest, messages, exchanges; never labels)
+      into predictions from the live composition (--mode live, default) or
+      the bare pipeline (--mode pipeline), converting bench messages back to
+      spec messages with part text checked equal (P1, live) and writing a
+      coded failed world (part_text_mismatch, conversion, ingest, settle,
+      read, unlocated_access) when a world cannot be processed; its bytes
+      equal ct-eval run --predictions-out's (P5, tested). from-export and
+      replay turn a saved node0 bench run into an input view plus the
+      gateway's (or an in-memory replay's) predictions, attributed from
+      the conversation reads (/query/exchange-turns, /query/span-points,
+      saved by ct-bench-detect fetch) or, without them, from the evidence.
     entry_points:
       - crates/eval/src/lib.rs
+      - crates/eval/src/bench_detect/mod.rs
+      - crates/eval/src/bin/ct-bench-detect/main.rs
       - crates/eval/src/pipeline.rs
       - crates/eval/src/gateway.rs
       - crates/eval/src/score/align.rs
