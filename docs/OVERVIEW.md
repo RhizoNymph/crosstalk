@@ -819,19 +819,25 @@ Features Index:
       reads run in one REPEATABLE READ snapshot and resolve agents,
       channels, node facts and the topic version (spec TopicCatalog) at
       query time, folding in Rust. Events the store decides go to a
-      transactional outbox, relayed after commit; traffic rows coalesce
-      into one window per drain for Changed::Traffic (a marked hook until
-      the follow-mode spec lands). consumer::run (group "topology") applies
+      transactional outbox, relayed after commit; each row is stamped with
+      its envelope id and time in a committed transaction before its first
+      publish (P7.3 W6, 0002_outbox_ids.sql), so a retried relay
+      republishes the same ids; traffic rows coalesce into one stamped row
+      per drain for Changed::Traffic (a marked hook until the follow-mode
+      spec lands). consumer::run (group "topology") applies
       TransmissionClassified, AccessRecorded, VerdictSet and the version
-      events to any EdgeStore, publishes EdgeUpdated before acking, and
-      recomputes the watermark every bucket width. Model-tested against
-      crosstalk-memory's InMemoryEdgeStore.
+      events to any EdgeStore, publishes EdgeUpdated (id derived from the
+      delivery with EventId::derive) before acking, and recomputes the
+      watermark every bucket width. The watermark is persisted and never
+      lowered across restarts. Model-tested against crosstalk-memory's
+      InMemoryEdgeStore.
     entry_points:
       - crates/topology/src/lib.rs
       - crates/topology/src/store/mod.rs
       - crates/topology/src/consumer.rs
       - crates/topology/src/outbox.rs
       - crates/topology/migrations/0001_topology.sql
+      - crates/topology/migrations/0002_outbox_ids.sql
     depends_on: [type_spec, store, memory, transport, channel_semantics]
     doc: docs/features/topology_store.md
   postgres_stores:
