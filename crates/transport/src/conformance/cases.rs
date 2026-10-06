@@ -251,8 +251,9 @@ pub(super) async fn nacks_count_attempts_then_dead_letter<K: Kit>(kit: &K) {
 /// not settled within the ack timeout comes back with its attempt counted,
 /// and the late ack is refused.
 pub(super) async fn an_ack_timeout_redelivers_and_refuses_the_late_ack<K: Kit>(kit: &K) {
+    let ack_timeout = kit.ack_timeout();
     let settings = Settings {
-        ack_timeout: Duration::from_millis(300),
+        ack_timeout,
         ..Settings::default()
     };
     let (bus, _) = kit.start(settings).await;
@@ -263,7 +264,7 @@ pub(super) async fn an_ack_timeout_redelivers_and_refuses_the_late_ack<K: Kit>(k
     bus.publish(changed(1)).await.expect("publish");
     let first = next_soon(&mut sub).await;
     assert_eq!(first.attempt.get(), 1);
-    tokio::time::sleep(Duration::from_millis(400)).await;
+    tokio::time::sleep(ack_timeout + Duration::from_millis(100)).await;
     assert_eq!(
         sub.ack(first.id).await,
         Err(BusError::UnknownDelivery(first.id))

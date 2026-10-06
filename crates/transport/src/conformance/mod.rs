@@ -47,6 +47,11 @@ pub(crate) trait Kit: Sync {
 
     /// How long a case waits to conclude that nothing arrives.
     fn quiet(&self) -> Duration;
+
+    /// The ack timeout a case that times a delivery out runs with: long
+    /// enough that a consumer acking at once always beats it, which over a
+    /// remote, shared database takes more than in process.
+    fn ack_timeout(&self) -> Duration;
 }
 
 pub(crate) struct MpscKit;
@@ -68,6 +73,10 @@ impl Kit for MpscKit {
 
     fn quiet(&self) -> Duration {
         Duration::from_secs(10)
+    }
+
+    fn ack_timeout(&self) -> Duration {
+        Duration::from_millis(300)
     }
 }
 
@@ -110,6 +119,10 @@ impl Kit for PgKit {
 
     fn quiet(&self) -> Duration {
         Duration::from_millis(600)
+    }
+
+    fn ack_timeout(&self) -> Duration {
+        Duration::from_secs(2)
     }
 }
 

@@ -145,8 +145,10 @@ RETURNING d.seq, d.attempt, e.subject, e.envelope";
 /// returns them at the next start (`transport.restart.held-redelivered`).
 ///
 /// `next` is cancel-safe up to one attempt: a call dropped while its
-/// transaction commits may leave the row held, which the ack timeout takes
-/// back (the reaper knows the hold before it commits).
+/// transaction commits may leave the row held, which the reaper takes back
+/// at a provisional deadline it learned before the commit (twice the ack
+/// timeout plus the publish timeout after the take began). The ack timeout
+/// itself runs from the handout.
 #[derive(Debug)]
 pub struct PgSubscription {
     shared: Arc<Shared>,
@@ -171,7 +173,7 @@ impl PgSubscription {
         self.abandoned = true;
     }
 
-    async fn try_take(&self, hold_deadline: Instant) -> Result<Took, sqlx::Error> {
+    async fn try_take(&self, provisional: Instant) -> Result<Took, sqlx::Error> {
         let shared = &self.shared;
         let group = self.group.0.as_str();
         let capacity = i64::try_from(shared.config.group_capacity.get()).unwrap_or(i64::MAX);
@@ -226,7 +228,11 @@ impl PgSubscription {
         let took = match taken {
             Some((seq, attempt, subject, envelope)) => {
                 // Known to the reaper before it commits, so a call dropped
-                // mid-commit is still taken back at the deadline.
+                // mid-commit is still taken back. This provisional deadline
+                // is later than the real one, which `next` registers once
+                // the hold is handed out (a fail is conditional on the row
+                // still being held at this attempt, so the later one is a
+                // no-op when the real one already fired or it was acked).
                 let key = HoldKey {
                     group: group.to_owned(),
                     seq,
@@ -234,7 +240,7 @@ impl PgSubscription {
                 };
                 let _ = shared.reaper.send(ReaperMsg::Hold {
                     key,
-                    deadline: hold_deadline,
+                    deadline: provisional,
                     retry: self.retry,
                 });
                 Took::Row {
@@ -329,8 +335,10 @@ impl Subscription for PgSubscription {
             self.held.retain(|_, hold| hold.deadline > now);
             // Any wake-up from here on interrupts the wait below.
             self.wake.borrow_and_update();
-            let deadline = now + ack_timeout;
-            let wait = match self.try_take(deadline).await {
+            // Covers the whole take (pool wait and round trips) twice over;
+            // only a call dropped mid-commit ever relies on it.
+            let provisional = now + 2 * ack_timeout + self.shared.config.publish_timeout.get();
+            let wait = match self.try_take(provisional).await {
                 Ok(Took::Row {
                     seq,
                     attempt,
@@ -338,6 +346,18 @@ impl Subscription for PgSubscription {
                     envelope,
                 }) => match decode_envelope(&subject, &envelope) {
                     Ok(envelope) => {
+                        // The ack timeout runs from the handout, as on
+                        // MpscBus, not from before the take's transaction.
+                        let deadline = Instant::now() + ack_timeout;
+                        let _ = self.shared.reaper.send(ReaperMsg::Hold {
+                            key: HoldKey {
+                                group: self.group.0.clone(),
+                                seq,
+                                attempt,
+                            },
+                            deadline,
+                            retry: self.retry,
+                        });
                         let id =
                             DeliveryId(self.shared.next_delivery.fetch_add(1, Ordering::Relaxed));
                         self.held.insert(

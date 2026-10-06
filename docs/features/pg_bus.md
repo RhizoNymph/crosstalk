@@ -90,9 +90,12 @@ next()                                                 loop of one transaction p
   admitted_through = last admitted (if candidates exceeded room) else head
   delayed rows with available_at <= clock.now() → ready
   take the lowest-seq ready row FOR UPDATE SKIP LOCKED → held, attempt + 1
-    (the reaper learns the hold and its deadline before the commit)
+    (the reaper learns the hold before the commit, with a provisional deadline
+     of 2 x ack_timeout + publish_timeout from the take's start)
   COMMIT
-  row  → decode strictly → Delivery { id: process counter, attempt, envelope }
+  row  → deadline = handout + ack_timeout, told to the reaper and kept locally
+         (the ack timeout never counts the pool wait or the take's round trips)
+         decode strictly → Delivery { id: process counter, attempt, envelope }
          undecodable → delete the row, warn, Some(Err(Decode)) once
   none → wait for: a wake-up (local publish/ack/nack/replay, NOTIFY via the
          listener task), the earliest delayed row's due time, or `poll`
@@ -151,8 +154,9 @@ each notification and each reconnect) and the reaper task. Both stop on
 process.
 
 Cancel safety. A `next` dropped while its transaction commits may leave
-the row held; the reaper already knows the hold, so the ack timeout takes
-it back (one attempt and one ack timeout lost, nothing else). `MpscBus`'s
+the row held; the reaper already knows the hold with its provisional
+deadline, so it is taken back then (one attempt and that delay lost,
+nothing else). `MpscBus`'s
 stronger guarantee (the next call returns the same delivery) does not
 hold here.
 

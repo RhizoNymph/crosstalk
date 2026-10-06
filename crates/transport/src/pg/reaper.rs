@@ -4,7 +4,9 @@
 //!
 //! Deadlines live in process memory (tokio `Instant`s), as on `MpscBus`.
 //! A subscription tells the reaper about each hold before the hold
-//! commits, and about each ack; at a deadline the reaper fails the hold
+//! commits (a provisional deadline, for a `next` dropped mid-commit), again
+//! at the handout (the real deadline, handout plus the ack timeout), and
+//! about each ack; at a deadline the reaper fails the hold
 //! with [`Failure::Timeout`]. Every failure is conditional on the row still
 //! being held at that attempt, so a late or repeated one is a no-op.
 //! Failing on the last attempt stores the dead letter and deletes the
