@@ -150,9 +150,13 @@ min = 0.98
 # SALT forwarding row (`Tier::Forwarding`: deliveries pasting the sender's
 # own tool output), only in runs with `--forwarding on`. With forwarding
 # off (the shipped default) these are known misses, kept out of `overall`
-# and ungated (0.485, 456 / 941). Forwarding on (2026-10-05, c3cd7f2 +
-# the forwarding tier): 0.967 (910 / 941), at an overall precision of
-# 0.144, so none of the headline live gates apply to that configuration.
+# and ungated (0.485, 456 / 941). Forwarding on: 0.967 (910 / 941) at
+# c3cd7f2, then 0.885 once the reader's nearer source (INV-1154,
+# `provenance.match.forward-direct-read`) stopped matching a forward on
+# content the reader had already read itself. That is the intended tradeoff:
+# the same change moved forwarding-on precision from 0.143 to 0.882
+# (measured at 7f8a2fb by the a2a-transmission-bench parity baseline). None
+# of the headline live gates apply to this configuration.
 
 [[gate]]
 name = "salt (live, forwarding on): forwarded tool output is found"
@@ -161,7 +165,7 @@ forwarding = "on"
 dataset = "salt"
 tier = "forwarding"
 metric = "recall"
-min = 0.94
+min = 0.86
 
 [[gate]]
 name = "salt (live): nothing is attributed to a scripted sender"

@@ -244,6 +244,15 @@ pub trait ProvenanceStore {
         id: ExchangeId,
     ) -> impl Future<Output = Result<Option<(ExchangeRecord, ScanStatus)>, ProvenanceStoreError>> + Send;
 
+    /// When the exchange started (its `ExchangeCaptured` record), `None`
+    /// when not recorded. A read of the record alone, kept after
+    /// [`ProvenanceStore::prune`]: the stage that extracts a delta stamps it
+    /// with this time, so a restarted process loses no start.
+    fn started_at(
+        &self,
+        id: ExchangeId,
+    ) -> impl Future<Output = Result<Option<Timestamp>, ProvenanceStoreError>> + Send;
+
     /// The stored spans among `ids` (unknown ids left out), in `ids` order.
     fn spans(
         &self,

@@ -10,7 +10,7 @@ use std::time::Duration;
 use crosstalk_memory::provenance::{IndexConfig, MemoryFingerprintIndex};
 use crosstalk_sim::{CheckFailed, SimClock, SimCtx};
 use crosstalk_spec::derived::provenance::fingerprint::PositionedFingerprint;
-use crosstalk_spec::derived::provenance::span::{OriginatedSpan, SpanState};
+use crosstalk_spec::derived::provenance::span::{Origin, OriginatedSpan, SpanState};
 use crosstalk_spec::events::detect::DetectEvent;
 use crosstalk_spec::events::ingest::{ConversationDelta, IngestEvent};
 use crosstalk_spec::events::{BusEvent, Envelope, Subject};
@@ -238,6 +238,44 @@ impl Rig {
         }
     }
 
+    /// Stop the consumer as a crash would (its task aborted mid-wait,
+    /// nothing acked after) and start a new one, with a new engine, over the
+    /// same records, index and bodies.
+    async fn restart(&mut self) -> Result<(), CheckFailed> {
+        self.task.abort();
+        let _ = (&mut self.task).await;
+        let config = dst_config();
+        let retry = RetryPolicy::new(
+            std::num::NonZeroU32::new(8).expect("attempts"),
+            Duration::from_millis(10),
+            Duration::from_millis(100),
+        )
+        .map_err(|e| fail(format!("retry: {e:?}")))?;
+        let subscription = consumer::subscribe(&self.bus, retry)
+            .await
+            .map_err(|e| fail(format!("subscribe: {e:?}")))?;
+        let engine = Provenance::new(
+            &config,
+            self.index.clone(),
+            self.store.clone(),
+            self.semantic.clone(),
+            self.messages.clone(),
+        );
+        let settings = ConsumerSettings {
+            retry_after: Duration::from_millis(10),
+            eviction_interval: config.eviction_interval(),
+        };
+        self.task = tokio::spawn(consumer::run(
+            subscription,
+            engine,
+            self.bus.clone(),
+            Arc::new(self.clock.clone()),
+            settings,
+            Arc::new(ConsumerStats::new()),
+        ));
+        Ok(())
+    }
+
     fn matches(&self) -> Vec<crate::store::StoredMatch> {
         self.store.all_matches()
     }
@@ -313,6 +351,67 @@ crosstalk_sim::sim_test! {
         let republished: std::collections::BTreeSet<EventId> = rig.published.iter().map(|e| e.id).collect();
         let original: std::collections::BTreeSet<EventId> = first.iter().copied().collect();
         ctx.check(republished == original, || "a redelivery published a new envelope id".to_owned())?;
+        rig.stop().await;
+        Ok(())
+    }
+}
+
+crosstalk_sim::sim_test! {
+    /// `transport.consumer.derived-envelope-ids`: every envelope the
+    /// consumer publishes for a delta has the id derived from the delta's
+    /// exchange and the record it announces (`span::span_event_id`,
+    /// `span::match_id`), so a redelivery, a republish of the delta under a
+    /// new envelope id, and a redelivery to a consumer restarted over the
+    /// same records all land on the ids of the first delivery.
+    fn redelivery_republishes_the_same_envelope_ids(ctx) {
+        let mut rng = ctx.rng();
+        let mut rig = Rig::start(&ctx).await?;
+        let (a, b) = (rig.ids.agent(), rig.ids.agent());
+        let text = sentence(&format!("derived-{}", ctx.seed().get()));
+        let origin = rig.exchange(a, vec![], assistant_text(&text));
+        rig.deliver(&origin).await?;
+        tokio::time::sleep(Duration::from_secs(1)).await;
+        let reader = rig.exchange(b, vec![tool_result("call_1", &text)], assistant_text(&sentence("b-said")));
+        rig.deliver(&reader).await?;
+        rig.drain().await?;
+        let first: Vec<EventId> = rig.published.iter().map(|e| e.id).collect();
+        ctx.check(!rig.matches().is_empty(), || "the read was matched".to_owned())?;
+
+        // Each id is the one derived from what the envelope announces.
+        let mut derived = std::collections::BTreeSet::new();
+        for record in rig.store.all_spans() {
+            if matches!(record.span.state.origin(), Some(Origin::Originated | Origin::Relayed(_))) {
+                derived.insert(crate::span::span_event_id(record.span.exchange, record.span.id));
+            }
+        }
+        for stored in rig.matches() {
+            let content = &stored.content;
+            derived.insert(crate::span::match_id(content.reader_exchange(), content.origin(), &content.read_at()));
+        }
+        let published: std::collections::BTreeSet<EventId> = first.iter().copied().collect();
+        ctx.check(published.len() == first.len(), || "an id was published twice by one delivery".to_owned())?;
+        ctx.check(published == derived, || format!("published {published:?}, derived {derived:?}"))?;
+
+        // Redeliveries: the same envelope, a republish under a new id, and,
+        // in a seeded order, after a restart of the consumer.
+        let restart_at = rng.next_u64() % 3;
+        for n in 0..3u64 {
+            if n == restart_at {
+                rig.restart().await?;
+            }
+            let delivery = match n {
+                0 => reader.delta_envelope.clone(),
+                1 => rig.envelope(reader.delta_envelope.event.clone(), rig.clock.now()),
+                _ => rig.envelope(origin.delta_envelope.event.clone(), rig.clock.now()),
+            };
+            rig.publish(&delivery).await?;
+            tokio::time::sleep(Duration::from_millis(1 + rng.next_u64() % 20)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        rig.drain().await?;
+        let again: std::collections::BTreeSet<EventId> = rig.published.iter().map(|e| e.id).collect();
+        ctx.check(again == published, || format!("redeliveries published {again:?}, first {published:?}"))?;
+        ctx.check(rig.published.len() > first.len(), || "nothing was republished".to_owned())?;
         rig.stop().await;
         Ok(())
     }

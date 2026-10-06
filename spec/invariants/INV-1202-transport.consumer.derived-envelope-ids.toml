@@ -15,7 +15,7 @@ redelivery a second event.
 
 [evidence]
 dst = [
-    "crosstalk_reconstruct::dst::redelivery_republishes_the_same_envelope_ids",
+    "crosstalk_reconstruct::tests::dst::redelivery_republishes_the_same_envelope_ids",
     "crosstalk_provenance::dst::redelivery_republishes_the_same_envelope_ids",
     "crosstalk_flow::dst::redelivery_republishes_the_same_envelope_ids",
     "crosstalk_topology::dst::redelivery_republishes_the_same_envelope_ids",

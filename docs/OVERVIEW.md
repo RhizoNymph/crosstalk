@@ -36,7 +36,8 @@ Overview:
     has its extractors, correlator and consumer (flow_extract,
     flow_correlator) and its Postgres stores (flow_store); L7 has its
     Postgres edge store and bus consumer (topology_store); L6 has its
-    remote adapters (analysis) and Postgres search and alerts
+    remote adapters (analysis) and Postgres search, alerts, topic
+    catalog and projection store, plus the classification step
     (search_alerts).
     The L8 surface service
     (crosstalk-surface: QueryApi, OperatorActions, LiveFeed, export and
@@ -55,8 +56,10 @@ Overview:
     invariants are tested with (sim). crosstalk-testkit holds the builders,
     the synthetic Anthropic corpus and the fake upstream and client
     (testkit). crosstalk-transport has the in-process bus (MpscBus) with
-    consumer groups, retries, dead letters and envelope dedup, and the
-    content-addressed blob store (FsBlobStore, MemoryBlobStore)
+    consumer groups, retries, dead letters and envelope dedup, the
+    durable Postgres bus (PgBus, pg_bus) and the on-disk publish spool in
+    front of it (SpoolingBus, publish_spool), not yet wired into serve,
+    and the content-addressed blob store (FsBlobStore, MemoryBlobStore)
     (transport). crosstalk-canonical has the Anthropic Messages
     normalizer (L1): pure functions from a RawExchange to a
     NormalizedExchange (media bytes included), with streaming reassembly,
@@ -665,9 +668,11 @@ Features Index:
       group): every QueryApi method with its permission checked first,
       watermark-first reads, paging and a keyed-MAC cursor for
       transmission rows by id, typed errors through the spec's From
-      impls; OperatorActions::act (one store write stamped with the
-      caller and the accept time, then exactly one OperatorRecord whose
-      AuditOutcome inverts to the returned result) and Surface::request;
+      impls; OperatorActions::act (a write-ahead AuditIntent, one store
+      write stamped with the caller and the accept time, then exactly one
+      OperatorRecord whose AuditOutcome inverts to the returned result,
+      appended as the intent is removed; Surface::recover_interrupted
+      records leftover intents as Interrupted at start) and Surface::request;
       the live feed (a writer task owning the epoch's log, bounded
       per-stream buffers that end lagging streams, resume and resync,
       heartbeats, session ends, a bus consumer that appends before it
@@ -691,13 +696,20 @@ Features Index:
       (SpanIndex); an opt-in in-process projection fitter
       (ProjectionFitting::Deterministic, FakeLayoutFitter) fits queued jobs.
       Rows by id and a channel's transmissions read topics from
-      TopicCatalog::assignments under the page's version. The HTTP server (P7.1) is http_server.
+      TopicCatalog::assignments under the page's version. L8's Postgres
+      stores (P7.3 W7, crosstalk_surface::pg, schema surface): PgAuditLog
+      (AuditLog + AuditIntents, append-only trigger, cursors keyed from the
+      deployment secret), PgOperatorStore (directory and config entries in
+      one transaction) and PgSinkRegistry; Surface::with_secret derives the
+      surface's cursor key from the secret so cursors survive a restart.
+      The HTTP server (P7.1) is http_server.
     entry_points:
       - crates/surface/src/lib.rs
       - crates/surface/src/service.rs
       - crates/surface/src/stores.rs
       - crates/surface/src/query/mod.rs
       - crates/surface/src/actions/mod.rs
+      - crates/surface/src/pg/mod.rs
       - crates/surface/src/live/mod.rs
       - crates/surface/src/export/mod.rs
       - crates/surface/src/nodes/mod.rs
@@ -846,7 +858,8 @@ Features Index:
       changes, landed: EventId::derive, KeyedHasher::derive_key,
       BusError::SpoolFull, AuditOutcome::Interrupted with AuditIntent and
       AuditIntents, PgBus/SpoolingBus/PgFrontierSource docs, INV-1200 to
-      INV-1221; W1 to W9 not implemented): detections that survive
+      INV-1221; W1, transport, implemented: PgBus, SpoolingBus, DbLink,
+      see pg_bus and publish_spool): detections that survive
       a gateway restart. Surveys what is persisted today (serve runs Live
       on memory stores and MpscBus; the L3 to L7 Postgres stores exist but
       are unwired, and crosstalk migrate runs no layer migrations) and
@@ -914,13 +927,15 @@ Features Index:
       routes) with a loader that checks each case against its metadata; a
       hyper fake upstream that replays cases with paced event streams and
       stalls, disconnects, withholds or fails on command and records what
-      it received; and a hyper fake harness client that collects responses
-      chunk by chunk.
+      it received; a hyper fake harness client that collects responses
+      chunk by chunk; and DbLink, a loopback TCP relay to the test database
+      that a test cuts and restores to simulate an outage.
     entry_points:
       - crates/testkit/src/lib.rs
       - crates/testkit/src/corpus/anthropic.rs
       - crates/testkit/src/upstream/mod.rs
       - crates/testkit/src/client.rs
+      - crates/testkit/src/db_link.rs
       - crates/testkit/corpus/README.md
     depends_on: [type_spec, workspace]
     doc: docs/features/testkit.md
@@ -956,6 +971,51 @@ Features Index:
       - crates/transport/src/blob/memory.rs
     depends_on: [type_spec, wire_contract, workspace]
     doc: docs/features/transport.md
+  pg_bus:
+    description: >
+      PgBus (crosstalk-transport pg module, P7.3 workstream W1): the
+      durable single-node EventBus on Postgres, schema transport (events
+      log idempotent on envelope id, groups with admitted_through,
+      deliveries ready/held/delayed, dead letters). MpscBus's group
+      semantics (checked by a conformance suite run over both buses);
+      publishes commit in seq order under a transaction advisory lock;
+      next admits, makes due delays ready and takes a row FOR UPDATE SKIP
+      LOCKED in one transaction, waking on LISTEN/NOTIFY or a poll; ack
+      deadlines in a reaper task; delays from the injected clock;
+      recover_held returns a stopped process's held deliveries with the
+      attempt counted; group_stats for the frontier; prune for 7-day
+      retention behind the slowest group; DrainTarget for the spool. Not
+      yet built by serve (W8).
+    entry_points:
+      - crates/transport/src/pg/mod.rs
+      - crates/transport/src/pg/subscription.rs
+      - crates/transport/migrations/0001_bus.sql
+      - crates/transport/src/conformance/mod.rs
+      - crates/transport/src/integration/mod.rs
+    depends_on: [transport, store, postgres_stores]
+    doc: docs/features/pg_bus.md
+  publish_spool:
+    description: >
+      SpoolingBus (crosstalk-transport spool module, P7.3 workstream W1,
+      decision Q5): an EventBus decorator that appends what its inner bus
+      cannot take (Disconnected) to fsynced, checksummed segments on disk
+      and drains them in publish order, under their own ids, when the
+      inner bus answers (one batch transaction, then an atomically
+      replaced cursor). States Direct, Spooling, Draining, Corrupt change
+      under the publish mutex, so nothing overtakes the backlog. A torn
+      last record is truncated at open, any other bad record stops
+      draining; bounded by max_bytes (SpoolFull, never waits); LOCK per
+      directory; oldest_at for the frontier; discard_corrupt for the
+      operator. Unit, seeded DST with crashes, and integration tests over
+      PgBus through testkit's DbLink. Not yet built by serve (W8).
+    entry_points:
+      - crates/transport/src/spool/mod.rs
+      - crates/transport/src/spool/log.rs
+      - crates/transport/src/spool/drain.rs
+      - crates/transport/src/dst/spool.rs
+      - crates/testkit/src/db_link.rs
+    depends_on: [transport, pg_bus, testkit, postgres_stores]
+    doc: docs/features/publish_spool.md
   memory:
     description: >
       crosstalk-memory, the in-memory reference implementation of every
@@ -1291,16 +1351,18 @@ Features Index:
       (evidence::scope, ready for per-corpus replay scoping); PgAgents,
       every L3 agent store trait on Postgres (merge log with exact unmerges,
       vetoes, renames, resolve, lifecycle, claims, activity, reads; an
-      outbox; an in-process directory cache), model-tested against
+      outbox whose relay stamps each row with its envelope id and time
+      before the first publish, INV-1211; an in-process directory cache;
+      list cursor keys derived from the deployment secret), model-tested against
       crosstalk-memory; ConversationThreader over MemoryConversations or
-      PgConversations (prefix chains, forks, compaction from summary
+      PgConversations (both serve ExchangePlacements; prefix chains, forks, compaction from summary
       turns, WebSocket increment resolution scoped by upstream and identity
       scope, system turns anywhere, every message kept in order under an
       ordinal, a per-agent seen-message set within a configured retention
       that keeps history replayed from another conversation out of a
       delta's new inputs, INV-1100); and the reconstruct consumer (ExchangeCaptured in;
-      AgentSeen and ConversationDelta out under envelope ids derived from
-      the exchange). Replays AI Village's Claude Code stream and lmcache's
+      ConversationDelta out under an envelope id derived from the
+      exchange; AgentSeen staged by the agent store's create or attach). Replays AI Village's Claude Code stream and lmcache's
       interleaved re-runs as ignored fixture tests.
     entry_points:
       - crates/reconstruct/src/lib.rs
@@ -1344,7 +1406,10 @@ Features Index:
       SpanRelayed and ContentMatched; PgFingerprintIndex model-tested
       against crosstalk-memory's reference; L4's records (exchanges with
       per-exchange and per-message scan status, spans by id, matches by
-      reader message and by origin span) in memory and on Postgres; a
+      reader message and by origin span, and each exchange's start, read
+      back by the L4 stage so a restart loses none) in memory and on
+      Postgres, the Postgres pair model-tested against the memory one
+      under every match rule and across a restart; a
       semantic matcher stub until P6.2. Validated on AgentDojo: 9948 of
       9949 exposed injection slots matched.
     entry_points:
@@ -1751,12 +1816,26 @@ Features Index:
       AlertReads in SERIALIZABLE transactions with an outbox published after
       commit; RuleEvaluator is AlertRuleEval for every rule kind; AlertsStage
       is the alerts consumer group, built like the gateway pipeline's
-      stages. Model-tested against crosstalk-memory's harnesses.
+      stages. P7.3 W5 adds PgTopicCatalog (TopicCatalog, TopicLifecycle,
+      TopicAssignments; version numbers from a counter row, drops freeze
+      sizes and delete assignments in one transaction, the one publisher of
+      TopicVersionDropped), PgProjectionStore (ProjectionStore: jobs as
+      ProjectionInfo JSON, SKIP LOCKED claims under leases, frames as
+      bytea), the outbox relay with stable envelope ids (rows stamped in a
+      committed transaction before the first publish, republished under
+      the same id; INV-1213), and classify::Classifier, the analyze
+      consumer's classification step (decision saved before any effect and
+      replayed on redelivery, envelope id EventId::derive of the delivery),
+      for W8 to wire in place of the gateway's classifier. Model-tested
+      against crosstalk-memory's harnesses.
     entry_points:
       - crates/analysis/src/search/mod.rs
       - crates/analysis/src/alerts/mod.rs
       - crates/analysis/src/alerts/eval/mod.rs
       - crates/analysis/src/alerts/consumer.rs
+      - crates/analysis/src/topics/mod.rs
+      - crates/analysis/src/projections/mod.rs
+      - crates/analysis/src/classify/mod.rs
       - crates/analysis/src/pg/mod.rs
     depends_on: [type_spec, store, memory, gateway]
     doc: docs/features/search_alerts.md

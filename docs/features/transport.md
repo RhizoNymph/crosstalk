@@ -11,7 +11,12 @@ P2.2, described in [Blob store](#blob-store) below. The single-node
 gateway runs on it, and every layer's simulation tests use it (as a
 dev-dependency) with a seeded delivery order.
 
-The sections up to [Blob store](#blob-store) cover the bus.
+The sections up to [Blob store](#blob-store) cover the in-process bus.
+The durable bus on Postgres (`PgBus`, the `pg` module) is in
+[pg_bus.md](pg_bus.md), and the publish spool in front of it
+(`SpoolingBus`, the `spool` module) in [publish_spool.md](publish_spool.md);
+the conformance suite in `src/conformance/` runs the group semantics
+below over both buses.
 
 ## Scope
 
@@ -35,10 +40,12 @@ The sections up to [Blob store](#blob-store) cover the bus.
 ## Non-scope
 
 - `BlobStore`, which is the [Blob store](#blob-store) section.
-- The multi-node `JetStreamBus` and every `integration` evidence of the
-  transport invariants (NATS JetStream, Postgres).
+- The multi-node `JetStreamBus` and the `integration` evidence of the
+  transport invariants on NATS JetStream. `PgBus` and the spool have their
+  own pages.
 - Durability across process restarts: nothing on this bus survives the
-  process (`transport.durability.publish-persisted` is JetStream's).
+  process (`transport.durability.publish-persisted` is JetStream's;
+  `PgBus`, in [pg_bus.md](pg_bus.md), is the durable single-node bus).
 - A shared, durable handled-id record for `Dedup` across nodes (a
   Postgres `HandledIds`); `MemoryHandledIds` is process-local.
 - The `lint:transport-no-payload-in-logs` rule.
@@ -172,7 +179,9 @@ errors.
 | `src/dedup.rs` | The dedup wrapper | `Dedup`, `HandledIds` |
 | `src/testing.rs` | Test fixtures and proptest strategies | (tests only) |
 | `src/tests/` | Unit and property tests; invariant evidence at `crosstalk_transport::tests::*` | — |
-| `src/dst/` | Simulation tests; invariant evidence at `crosstalk_transport::dst::*` | — |
+| `src/dst/` | Simulation tests; invariant evidence at `crosstalk_transport::dst::*` (the spool's in `dst/spool.rs`) | — |
+| `src/conformance/` | The bus conformance suite, once over `MpscBus` and once over `PgBus` | — |
+| `src/pg/`, `src/spool/`, `src/integration/` | `PgBus`, the spool, Postgres tests: see [pg_bus.md](pg_bus.md) and [publish_spool.md](publish_spool.md) | — |
 
 ### Simulation tests
 

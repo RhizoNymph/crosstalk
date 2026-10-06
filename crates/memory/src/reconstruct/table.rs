@@ -56,6 +56,21 @@ fn changed(ids: impl IntoIterator<Item = AgentId>) -> impl Iterator<Item = BusEv
         .map(|id| BusEvent::Changed(Changed::Agent(id)))
 }
 
+/// `AgentSeen` for each of `items`, newly attributed to `agent`, in order.
+/// Staged with the write that attributes them, so an announcement is never
+/// lost between the write and a publish (`reconstruct.agent-seen.once-per-evidence`).
+fn seen<'a>(
+    agent: AgentId,
+    items: impl IntoIterator<Item = &'a IdentityEvidence>,
+) -> impl Iterator<Item = BusEvent> {
+    items.into_iter().map(move |evidence| {
+        BusEvent::Ingest(IngestEvent::AgentSeen {
+            agent,
+            evidence: evidence.clone(),
+        })
+    })
+}
+
 impl AgentTable {
     /// `AgentDirectory::canonical`: a merged agent's target, else the id.
     pub(crate) fn canonical(&self, id: AgentId) -> AgentId {
@@ -124,8 +139,12 @@ impl AgentTable {
             .parent
             .filter(|parent| self.agents.contains_key(parent))
             .map(|parent| self.canonical(parent));
+        let mut events: Vec<BusEvent> = changed(std::iter::once(new.id).chain(parent)).collect();
+        if matches!(new.origin, AgentOrigin::Traffic { .. }) {
+            events.extend(seen(agent.id, agent.evidence.iter()));
+        }
         self.agents.insert(agent.id, agent);
-        Ok(changed(std::iter::once(new.id).chain(parent)).collect())
+        Ok(events)
     }
 
     pub(crate) fn advance(
@@ -159,10 +178,11 @@ impl AgentTable {
         if self.get(id)?.evidence.iter().any(|held| *held == evidence) {
             return Err(AgentLifecycleError::DuplicateEvidence(id));
         }
+        let events = changed([id]).chain(seen(id, [&evidence])).collect();
         if let Some(agent) = self.agents.get_mut(&id) {
             agent.evidence.push(evidence);
         }
-        Ok(changed([id]).collect())
+        Ok(events)
     }
 
     // ---- the merge log ----------------------------------------------------

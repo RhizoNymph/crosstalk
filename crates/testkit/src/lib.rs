@@ -15,6 +15,8 @@
 //!   command, and records what it received.
 //! - [`client`]: [`client::HarnessClient`], a hyper client that sends a
 //!   corpus request and collects the response with chunk arrival times.
+//! - [`db_link`]: [`db_link::DbLink`], a loopback TCP relay to the test
+//!   database that a test cuts and restores to simulate an outage.
 //!
 //! Builds values of the types in [`crosstalk_spec`] and serves recorded
 //! traffic to the L0 ingress interface in
@@ -26,6 +28,7 @@
 pub mod build;
 pub mod client;
 pub mod corpus;
+pub mod db_link;
 pub mod ids;
 pub mod time;
 pub mod upstream;

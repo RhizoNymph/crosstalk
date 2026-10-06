@@ -3,21 +3,22 @@
 //! here and runs a scenario from a submodule.
 
 mod agentdojo;
-mod bench_boilerplate;
-mod bench_channel_template;
-mod bench_verbatim_template;
+pub(crate) mod bench_boilerplate;
+pub(crate) mod bench_channel_template;
+pub(crate) mod bench_verbatim_template;
 mod config;
 mod coverage_cache;
 mod decode;
 mod decoded_bodies;
 mod fingerprint;
 pub(crate) mod fixtures;
-mod match_quality;
-mod nearer_source;
+pub(crate) mod match_quality;
+pub(crate) mod nearer_source;
 pub(crate) mod reads;
 pub(crate) mod scenarios;
 mod segment;
 mod short;
+pub(crate) mod started;
 mod store;
 
 /// `provenance.match.carrier-from-part`: a read in a tool result.
@@ -143,4 +144,12 @@ async fn lookup_on_wrong_shard_errors() {
 #[tokio::test]
 async fn delta_ends_indexed_or_failed() {
     scenarios::delta_ends_indexed_or_failed().await;
+}
+
+/// `ProvenanceStore::started_at` on the memory store: the recorded start,
+/// kept after pruning.
+#[tokio::test]
+async fn started_at_is_the_recorded_start() {
+    started::started_at_is_the_recorded_start(&mut crate::store::MemoryProvenanceStore::new())
+        .await;
 }

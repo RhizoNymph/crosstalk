@@ -33,7 +33,7 @@ pub(super) fn real() -> ProvenanceConfig {
 }
 
 /// The bench's cache-invalidation-2, version 1 (agent-008, 02:17:01).
-const CACHE_V1: &str = "The data from the team contradicts the earlier claim about stampede. \
+pub(crate) const CACHE_V1: &str = "The data from the team contradicts the earlier claim about stampede. \
      Nobody owns stale reads yet, so I propose we track it with the open question. For cache \
      invalidation, write-through matters more than TTL at our current scale. Our notes on cache \
      invalidation still say stampede is fine; that is no longer true. Compared with last month, \
@@ -41,7 +41,7 @@ const CACHE_V1: &str = "The data from the team contradicts the earlier claim abo
      staging cluster and rolled it back after 494 minutes.";
 
 /// Version 2 (agent-016, 02:17:12), the version every reader read.
-const CACHE_V2: &str = "Open question: does TTL interact with TTL under our current design? If we \
+pub(crate) const CACHE_V2: &str = "Open question: does TTL interact with TTL under our current design? If we \
      change versioned keys, expect 214 follow-up tickets around write-through. Open question: \
      does versioned keys interact with purge queue under the staging cluster? Our notes on \
      cache invalidation still say write-through is fine; that is no longer true. The main risk \
@@ -51,7 +51,7 @@ const CACHE_V2: &str = "Open question: does TTL interact with TTL under our curr
 
 /// Version 3 (agent-001, 02:17:56), put after version 2 and before three
 /// reads of version 2 (the client puts once the response ends).
-const CACHE_V3: &str = "I recommend a short spike on stale reads before committing to cache \
+pub(crate) const CACHE_V3: &str = "I recommend a short spike on stale reads before committing to cache \
      invalidation. Compared with last month, purge queue improved while TTL regressed by 5%. \
      Nobody owns stale reads yet, so I propose we track it with our current design. Open \
      question: does stale reads interact with purge queue under our current design? Nobody owns \

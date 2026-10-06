@@ -39,7 +39,7 @@ use crate::ids::IdSource;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Attribution {
     /// Attributed to `agent`, which `seen` evidence was newly attributed
-    /// to (each published once as `AgentSeen`).
+    /// to (each announced once as `AgentSeen` by the agent store's write).
     Agent {
         agent: AgentId,
         seen: Vec<IdentityEvidence>,
