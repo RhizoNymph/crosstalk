@@ -205,6 +205,16 @@ pub struct ViolationRow {
     pub count: u64,
 }
 
+/// Access-only predictions of one class under one kind of negative
+/// control ([`Score::access_only_under_controls`]).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AccessOnlyControlRow {
+    pub dataset: DatasetId,
+    pub class: EvidenceClass,
+    pub reason: NegativeReason,
+    pub count: u64,
+}
+
 /// A missed label, for citing.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Miss {
@@ -249,7 +259,16 @@ pub struct Score {
     pub totals: Totals,
     pub rows: Vec<Row>,
     pub transmissions: Vec<TransmissionRow>,
+    /// Negative-control violations by content-class predictions. Only
+    /// these are violations: gates and `sources` count them.
     pub violations: Vec<ViolationRow>,
+    /// Access-only predictions that fall under a negative control, by
+    /// class: never violations and never gated. A `discarded` one is
+    /// [`Outcome::Dismissed`] (these rows say which controls the dismissed
+    /// predictions fell under); a `suspected` one is still a false positive
+    /// in its own access-class row, but not charged to the control.
+    #[serde(default)]
+    pub access_only_under_controls: Vec<AccessOnlyControlRow>,
     /// At most the scorer's example cap of each.
     pub misses: Vec<Miss>,
     pub false_positives: Vec<FalsePositive>,
@@ -320,6 +339,7 @@ pub struct Scorer {
     rows: BTreeMap<RowKey, Counts>,
     transmissions: BTreeMap<TransmissionKey, TransmissionCounts>,
     violations: BTreeMap<(DatasetId, NegativeReason), u64>,
+    access_only_under_controls: BTreeMap<(DatasetId, EvidenceClass, NegativeReason), u64>,
     misses: Vec<Miss>,
     false_positives: Vec<FalsePositive>,
     sources: sources::SourceTally,
@@ -335,6 +355,7 @@ impl Scorer {
             rows: BTreeMap::new(),
             transmissions: BTreeMap::new(),
             violations: BTreeMap::new(),
+            access_only_under_controls: BTreeMap::new(),
             misses: Vec::new(),
             false_positives: Vec::new(),
             sources: sources::SourceTally::default(),
@@ -402,13 +423,22 @@ impl Scorer {
                 Outcome::False { violated, .. } => {
                     counts.false_positive += 1;
                     entry.2.wrong = true;
-                    if let Some(reason) = violated {
-                        *self
-                            .violations
-                            .entry((dataset.clone(), reason))
-                            .or_default() += 1;
-                        self.sources
-                            .add(reason, &excerpt(world, prediction).unwrap_or_default());
+                    match violated {
+                        Some(reason) if prediction.class.is_content() => {
+                            *self
+                                .violations
+                                .entry((dataset.clone(), reason))
+                                .or_default() += 1;
+                            self.sources
+                                .add(reason, &excerpt(world, prediction).unwrap_or_default());
+                        }
+                        Some(reason) => {
+                            *self
+                                .access_only_under_controls
+                                .entry((dataset.clone(), prediction.class, reason))
+                                .or_default() += 1;
+                        }
+                        None => {}
                     }
                     if self.false_positives.len() < self.example_cap {
                         self.false_positives.push(FalsePositive {
@@ -420,7 +450,15 @@ impl Scorer {
                     }
                 }
                 Outcome::Unjudged => counts.unjudged += 1,
-                Outcome::Dismissed => counts.dismissed += 1,
+                Outcome::Dismissed => {
+                    counts.dismissed += 1;
+                    if let Some(control) = control {
+                        *self
+                            .access_only_under_controls
+                            .entry((dataset.clone(), prediction.class, control.label().reason))
+                            .or_default() += 1;
+                    }
+                }
             }
         }
         for (route, quality, verdicts) in by_transmission.into_values() {
@@ -485,11 +523,13 @@ impl Scorer {
                 .into_iter()
                 .map(|(key, counts)| TransmissionRow { key, counts })
                 .collect(),
-            violations: self
-                .violations
+            violations: violation_rows(self.violations),
+            access_only_under_controls: self
+                .access_only_under_controls
                 .into_iter()
-                .map(|((dataset, reason), count)| ViolationRow {
+                .map(|((dataset, class, reason), count)| AccessOnlyControlRow {
                     dataset,
+                    class,
                     reason,
                     count,
                 })
@@ -499,6 +539,17 @@ impl Scorer {
             sources: self.sources.top(),
         }
     }
+}
+
+fn violation_rows(counts: BTreeMap<(DatasetId, NegativeReason), u64>) -> Vec<ViolationRow> {
+    counts
+        .into_iter()
+        .map(|((dataset, reason), count)| ViolationRow {
+            dataset,
+            reason,
+            count,
+        })
+        .collect()
 }
 
 /// What a transmission's matches were judged: a transmission is genuine when

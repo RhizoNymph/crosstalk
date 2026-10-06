@@ -16,7 +16,8 @@ pub mod in_process;
 pub mod world;
 
 pub use in_process::{
-    Backbone, InProcess, InProcessError, InProcessOptions, MemoryStores, ProjectionFitting,
+    Backbone, ConversationStores, InProcess, InProcessError, InProcessOptions, MemoryStores,
+    ProjectionFitting, Unrecorded,
 };
 
 #[cfg(test)]

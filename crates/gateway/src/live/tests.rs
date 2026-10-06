@@ -668,3 +668,81 @@ async fn a_suspected_transmission_is_exported_only_in_its_state() {
     assert_eq!(export(discarded_only).await, Vec::new());
     live.shutdown(Instant::now() + PATIENCE).await;
 }
+
+/// The conversation reads in a live process: an exchange ingested is
+/// kept in L1's exchange store, threaded by L3, and read back through the
+/// surface as a conversation turn with its exchange record.
+#[tokio::test]
+async fn an_ingested_exchange_reads_back_as_a_conversation_turn() {
+    use crosstalk_spec::batch::IdBatch;
+    use crosstalk_spec::interfaces::l1_canonical::exchanges::ExchangeReads;
+    use crosstalk_spec::interfaces::l8_surface::QueryApi;
+    use crosstalk_spec::interfaces::l8_surface::conversation::{
+        ConversationFilter, TurnIndex, TurnWindow,
+    };
+    use crosstalk_spec::paging::{PageRequest, PageSize};
+    use crosstalk_testkit::build::exchange::NormalizedExchangeBuilder;
+    use crosstalk_testkit::build::message::{assistant_text, user_text};
+
+    let live = start().await;
+    let mut ids = Ids::seeded(23);
+    let normalized = NormalizedExchangeBuilder::new(&mut ids)
+        .exchange(|exchange| exchange.started_at(T0))
+        .request(vec![user_text("write the release plan")])
+        .response(assistant_text("ship on friday"))
+        .build();
+    let exchange = normalized.exchange.meta.id;
+    if let Err(error) = live.pipeline().ingest(normalized, T0).await {
+        panic!("ingest: {error:?}");
+    }
+    let settled = live
+        .settle(Timestamp::from_micros(T0.as_micros() + MINUTE))
+        .await;
+    assert!(settled.is_ok(), "settle: {settled:?}");
+    let batch = IdBatch::new([exchange]).unwrap_or_else(|error| panic!("{error:?}"));
+    let stored = live.layers().exchanges.exchanges(&batch).await;
+    assert_eq!(
+        stored.map(|stored| stored.len()),
+        Ok(1),
+        "kept in L1's store"
+    );
+    let caller = match live.caller(RequestIdentity::Anonymous).await {
+        Ok(caller) => caller,
+        Err(error) => panic!("caller: {error:?}"),
+    };
+    let size = PageSize::new(20).unwrap_or_else(|error| panic!("{error:?}"));
+    let listed = live
+        .surface()
+        .conversations(
+            &caller,
+            &ConversationFilter::default(),
+            &PageRequest { size, after: None },
+        )
+        .await
+        .unwrap_or_else(|error| panic!("list: {error:?}"));
+    assert_eq!(listed.items().len(), 1);
+    let id = listed.items()[0].id;
+    let turns = live
+        .surface()
+        .conversation_turns(
+            &caller,
+            id,
+            &TurnWindow {
+                from: TurnIndex(0),
+                size,
+            },
+        )
+        .await
+        .unwrap_or_else(|error| panic!("turns: {error:?}"))
+        .unwrap_or_else(|| panic!("the conversation"));
+    assert_eq!(turns.total, 1);
+    assert_eq!(turns.turns[0].exchange, exchange);
+    assert_eq!(turns.turns[0].inputs.len(), 1);
+    assert!(turns.turns[0].output.is_some());
+    let located = live.surface().exchange_turns(&caller, &batch).await;
+    assert_eq!(
+        located.map(|placed| placed.get(&exchange).map(|placement| placement.turn)),
+        Ok(Some(TurnIndex(0)))
+    );
+    live.shutdown(Instant::now() + PATIENCE).await;
+}

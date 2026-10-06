@@ -1,0 +1,17 @@
+[invariant]
+id = "reconstruct.conversation.entries-request-order"
+statement = "A turn's input entries are the request's messages new to the conversation in the order the request held them, any role: a new or changed top-level system prompt first when the request did not repeat it, then the request's messages after the stored prefix with system turns where the request put them."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+A harness can put a system message mid-conversation; the view must show
+it where the agent saw it, which ConversationDelta::new_system alone
+cannot say.
+"""
+
+[evidence]
+unit = "crosstalk_reconstruct::tests::conversation_reads::turn_entries_keep_request_order_across_roles"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

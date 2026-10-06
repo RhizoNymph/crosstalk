@@ -293,11 +293,22 @@ pub enum InputError {
     /// An excerpt window wider than `ExcerptWindow::MAX_CONTEXT` bytes of
     /// context a side (`ExcerptWindow::new` refuses it).
     ExcerptContextTooLong { max: u16, got: u16 },
-    /// More distinct ids than a request takes: a name lookup
-    /// (`agent_names`, `channel_names`) over `IdBatch::MAX`, or a
+    /// More distinct ids than a request takes: a batch lookup
+    /// (`agent_names`, `channel_names`, `exchange_turns`, `span_points`)
+    /// over `IdBatch::MAX`, or a
     /// transmission selection over `TransmissionSelection::MAX`. `max` is
     /// the bound that applied and `got` the distinct ids asked for.
     TooManyIds { max: usize, got: usize },
+    /// A text limit outside `1..=TextLimit::MAX` bytes (`TextLimit::new`
+    /// refuses it). `max` is the bound, `got` the limit asked for.
+    TextLimitOutOfRange { max: u32, got: u32 },
+    /// A part text read naming a part with no text (media, opaque
+    /// reasoning, an unknown block, a tool result without text) or a part
+    /// the message does not have (`NoPartText`).
+    PartWithoutText { index: u16 },
+    /// A part text slice starting past the end of the part's text, or
+    /// inside a character. `part_len` is the text's length in bytes.
+    SliceOutsideText { from: u32, part_len: u32 },
     /// An export in a format the gateway does not write: one outside
     /// `Present::export_formats`. Refused after the permission check and
     /// before anything is read (`ExportFormats::check`).

@@ -13,9 +13,12 @@ use crosstalk_spec::derived::flow::access::Access;
 use crosstalk_spec::derived::flow::resource::Resource;
 use crosstalk_spec::derived::provenance::span::Span;
 use crosstalk_spec::ids::{AccessId, ResourceId, SpanId};
+use crosstalk_spec::interfaces::l1_canonical::exchanges::ExchangeReads;
 use crosstalk_spec::interfaces::l2_transport::{BlobStore, DeadLetterStore, EventBus};
 use crosstalk_spec::interfaces::l3_reconstruction::agents::AgentReads;
+use crosstalk_spec::interfaces::l3_reconstruction::conversations::ConversationReads;
 use crosstalk_spec::interfaces::l3_reconstruction::{AgentDirectory, IdentityResolver};
+use crosstalk_spec::interfaces::l4_provenance::reads::ProvenanceReads;
 use crosstalk_spec::interfaces::l5_flow::channels::ChannelReads;
 use crosstalk_spec::interfaces::l5_flow::transmissions::TransmissionStore;
 use crosstalk_spec::interfaces::l5_flow::verdicts::TransmissionVerdicts;
@@ -108,6 +111,13 @@ pub trait SurfaceStores: Send + Sync + 'static {
     type Evidence: EvidenceRecords + Send + Sync + 'static;
     /// What an export's rows are read from.
     type Export: ExportSource + Send + Sync + 'static;
+    /// L1's exchange records: each conversation turn's header and claims.
+    type Exchanges: ExchangeReads + Send + Sync + 'static;
+    /// L3's conversations, their transcripts and turns.
+    type Conversations: ConversationReads + Send + Sync + 'static;
+    /// L4's records: spans by id (`SpanIndex`), output spans, matches,
+    /// readers and scan status.
+    type Provenance: ProvenanceReads + Send + Sync + 'static;
 
     fn agents(&self) -> &Self::Agents;
     fn channels(&self) -> &Self::Channels;
@@ -126,4 +136,7 @@ pub trait SurfaceStores: Send + Sync + 'static {
     fn blobs(&self) -> &Self::Blobs;
     fn evidence(&self) -> &Self::Evidence;
     fn export_source(&self) -> &Self::Export;
+    fn exchanges(&self) -> &Self::Exchanges;
+    fn conversations(&self) -> &Self::Conversations;
+    fn provenance(&self) -> &Self::Provenance;
 }

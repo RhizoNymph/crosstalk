@@ -13,18 +13,27 @@
 //! Every conversation keeps its messages in order, system turns included,
 //! each under an ordinal (0, 1, 2, ...), so a conversation can be paged in
 //! order without threading again ([`ConversationStore::transcript`]).
+//!
+//! Every threading call that records an outcome also records one turn of
+//! its conversation (its exchange, the first ordinal and count of the
+//! entries it appended, its agent, start, outcome kind and the history
+//! length after it), and a call that creates a conversation records the
+//! conversation's traffic source. The spec's `ConversationReads` reads
+//! them ([`super::reads`]).
 
 use crosstalk_spec::ids::{AgentId, ConversationId, ExchangeId, MessageHash};
 use crosstalk_spec::interfaces::l3_reconstruction::{ThreadError, ThreadOutcome};
 use crosstalk_spec::observed::agent::IdentityScope;
-use crosstalk_spec::observed::client::UpstreamId;
+use crosstalk_spec::observed::client::{TrafficSource, UpstreamId};
 use crosstalk_spec::observed::conversation::Conversation;
 use crosstalk_spec::observed::exchange::ResponseId;
-use crosstalk_spec::observed::message::Role;
 use crosstalk_spec::support::Timestamp;
 use serde::{Deserialize, Serialize};
 
 pub use super::history::Entry;
+/// One message of a stored conversation: the spec's
+/// [`crosstalk_spec::interfaces::l3_reconstruction::conversations::TranscriptEntry`].
+pub use crosstalk_spec::interfaces::l3_reconstruction::conversations::TranscriptEntry;
 
 /// Where a stored response can be found again: the upstream and identity
 /// scope it was returned under, and its id. A `previous_response_id`
@@ -72,23 +81,10 @@ pub struct ThreadInput {
     pub summary: Option<MessageHash>,
     /// The id a conversation this call creates takes.
     pub conversation: ConversationId,
-}
-
-/// One message of a stored conversation.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct TranscriptEntry {
-    /// The message's place in the conversation, from 0, counting every
-    /// message (system turns included).
-    pub ordinal: u32,
-    pub message: MessageHash,
-    pub role: Role,
-    /// The exchange that added it (for a fork's shared messages, the
-    /// parent's exchange).
-    pub exchange: ExchangeId,
-    /// Its place in the non-system history; `None` for a system message.
-    pub history_index: Option<u32>,
-    /// Whether it is an exchange's output.
-    pub output: bool,
+    /// Where the exchange's traffic came from
+    /// (`ClientContext::ingress`): a conversation this call creates
+    /// records it.
+    pub source: TrafficSource,
 }
 
 /// Keeps threaded conversations.

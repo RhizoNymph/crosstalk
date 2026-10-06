@@ -172,6 +172,9 @@ pub fn input_status(input: &InputError) -> Status {
         | InputError::EmptySelection
         | InputError::ExcerptContextTooLong { .. }
         | InputError::TooManyIds { .. }
-        | InputError::UnsupportedFormat { .. } => Status::UnprocessableContent,
+        | InputError::UnsupportedFormat { .. }
+        | InputError::TextLimitOutOfRange { .. }
+        | InputError::PartWithoutText { .. }
+        | InputError::SliceOutsideText { .. } => Status::UnprocessableContent,
     }
 }

@@ -1,0 +1,21 @@
+[invariant]
+id = "transport.spool.torn-tail-only"
+statement = "Spool recovery discards only an incomplete or mis-checksummed last record of the last segment, whose publish never returned Ok, and any other bad record stops draining as SpoolError::Corrupt."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+A torn append is the one expected crash artefact: its fsync never
+returned, so its publish never returned Ok and no exchange it carried was
+acknowledged as captured. Anything else is corruption of acknowledged
+data, which must stop the drain and be reported, never silently skipped.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_transport::spool::tests::every_prefix_of_a_torn_tail_is_truncated",
+    "crosstalk_transport::spool::tests::a_bad_record_mid_segment_is_corrupt",
+]
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

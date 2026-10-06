@@ -28,7 +28,9 @@ pub mod secret;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 pub use mint::{RandomSource, SeededRandom, UlidExhausted, UlidGenerator};
-pub use secret::{DeploymentSecret, InvalidRotation, InvalidSecret, KeyedHasher, SecretDigests};
+pub use secret::{
+    DeploymentSecret, DerivedKey, InvalidRotation, InvalidSecret, KeyedHasher, SecretDigests,
+};
 
 use crate::support::Blake3;
 use crate::wire::{WireRequest, decode_text};
@@ -213,6 +215,48 @@ entity_id! {
     AuditId;
     /// One export: its header, its trailer and its audit entries name it.
     ExportId;
+}
+
+/// The domain every derived envelope id's digest starts with, so no other
+/// BLAKE3 in the system can collide with one by construction.
+const DERIVED_EVENT_DOMAIN: &[u8] = b"crosstalk.envelope.derived.v1";
+
+impl EventId {
+    /// The envelope id of the `ordinal`-th event labelled `label` that a
+    /// pipeline consumer publishes because of the delivery whose envelope
+    /// id is `parent` (`canonical.ids.derived-event-id`).
+    ///
+    /// A function of its arguments alone: a redelivery of `parent`
+    /// republishes the same envelopes under the same ids, which the bus
+    /// deduplicates (`transport.publish.idempotent-on-id`) and consumers
+    /// deduplicate (`transport.consumer.derived-envelope-ids`). The id keeps
+    /// `parent`'s millisecond, so it sorts with its cause; its 80 random
+    /// bits are the first 10 bytes of a BLAKE3 over a fixed domain, the
+    /// label (length-prefixed), `parent` and `ordinal`, so distinct labels
+    /// or ordinals of one parent give distinct ids.
+    ///
+    /// `label` names the kind of output (`"transmission-confirmed"`,
+    /// `"edge-updated"`, ...) and is a literal, so a typo cannot be
+    /// computed at run time; `ordinal` is the event's place among the
+    /// delivery's outputs of that label, from 0.
+    pub fn derive(parent: EventId, label: &'static str, ordinal: u32) -> EventId {
+        let label = label.as_bytes();
+        // A literal longer than u32::MAX bytes cannot exist in a binary
+        // this code runs in; saturating keeps the encoding total anyway.
+        let label_len = u32::try_from(label.len()).unwrap_or(u32::MAX);
+        let mut bytes = Vec::with_capacity(DERIVED_EVENT_DOMAIN.len() + 4 + label.len() + 20);
+        bytes.extend_from_slice(DERIVED_EVENT_DOMAIN);
+        bytes.extend_from_slice(&label_len.to_be_bytes());
+        bytes.extend_from_slice(label);
+        bytes.extend_from_slice(&parent.0.to_be_bytes());
+        bytes.extend_from_slice(&ordinal.to_be_bytes());
+        let digest = Blake3::of(&bytes);
+        let mut random = [0u8; 16];
+        random[6..].copy_from_slice(&digest.as_bytes()[..10]);
+        let random = u128::from_be_bytes(random);
+        let millis = parent.0 >> mint::RANDOM_BITS;
+        EventId((millis << mint::RANDOM_BITS) | random)
+    }
 }
 
 content_id! {

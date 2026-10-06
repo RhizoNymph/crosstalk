@@ -32,7 +32,8 @@
 //!   history, the operator directory and the audit log.
 //! - `LiveFeed` ([`live`]): the SSE endpoint that tells the UI, by id, what
 //!   to re-query.
-//! - `AuditLog` ([`audit`]): `PgAuditLog`, append-only.
+//! - `AuditLog` and `AuditIntents` ([`audit`]): `PgAuditLog`, append-only,
+//!   with its write-ahead intents.
 //! - `OperatorStore` ([`operators`]): `PgOperatorStore`, the directory and
 //!   its config loads, each recorded in the audit log in its transaction.
 //! - `SinkRegistry` ([`sinks`]): `PgSinkRegistry`, the configured sinks and
@@ -124,6 +125,20 @@
 //! Content. Neither is `Watermarked`: both read a transmission's current
 //! state, not buckets. Verdicts stay in `verdicts`.
 //!
+//! **Conversations.** `conversations` lists one agent's conversations (or
+//! every agent's), newest first, each as a [`conversation::ConversationRow`];
+//! `conversation` returns one's head (origin with its links resolved,
+//! successors, the delegation that started it, traffic counts and harness
+//! claims); `conversation_turns` returns the turns one index window names,
+//! with their structure and provenance marks and no text;
+//! `conversation_text` returns the same window's text, aligned with it
+//! (Content), and `part_text` one slice of one part's text (Content);
+//! `span_readers` pages the readers of one span beyond those a turn carries
+//! inline; `exchange_turns` and `span_points` say where a batch of
+//! exchanges or spans sits. None is `Watermarked`: conversations and spans
+//! are L3 and L4 state; provenance completeness is reported per turn. See
+//! [`conversation`].
+//!
 //! **Projections.** `fit_projection` resolves and pins the filter's version,
 //! records a queued job and returns its id at once; the fit runs in the
 //! background ([`crate::aggregates::projection`]). `projection_status` and
@@ -149,6 +164,7 @@ pub mod actions;
 pub mod audit;
 pub mod channel_traffic;
 pub mod channels;
+pub mod conversation;
 pub mod errors;
 pub mod evidence;
 pub mod excerpt;
@@ -186,13 +202,17 @@ use crate::derived::flow::channel::policy::PolicyHistory;
 use crate::derived::flow::resource::ResourcePattern;
 use crate::derived::flow::transmission::Transmission;
 use crate::derived::flow::verdict::VerdictLog;
-use crate::ids::{AgentId, AlertId, AlertRuleId, ChannelId, ProjectionId, TransmissionId};
+use crate::ids::{
+    AgentId, AlertId, AlertRuleId, ChannelId, ConversationId, ExchangeId, ProjectionId, SpanId,
+    TransmissionId,
+};
 use crate::interfaces::l2_transport::{ConsumerGroup, DeadLetter};
 use crate::interfaces::l6_analysis::SearchResults;
+use crate::observed::message::PartRef;
 use crate::paging::{
     AgentList, AlertList, AlertRuleList, AuditList, ChannelList, ChannelTransmissionList,
-    DeadLetterList, EdgeTransmissionList, Page, PageRequest, ProjectionList, ResourceUseList,
-    SearchList, TopicList, TransmissionList,
+    ConversationList, DeadLetterList, EdgeTransmissionList, Page, PageRequest, ProjectionList,
+    ResourceUseList, SearchList, SpanReaderList, TopicList, TransmissionList,
 };
 use crate::support::TimeWindow;
 use crate::wire::WireRequest;
@@ -200,6 +220,11 @@ use crate::wire::WireRequest;
 use audit::{AuditEntry, AuditFilter};
 use channel_traffic::{ChannelTransmissionFilter, ChannelTransmissionPage};
 use channels::{ChannelName, ChannelRow, PromotionPreview};
+use conversation::text::{ConversationText, PartText, TextLimit, TextSlice};
+use conversation::turn::{Reader, TurnPage};
+use conversation::{
+    ConversationFilter, ConversationHead, ConversationRow, ExchangePlacement, SpanPoint, TurnWindow,
+};
 use evidence::TransmissionEvidence;
 use excerpt::ExcerptWindow;
 use export::{Export, ExportRequest, ExportStream};
@@ -407,6 +432,106 @@ pub trait QueryApi {
         caller: &Caller,
         ids: &IdBatch<AgentId>,
     ) -> impl Future<Output = Result<BTreeMap<AgentId, AgentName>, QueryError>> + Send;
+
+    /// View. A page of the conversations `filter` admits, newest first
+    /// (`ConversationId` descending), each as a [`ConversationRow`]. With
+    /// `filter.agent`, the conversations whose stored agent resolves to the
+    /// same canonical agent as `filter.agent` (an alias's conversations
+    /// included, so a merge shows them together and an unmerge splits them
+    /// on the next read); an unknown agent lists nothing. Non-empty
+    /// `origins` keeps those origin kinds; `replay` keeps by traffic
+    /// source. The cursor binds the filter and the agents it resolved to:
+    /// a merge or unmerge of them between pages makes the next page
+    /// `InvalidCursor`, and the client restarts.
+    fn conversations(
+        &self,
+        caller: &Caller,
+        filter: &ConversationFilter,
+        page: &PageRequest<ConversationList>,
+    ) -> impl Future<Output = Result<Page<ConversationRow, ConversationList>, QueryError>> + Send;
+
+    /// View. The head of a conversation page: its row, its traffic, its
+    /// successors (forks and compactions of it), the delegation that
+    /// started it and the harness claims seen on its turns. `None` for an
+    /// unknown id.
+    fn conversation(
+        &self,
+        caller: &Caller,
+        id: ConversationId,
+    ) -> impl Future<Output = Result<Option<ConversationHead>, QueryError>> + Send;
+
+    /// View. The turns `window` names, in threading order, with their
+    /// structure and provenance marks and no message text. `None` for an
+    /// unknown conversation. A window starting at or past the last turn is
+    /// an empty page carrying `total`, not an error.
+    fn conversation_turns(
+        &self,
+        caller: &Caller,
+        id: ConversationId,
+        window: &TurnWindow,
+    ) -> impl Future<Output = Result<Option<TurnPage>, QueryError>> + Send;
+
+    /// View. Every reader of one indexed span (one content match whose
+    /// origin it is each), newest reader exchange first: the rest of a
+    /// `ReadBy` that did not fit inline. `None` for a span L4 does not
+    /// keep.
+    fn span_readers(
+        &self,
+        caller: &Caller,
+        span: SpanId,
+        page: &PageRequest<SpanReaderList>,
+    ) -> impl Future<Output = Result<Option<Page<Reader, SpanReaderList>>, QueryError>> + Send;
+
+    /// View. For each exchange of `ids` that has been threaded, keyed by
+    /// that id, where it sits ([`conversation::ExchangePlacement`]): its
+    /// turn's agent, resolved through `AgentDirectory::canonical` at the
+    /// read (never stored resolved), its conversation and its turn.
+    /// Unthreaded and unknown ids are left out. Bounded as `agent_names`
+    /// is: more than [`IdBatch::MAX`] distinct ids is refused before the
+    /// call as `InvalidInput(TooManyIds)`.
+    fn exchange_turns(
+        &self,
+        caller: &Caller,
+        ids: &IdBatch<ExchangeId>,
+    ) -> impl Future<Output = Result<BTreeMap<ExchangeId, ExchangePlacement>, QueryError>> + Send;
+
+    /// View. For each span of `ids` that `SpanIndex::spans` holds, keyed by
+    /// that id, where it sits: its author (canonical at the read), its
+    /// exchange, the conversation turn when that exchange is threaded, and
+    /// its location. Unknown ids are left out. Bounded as `exchange_turns`.
+    fn span_points(
+        &self,
+        caller: &Caller,
+        ids: &IdBatch<SpanId>,
+    ) -> impl Future<Output = Result<BTreeMap<SpanId, SpanPoint>, QueryError>> + Send;
+
+    /// Content. The text of the turns `window` names, aligned with
+    /// `conversation_turns` for the same window: per turn the same
+    /// messages, per message the same parts, in the same order. Each part's
+    /// text is clipped to `limit` bytes on a character boundary. A body
+    /// content retention dropped is `BodyText::BodyDropped` and the rest is
+    /// returned. `None` for an unknown conversation. A limit outside
+    /// `1..=TextLimit::MAX` is refused before the call as
+    /// `InvalidInput(TextLimitOutOfRange)`.
+    fn conversation_text(
+        &self,
+        caller: &Caller,
+        id: ConversationId,
+        window: &TurnWindow,
+        limit: TextLimit,
+    ) -> impl Future<Output = Result<Option<ConversationText>, QueryError>> + Send;
+
+    /// Content. A slice of one part's text (`Message::part_text`): the
+    /// "show more" of a clipped part. `None` when the blob store has no
+    /// such message; a part with no text is
+    /// `InvalidInput(PartWithoutText)`, a slice start past the text or
+    /// inside a character `InvalidInput(SliceOutsideText)`.
+    fn part_text(
+        &self,
+        caller: &Caller,
+        part: PartRef,
+        slice: TextSlice,
+    ) -> impl Future<Output = Result<Option<PartText>, QueryError>> + Send;
 
     /// View. Built-in rules first, in [`BuiltinRule::ALL`] order, then user
     /// rules newest first. Every rule is listed: none is ever deleted. One
@@ -824,9 +949,10 @@ pub trait OperatorActions {
     /// `VerdictError` for `SetVerdict`, `RuleError` for rule management,
     /// `CatalogError` and `PinError` for pins. A call that returns `Ok` or an `ActionError` other than `Store` leaves exactly one
     /// operator audit entry, whose outcome is what it returns
-    /// (`AuditOutcome::of`): a `Succeeded` entry is written in the same
-    /// transaction as the action's effect, and a `Forbidden` or `Rejected`
-    /// one with no effect. A `Store` error had no effect and leaves at most
+    /// (`AuditOutcome::of`): a permitted call records an `AuditIntent`
+    /// before its effect and its entry after it, an interrupted one is
+    /// recorded `Interrupted` at start (`audit::AuditIntents`), and a
+    /// `Forbidden` or `Rejected` one has no effect. A `Store` error had no effect and leaves at most
     /// one entry, written when the audit log is still reachable.
     fn act(
         &self,

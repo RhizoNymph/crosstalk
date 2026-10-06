@@ -1,0 +1,26 @@
+[invariant]
+id = "canonical.ids.derived-event-id"
+statement = "EventId::derive(parent, label, ordinal) is a function of its three arguments, keeps the parent's millisecond, and gives distinct ids for distinct labels or ordinals of one parent."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+A consumer that republishes after a redelivery or a restart must publish
+the same envelopes under the same ids, or the bus and the consumers
+downstream cannot deduplicate them. The id keeps its cause's millisecond
+so it sorts with it. Labels are length-prefixed in the digest, so a label
+that is a prefix of another cannot collide with it. The derivation is
+pinned: changing it would give every redelivery after an upgrade new ids.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::derived_ids::derived_event_id_is_the_documented_digest",
+    "crosstalk_spec::tests::derived_ids::derived_event_id_is_stable_and_keeps_the_parent_millisecond",
+    "crosstalk_spec::tests::derived_ids::derived_event_ids_differ_by_label_ordinal_and_parent",
+]
+property = "crosstalk_spec::tests::derived_ids::derived_event_ids_are_functions_of_their_inputs"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+property = { agent = "true", human = "false" }

@@ -3,7 +3,8 @@
 //!
 //! Shaped like the recorded corpus (`crates/testkit/corpus/anthropic`):
 //! the headers Claude Code sends (`user-agent: claude-cli/…`,
-//! `x-claude-code-session-id`, `x-api-key`, `anthropic-beta`), the full
+//! `x-claude-code-session-id`, `x-api-key` or a subscription's Bearer
+//! token, `anthropic-beta`), the full
 //! history in every request, the Claude Code system prompt and tool list,
 //! `metadata.user_id` naming the session, and a streamed response with one
 //! content block per assistant block.
@@ -106,11 +107,47 @@ impl Turn {
     }
 }
 
+/// How a session authenticates. Either way the credential is hashed at L0
+/// and never leaves the hot path.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Credential {
+    /// A Console API key, sent as `x-api-key`.
+    ApiKey(String),
+    /// A Claude Pro/Max login: the OAuth access token as
+    /// `Authorization: Bearer`, with the OAuth capability in
+    /// `anthropic-beta` that subscription requests require.
+    Subscription { access_token: String },
+}
+
+/// The `anthropic-beta` values every request carries.
+const BETAS: &str = "claude-code-20250219,interleaved-thinking-2025-05-14";
+/// The same with the OAuth capability, as Claude Code sends on a claude.ai
+/// login.
+const OAUTH_BETAS: &str = "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14";
+
+impl Credential {
+    /// The header carrying the credential, and its value.
+    fn header(&self) -> (&'static str, String) {
+        match self {
+            Self::ApiKey(key) => ("x-api-key", key.clone()),
+            Self::Subscription { access_token } => {
+                ("authorization", format!("Bearer {access_token}"))
+            }
+        }
+    }
+
+    fn betas(&self) -> &'static str {
+        match self {
+            Self::ApiKey(_) => BETAS,
+            Self::Subscription { .. } => OAUTH_BETAS,
+        }
+    }
+}
+
 /// Who a session is on the wire.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SessionHeaders {
-    /// The `x-api-key` value. Hashed at L0; never leaves the hot path.
-    pub api_key: String,
+    pub credential: Credential,
     /// The `x-claude-code-session-id` value.
     pub session_id: String,
     /// The account part of `metadata.user_id`.
@@ -192,12 +229,10 @@ pub fn request(session: &SessionHeaders, history: &[Turn], tools: &[ToolSpec]) -
         "max_tokens": 32000,
         "stream": true,
     });
+    let credential = session.credential.header();
     let headers = [
         ("accept", "application/json".to_owned()),
-        (
-            "anthropic-beta",
-            "claude-code-20250219,interleaved-thinking-2025-05-14".to_owned(),
-        ),
+        ("anthropic-beta", session.credential.betas().to_owned()),
         (
             "anthropic-dangerous-direct-browser-access",
             "true".to_owned(),
@@ -209,7 +244,7 @@ pub fn request(session: &SessionHeaders, history: &[Turn], tools: &[ToolSpec]) -
             format!("claude-cli/{CLAUDE_CODE_VERSION} (external, cli)"),
         ),
         ("x-app", "cli".to_owned()),
-        ("x-api-key", session.api_key.clone()),
+        credential,
         ("x-claude-code-session-id", session.session_id.clone()),
         ("x-stainless-arch", "x64".to_owned()),
         ("x-stainless-lang", "js".to_owned()),

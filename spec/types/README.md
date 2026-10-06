@@ -28,10 +28,10 @@ spec/types/
 ├── mod.rs                 crate root: the three tiers, aliases, events, interfaces
 ├── aliases.rs             Aliases (read-time resolution of merged agents and superseded channels), Resolve, NoAliases
 ├── batch.rs               IdBatch (checked: distinct, ascending, at most 1,000; a WireRequest), TooManyIds: the one id batch of every name lookup (agents, channels)
-├── ids.rs                 typed ids: ULID entity ids (incl. AuditId, ExportId, MergeId, ProjectionId, SinkId; ulid_text, from_ulid_text, InvalidUlidText; WireRequests; EntityId), BLAKE3 content ids (incl. ConfigHash), secret digests
+├── ids.rs                 typed ids: ULID entity ids (incl. AuditId, ExportId, MergeId, ProjectionId, SinkId; ulid_text, from_ulid_text, InvalidUlidText; WireRequests; EntityId; EventId::derive, an envelope id derived from its cause's id, a label and an ordinal), BLAKE3 content ids (incl. ConfigHash), secret digests
 ├── ids/
 │   ├── mint.rs            UlidGenerator (over the injected Clock and a RandomSource; monotonic per generator: next_ulid, mint, and next_at, mint_at stamping a given time), SeededRandom (new, from_entropy), UlidExhausted
-│   └── secret.rs          DeploymentSecret (no serde, Clone or key accessor; Debug and Display show the version; from_hex ignores surrounding whitespace), KeyedHasher (the only maker of CredentialHash and AccountHash; rotation overlap), SecretDigests, InvalidSecret, InvalidRotation
+│   └── secret.rs          DeploymentSecret (no serde, Clone or key accessor; Debug and Display show the version; from_hex ignores surrounding whitespace), KeyedHasher (the only maker of CredentialHash and AccountHash; rotation overlap; derive_key: a per-purpose DerivedKey from the current version, e.g. cursor MAC keys), DerivedKey (no serde or Clone; Debug shows the version), SecretDigests, InvalidSecret, InvalidRotation
 ├── support.rs             NonEmpty, NonBlank, DisplayText (checked), QueryText (checked: at most MAX characters, line breaks allowed), Capped (checked: capped list with exact total), Change, Timestamp, Clock (the injected wall clock: now; SystemClock reads the OS clock), TimeWindow (a WireRequest), ByteRange, Blake3 (of, hex), hex and from_hex (raw bytes), Similarity, Share, Finite (an f32 never NaN or infinite), Watermark; each with its wire form
 ├── paging.rs              PageSize, Cursor (typed by list), PageRequest (a WireRequest), Page (checked, also when decoded: InvalidPage), one marker per list (incl. AuditList, AlertList, SearchList, TopicList, ProjectionList, ResourceUseList, TransmissionList)
 ├── wire/                  the JSON wire contract: conventions, requests and authority
@@ -103,7 +103,7 @@ spec/types/
 ├── interfaces/            one module per layer: traits (read and write side) and their errors; mod.rs states the write-side, publication and time conventions
 │   ├── l0_ingress.rs      UpstreamRouter, ClientIdentifier (derivations at the exchange's start time), ProviderAdapter, HarnessRequest and BodyDecodeError (what capture decodes from a request body, in process; not the JSON wire's), ResponseHead, ResponseFramer, WebSocketTap
 │   ├── l1_canonical.rs    Normalizer, NormalizedExchange (with its media; check, applied on decode: InvalidNormalizedExchange; serde for goldens, in process only), NormalizeWarning
-│   ├── l2_transport.rs    EventBus, Subscription, RetryPolicy, ConsumerGroup (a WireRequest), DeadLetter, DeadLetterStore (list, replay), BlobStore (None: dropped by retention)
+│   ├── l2_transport.rs    EventBus (MpscBus, PgBus, SpoolingBus, JetStreamBus; durability and idempotent publish), Subscription, RetryPolicy, ConsumerGroup (a WireRequest), DeadLetter, DeadLetterStore (list, replay), BlobStore (None: dropped by retention), BusError (incl. SpoolFull)
 │   ├── l3_reconstruction.rs IdentityResolver (merge, unmerge, rename, resolve over derived evidence), EvidenceDeriver, AgentDirectory, ClaimStore, Threader, ExchangePlacements (placement by exchange), Placement, ResolveError (incl. MergeIntoSelf)
 │   ├── l3_reconstruction/
 │   │   ├── agents.rs      AgentReads (list, cluster, names), ActivityStore, AgentReadError
@@ -137,7 +137,7 @@ spec/types/
 │       ├── excerpt.rs     ExcerptWindow (checked; DEFAULT, MATCH_ONLY; a WireRequest), Excerpt (checked: boundaries, bounds, counts that fit a part; cut), Excerpted (of; BodyDropped), ExcerptError, CutError
 │       ├── overview.rs    OverviewCounts, QueueCounts (tally: shown alerts, listed channels, unconfirmed channels)
 │       ├── live.rs        LiveFeed, UiEvent (id only, from Changed), LiveItem (event_name: the SSE event; its cursor is the SSE id), LiveCursor (its text on the wire), LiveEnd (EVENT_NAME), FeedWindow (checked), LiveConfig (checked; neither serialized)
-│       ├── audit.rs       AuditLog, AuditEntry, AuditBody (operator, config, export), OperatorRecord (checked; keeps a CallerSnapshot), AuditOutcome, ConfigChange (incl. sinks, never their endpoints, and retention), AuditSubject (incl. Sink), AuditFilter (a WireRequest)
+│       ├── audit.rs       AuditLog, AuditIntents (write-ahead intents: intend, complete, recover_interrupted), AuditIntent (checked: a permitted call), AuditEntry, AuditBody (operator, config, export), OperatorRecord (checked; keeps a CallerSnapshot), AuditOutcome (incl. Interrupted), ConfigChange (incl. sinks, never their endpoints, and retention), AuditSubject (incl. Sink), AuditFilter (a WireRequest)
 │       ├── sinks.rs       AlertSink, SinkInfo (last_delivery adjacently tagged: succeeded or failed), SinkKind, SinkError; SinkRegistry (record_delivery, sinks), SinkRegistryError
 │       ├── export/        QueryApi::export: one dataset streamed between a header and a trailer
 │       │   ├── mod.rs     module docs and re-exports
@@ -165,6 +165,8 @@ spec/types/
     ├── encoding/          the message encoding and canonical JSON: pinned vectors, round trips, decode as encode's exact inverse, RFC 8785 vectors, exact numbers
     ├── secrets.rs         keyed digests per version (BLAKE3's keyed vector), rotation overlaps, a secret never shown
     ├── minting.rs         ULIDs: monotonic whatever the clock reads, distinct across generators, a function of clock and seed
+    ├── derived_ids.rs     EventId::derive (pinned digest, a function of its inputs) and KeyedHasher::derive_key (stable across restarts, per purpose)
+    ├── audit_intents.rs   write-ahead audit intents and the Interrupted outcome
     ├── wire/              the wire contract: harness.rs (goldens, CROSSTALK_BLESS, rejection and request checks), mod.rs (the golden layout check), one module per area; http/ the HTTP binding (TableClient: a QueryApi over the route table)
     └── golden/            one file per wire shape, <area>/<name>.json (encoding/vectors.json: the pinned message encodings); one JSONL golden (surface_reads/export/export_complete.jsonl: a complete export, line by line)
 ```

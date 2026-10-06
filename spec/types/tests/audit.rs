@@ -678,6 +678,9 @@ fn every_input_error() -> Vec<InputError> {
             | InputError::ExcerptContextTooLong { .. }
             | InputError::TooManyIds { .. }
             | InputError::UnsupportedFormat { .. }
+            | InputError::TextLimitOutOfRange { .. }
+            | InputError::PartWithoutText { .. }
+            | InputError::SliceOutsideText { .. }
             | InputError::MalformedRequest { .. } => input,
         }
     }
@@ -702,6 +705,15 @@ fn every_input_error() -> Vec<InputError> {
         },
         InputError::UnsupportedFormat {
             format: ExportFormat::Parquet,
+        },
+        InputError::TextLimitOutOfRange {
+            max: 65_536,
+            got: 0,
+        },
+        InputError::PartWithoutText { index: 2 },
+        InputError::SliceOutsideText {
+            from: 9000,
+            part_len: 8192,
         },
         InputError::MalformedRequest {
             kind: DecodeErrorKind::Data,

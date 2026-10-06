@@ -27,6 +27,7 @@
 //! the bus, not only the stores' own.
 
 pub(crate) mod fitting;
+mod reads;
 mod stores;
 
 use std::collections::BTreeSet;
@@ -71,6 +72,7 @@ use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
 pub use fitting::{FitRunError, ProjectionFitting};
+pub use reads::{ConversationStores, Unrecorded};
 pub use stores::{Alerts, Directory, Edges, Export, MemoryEvidence, MemoryStores, Search};
 
 /// How the in-process surface and its stores are configured.
@@ -153,11 +155,11 @@ impl Backbone<MemoryBlobStore> {
 }
 
 /// The surface over the reference stores, and handles on both.
-pub struct InProcess<B = MemoryBlobStore> {
+pub struct InProcess<B = MemoryBlobStore, R = Unrecorded> {
     /// The stores: seed the world through the spec's write traits on them.
-    pub stores: MemoryStores<B>,
+    pub stores: MemoryStores<B, R>,
     /// The surface: `QueryApi`, `OperatorActions` and `LiveFeed`.
-    pub surface: Arc<Surface<MemoryStores<B>>>,
+    pub surface: Arc<Surface<MemoryStores<B, R>>>,
     /// Keeps the graphs' node facts current; the relay feeds it.
     pub nodes: NodeFeeder<MemoryAgents, MemoryChannels<MemoryAgents>>,
     relay: JoinHandle<()>,
@@ -176,16 +178,32 @@ impl InProcess<MemoryBlobStore> {
     }
 }
 
-impl<B> InProcess<B>
+impl<B> InProcess<B, Unrecorded>
 where
     B: BlobStore + Clone + Send + Sync + 'static,
 {
-    /// Build every store over `backbone`, load `options.access`, rebuild
-    /// the node facts, start the live feed and the relay, and build the
-    /// surface. Needs a tokio runtime.
+    /// [`InProcess::start_with_reads`] with no conversation records.
     pub async fn start_with(
         options: InProcessOptions,
         backbone: Backbone<B>,
+    ) -> Result<Self, InProcessError> {
+        Self::start_with_reads(options, backbone, Unrecorded).await
+    }
+}
+
+impl<B, R> InProcess<B, R>
+where
+    B: BlobStore + Clone + Send + Sync + 'static,
+    R: ConversationStores,
+{
+    /// Build every store over `backbone`, load `options.access`, rebuild
+    /// the node facts, start the live feed and the relay, and build the
+    /// surface, its conversation reads over `reads`. Needs a tokio
+    /// runtime.
+    pub async fn start_with_reads(
+        options: InProcessOptions,
+        backbone: Backbone<B>,
+        reads: R,
     ) -> Result<Self, InProcessError> {
         let Backbone {
             bus,
@@ -288,6 +306,7 @@ where
             evidence,
             export,
             nodes,
+            reads,
         };
         let feed = FeedWriter::spawn(options.surface.live, FeedEpoch(started.as_micros()));
         let feeder = NodeFeeder::new(

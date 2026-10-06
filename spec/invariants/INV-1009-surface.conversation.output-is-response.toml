@@ -1,0 +1,16 @@
+[invariant]
+id = "surface.conversation.output-is-response"
+statement = "A turn's output is the message whose entry is the exchange's output (its response when Completed, its partial response when Failed), None when the exchange has none, and MessagePlacement::Output appears only there."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Write-side marks (output spans and their readers) hang off the output;
+mixing it with inputs would put readers on text the agent only received.
+"""
+
+[evidence]
+unit = "crosstalk_surface::tests::conversations::output_is_the_response_or_partial"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

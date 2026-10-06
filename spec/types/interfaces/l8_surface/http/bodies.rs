@@ -14,6 +14,7 @@
 //! | `POST /query/series` | [`SeriesBody`] | `series` |
 //! | `POST /query/search` | [`SearchBody`] | `search` |
 //! | `POST /projections` | [`FitProjectionBody`] | `fit_projection` |
+//! | `POST /query/part-text` | [`PartTextBody`] | `part_text` |
 
 use serde::{Deserialize, Serialize};
 
@@ -21,10 +22,12 @@ use crate::aggregates::edge::{EdgeSelector, TopologyFilter, Weighting};
 use crate::aggregates::filter::TopicVersionSelector;
 use crate::aggregates::projection::ProjectionParams;
 use crate::aggregates::series::{SeriesGrid, SeriesGrouping};
+use crate::observed::message::PartRef;
 use crate::paging::{EdgeTransmissionList, PageRequest, SearchList, TransmissionList};
 use crate::support::TimeWindow;
 use crate::wire::WireRequest;
 
+use super::super::conversation::text::TextSlice;
 use super::super::lists::SearchRequest;
 use super::super::summary::TransmissionSelection;
 
@@ -107,3 +110,14 @@ pub struct FitProjectionBody {
 }
 
 impl WireRequest for FitProjectionBody {}
+
+/// `part_text`: `{"part": {"message": "…", "index": 0}, "slice": {"from":
+/// 8192, "limit": 8192}}`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct PartTextBody {
+    pub part: PartRef,
+    pub slice: TextSlice,
+}
+
+impl WireRequest for PartTextBody {}

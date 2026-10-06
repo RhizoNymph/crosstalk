@@ -1,0 +1,21 @@
+[invariant]
+id = "surface.cursor.survives-restart"
+statement = "A page cursor the surface or a store issued resolves to the same page after a restart with the same deployment secret."
+kind = "coordination"
+requires = ["unit", "integration"]
+rationale = """
+Clients page through lists across a gateway restart. Table cursors
+persist; MAC-keyed cursors (the surface's CursorKey, PgAgents' cursor
+key) would all turn InvalidCursor if their key were drawn at start, so
+each key is derived from the deployment secret with a per-purpose label
+(KeyedHasher::derive_key). A secret rotation invalidates them, which is
+accepted (decision Q4).
+"""
+
+[evidence]
+unit = "crosstalk_surface::tests::cursor::cursor_keyed_from_the_secret_resolves_after_restart"
+integration = "crosstalk_e2e::restart::cursors_resolve_after_restart"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

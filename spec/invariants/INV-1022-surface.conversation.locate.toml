@@ -1,0 +1,21 @@
+[invariant]
+id = "surface.conversation.locate"
+statement = "exchange_turns maps an exchange to ExchangePlacement { agent, conversation: c, turn: i } iff turn i of conversation c is that exchange, with agent the agent that turn was attributed to as resolved through AgentDirectory::canonical at the read (never stored resolved), and leaves out unknown and never-threaded exchanges; span_points maps a span to its recorded exchange, that exchange's turn when it is threaded, its recorded location, and AgentDirectory::canonical of its recorded author at the read."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+The /exchanges and /spans redirects land on these points; a wrong turn
+sends the investigator to someone else's text.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_reconstruct::tests::conversation_reads::locate_names_each_threaded_exchanges_turn",
+    "crosstalk_surface::tests::conversations::span_points_locate_spans_and_resolve_authors",
+]
+integration = "crosstalk_reconstruct::tests::pg_conversation_reads::pg_conversation_reads_agree_with_memory"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

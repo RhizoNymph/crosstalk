@@ -174,6 +174,41 @@ proptest! {
     }
 }
 
+/// Once `message_stop` reports `Finished`, the rest of the stream is ignored
+/// whatever it holds and however it is chunked: a later `message_stop`
+/// reports nothing and a later `error` event is no error. (Shrunk from a
+/// failing run of `events_form_ordered_prefix`: a chunk ending inside the
+/// first `message_stop` used to leave its tail unread and the next push
+/// resumed scanning past `Finished`.)
+#[test]
+fn nothing_reported_after_finished() {
+    let pieces = [
+        "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+        "event: error\ndata: {\"error\":{\"message\":\"x\"}}\n\n",
+        "aaAa\n",
+        "event: future_event\ndata: {}\n\n",
+        "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+        "  AAA00 aaa \n",
+        "event: message_start\ndata: {\"type\":\"message_start\"}\n\n",
+        "A0\n",
+    ];
+    let bytes = Bytes::from(pieces.concat());
+    let head = head(200, Some(SSE));
+    let finished = (vec![FrameEvent::FirstContent, FrameEvent::Finished], None);
+    let shrunk: [usize; 3] = [
+        3_823_227_180_157_404_380,
+        9_280_592_204_420_511_722,
+        1_154_208_280_455_854_135,
+    ];
+    assert_eq!(run(&head, &split(&bytes, &shrunk)), finished);
+    assert_eq!(run(&head, std::slice::from_ref(&bytes)), finished);
+    let bytewise: Vec<Bytes> = (0..bytes.len()).map(|at| bytes.slice(at..at + 1)).collect();
+    assert_eq!(run(&head, &bytewise), finished);
+    for cut in 0..=bytes.len() {
+        assert_eq!(run(&head, &split(&bytes, &[cut])), finished, "cut at {cut}");
+    }
+}
+
 /// The framer follows the documented table: an event stream for a 2xx
 /// `text/event-stream` (parameters and case aside), one JSON body for any
 /// other 2xx, and an error document for any other status, from the

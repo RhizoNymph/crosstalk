@@ -468,6 +468,7 @@ streams from testkit without waiting for P3.
 - [ ] Round-trip tests: client to server to memory stores.
 
 ### P7.3 Surface on Postgres
+Design: [docs/features/postgres_stores.md](features/postgres_stores.md) (survey, durable bus, publish spool, checkpoints, restart semantics, workstreams; reviewed in PR #103, decisions recorded; implementation starts with the spec workstream).
 - [ ] Wire the surface to the Postgres stores in the gateway.
 - [ ] An end-to-end test: the wiki demo traffic, then the API, showing the graph, evidence and alert.
 

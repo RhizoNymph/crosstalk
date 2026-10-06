@@ -5,6 +5,7 @@ use std::fmt::Write;
 use serde::Serialize;
 
 use super::{Report, ReportRow};
+use crate::predict::EvidenceClass;
 use crate::report::gates::GateStatus;
 
 /// A value's snake_case serde name (`user_turn`), for table cells.
@@ -161,6 +162,25 @@ pub fn render(report: &Report) -> String {
         let _ = writeln!(out, "\nnegative-control violations:");
         for row in &report.violations {
             let _ = writeln!(out, "  {:<20} {}", name(&row.reason), row.count);
+        }
+    }
+    if !report.access_only_under_controls.is_empty() {
+        let _ = writeln!(
+            out,
+            "\naccess-only predictions under negative controls (not violations, not gated):"
+        );
+        for row in &report.access_only_under_controls {
+            let verdict = if row.class == EvidenceClass::Discarded {
+                "dismissed on"
+            } else {
+                "suspected under"
+            };
+            let _ = writeln!(
+                out,
+                "  {verdict} {} controls: {}",
+                name(&row.reason),
+                row.count
+            );
         }
     }
     if let Some(background) = &report.background {

@@ -9,7 +9,11 @@
 //! | 4 | B | `b2-repeat` | the tool result is the page, [`SENTENCE`] in it; B's answer repeats [`SENTENCE`] |
 //!
 //! A and B are separate Claude Code sessions with separate API keys and
-//! session ids, so L3 resolves two agents. The sentence is A's own output
+//! session ids, so L3 resolves two agents. [`Scenario::wiki_relay_subscription`]
+//! is the same relay on Claude Pro/Max logins: each session sends a fake
+//! OAuth access token with the OAuth capability, and A's token is
+//! refreshed between its two exchanges, so only the session id carries A
+//! across them. The sentence is A's own output
 //! (the write call's input), so L4 indexes it as originated by A and
 //! matches it in B's tool result (`ContentMatched`). L5 extracts a write
 //! access from exchange 1 and a read access from exchange 4 (reads are
@@ -32,8 +36,26 @@ use crosstalk_spec::support::Timestamp;
 
 pub use self::tools::{WIKI_PAGE, read_call, write_call};
 use self::wire::{
-    Block, HttpRequest, HttpResponse, Role, SessionHeaders, Stop, ToolSpec, Turn, Usage,
+    Block, Credential, HttpRequest, HttpResponse, Role, SessionHeaders, Stop, ToolSpec, Turn, Usage,
 };
+
+/// How the scenario's sessions authenticate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Auth {
+    /// Console API keys, one per session.
+    ApiKeys,
+    /// Claude Pro/Max logins: fake OAuth access tokens, A's refreshed
+    /// between its two exchanges.
+    Subscription,
+}
+
+/// The fake access tokens of [`Auth::Subscription`]: A's before and after
+/// its refresh, then B's. Shaped like real ones; never real.
+pub const SUBSCRIPTION_TOKENS: [&str; 3] = [
+    "sk-ant-oat01-TEST-e2e-agent-a-Hq4Wz8Lk2Vn6Rt9Yb3Mc7Xp1",
+    "sk-ant-oat01-TEST-e2e-agent-a-refreshed-Jd5Gs8Ku2Ne6Qw",
+    "sk-ant-oat01-TEST-e2e-agent-b-Zf3Tm7Ry1Pc5Lh9Vx2Kb6Sn",
+];
 
 /// The sentence A originates and B repeats: distinctive enough that no
 /// other text in the scenario (or anywhere) shares a shingle with it.
@@ -98,10 +120,20 @@ fn exchange_id(started_at: Timestamp, ordinal: u128) -> ExchangeId {
 impl Scenario {
     /// The wiki relay starting at `start`.
     pub fn wiki_relay(start: Timestamp) -> Self {
-        let answer = format!(
-            "The runbook is explicit about it: {SENTENCE} After that the rollback itself is a normal deploy of the previous tag."
-        );
-        Self::relay_with(start, tools::page_as_read(), answer)
+        Self::relay_with(start, tools::page_as_read(), relay_answer(), Auth::ApiKeys)
+    }
+
+    /// The wiki relay on Claude Pro/Max logins ([`Auth::Subscription`]):
+    /// the same traffic but for the credentials, with A's access token
+    /// refreshed between `a1-write` and `a2-ack`. `agents` holds each
+    /// session's first token.
+    pub fn wiki_relay_subscription(start: Timestamp) -> Self {
+        Self::relay_with(
+            start,
+            tools::page_as_read(),
+            relay_answer(),
+            Auth::Subscription,
+        )
     }
 
     /// The wiki relay where nothing crosses: A writes the page as before,
@@ -115,16 +147,26 @@ impl Scenario {
             start,
             tools::withheld_as_read(),
             "The runbook page is under review and has no steps in it yet; I can't tell you what has to happen before a rollback.".to_owned(),
+            Auth::ApiKeys,
         )
     }
 
-    /// The relay with B's `Read` returning `read_result` and B answering
-    /// `answer`.
-    fn relay_with(start: Timestamp, read_result: String, answer: String) -> Self {
+    /// The relay with B's `Read` returning `read_result`, B answering
+    /// `answer`, and the sessions authenticating by `auth`.
+    fn relay_with(start: Timestamp, read_result: String, answer: String, auth: Auth) -> Self {
+        let credential = |api_key: &str, token: &str| match auth {
+            Auth::ApiKeys => Credential::ApiKey(api_key.to_owned()),
+            Auth::Subscription => Credential::Subscription {
+                access_token: token.to_owned(),
+            },
+        };
         let a = ScenarioAgent {
             name: "a",
             headers: SessionHeaders {
-                api_key: "sk-ant-api03-e2e-agent-a-0000000000000000000000000000000000000000000000000000000000000000-AAAAAAAA".to_owned(),
+                credential: credential(
+                    "sk-ant-api03-e2e-agent-a-0000000000000000000000000000000000000000000000000000000000000000-AAAAAAAA",
+                    SUBSCRIPTION_TOKENS[0],
+                ),
                 session_id: "3f1c6a52-8d0e-4b7a-9c21-5e6f0a1b2c3d".to_owned(),
                 user_hash: "a1".repeat(32),
                 cwd: "/home/ops/ledger".to_owned(),
@@ -133,10 +175,24 @@ impl Scenario {
         let b = ScenarioAgent {
             name: "b",
             headers: SessionHeaders {
-                api_key: "sk-ant-api03-e2e-agent-b-1111111111111111111111111111111111111111111111111111111111111111-BBBBBBBB".to_owned(),
+                credential: credential(
+                    "sk-ant-api03-e2e-agent-b-1111111111111111111111111111111111111111111111111111111111111111-BBBBBBBB",
+                    SUBSCRIPTION_TOKENS[2],
+                ),
                 session_id: "9b7e2d14-6c3f-4e8a-b5d9-0f1e2a3b4c5d".to_owned(),
                 user_hash: "b2".repeat(32),
                 cwd: "/home/sre/oncall".to_owned(),
+            },
+        };
+        // A after its token refresh: on API keys, nothing changes.
+        let a_later = match auth {
+            Auth::ApiKeys => a.clone(),
+            Auth::Subscription => ScenarioAgent {
+                name: a.name,
+                headers: SessionHeaders {
+                    credential: credential("", SUBSCRIPTION_TOKENS[1]),
+                    ..a.headers.clone()
+                },
             },
         };
         let tools = tools::declared();
@@ -191,7 +247,7 @@ impl Scenario {
             "Published the runbook at {WIKI_PAGE}."
         ))];
         exchanges.push(exchange(
-            &a,
+            &a_later,
             start,
             &tools,
             Step {
@@ -287,6 +343,13 @@ impl Scenario {
             .last()
             .map_or(self.start, |exchange| exchange.ended_at)
     }
+}
+
+/// B's answer in the relay: it repeats [`SENTENCE`].
+fn relay_answer() -> String {
+    format!(
+        "The runbook is explicit about it: {SENTENCE} After that the rollback itself is a normal deploy of the previous tag."
+    )
 }
 
 /// One scripted exchange before it is put on the wire.

@@ -387,6 +387,15 @@ others.
 | window slice, before (old converter) | 4078 | 0.999 / 1.000 | - | 0 / 4 | - | 3.5 h | 1.2 GB |
 | window slice, now | 4089 (+ 15 access-only) | - | 0.996 / 1.000 (4074 / 4089) | 0 / 15 | 0.000 (0 / 15) | 3.6 h | 1.3 GB |
 
+Since `perf/live-profiling` the same slice runs live in about 3 minutes
+(2 h 52 min before on the same machine; 168 s of CPU against 7,105 s;
+peak RSS 2.1 GB against 1.15 GB, the bounded L4 caches), with
+byte-identical predictions and report. The time went to L4's fingerprint
+index counting frequencies over every observation, rebuilding the
+inputs' coverage and decoding the request history on every exchange, and
+re-encoding every history body on ingest (gateway.md, provenance.md,
+memory.md). The week window has not been rerun.
+
 Reference on the same slice: 4,074 / 4,078 before and 4,074 / 4,089 now
 (chat unchanged; channel rows 0 by construction).
 

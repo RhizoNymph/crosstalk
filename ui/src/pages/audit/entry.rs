@@ -4,7 +4,7 @@
 //! both read entries through [`entry_view`].
 
 use crosstalk_spec::interfaces::l8_surface::audit::{
-    AuditBody, AuditEntry, AuditOutcome, AuditSubject, ConfigOutcome,
+    AuditBody, AuditEntry, AuditOutcome, AuditSubject, ConfigOutcome, INTERRUPTED_REASON,
 };
 use crosstalk_spec::interfaces::l8_surface::export::{ExportEnd, ExportEvent};
 use crosstalk_spec::interfaces::l8_surface::{ActionOutcome, Permission, QueryError};
@@ -91,6 +91,7 @@ fn outcome(body: &AuditBody) -> OutcomeView {
             },
             AuditOutcome::Forbidden { missing } => OutcomeView::Forbidden(*missing),
             AuditOutcome::Rejected(why) => OutcomeView::Rejected(describe_error(&rejection(why))),
+            AuditOutcome::Interrupted => OutcomeView::Rejected(INTERRUPTED_REASON.to_owned()),
         },
         AuditBody::Config(record) => match &record.outcome {
             ConfigOutcome::Applied => OutcomeView::Applied {
