@@ -9,7 +9,7 @@
 //! - [`PgTransmissionStore`] implements `TransmissionStore` and
 //!   `TransmissionVerdicts` over the stored transmissions and their verdict
 //!   logs.
-//! - [`PgShardTicks`] keeps the correlator shards' tick checkpoints, and
+//! - [`PgShardTicks`] reads the correlator shards' tick records, and
 //!   [`ShardKey`] is the shard key the registry's directory decides.
 //!
 //! **Publishing.** A store publishes what it decides (`ChannelDiscovered`,
@@ -33,6 +33,7 @@ mod error;
 mod ids;
 pub mod outbox;
 mod registry;
+mod restart;
 mod shards;
 mod transmissions;
 
@@ -46,6 +47,7 @@ pub use error::FlowStoreError;
 pub use ids::{ChannelIdSource, IdSourceError, UlidChannelIds};
 pub use outbox::{BusSink, EventSink, Relay, SinkError, Stamp};
 pub use registry::PgChannelRegistry;
+pub use restart::PgFlowDurability;
 pub use shards::PgShardTicks;
 pub use transmissions::PgTransmissionStore;
 

@@ -103,7 +103,7 @@ where
             Err(error) => return Err(error.into()),
         }
         self.durability
-            .access_recorded(&access, &observed.locator)
+            .access_recorded(&access, &observed.locator, resolved.channel)
             .await?;
         steps.push(Step::Publish(BusEvent::Detect(
             DetectEvent::AccessRecorded {

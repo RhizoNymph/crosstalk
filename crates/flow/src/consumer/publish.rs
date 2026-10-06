@@ -3,14 +3,22 @@
 //!
 //! The consumer is at least once: after a redelivery, a re-fed access or
 //! a restore it decides the same things again and publishes the same
-//! events. Each event's envelope id is a function of the event alone: the
-//! millisecond of what it is about (the access, the read of the co-access,
-//! the transmission; ids that are themselves derived from the input) and a
-//! digest of the event's wire JSON. A republished event lands on the id the
-//! bus log already holds (`transport.publish.idempotent-on-id`); a
-//! different event about the same thing (a transmission confirmed with
-//! more content) gets another id. The envelope's `at` is the injected
-//! clock's reading when it is published.
+//! events. Each event's envelope id is a function of the event alone,
+//! stamped with the millisecond of what it is about (ids that are
+//! themselves derived from the input):
+//!
+//! - `AccessRecorded`: the access; `TransmissionConfirmed`,
+//!   `TransmissionSuspected`: the transmission. One each: the consumer
+//!   decides each once, and a repeat after a restart that saw more (an
+//!   access resolved to a channel discovered since, a confirmation that
+//!   already holds its later extensions) lands on the id of the first,
+//!   which the bus keeps.
+//! - `ChannelCrossAccessed`: the co-access's read and a digest of the
+//!   event's wire JSON (one per transmission opened on the read).
+//!
+//! A republished event lands on the id the bus log already holds
+//! (`transport.publish.idempotent-on-id`). The envelope's `at` is the
+//! injected clock's reading when it is published.
 
 use std::sync::Arc;
 
@@ -36,23 +44,31 @@ pub enum PublishError {
 
 /// The envelope id the consumer publishes `event` under.
 pub fn envelope_id(event: &BusEvent, now: Timestamp) -> Result<EventId, PublishError> {
-    let (label, about): (&str, Option<u128>) = match event {
+    let once = |label: &[u8], about: u128| {
+        let millis = u64::try_from(about >> RANDOM_BITS).unwrap_or(u64::MAX);
+        let derived = Derive::new("crosstalk.flow.envelope.v1")
+            .bytes(label)
+            .ulid(about)
+            .at(Timestamp::from_micros(millis.saturating_mul(1_000)));
+        EventId::from_ulid(derived)
+    };
+    let (label, about): (&[u8], Option<u128>) = match event {
         BusEvent::Detect(DetectEvent::AccessRecorded { access, .. }) => {
-            ("access-recorded", Some(access.id.as_ulid()))
-        }
-        BusEvent::Detect(DetectEvent::ChannelCrossAccessed { co_access, .. }) => {
-            ("channel-cross-accessed", Some(co_access.read().as_ulid()))
+            return Ok(once(b"access-recorded", access.id.as_ulid()));
         }
         BusEvent::Detect(DetectEvent::TransmissionConfirmed { transmission, .. }) => {
-            ("transmission-confirmed", Some(transmission.as_ulid()))
+            return Ok(once(b"transmission-confirmed", transmission.as_ulid()));
         }
         BusEvent::Detect(DetectEvent::TransmissionSuspected { transmission, .. }) => {
-            ("transmission-suspected", Some(transmission.as_ulid()))
+            return Ok(once(b"transmission-suspected", transmission.as_ulid()));
+        }
+        BusEvent::Detect(DetectEvent::ChannelCrossAccessed { co_access, .. }) => {
+            (b"channel-cross-accessed", Some(co_access.read().as_ulid()))
         }
         // The consumer publishes nothing else; another event is still
         // given an id that is a function of it, stamped now.
         BusEvent::Ingest(_) | BusEvent::Detect(_) | BusEvent::Insight(_) | BusEvent::Changed(_) => {
-            ("event", None)
+            (b"event", None)
         }
     };
     let wire = serde_json::to_vec(event).map_err(|error| PublishError::Encode {
@@ -63,7 +79,7 @@ pub fn envelope_id(event: &BusEvent, now: Timestamp) -> Result<EventId, PublishE
         Timestamp::from_micros(millis.saturating_mul(1_000))
     });
     let derived = Derive::new("crosstalk.flow.envelope.v1")
-        .bytes(label.as_bytes())
+        .bytes(label)
         .ulid(about.unwrap_or_default())
         .bytes(&wire)
         .at(at);

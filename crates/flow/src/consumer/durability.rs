@@ -15,12 +15,12 @@
 //! - the **checkpoint**, written with the shards' tick record in one
 //!   transaction, covering every input recorded when it was taken.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, PoisonError};
 
 use crosstalk_spec::derived::flow::access::Access;
 use crosstalk_spec::derived::flow::resource::Locator;
-use crosstalk_spec::ids::AccessId;
+use crosstalk_spec::ids::{AccessId, ChannelId};
 use crosstalk_spec::support::Timestamp;
 
 use super::checkpoint::{Checkpoint, StoredCheckpoint};
@@ -44,11 +44,34 @@ impl DurabilityError {
     }
 }
 
+/// The channel an access's resource resolved to when the consumer
+/// recorded the access: the medium it was correlated in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Resolved {
+    /// On no channel: the resource's own medium.
+    NoChannel,
+    Channel(ChannelId),
+    /// Not stored (the process stopped between recording the access and
+    /// its resolution): resolved again on re-feed.
+    Unknown,
+}
+
+impl Resolved {
+    pub fn of(channel: Option<ChannelId>) -> Self {
+        channel.map_or(Self::NoChannel, Self::Channel)
+    }
+}
+
 /// An input recorded after the stored checkpoint, to re-feed on restore.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Recorded {
-    /// A recorded access, with the locator of its resource.
-    Access { access: Access, locator: Locator },
+    /// A recorded access, with the locator of its resource and the channel
+    /// it was resolved to.
+    Access {
+        access: Access,
+        locator: Locator,
+        resolved: Resolved,
+    },
     ToolCall(ToolCalled),
 }
 
@@ -83,12 +106,14 @@ pub trait FlowDurability: Send + Sync {
     -> impl Future<Output = Result<(), DurabilityError>> + Send;
 
     /// `access` (of the resource at `locator`) was recorded in the
-    /// registry. A store that numbers accesses as it records them
-    /// (Postgres) has nothing to do.
+    /// registry, resolved to `channel` (`None`: on no channel). A store
+    /// that numbers accesses as it records them (Postgres) keeps only the
+    /// resolution.
     fn access_recorded(
         &self,
         access: &Access,
         locator: &Locator,
+        channel: Option<ChannelId>,
     ) -> impl Future<Output = Result<(), DurabilityError>> + Send;
 
     /// Record a tool call, numbered in the recording order.
@@ -137,6 +162,7 @@ impl FlowDurability for Volatile {
         &self,
         _access: &Access,
         _locator: &Locator,
+        _channel: Option<ChannelId>,
     ) -> Result<(), DurabilityError> {
         Ok(())
     }
@@ -171,7 +197,8 @@ struct MemoryState {
     held: BTreeMap<AccessId, (Observed<WriteCall>, Timestamp)>,
     /// Every recorded input by its recording number.
     journal: BTreeMap<u64, Recorded>,
-    recorded_accesses: BTreeSet<AccessId>,
+    /// Each recorded access's recording number.
+    recorded_accesses: BTreeMap<AccessId, u64>,
     next: u64,
     checkpoint: Option<StoredCheckpoint>,
     /// Each shard's tick record (`flow.shard_ticks`).
@@ -179,9 +206,34 @@ struct MemoryState {
 }
 
 impl MemoryState {
-    fn record(&mut self, input: Recorded) {
+    fn record(&mut self, input: Recorded) -> u64 {
         self.next += 1;
         self.journal.insert(self.next, input);
+        self.next
+    }
+
+    /// The registry records an access once: so does its numbering. Its
+    /// first resolution stays.
+    fn access(&mut self, access: &Access, locator: &Locator, resolved: Resolved) {
+        match self.recorded_accesses.get(&access.id) {
+            Some(number) => {
+                if let Some(Recorded::Access {
+                    resolved: stored @ Resolved::Unknown,
+                    ..
+                }) = self.journal.get_mut(number)
+                {
+                    *stored = resolved;
+                }
+            }
+            None => {
+                let number = self.record(Recorded::Access {
+                    access: access.clone(),
+                    locator: locator.clone(),
+                    resolved,
+                });
+                self.recorded_accesses.insert(access.id, number);
+            }
+        }
     }
 }
 
@@ -205,6 +257,13 @@ impl MemoryDurability {
     /// The stored checkpoint.
     pub fn checkpoint(&self) -> Option<StoredCheckpoint> {
         self.with(|state| state.checkpoint.clone())
+    }
+
+    /// `access` was recorded and numbered, and the process stopped before
+    /// its resolution was stored: what Postgres holds when the consumer's
+    /// update after `record_access` failed. For simulations.
+    pub fn record_unresolved(&self, access: &Access, locator: &Locator) {
+        self.with(|state| state.access(access, locator, Resolved::Unknown));
     }
 
     /// How many writes are held.
@@ -241,16 +300,9 @@ impl FlowDurability for MemoryDurability {
         &self,
         access: &Access,
         locator: &Locator,
+        channel: Option<ChannelId>,
     ) -> Result<(), DurabilityError> {
-        self.with(|state| {
-            // The registry records an access once: so does its numbering.
-            if state.recorded_accesses.insert(access.id) {
-                state.record(Recorded::Access {
-                    access: access.clone(),
-                    locator: locator.clone(),
-                });
-            }
-        });
+        self.with(|state| state.access(access, locator, Resolved::of(channel)));
         Ok(())
     }
 

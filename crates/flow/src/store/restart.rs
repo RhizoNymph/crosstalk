@@ -20,7 +20,7 @@
 
 use crosstalk_spec::derived::flow::access::Access;
 use crosstalk_spec::derived::flow::resource::{Locator, Resource};
-use crosstalk_spec::ids::{AccessId, AgentId};
+use crosstalk_spec::ids::{AccessId, AgentId, ChannelId};
 use crosstalk_spec::observed::message::{ToolCallId, ToolName};
 use crosstalk_spec::support::Timestamp;
 use crosstalk_store::{SerializableRetry, TxError, retry_serializable};
@@ -29,7 +29,7 @@ use sqlx::{PgConnection, PgPool};
 use super::codec::{CodecError, from_json, id_text, json, micros, parse_id, timestamp};
 use super::error::{Fault, FlowStoreError, StoreFault, finished};
 use crate::consumer::{
-    Checkpoint, DurabilityError, FlowDurability, Observed, Recorded, Recovered, Settings,
+    Checkpoint, DurabilityError, FlowDurability, Observed, Recorded, Recovered, Resolved, Settings,
     ShardSnapshot, Shards, StoredCheckpoint, ToolCalled, WriteCall,
 };
 
@@ -103,8 +103,9 @@ pub struct PgFlowDurability {
 /// A `flow.checkpoints` row.
 type CheckpointRow = (i32, i32, i32, Option<i64>, i64, Vec<u8>);
 
-/// An access recorded after a checkpoint, with its resource.
-type AccessRow = (i64, String, String);
+/// An access recorded after a checkpoint, with its resource and
+/// resolution.
+type AccessRow = (i64, String, String, bool, Option<String>);
 
 /// A `flow.tool_calls` row.
 type ToolCallRow = (i64, String, String, String, i64);
@@ -287,12 +288,23 @@ impl FlowDurability for PgFlowDurability {
         Ok(())
     }
 
-    /// Nothing to do: the registry numbered the access as it recorded it.
+    /// The registry numbered the access as it recorded it; this stores
+    /// the channel it was resolved to, once.
     async fn access_recorded(
         &self,
-        _access: &Access,
+        access: &Access,
         _locator: &Locator,
+        channel: Option<ChannelId>,
     ) -> Result<(), DurabilityError> {
+        sqlx::query(
+            "UPDATE flow.accesses SET resolved = true, resolved_channel = $2 \
+             WHERE id = $1 AND NOT resolved",
+        )
+        .bind(id_text(access.id))
+        .bind(channel.map(id_text))
+        .execute(&self.pool)
+        .await
+        .map_err(query_failed)?;
         Ok(())
     }
 
@@ -312,7 +324,9 @@ impl FlowDurability for PgFlowDurability {
     async fn save(&self, checkpoint: &Checkpoint, taken_at: Timestamp) -> Result<(), DurabilityError> {
         let taken_at = micros("checkpoints.taken_at", taken_at).map_err(codec_failed)?;
         retry_serializable(&self.pool, &self.retry, |conn| {
-            Box::pin(async move { save_in(conn, checkpoint, taken_at).await })
+            // The body may run again; each attempt owns its copy.
+            let checkpoint = checkpoint.clone();
+            Box::pin(async move { save_in(conn, &checkpoint, taken_at).await })
         })
         .await
         .map_err(finished)
@@ -349,7 +363,7 @@ impl FlowDurability for PgFlowDurability {
             held.push((write, settles_at));
         }
         let accesses: Vec<AccessRow> = sqlx::query_as(
-            "SELECT a.recorded_seq, a.access, r.resource \
+            "SELECT a.recorded_seq, a.access, r.resource, a.resolved, a.resolved_channel \
              FROM flow.accesses a JOIN flow.resources r ON r.id = a.resource_id \
              WHERE a.recorded_seq > $1 ORDER BY a.recorded_seq",
         )
@@ -368,9 +382,23 @@ impl FlowDurability for PgFlowDurability {
         tx.commit().await.map_err(query_failed)?;
         // Merge the two in recording order.
         let mut numbered: Vec<(i64, Recorded)> = Vec::with_capacity(accesses.len() + calls.len());
-        for (number, access, resource) in &accesses {
+        for (number, access, resource, resolved, channel) in &accesses {
             let (access, locator) = recorded_access(access, resource).map_err(codec_failed)?;
-            numbered.push((*number, Recorded::Access { access, locator }));
+            let resolved = match (resolved, channel) {
+                (false, _) => Resolved::Unknown,
+                (true, None) => Resolved::NoChannel,
+                (true, Some(channel)) => Resolved::Channel(
+                    parse_id("accesses.resolved_channel", channel).map_err(codec_failed)?,
+                ),
+            };
+            numbered.push((
+                *number,
+                Recorded::Access {
+                    access,
+                    locator,
+                    resolved,
+                },
+            ));
         }
         for row in &calls {
             numbered.push((row.0, Recorded::ToolCall(tool_call(row).map_err(codec_failed)?)));

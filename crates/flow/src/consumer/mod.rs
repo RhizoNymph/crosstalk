@@ -57,7 +57,7 @@ pub mod settings;
 pub mod shards;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -85,7 +85,7 @@ pub use self::checkpoint::{
     StoredCheckpoint,
 };
 pub use self::durability::{
-    DurabilityError, FlowDurability, MemoryDurability, Recorded, Recovered, Volatile,
+    DurabilityError, FlowDurability, MemoryDurability, Recorded, Recovered, Resolved, Volatile,
 };
 pub use self::error::StepError;
 pub use self::held::HeldWrites;
@@ -160,6 +160,7 @@ enum Step {
     Refeed {
         access: Access,
         locator: Locator,
+        resolved: Resolved,
     },
     Correlate(Access, Option<ChannelId>),
     Content(ContentMatch),
@@ -546,7 +547,11 @@ where
                     .tool_named(call.agent, &call.call, &call.name, call.at);
                 Ok(Vec::new())
             }
-            Step::Refeed { access, locator } => self.refeed(access, locator).await,
+            Step::Refeed {
+                access,
+                locator,
+                resolved,
+            } => self.refeed(access, locator, resolved).await,
             Step::Correlate(access, channel) => Ok(decisions(self.shards.access(&access, channel))),
             Step::Content(content) => {
                 self.refresh_kin(content.origin_agent()).await;

@@ -24,6 +24,8 @@ use std::collections::BTreeSet;
 
 use crosstalk_spec::derived::flow::access::Access;
 use crosstalk_spec::derived::flow::resource::Locator;
+use crosstalk_spec::events::BusEvent;
+use crosstalk_spec::events::detect::DetectEvent;
 use crosstalk_spec::ids::AccessId;
 use crosstalk_spec::interfaces::l2_transport::EventBus;
 use crosstalk_spec::interfaces::l3_reconstruction::agents::AgentReads;
@@ -33,11 +35,12 @@ use crosstalk_spec::interfaces::l5_flow::transmissions::TransmissionStore;
 use crosstalk_spec::support::Timestamp;
 
 use super::checkpoint::{CheckpointError, FlowRestoreError};
-use super::durability::{FlowDurability, Recorded};
+use super::durability::{FlowDurability, Recorded, Resolved};
 use super::held::HeldWrites;
 use super::input::Observed;
-use super::{FlowConsumer, Shards, Step, StepError};
-use crate::correlate::pairing;
+use super::{FlowConsumer, Shards, Step, StepError, decisions};
+use crate::correlate::MediumKey;
+use crate::correlate::pairing::{self, WriteOutcome};
 
 /// A checkpoint taken.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -128,9 +131,17 @@ where
         let (mut accesses_refed, mut tool_calls_refed) = (0, 0);
         for input in recovered.inputs {
             match input {
-                Recorded::Access { access, locator } => {
+                Recorded::Access {
+                    access,
+                    locator,
+                    resolved,
+                } => {
                     accesses_refed += 1;
-                    self.queue(Step::Refeed { access, locator });
+                    self.queue(Step::Refeed {
+                        access,
+                        locator,
+                        resolved,
+                    });
                 }
                 Recorded::ToolCall(call) => {
                     tool_calls_refed += 1;
@@ -160,24 +171,51 @@ where
     }
 
     /// An access recorded before a restart, taken as when it was first
-    /// recorded: its resource resolved again (to the same id), the access
-    /// recorded (already there), announced (under the same envelope id),
-    /// then correlated unless it is a write that does not pair.
+    /// recorded: in the medium its resource was resolved to then (the
+    /// resource's evidence handed to that channel first), announced (under
+    /// the same envelope id), then correlated unless it is a write that
+    /// does not pair. The resource may be on another channel since (one
+    /// this consumer discovered from it, or a promotion's): resolving it
+    /// again would correlate the access where it never was, and open its
+    /// transmissions under other ids. An access whose resolution was not
+    /// stored is recorded again as new.
     pub(super) async fn refeed(
         &mut self,
         access: Access,
         locator: Locator,
+        resolved: Resolved,
     ) -> Result<Vec<Step>, StepError> {
         let outcome = pairing::outcome(&access);
-        let observed = Observed {
-            id: access.id,
-            agent: access.agent,
-            exchange: access.exchange,
-            at: access.at,
-            locator,
-            via: access.via,
-            op: (),
+        let channel = match resolved {
+            Resolved::Channel(channel) => Some(channel),
+            Resolved::NoChannel => None,
+            Resolved::Unknown => {
+                let observed = Observed {
+                    id: access.id,
+                    agent: access.agent,
+                    exchange: access.exchange,
+                    at: access.at,
+                    locator,
+                    via: access.via,
+                    op: (),
+                };
+                return self.record(observed, access.op, outcome).await;
+            }
         };
-        self.record(observed, access.op, outcome).await
+        let mut steps = Vec::new();
+        if let Some(channel) = channel {
+            steps.extend(decisions(self.shards.rekey(
+                MediumKey::Resource(access.resource),
+                MediumKey::Channel(channel),
+            )));
+        }
+        steps.push(Step::Publish(BusEvent::Detect(DetectEvent::AccessRecorded {
+            access: access.clone(),
+            channel,
+        })));
+        if outcome.is_none_or(WriteOutcome::pairs) {
+            steps.push(Step::Correlate(access, channel));
+        }
+        Ok(steps)
     }
 }

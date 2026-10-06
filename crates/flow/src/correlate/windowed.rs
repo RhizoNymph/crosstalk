@@ -484,6 +484,18 @@ impl WindowedCorrelator {
     pub fn absorb(&mut self, medium: MediumKey, evidence: MediumEvidence) -> Vec<Decided> {
         let mut out = Vec::new();
         let incoming = evidence.medium;
+        // The handed accesses' exchanges started at their times, as when
+        // the accesses reached this shard directly: matches waiting here
+        // for one of those starts are decided now.
+        let starts: BTreeMap<ExchangeId, Timestamp> = incoming
+            .writes
+            .values()
+            .chain(incoming.reads.values())
+            .map(|access| (access.exchange, access.at))
+            .collect();
+        for (exchange, started_at) in starts {
+            out.extend(self.exchange(exchange, started_at));
+        }
         let timing = self.timing;
         let carried: Vec<(MatchKey, Timestamp)> = self
             .uncarried
