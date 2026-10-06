@@ -24,10 +24,10 @@ use crosstalk_spec::support::{TimeWindow, Timestamp};
 use super::super::FixtureBackend;
 use super::super::clock::{DAY, MINUTE, NOW, START, WATERMARK, ago, plus};
 use super::super::export::ExportRows;
-use super::super::export::digest::RowDigest;
 use super::{caller, collect, day, first, fresh, researcher, week};
 use crate::url::scope::Scope;
 use crosstalk_spec::interfaces::l8_surface::QueryApi;
+use crosstalk_surface::export::Blake3RowHasher;
 
 pub(super) fn scope(scope: &Scope) -> ExportScope {
     ExportScope {
@@ -66,7 +66,7 @@ pub(super) async fn run(
 /// The export verifies, and its header, rows and trailer agree.
 pub(super) fn verified(header: &ExportHeader, rows: &[ExportRow], trailer: &ExportTrailer) {
     assert_eq!(
-        verify_export(header, rows, Some(trailer), RowDigest::new()),
+        verify_export(header, rows, Some(trailer), Blake3RowHasher::new()),
         Ok(())
     );
     assert!(trailer.is_complete());

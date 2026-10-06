@@ -498,17 +498,16 @@ async fn a_lost_gateway_ends_data_live_as_unreachable() {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn a_states_export_round_trips_over_http() {
-    // The served world: its rows cross the binding, and the client checks
-    // each against the header and the trailer's BLAKE3 digest as they
-    // arrive. (Not `FixtureApi`: the fixture's row digest is a stand-in for
-    // BLAKE3, so its exports do not verify over HTTP.)
-    let world = HttpWorld::start().await;
+    // The fixture over HTTP: its rows cross the binding, and the client
+    // checks each against the header and the trailer's BLAKE3 digest as
+    // they arrive (the fixture seals with the surface's row hasher).
+    let world = FixtureApi::start().await;
     let access = world.access(RESEARCHER_TOKEN).await.expect("access");
     let router = world.router(RESEARCHER_TOKEN, access);
     let (page, reply) = follow(&router, "/export").await;
     assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
-    // The world's whole week: its unconfirmed transmissions are older than
-    // the default day.
+    // The data's whole week (the fixture ends where the world does, at
+    // `UI_ANCHOR`): it holds every state.
     let week_start = crate::url::view_state::format_time(crosstalk_world::clock::minus(
         crosstalk_world::UI_ANCHOR,
         crosstalk_world::clock::DAY * 7,
