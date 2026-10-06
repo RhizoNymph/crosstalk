@@ -9,6 +9,7 @@ pub use gates::{Check, Gate, GateDetector, GateOutcome, GateStatus, Gates};
 
 use crate::keys::DatasetId;
 use crate::pipeline::Unscored;
+use crate::predict::EvidenceClass;
 use crate::score::{
     Counts, FalsePositive, Miss, RowKey, Score, SourceCount, Totals, TransmissionRow, ViolationRow,
 };
@@ -77,27 +78,46 @@ pub struct Report {
     pub background: Option<Background>,
 }
 
-/// Labels (out-of-reach and forwarding ones aside) that only a suspected or discarded
-/// prediction aligned with: the detector saw the co-access but never
-/// matched content. They are missed in `overall`, never found; this is the
-/// recall the access pattern alone would have had on top of it.
+/// What access evidence (suspected or discarded predictions) found.
+///
+/// - `labels` of `expected`: content labels (out-of-reach ones aside)
+///   that only a suspected or discarded prediction aligned with. The
+///   detector saw the co-access but never matched content; they are
+///   missed in `overall`, never found, and this is the recall the access
+///   pattern alone would have had on top of it.
+/// - `found_access` of `expected_access`: access-only labels
+///   (`Expectation::AccessOnly`, INV-963: content on a resource its sender
+///   never wrote stays suspected), which only access evidence finds and
+///   `overall` never counts.
 #[derive(Debug, Clone, Copy, PartialEq, Serialize, Deserialize)]
 pub struct AccessOnly {
-    /// Missed labels a suspected or discarded prediction aligned with.
+    /// Missed content labels a suspected or discarded prediction aligned
+    /// with.
     pub labels: u64,
-    /// Every in-reach label (`overall`'s expected).
+    /// Every in-reach content label (`overall`'s expected).
     pub expected: u64,
     /// `labels / expected`; `None` with no label.
     pub recall: Option<f64>,
+    /// In-reach access-only labels.
+    pub expected_access: u64,
+    /// Access-only labels a suspected or discarded prediction found.
+    pub found_access: u64,
+    /// `found_access / expected_access`; `None` with no such label.
+    pub access_recall: Option<f64>,
 }
 
 impl AccessOnly {
-    pub fn of(overall: &Counts) -> Self {
+    /// From `overall` (content rows) and `access` (the in-reach rows of
+    /// access-only labels).
+    pub fn of(overall: &Counts, access: &Counts) -> Self {
         Self {
             labels: overall.suspected,
             expected: overall.expected,
             recall: (overall.expected > 0)
                 .then(|| overall.suspected as f64 / overall.expected as f64),
+            expected_access: access.expected,
+            found_access: access.found,
+            access_recall: access.recall(),
         }
     }
 }
@@ -133,6 +153,16 @@ impl Report {
                 _ => overall.add(&row.counts),
             }
         }
+        // Access-only labels sit in the `suspected` rows (their predictions'
+        // counts there are not labels and are left out).
+        let mut access = Counts::default();
+        for row in score.rows.iter().filter(|row| {
+            row.key.class == EvidenceClass::Suspected && row.key.tier != Some(Tier::OutOfReach)
+        }) {
+            access.expected += row.counts.expected;
+            access.found += row.counts.found;
+            access.missed += row.counts.missed;
+        }
         let false_positives =
             overall.false_positive + out_of_reach.false_positive + forwarding.false_positive;
         let background =
@@ -156,7 +186,7 @@ impl Report {
             })
             .collect();
         Self {
-            access_only: AccessOnly::of(&overall),
+            access_only: AccessOnly::of(&overall, &access),
             overall: Summary::of(overall),
             out_of_reach: Summary::of(out_of_reach),
             forwarding: Summary::of(forwarding),

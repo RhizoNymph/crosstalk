@@ -73,6 +73,9 @@ pub enum Mode {
     ClaudeCode { limit: Option<usize> },
     /// Village days `from..=to`.
     Window { from: Day, to: Day },
+    /// The first `hours` hours of village day `day` (a bounded window for
+    /// slow detectors).
+    DaySlice { day: Day, hours: u32 },
 }
 
 /// What a source saw, for reports.
@@ -103,6 +106,10 @@ impl AiVillageSource {
             Mode::Window { from, to } => {
                 Inner::Window(Box::new(WindowStream::open(root, from, to)?))
             }
+            Mode::DaySlice { day, hours } => Inner::Window(Box::new(WindowStream::open_window(
+                root,
+                time::Window::first_hours(day, hours)?,
+            )?)),
         };
         Ok(Self { inner })
     }
