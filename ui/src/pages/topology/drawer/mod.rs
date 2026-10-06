@@ -128,6 +128,7 @@ pub async fn topology_drawer(
                         </dl>
                         <div class="mt-2 flex gap-3 text-xs">
                             <a class=(LINK) href=(panel.url)>"Open agent page"</a>
+                            <a class=(LINK) href=(panel.conversations_url) data-conversations="true">"Conversations"</a>
                             <a class=(LINK) href=(panel.focus_url)>"Filter to this agent"</a>
                         </div>
                     </div>

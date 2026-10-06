@@ -44,9 +44,13 @@ use crosstalk_spec::support::Timestamp;
 use tokio::sync::RwLock;
 
 use super::Result;
+use crosstalk_spec::interfaces::l8_surface::QueryError;
 use queries::Ctx;
 use store::State;
 use world::World;
+
+#[cfg(test)]
+pub use world::conversations::Cases;
 
 #[cfg(test)]
 pub use world::ChannelKey;
@@ -55,6 +59,8 @@ pub use world::GenError;
 #[derive(Debug)]
 pub struct FixtureBackend {
     world: World,
+    /// The world's conversations, built on the first conversation read.
+    conversations: world::conversations::LazyConversations,
     /// Shared with the streams of started exports, which audit how they
     /// end.
     state: Arc<RwLock<State>>,
@@ -121,6 +127,7 @@ impl FixtureBackend {
             .map(|_| clock::plus(clock.view_end(), clock::BUCKET.as_micros().get()));
         Ok(Self {
             world,
+            conversations: world::conversations::LazyConversations::default(),
             state: Arc::new(RwLock::new(state)),
             export_limits: export::limits(),
             feed: Arc::new(live::Feed::new(
@@ -190,6 +197,42 @@ impl FixtureBackend {
         &self.world.scenario
     }
 
+    /// The world's conversations, for tests (built on first use).
+    #[cfg(test)]
+    pub fn conversation_records(&self) -> Arc<world::conversations::Conversations> {
+        self.full_conversations().expect("conversations build")
+    }
+
+    /// Whether the conversations were built yet, for tests.
+    #[cfg(test)]
+    pub fn conversations_built(&self) -> bool {
+        self.conversations.is_built()
+    }
+
+    /// Every content match of a confirmed transmission, oldest transmission
+    /// first, for tests.
+    #[cfg(test)]
+    pub fn confirmed_matches(
+        &self,
+    ) -> Vec<(
+        TransmissionId,
+        crosstalk_spec::derived::provenance::matching::ContentMatch,
+    )> {
+        self.world
+            .transmissions
+            .iter()
+            .filter_map(|t| {
+                t.transmission.state.confirmed().map(|c| {
+                    (
+                        t.transmission.id,
+                        c.content().iter().cloned().collect::<Vec<_>>(),
+                    )
+                })
+            })
+            .flat_map(|(id, matches)| matches.into_iter().map(move |m| (id, m)))
+            .collect()
+    }
+
     /// Every transmission id the world holds, newest id first, for tests
     /// that page through them with `transmissions_by_id`.
     #[cfg(test)]
@@ -213,11 +256,30 @@ impl FixtureBackend {
                 .snapshot(&self.world, &state, state.clock.now())
                 .await;
             drop(state);
+            let cut = || {
+                snapshot
+                    .conversations
+                    .get_or_build(|| {
+                        self.full_conversations()
+                            .map(|full| full.at(snapshot.cutoff))
+                            .map_err(|e| format!("{e:?}"))
+                    })
+                    .map_err(|reason| QueryError::Store { reason })
+            };
             return queries::graph::with_watermark(snapshot.watermark, || {
-                f(&Ctx::new(&snapshot.world, &snapshot.state))
+                f(&Ctx::new(&snapshot.world, &snapshot.state).with_conversations(&cut))
             });
         }
-        f(&Ctx::new(&self.world, &state))
+        let full = || self.full_conversations();
+        f(&Ctx::new(&self.world, &state).with_conversations(&full))
+    }
+
+    /// The whole world's conversations, built on the first call
+    /// (`world::conversations::build`, deterministic for the seed).
+    fn full_conversations(&self) -> Result<Arc<world::conversations::Conversations>> {
+        self.conversations
+            .get_or_build(|| world::conversations::build(&self.world).map_err(|e| e.to_string()))
+            .map_err(|reason| QueryError::Store { reason })
     }
 
     /// Drops a replay's cached snapshot after a state change.

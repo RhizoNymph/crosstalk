@@ -1,5 +1,6 @@
 //! URL encodings: ids, routes and the shared view state.
 
+pub mod follow;
 pub mod route;
 pub mod scope;
 pub mod ulid;

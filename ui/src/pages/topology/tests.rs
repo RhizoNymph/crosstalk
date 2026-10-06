@@ -161,7 +161,7 @@ async fn renders_graph_brush_filter_and_heaviest_edges() {
     assert!(body.contains("<ct-timebrush"));
     assert!(body.contains("buckets=168"));
     assert!(
-        body.contains("final up to 2026-10-02 23:50:00 UTC"),
+        body.contains("provisional after 2026-10-02 23:50:00 UTC"),
         "watermark"
     );
     assert!(body.contains("Heaviest edges"));

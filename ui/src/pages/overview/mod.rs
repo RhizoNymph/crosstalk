@@ -2,6 +2,10 @@
 //! active channels, open alerts, the review queue), the heaviest edges
 //! (each opening the topology with that edge selected), the newest open
 //! alerts, and a link into every section carrying the view state.
+//!
+//! The page follows the present by default (`follow=1d`): its window
+//! slides on every render, and `<ct-live>` re-renders it on the feed's
+//! events and a timer (`components::follow`).
 
 pub mod model;
 
@@ -13,6 +17,7 @@ use topcoat::view::{View, component, view};
 
 use self::model::{Tile, load};
 use crate::app::caller;
+use crate::components::follow::{finality, follow_bar};
 use crate::components::form::{LINK, SECTION, SECTION_TITLE};
 use crate::components::live::live_watch;
 use crate::components::table::{ROW, TD, TD_MUTED, TD_NUM};
@@ -23,7 +28,7 @@ use crate::error::UiError;
 use crate::pages::alerts::model::AlertRow;
 use crate::pages::common::action::status_of;
 use crate::pages::topology::drawer::model::EdgeItem;
-use crate::pages::view::view_state;
+use crate::pages::view::followed_view_state;
 use crate::url::view_state::ViewState;
 
 /// The sections the landing page links into, with what each is for.
@@ -53,7 +58,7 @@ const SECTIONS: [(&str, &str, &str); 9] = [
 
 #[page("/")]
 async fn overview_get(cx: &Cx) -> Result<impl View> {
-    let state = view_state(cx).await?;
+    let state = followed_view_state(cx).await?;
     Ok(view! { overview_page(state: state) })
 }
 
@@ -64,8 +69,8 @@ async fn overview_page(cx: &Cx, state: ViewState) -> Result<impl View> {
     let final_up_to = loaded
         .as_ref()
         .ok()
-        .and_then(|o| o.watermark.clone())
-        .map(|w| format!(" · final up to {w}"))
+        .and_then(|o| o.watermark)
+        .map(|w| format!(" · {}", finality(state.scope.window, w, &format_time(w))))
         .unwrap_or_default();
     let window = format!(
         "{} → {}",
@@ -92,6 +97,7 @@ async fn overview_page(cx: &Cx, state: ViewState) -> Result<impl View> {
                 (final_up_to)
                 "."
             </p>
+            follow_bar(path: "/", state: &state, extra: Vec::new())
             <div class="mt-2 flex items-center gap-2 text-xs">
                 <span class="text-zinc-500">"Channels:"</span>
                 filter_chip(label: "confirmed only", href: confirmed_only_href, active: confirmed_only)
@@ -247,6 +253,6 @@ mod tests {
         assert!(body.contains("Newest open alerts"));
         assert!(body.contains("href=\"/channels?from=2026-10-02T00:00:00Z"));
         assert!(body.contains("tab=review"));
-        assert!(body.contains("final up to 2026-10-02 23:50:00 UTC"));
+        assert!(body.contains("provisional after 2026-10-02 23:50:00 UTC"));
     }
 }

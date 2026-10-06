@@ -8,6 +8,8 @@
  *
  * With `data-live` (the feed URL), a `watermark` event refetches `data-src`
  * and redraws the bars in place, keeping the brush and any drag in progress.
+ * A `data-src` that only moves its window (`from`, `to`, `buckets`: a
+ * followed view sliding, `shared/slide.ts`) is redrawn the same way.
  */
 
 import { type TimelinePayload, timelinePayload } from '../payloads/timeline.ts';
@@ -124,16 +126,22 @@ export class TimebrushElement extends PayloadElement<TimelinePayload> {
     this.#render();
   }
 
-  override connectedCallback(): void {
-    super.connectedCallback();
+  protected override attached(): void {
     this.#live.start(this.dataset.live ?? '');
   }
 
-  override disconnectedCallback(): void {
+  protected override detached(): void {
     this.#live.stop();
     this.#refetch?.abort();
     this.#refetch = null;
-    super.disconnectedCallback();
+  }
+
+  protected override readonly slideKeys = ['from', 'to', 'buckets'];
+
+  protected override slide(): boolean {
+    if (this.#svg === null) return false;
+    void this.#liveTick();
+    return true;
   }
 
   async #liveTick(): Promise<void> {

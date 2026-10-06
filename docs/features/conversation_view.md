@@ -1,9 +1,16 @@
 # Conversation view
 
-Status: **design**. Nothing here is implemented. Phase B (implementation)
-starts once `feat/ui` has been migrated onto `staging` and the spec has the
-conversation reads proposed in `docs/handoff/conversation-view-spec.md`.
-Until then no UI code is written against the older spec on this branch.
+Status: **implemented** on `feat/ui-conversation` (from `staging`), over
+the spec's conversation reads (`docs/features/conversation_reads.md`,
+INV-1000..1029), which the fixture implements over its own conversations
+([Fixture data](#fixture-data)) and the world and http backends serve
+through the real surface. The proposal those reads came from is
+`docs/handoff/conversation-view-spec.md` (revision 3); where the landed
+spec differs (traffic counts on the head, `MessagePlacement`,
+`SpanOrigin::Forwarded`, `ScanStatus`, a dropped body's marks,
+`ExchangePlacement`), the pages follow the spec. Not built yet: the
+"show more" slice of a long part (`part_text`) and the turn-number jump
+box; see [Not built](#not-built).
 
 An operator page showing one agent's conversation turn by turn: what each
 exchange read and wrote, and **where text came from and where it went**:
@@ -134,7 +141,9 @@ Agents / cc3 / Conversations / 01J…X          [refresh]
   propagated with hits, expired: "no later readers can be detected") and
   "read later by" the inline readers, each linking to the reader's turn and
   its transmission; "+N more" opens a reader list (`span_readers`, a
-  section on the same page under the span, paged by the `rcursor` key).
+  section at the top of the page, paged by the `rcursor` key). Spans this
+  agent forwarded from an input it read (`SpanOrigin::Forwarded`) render
+  like originated ones, labelled "forwarded from an input".
   Relayed spans (`⟳`) link to the span they copied or name the input
   message they came from, found in this conversation when it is shown.
 - **Delegation.** A reader or inbound mark whose transmission route is
@@ -159,10 +168,9 @@ Agents / cc3 / Conversations / 01J…X          [refresh]
 - **Content** adds text: the page makes one `conversation_text` call for
   the same window and renders each part's text with marks highlighted
   (`<mark>` over each inbound range and originated span, as the evidence
-  page's excerpts do). Parts longer than the limit (8 KiB) end with "show
-  more", which loads the next slice through `part_text` in a shard (not a
-  URL key: expanding text changes no data the view is about). A dropped
-  body says "body dropped by content retention" as on the evidence page.
+  page's excerpts do). Parts longer than the limit (8 KiB) end with a note
+  of the bytes not shown. A dropped body says "body dropped by content
+  retention" and still lists its marks (`MessageParts::BodyDropped`).
 - Text is fetched only when `can(caller, Content)`; without it the text
   call is never made, so a View-only caller's request never reads message
   text.
@@ -171,8 +179,8 @@ Agents / cc3 / Conversations / 01J…X          [refresh]
 
 - Conversation list: spec cursor paging, 50 per page, `cursor` key,
   "« First page / Next page »" as the other lists.
-- Turns: windows of 20 by `turn`, with "earlier" and "later" links and a
-  turn-number jump box (a GET form submitting `turn`). Long conversations
+- Turns: windows of 20 by `turn`, with "earlier" and "later" links above
+  and below the turns. Long conversations
   (the AI Village stream has hundreds of turns) stay fast because only one
   window's turns, marks and text are read.
 - Readers of one span: `span_readers`, 20 per page, `rcursor` key.
@@ -207,44 +215,125 @@ GET /conversations/{id}?turn=37&<view state>
 
 GET /exchanges/{id}   → exchange_turns([id]) → 303 /conversations/{c}?turn={i}
 GET /spans/{id}       → span_points([id])    → 303 /conversations/{c}?turn={i}&hl={id}
-GET /agents/{id}/conversations → agent(id) for the banner/name,
-                                 conversations({agent: id, origins}, page)
-shard part_text(part, slice) → PartText (Content)
+GET /agents/{id}/conversations → agent(id) for the name and alias banner,
+                                 conversations({agent: canonical, origins, replay}, page)
+with hl: span_points([hl]) → the span's turn (hl survives window links only there)
+         span_readers(hl, rcursor page of 20) → the "Read later by" section
 ```
 
 The pages call the spec's `QueryApi` through `app::backend(cx)` like every
-other page; the fixture backend implements the new methods over seeded
-conversations. If the spec addition lands in a different shape, this
-section and the model module change, not the layout.
+other page. `view.rs` maps the spec's read models to the view model
+(`model.rs`), which `sections.rs` renders, so a shape change in the spec
+touches the mapping, not the layout.
 
-## Files (planned, Phase B)
+### Backends
+
+- **Fixture**: answers every read from its conversations
+  (`backend/fixture/queries/conversations/`): the list (canonical agent,
+  origin and replay filters, `ConversationId` descending, keyset cursor
+  bound to the filter and the resolved cluster), the head (origin links,
+  successors with branch turns, traffic counted over content-holding
+  transmissions, the delegation that started it, claims), turn windows
+  with part shapes from the bodies and marks from the match and span
+  indexes (none while a turn's scan is pending), readers newest first,
+  the batch locates, and text cut with `PartText::cut`.
+- **World**: the in-process surface starts with `Unrecorded` conversation
+  stores (`crosstalk_api::InProcess::start`), so the seeded world has no
+  conversations: an agent's list is the "No conversations recorded" empty
+  state, a conversation id is 404, and `/exchanges/{id}` says the exchange
+  is not threaded. Seeding conversations into the world is
+  `crates/world`'s to do.
+- **Http**: `crosstalk-client` calls the gateway's routes; a gateway that
+  threads exchanges serves real conversations. Router tests run the
+  fixture behind the gateway API's binding (`testing::fixture_api`) as the
+  on-call operator.
+
+## Fixture data
+
+The fixture's traffic generator knows exchanges only as ids on content
+matches and spans only as locations, so `backend/fixture/world/conversations/`
+threads that traffic into conversations. They are not part of world
+generation, where they cost about 80% of the time (some 800 ms of 960 ms
+in a debug build): the backend builds them once, on its first
+conversation read (`LazyConversations`, a `OnceLock`, so concurrent first
+reads build once), and a replay snapshot cuts them at its present on its
+own first conversation read. Pages that read no conversation never build
+them. Reads reach them through `Ctx::conversations` and the queries'
+`Cv` wrapper:
+
+- a **reader turn** per reader exchange: its inputs are the messages the
+  copies arrived in (`ContentMatch::read_at`, bodies in `Blobs`, dropped
+  where retention dropped them), its output a generated reply (with a tool
+  call when the next turn reads a tool result, and sometimes a quote of what
+  it read, recorded as a relayed span), or for a `ReaderOutput` match the
+  output the copy was found in;
+- a **writer turn** per originated span, a little before its first read:
+  its output is the message the span sits in;
+- conversations per agent split at a three-hour gap, 24 turns or a
+  delegated task (which opens the child's conversation), each opening with
+  a generated system prompt and user task; protocol, transport and model
+  follow the agent's real harness family, and each turn carries one of the
+  agent's recorded harness claims;
+- named cases (`Conversations::cases`): a fork sharing its parent's first
+  two turns, a compaction carrying two messages over, a Codex conversation
+  whose first increment continues a response the gateway never saw, a
+  system turn in a second request, a failed exchange with a partial
+  output, one self-hosted (or pi) agent's conversations replayed from the
+  `agentdojo-workspace` corpus, and one turn still waiting for its scan.
+
+Generated messages are canonical (`Message::new`) and unique (each names
+its exchange or conversation). One simplification: the generator stores
+each copy found in a reader's output as its own message, but an exchange
+has one output, so copies beyond the first are listed among that turn's
+inputs as assistant messages.
+
+## Files
 
 | File | Role |
 | --- | --- |
-| `ui/src/pages/conversation/mod.rs` | `#[page("/conversations/{id}")]`, path param, `load`, head and window rendering |
-| `ui/src/pages/conversation/query.rs` | page keys: `turn`, `hl`, `rcursor`; window arithmetic (`window_start(turn) = turn / 20 * 20`) |
-| `ui/src/pages/conversation/model.rs` | `TurnView`, `MessageView`, `PartView`, `MarkView` built from `Turn` + optional `TurnText`; route and carrier labels shared with `transmission/model.rs` |
-| `ui/src/pages/conversation/sections.rs` | head, turn, boundary, part and mark components |
-| `ui/src/pages/conversation/text.rs` | text with highlighted ranges; the `part_text` "show more" shard |
-| `ui/src/pages/conversation/list.rs` | `#[page("/agents/{id}/conversations")]` |
-| `ui/src/pages/conversation/locate.rs` | `/exchanges/{id}` and `/spans/{id}` redirects |
-| `ui/src/pages/conversation/tests.rs` | router tests (below) |
-| `ui/src/pages/common/links.rs` | `conversation_url`, `exchange_url`, `span_url` (added) |
-| `ui/src/backend/fixture/world/conversations.rs` | seeded conversations and turns derived from the fixture's exchanges, spans and matches |
-| `ui/src/backend/fixture/queries/conversations.rs` | the fixture's `QueryApi` conversation methods |
-| `ui/src/pages/mod.rs` | module registration only |
-| `ui/src/pages/agents/detail.rs`, `transmission/sections.rs`, `topology/drawer/mod.rs` | one link each |
+| `ui/src/backend/fixture/world/conversations/mod.rs` | `Conversations` (records, exchange → turn index, span records, relayed spans, generated bodies, pending scans, `Cases`), `ConversationRecord`, `TurnRecord`, `Entry`, `Ending`, `SpanRecord`, `RelayedSpan`, `Conversations::at` |
+| `ui/src/backend/fixture/world/conversations/build.rs` | `build(&World)`: threading the traffic and making the named cases |
+| `ui/src/backend/fixture/world/conversations/messages.rs` | generated system prompts, tasks, replies, summaries, system turns and partial replies |
+| `ui/src/backend/fixture/world/conversations/tests.rs` | the overlay's laws: every reader exchange and origin span is a turn of its agent, time order, no message twice, each case, replay cutoff, determinism |
+| `ui/src/pages/conversation/query.rs` | page keys `turn`, `hl`, `rcursor`, `origin`, `replay`; `Window` (twenty turns from a multiple of twenty) |
+| `ui/src/pages/conversation/model.rs` | the view model (`HeadView`, `TurnView`, `MessageView`, `PartView`, `MarkView`, …) and `segments`, which cuts a part's text at its marks |
+| `ui/src/pages/conversation/sections.rs` | head, window links, turn, boundary, part, text and mark components |
+| `ui/src/pages/conversation/tests.rs`, `links_tests.rs` | component rendering from view models; the entry links |
+| `ui/src/pages/common/links.rs` | `agent_conversations_url`, `conversation_url`, `exchange_url`, `span_url` |
+| `ui/src/pages/agents/detail.rs`, `topology/drawer/{mod,model}.rs`, `transmission/{model,sections}.rs` | the entry links: "Conversations" on the agent header and drawer agent panel; "in sender's / reader's conversation" on each evidence match |
+| `ui/src/pages/mod.rs`, `backend/fixture/{mod,replay}.rs`, `queries/mod.rs` | module registration; the lazily built conversations (`FixtureBackend::conversations`, `Snapshot::conversations`, `Ctx::with_conversations`) |
 
-Tests (Phase B): a router test per route (status, canonical redirect,
-422 per bad key), View-only rendering has no text and does not call the
-text read (`caller_with(&[Permission::View])`), Content rendering
-highlights each mark, window arithmetic and `turn` past the end, alias
-banner on the list, each fixture scenario (fork link and branch turn,
-compaction boundary with carried-over count, unseen increment, delegation
-both ways, mid-conversation system message in request order, dropped
-body), redirects for threaded and unthreaded exchanges and spans, and a
-headless-Chrome check of the page and its links. The existing suite must
-pass unchanged.
+Pages and reads:
+
+| File | Role |
+| --- | --- |
+| `ui/src/pages/conversation/mod.rs` | `#[page("/conversations/{id}")]`: load (head, window, text with Content, the highlighted span's turn and readers), the page and reader section |
+| `ui/src/pages/conversation/view.rs` | spec read models → view model: `head_view`, `turn_view`, marks, delegation wording, `referenced` (the agents and channels to name) |
+| `ui/src/pages/conversation/list.rs` | `#[page("/agents/{id}/conversations")]`: alias banner, origin and traffic chips, table, paging |
+| `ui/src/pages/conversation/locate.rs` | `/exchanges/{id}` and `/spans/{id}`: 303 to the turn, or a page saying it is not threaded or unknown |
+| `ui/src/pages/conversation/pages_tests.rs` | router tests over the fixture, over the world backend and over HTTP |
+| `ui/src/backend/fixture/queries/conversations/{mod,turns,marks,text}.rs` | the fixture's eight conversation reads |
+| `ui/src/backend/fixture/queries/conversations/tests.rs` | the reads' INV-1000..1029 behaviour over the fixture |
+| `ui/src/backend/fixture/surface.rs` | the `QueryApi` methods calling those reads |
+| `ui/src/backend/fixture/mod.rs` | test handles `conversation_records`, `confirmed_matches`; `Cases` |
+
+Tests cover: each route's status, 303s and 404s, 422 per bad key; the
+window arithmetic and a turn past the end; View-only rendering with no
+text; marks linking evidence and turns; the fork, compaction, replayed
+corpus, unseen increment, failed exchange, pending scan and delegation
+cases; the list's filters; the world backend's empty states; the same
+pages over HTTP. A headless-Chrome check (light and dark) loaded a fork, a
+compaction, an agent's list, a replayed agent's list and a sender's turn
+reached from an evidence page through `/spans/{id}`, with no console
+errors.
+
+## Not built
+
+- **Show more**: a part longer than 8 KiB shows its first 8 KiB and the
+  count of bytes after them; loading the next slice (`part_text`) from the
+  page is not wired.
+- **Jump to turn**: no turn-number box; `turn=N` in the URL and the window
+  links do the paging.
 
 ## Invariants and constraints
 

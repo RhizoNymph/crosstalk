@@ -11,6 +11,11 @@
  *   shows a notice with a reload button instead.
  * - Closes the stream on `pagehide` and, when the page comes back from the
  *   back/forward cache, opens a new one and refreshes (`lifecycle.ts`).
+ * - On a page that follows the present (`[data-live-follow]`, rendered by
+ *   the follow bar), also refreshes every 30 s, and while the tab is hidden
+ *   neither ticks nor refreshes, refreshing once when it is shown again
+ *   (`follow.ts`). The same throttle and editing guard apply. Pinned pages
+ *   are not paced.
  * - On the stream's `end` event, reconnects as `EventSource` does, except
  *   when the UI's backend can no longer reach the gateway (`unreachable`):
  *   then it closes the stream and shows "Live updates lost: gateway
@@ -18,6 +23,7 @@
  */
 
 import { endStep, parseEnd } from './end.ts';
+import { FollowPacer } from './follow.ts';
 import { lifecycleStep } from './lifecycle.ts';
 import { type RefreshOutcome, refreshRegions } from './refresh.ts';
 import { refreshDelay } from './throttle.ts';
@@ -58,6 +64,15 @@ button {
 }
 `;
 
+/** Whether the page declares that it follows the present. */
+function declaresFollow(): boolean {
+  return document.querySelector('[data-live-follow]') !== null;
+}
+
+function tabVisible(): boolean {
+  return document.visibilityState !== 'hidden';
+}
+
 /** Every watch token the document declares now. */
 function declaredTokens(): ReturnType<typeof parseWatch> {
   return [...document.querySelectorAll('[data-live-watch]')].flatMap((marker) =>
@@ -75,6 +90,8 @@ export class LiveElement extends HTMLElement {
   #refresh: AbortController | null = null;
   #lastRefreshAt: number | null = null;
   #value = '';
+  readonly #pacer = new FollowPacer(() => this.#schedule(), tabVisible());
+  readonly #visibility = (): void => this.#pacer.visibility(tabVisible());
   readonly #lifecycle = (event: Event): void => {
     const persisted = event instanceof PageTransitionEvent && event.persisted;
     switch (lifecycleStep(event.type, persisted)) {
@@ -121,12 +138,14 @@ export class LiveElement extends HTMLElement {
   connectedCallback(): void {
     window.addEventListener('pagehide', this.#lifecycle);
     window.addEventListener('pageshow', this.#lifecycle);
+    document.addEventListener('visibilitychange', this.#visibility);
     this.#connect();
   }
 
   disconnectedCallback(): void {
     window.removeEventListener('pagehide', this.#lifecycle);
     window.removeEventListener('pageshow', this.#lifecycle);
+    document.removeEventListener('visibilitychange', this.#visibility);
     this.#disconnect();
   }
 
@@ -141,12 +160,15 @@ export class LiveElement extends HTMLElement {
     this.#timer = null;
     this.#refresh?.abort();
     this.#refresh = null;
+    this.#pacer.stop();
   }
 
   #connect(): void {
     this.#disconnect();
     const src = this.dataset.src?.trim() ?? '';
     if (src === '') return;
+    this.#pacer.visibility(tabVisible());
+    this.#pacer.follow(declaresFollow());
     const source = new EventSource(src);
     this.#source = source;
     for (const kind of LIVE_KINDS) {
@@ -154,7 +176,7 @@ export class LiveElement extends HTMLElement {
     }
     source.addEventListener('resync', (event) => {
       this.#received(event);
-      if (declaredTokens().length > 0) this.#schedule();
+      if (declaredTokens().length > 0 && this.#pacer.admits()) this.#schedule();
     });
     source.addEventListener('heartbeat', (event) => this.#received(event));
     source.addEventListener('end', (event) => this.#ended(source, event));
@@ -196,7 +218,7 @@ export class LiveElement extends HTMLElement {
       console.warn(`ct-live: ignoring a ${kind} event: ${notice.error}`);
       return;
     }
-    if (watches(declaredTokens(), notice.value)) this.#schedule();
+    if (watches(declaredTokens(), notice.value) && this.#pacer.admits()) this.#schedule();
   }
 
   #schedule(): void {
@@ -204,6 +226,8 @@ export class LiveElement extends HTMLElement {
     const delay = refreshDelay(Date.now(), this.#lastRefreshAt, SETTLE_MS, MIN_INTERVAL_MS);
     this.#timer = setTimeout(() => {
       this.#timer = null;
+      // Hidden since it was asked for: showing the tab refreshes instead.
+      if (!this.#pacer.admits()) return;
       this.#lastRefreshAt = Date.now();
       void this.#run();
     }, delay);
@@ -220,6 +244,8 @@ export class LiveElement extends HTMLElement {
       this.#show(`This page's data changed (${outcome.why}).`);
     } else if (outcome.kind === 'refreshed') {
       this.#notice.hidden = true;
+      // The page may have been pinned or followed since.
+      this.#pacer.follow(declaresFollow());
     }
   }
 

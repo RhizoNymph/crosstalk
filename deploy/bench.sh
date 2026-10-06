@@ -26,6 +26,10 @@ bench_api_url="http://crosstalk:8081"
 # the gateway's data directory (blobs.root's parent).
 bench_data_dir="/var/lib/crosstalk"
 bench_gates="/usr/local/share/crosstalk-eval/gates.toml"
+# Seeds at or above this are reserved for holdout runs (the n-th holdout run
+# uses 1_000_000 + n); development runs stay below it, so a dev run can never
+# spend a holdout seed.
+bench_holdout_seed=1000000
 
 bench_usage() {
     sed -n '18,23p' "${here}/run.sh" >&2
@@ -42,6 +46,10 @@ bench_usage() {
   --settle-timeout SECS  give up waiting for the watermark after this long
                          (default 900; with the demo flow config it is
                          reached about 70 s to 6 min after the swarm ends)
+  --holdout              a holdout run for the bench's release scoring: needs
+                         a seed >= 1000000, writes deploy/bench/holdout/<run>/,
+                         stops after fetching (no scoring, no report/, no
+                         metrics printed). See docs/features/bench.md.
   --yes                  do not ask before restarting wiki and crosstalk
   -- ...                 further crosstalk-demo swarm options, passed as is
 USAGE
@@ -172,14 +180,20 @@ fresh_world() {
 # 5. The swarm against the real gateway (through the fake upstream), writing
 # ground truth v2 into the run directory. Runs as the invoking user so the
 # files are theirs.
+# The swarm's report: to the run directory, and to the terminal unless this
+# is a holdout run (whose numbers nobody should see before release scoring).
+bench_swarm_out() {
+    if [[ "$1" == 1 ]]; then cat >"$2"; else tee "$2"; fi
+}
+
 run_swarm() {
-    local run="$1"
-    shift
+    local run="$1" quiet="$2"
+    shift 2
     compose --profile swarm run --rm --no-deps -T \
         --user "${BENCH_UID}:${BENCH_GID}" \
         -v "${here}/bench:/bench" \
         swarm "$@" --ground-truth "/bench/${run}/truth.jsonl" \
-        | tee "${here}/bench/${run}/swarm.txt" \
+        | bench_swarm_out "$quiet" "${here}/bench/${run}/swarm.txt" \
         || bench_fail "the swarm failed; see ${here}/bench/${run}/swarm.txt"
     [[ -s "${here}/bench/${run}/truth.jsonl" ]] \
         || bench_fail "the swarm wrote no ground truth at deploy/bench/${run}/truth.jsonl"
@@ -221,11 +235,33 @@ wait_caught_up() {
 # 7. The gateway's detections: the transmissions export and each one's
 # evidence, saved as export.jsonl and evidence.jsonl in the run directory.
 fetch_detections() {
-    local run="$1"
-    compose --profile bench run --rm --no-deps -T bench \
+    local run="$1" quiet="${2:-0}" dir rc=0 out
+    dir="${here}/bench/${run}"
+    if [[ "$quiet" != 1 ]]; then
+        compose --profile bench run --rm --no-deps -T bench \
+            swarm-fetch --api "$bench_api_url" --token-env CROSSTALK_API_TOKEN \
+            --truth "/bench/${run}/truth.jsonl" --out "/bench/${run}" \
+            || bench_fail "ct-eval swarm-fetch failed; the detection state is still in crosstalk until it restarts"
+        return
+    fi
+    # Holdout: swarm-fetch's own output summarises the detector (rows per
+    # state), so it is not kept. fetch.log records only success, file names
+    # and byte sizes. On failure the output is kept in fetch.err for
+    # debugging: a failed fetch is not a usable holdout anyway.
+    out="$(compose --profile bench run --rm --no-deps -T bench \
         swarm-fetch --api "$bench_api_url" --token-env CROSSTALK_API_TOKEN \
-        --truth "/bench/${run}/truth.jsonl" --out "/bench/${run}" \
-        || bench_fail "ct-eval swarm-fetch failed; the detection state is still in crosstalk until it restarts"
+        --truth "/bench/${run}/truth.jsonl" --out "/bench/${run}" 2>&1)" || rc=$?
+    if ((rc != 0)); then
+        printf '%s\n' "$out" >"${dir}/fetch.err"
+        echo "swarm-fetch failed (exit ${rc}); output in fetch.err" >"${dir}/fetch.log"
+        bench_fail "ct-eval swarm-fetch failed (exit ${rc}); see ${dir}/fetch.err (not a usable holdout run)"
+    fi
+    {
+        echo "swarm-fetch ok"
+        for f in export.jsonl evidence.jsonl; do
+            [[ -f "${dir}/${f}" ]] && echo "${f} $(wc -c <"${dir}/${f}") bytes"
+        done
+    } >"${dir}/fetch.log"
 }
 
 # After the export: copy the gateway's exchange log and blob store into the
@@ -274,6 +310,7 @@ score() {
 
 bench() {
     local agents=20 duration=2m seed=42 scenario=headline shape=0 yes=0 timeout=900 run rc=0 end_ms
+    local holdout=0
     local extra=()
     while (($# > 0)); do
         case "$1" in
@@ -287,11 +324,19 @@ bench() {
             --claude-code-shape) shape=1; shift ;;
             --settle-timeout) positive_int "$1" "${2-}"; timeout="$2"; shift 2 ;;
             --yes | -y) yes=1; shift ;;
+            --holdout) holdout=1; shift ;;
             --) shift; extra=("$@"); break ;;
             -h | --help) bench_usage; exit 0 ;;
             *) bench_usage; exit 2 ;;
         esac
     done
+    if ((holdout == 1)); then
+        ((seed >= bench_holdout_seed)) \
+            || bench_fail "--holdout needs a reserved seed (>= ${bench_holdout_seed}: 1000000 + n for the n-th holdout run), got ${seed}"
+    else
+        ((seed < bench_holdout_seed)) \
+            || bench_fail "seed ${seed} is reserved for holdout runs (>= ${bench_holdout_seed}); pass --holdout or a seed below it"
+    fi
     need_env
     compose_files+=(-f "${here}/compose.demo.yaml")
     command -v curl >/dev/null 2>&1 || bench_fail "needs curl on this host (to read /readyz and /healthz)"
@@ -310,12 +355,18 @@ bench() {
     fresh_world
 
     run="$(date -u +%Y%m%dT%H%M%SZ)"
+    if ((holdout == 1)); then
+        mkdir -p "${here}/bench/holdout"
+        run="holdout/${run}"
+    fi
     mkdir "${here}/bench/${run}" || bench_fail "deploy/bench/${run} already exists"
     local swarm_args=(--agents "$agents" --duration "$duration" --seed "$seed" --scenario "$scenario")
     ((shape == 1)) && swarm_args+=(--claude-code-shape)
     {
         echo "run=${run}"
         echo "scenario=${scenario}"
+        echo "seed=${seed}"
+        echo "holdout=${holdout}"
         echo "swarm=${swarm_args[*]} ${extra[*]}"
         echo "evidence_window_ms=$(demo_flow_ms evidence_window_ms)"
         echo "suspected_ttl_ms=$(demo_flow_ms suspected_ttl_ms)"
@@ -324,14 +375,22 @@ bench() {
     } >"${here}/bench/${run}/bench.env"
     echo "run.sh bench: run ${run} (scenario ${scenario}) -> deploy/bench/${run}/" >&2
 
-    run_swarm "$run" "${swarm_args[@]}" "${extra[@]}"
+    run_swarm "$run" "$holdout" "${swarm_args[@]}" "${extra[@]}"
     # Whole seconds: `date +%3N` is not portable (uutils prints nanoseconds),
     # and the watermark moves in 5-minute buckets.
     end_ms="$(($(date +%s) * 1000))"
     echo "swarm_end_unix_ms=${end_ms}" >>"${here}/bench/${run}/bench.env"
     wait_caught_up "$run" "$end_ms" "$timeout"
-    fetch_detections "$run"
+    fetch_detections "$run" "$holdout"
     snapshot_inputs "$run"
+    if ((holdout == 1)); then
+        # Holdout: no scoring, no report/, no metrics; just say what was saved.
+        echo "holdout run ${run#holdout/} (scenario ${scenario}, seed ${seed}) saved, unscored:"
+        ls -1 "${here}/bench/${run}" | sed 's/^/  /'
+        echo "copy it to the dataset root on the bench machine:"
+        echo "  rsync -a <this host>:${here}/bench/${run}/ ~/Data/ai/agents/demo-swarm-holdout/${run#holdout/}/"
+        exit 0
+    fi
     score "$run" || rc=$?
     exit "$rc"
 }
