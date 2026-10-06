@@ -1,6 +1,6 @@
 [invariant]
 id = "flow.extract.shell-outcome-from-known-output"
-statement = "For an access a known shell command makes, a result the wire does not flag as an error is judged by that command's output: a `git push` rejection or error is Rejected, a ref update or `Everything up-to-date` Delivered and anything else Unknown; a `curl` or `wget` whose last shown HTTP status is 4xx or 5xx (or a `curl: (N)` error) is Rejected and 2xx or 3xx Delivered; a `gh` or `glab` error is Rejected and a printed URL Delivered; every other shell access keeps the wire's word."
+statement = "For an access a known shell command makes, a result the wire does not flag as an error is judged by that command's output: a `git push` rejection or error is Rejected, a ref update or `Everything up-to-date` Delivered and anything else Unknown; a `curl` or `wget` whose last shown HTTP status is 4xx or 5xx (or a `curl: (N)` error) is Rejected and 2xx or 3xx Delivered; a `gh` or `glab` error is Rejected and a printed URL Delivered; every other shell access keeps the wire's word, except that an access the output refutes (its command skipped or failed on it, flow.extract.shell-skipped-command-no-access, or its push printed another remote, flow.extract.printed-remote-wins) is Rejected first."
 kind = "domain"
 property = "postcondition"
 requires = ["unit"]

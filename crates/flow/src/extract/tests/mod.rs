@@ -11,6 +11,7 @@ pub(crate) mod generate;
 mod http;
 mod mcp;
 mod repos;
+mod shell_state;
 mod sites;
 mod spans;
 pub(crate) mod support;

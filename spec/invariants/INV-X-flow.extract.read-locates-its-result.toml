@@ -1,0 +1,23 @@
+[invariant]
+id = "flow.extract.read-locates-its-result"
+statement = "Every Read the extraction step hands the flow consumer names, as its result, a part of a message of its own exchange (the request's new inputs, or the output for a server tool) whose text is not empty; a result with no text (an empty output, an empty content list) is no read, and its call's held writes are still released."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+A read is located at its result's text: the eval's prediction conversion
+and any content match need a non-empty part to point at. A `glab api … |
+jq` that printed nothing (AI Village 01KXE46805TY443EM5HE3VE2YF), or a
+turn's second call whose result the village records empty, was recorded
+as a read of an empty part; under a day-long correlation window it became
+a co-access read the eval could not locate (`PredictError::UnlocatedAccess`,
+which also reports a part with no text as outside its exchange), failing
+the whole world. The part is the one the delta carries, so it is in the
+read's exchange by construction; the check is that it has text.
+"""
+
+[evidence]
+unit = "crosstalk_gateway::live::layers::extract::tests::a_result_without_text_is_no_read"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

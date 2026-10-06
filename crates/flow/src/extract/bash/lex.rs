@@ -6,7 +6,11 @@
 //! continuations) so a word's text is what the command sees. A word whose
 //! value the shell would compute (a parameter, command or arithmetic
 //! substitution, a glob, a leading `~`) is kept but marked not literal: it
-//! names no resource the gateway can know. Here-document bodies are
+//! names no resource the gateway can know, except a path under the home
+//! directory (`~`, `~/x`, `$HOME/x`, `${HOME}/x`, `"$HOME"/x` with nothing
+//! else expanded), which keeps its rest ([`Word::home`]). Each command
+//! records how it joins the one before ([`Join`]: `;`, `&&`, `||`, `|`) and
+//! how many subshell parentheses it is in. Here-document bodies are
 //! skipped. Anything else of the shell grammar (functions, `if`, `for`) is
 //! read as words, which names no resource: the extractor misses accesses
 //! rather than inventing them.
@@ -17,6 +21,10 @@ pub struct Word {
     pub text: String,
     /// False when the shell would expand any part of it.
     pub literal: bool,
+    /// For a path under the home directory with nothing else expanded
+    /// (`~`, `~/x`, `$HOME/x`, `${HOME}/x`), what follows the home: `""`
+    /// or `/x`. Such a word is not literal.
+    pub home: Option<String>,
 }
 
 impl Word {
@@ -24,7 +32,14 @@ impl Word {
         Self {
             text: text.into(),
             literal: true,
+            home: None,
         }
+    }
+
+    /// The rest of a path under the home directory: `""` for the home
+    /// itself, `/x` for `~/x`.
+    pub fn home(&self) -> Option<&str> {
+        self.home.as_deref()
     }
 
     /// The text, when the shell passes it through unchanged.
@@ -62,12 +77,33 @@ pub struct Redirect {
     pub target: Word,
 }
 
+/// How a command follows the one before it.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Join {
+    /// The first command, or after `;`, `&`, a newline or a parenthesis:
+    /// it runs whatever the one before did.
+    #[default]
+    Sequence,
+    /// After `&&`: it runs when the list before it succeeded.
+    And,
+    /// After `||`: it runs when the list before it failed.
+    Or,
+    /// After `|` or `|&`: the next command of a pipeline, which runs when
+    /// the pipeline does.
+    Pipe,
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Command {
     pub words: Vec<Word>,
     pub redirects: Vec<Redirect>,
     /// Its stdout goes into a pipe.
     pub piped: bool,
+    /// How it follows the command before it.
+    pub join: Join,
+    /// How many subshell parentheses enclose it: a `cd` inside them does
+    /// not move the shell outside them.
+    pub depth: u16,
 }
 
 /// A command line's simple commands, in order.
@@ -111,6 +147,8 @@ struct WordBuf {
     text: String,
     literal: bool,
     quoted: bool,
+    /// The length of a leading home prefix (`~`, `$HOME`, `${HOME}`).
+    home_prefix: Option<usize>,
 }
 
 struct Pending {
@@ -127,6 +165,9 @@ struct Lexer {
     word: Option<WordBuf>,
     pending: Option<Pending>,
     heredocs: Vec<(String, bool)>,
+    /// How the next command joins the one before.
+    join: Join,
+    depth: u16,
 }
 
 impl Lexer {
@@ -139,6 +180,8 @@ impl Lexer {
             word: None,
             pending: None,
             heredocs: Vec::new(),
+            join: Join::Sequence,
+            depth: 0,
         }
     }
 
@@ -173,7 +216,7 @@ impl Lexer {
                     self.pos += 1;
                 }
                 '\n' => {
-                    self.finish_command(false)?;
+                    self.separate(false, Join::Sequence)?;
                     self.pos += 1;
                     self.skip_heredocs();
                 }
@@ -182,8 +225,20 @@ impl Lexer {
                         self.pos += 1;
                     }
                 }
-                ';' | '(' | ')' => {
+                ';' => {
+                    self.separate(false, Join::Sequence)?;
+                    self.pos += 1;
+                }
+                '(' => {
+                    // A group opens: the command before it ends, and the
+                    // first command inside joins as the group does.
                     self.finish_command(false)?;
+                    self.depth = self.depth.saturating_add(1);
+                    self.pos += 1;
+                }
+                ')' => {
+                    self.separate(false, Join::Sequence)?;
+                    self.depth = self.depth.saturating_sub(1);
                     self.pos += 1;
                 }
                 '&' => match self.peek_at(1) {
@@ -196,25 +251,25 @@ impl Lexer {
                         self.start_redirect(None, RedirectOp::Both, false)?;
                     }
                     Some('&') => {
-                        self.finish_command(false)?;
+                        self.separate(false, Join::And)?;
                         self.pos += 2;
                     }
                     _ => {
-                        self.finish_command(false)?;
+                        self.separate(false, Join::Sequence)?;
                         self.pos += 1;
                     }
                 },
                 '|' => match self.peek_at(1) {
                     Some('|') => {
-                        self.finish_command(false)?;
+                        self.separate(false, Join::Or)?;
                         self.pos += 2;
                     }
                     Some('&') => {
-                        self.finish_command(true)?;
+                        self.separate(true, Join::Pipe)?;
                         self.pos += 2;
                     }
                     _ => {
-                        self.finish_command(true)?;
+                        self.separate(true, Join::Pipe)?;
                         self.pos += 1;
                     }
                 },
@@ -248,7 +303,15 @@ impl Lexer {
                 }
                 '~' if self.word.is_none() => {
                     self.push(c);
-                    self.mark_expanded();
+                    let ends = self
+                        .peek_at(1)
+                        .is_none_or(|next| next == '/' || is_word_end(next));
+                    if ends {
+                        self.word().home_prefix = Some(1);
+                    } else {
+                        // `~user`: another user's home.
+                        self.mark_expanded();
+                    }
                     self.pos += 1;
                 }
                 _ => {
@@ -267,9 +330,16 @@ impl Lexer {
         let Some(word) = self.word.take() else {
             return;
         };
+        let home = word
+            .home_prefix
+            .filter(|_| word.literal)
+            .and_then(|len| word.text.get(len..))
+            .filter(|rest| rest.is_empty() || rest.starts_with('/'))
+            .map(str::to_owned);
         let word = Word {
+            literal: word.literal && word.home_prefix.is_none(),
             text: word.text,
-            literal: word.literal,
+            home,
         };
         match self.pending.take() {
             Some(pending) => {
@@ -286,17 +356,32 @@ impl Lexer {
         }
     }
 
-    fn finish_command(&mut self, piped: bool) -> Result<(), LexError> {
+    /// End the current command at a separator; the next command joins
+    /// as `join` says, unless no command ended here (a separator after a
+    /// parenthesis keeps the group's join, `a && (b)`).
+    fn separate(&mut self, piped: bool, join: Join) -> Result<(), LexError> {
+        let ended = self.finish_command(piped)?;
+        if ended || join != Join::Sequence {
+            self.join = join;
+        }
+        Ok(())
+    }
+
+    /// End the current command; whether there was one.
+    fn finish_command(&mut self, piped: bool) -> Result<bool, LexError> {
         self.finish_word();
         if self.pending.is_some() {
             return Err(LexError::MissingTarget);
         }
         let mut command = std::mem::take(&mut self.current);
-        if !command.words.is_empty() || !command.redirects.is_empty() {
-            command.piped = piped;
-            self.commands.push(command);
+        if command.words.is_empty() && command.redirects.is_empty() {
+            return Ok(false);
         }
-        Ok(())
+        command.piped = piped;
+        command.join = std::mem::take(&mut self.join);
+        command.depth = self.depth;
+        self.commands.push(command);
+        Ok(true)
     }
 
     fn start_redirect(
@@ -413,6 +498,21 @@ impl Lexer {
     /// At `$`: a parameter, command or arithmetic substitution, or ANSI-C
     /// quoting. Its text is kept raw and the word is no longer literal.
     fn dollar(&mut self) -> Result<(), LexError> {
+        if let Some(len) = self.home_variable() {
+            let at_start = self.word.as_ref().is_none_or(|word| word.text.is_empty());
+            for _ in 0..len {
+                if let Some(c) = self.peek() {
+                    self.push(c);
+                }
+                self.pos += 1;
+            }
+            if at_start {
+                self.word().home_prefix = Some(len);
+            } else {
+                self.mark_expanded();
+            }
+            return Ok(());
+        }
         self.mark_expanded();
         self.push('$');
         self.pos += 1;
@@ -440,6 +540,19 @@ impl Lexer {
             }
             _ => Ok(()),
         }
+    }
+
+    /// At `$`: the length of `$HOME` or `${HOME}` here, when it is one.
+    fn home_variable(&self) -> Option<usize> {
+        let rest: String = self.chars[self.pos..].iter().take(8).collect();
+        if rest.starts_with("${HOME}") {
+            return Some(7);
+        }
+        let name_ends = rest
+            .chars()
+            .nth(5)
+            .is_none_or(|c| !(c.is_ascii_alphanumeric() || c == '_'));
+        (rest.starts_with("$HOME") && name_ends).then_some(5)
     }
 
     /// Inside `$(`: up to the matching `)`, skipping quoted text.
@@ -527,4 +640,9 @@ impl Lexer {
             }
         }
     }
+}
+
+/// A character that ends an unquoted word.
+fn is_word_end(c: char) -> bool {
+    c.is_whitespace() || matches!(c, ';' | '&' | '|' | '(' | ')' | '<' | '>')
 }

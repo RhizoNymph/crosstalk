@@ -21,7 +21,7 @@ use crate::extract::op::Candidate;
 use crate::extract::outcome::CommandRule;
 use crate::extract::resource::url_locator;
 
-use super::commands::Shell;
+use super::commands::{Found, Shell};
 use super::lex::Word;
 use super::options::{OptSpec, Options};
 
@@ -138,7 +138,7 @@ const CURL_BODY: [&str; 12] = [
 ];
 
 impl Shell<'_> {
-    pub(super) fn curl(&self, args: &[Word], stdout_to_file: bool, found: &mut Vec<Candidate>) {
+    pub(super) fn curl(&self, args: &[Word], stdout_to_file: bool, found: &mut Vec<Found>) {
         let parsed = Options::parse(args, &CURL);
         let forced_get = parsed.has(&["-G", "--get"]);
         let method = match parsed.last(&["-X", "--request"]) {
@@ -177,7 +177,7 @@ impl Shell<'_> {
             if output.text != "-" {
                 body_to_result = false;
                 if let Some(locator) = self.file(output) {
-                    found.push(Candidate::write(locator, Extraction::Parsed));
+                    self.found(found, Candidate::write(locator, Extraction::Parsed));
                 }
             }
         }
@@ -190,7 +190,7 @@ impl Shell<'_> {
         self.requests(&urls, method, &form, body_to_result, rule, found);
     }
 
-    pub(super) fn wget(&self, args: &[Word], stdout_to_file: bool, found: &mut Vec<Candidate>) {
+    pub(super) fn wget(&self, args: &[Word], stdout_to_file: bool, found: &mut Vec<Found>) {
         let parsed = Options::parse(args, &WGET);
         let body = parsed.last(&["--post-data", "--body-data"]);
         let method = match parsed.last(&["--method"]) {
@@ -207,7 +207,7 @@ impl Shell<'_> {
             if output.text == "-" {
                 body_to_result = !stdout_to_file;
             } else if let Some(locator) = self.file(output) {
-                found.push(Candidate::write(locator, Extraction::Parsed));
+                self.found(found, Candidate::write(locator, Extraction::Parsed));
             }
         }
         let rule = CommandRule::Http {
@@ -223,7 +223,7 @@ impl Shell<'_> {
         form: &[(String, String)],
         body_to_result: bool,
         rule: CommandRule,
-        found: &mut Vec<Candidate>,
+        found: &mut Vec<Found>,
     ) {
         for word in urls {
             let Some(url) = word.as_literal().and_then(command_url) else {
@@ -244,13 +244,11 @@ impl Shell<'_> {
         request: &HttpRequest,
         body_to_result: bool,
         rule: CommandRule,
-        found: &mut Vec<Candidate>,
+        found: &mut Vec<Found>,
     ) {
-        found.extend(
-            http::candidates(request, body_to_result, Extraction::Parsed, self.sites)
-                .into_iter()
-                .map(|candidate| candidate.judged_by(rule)),
-        );
+        for candidate in http::candidates(request, body_to_result, Extraction::Parsed, self.sites) {
+            self.found(found, candidate.judged_by(rule));
+        }
     }
 }
 

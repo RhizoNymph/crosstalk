@@ -37,6 +37,9 @@ impl Classified {
 /// `payload` is where a write's content is (a read ignores it); `rule` is
 /// the command whose output judges the result, for an access a shell
 /// command makes (`outcome::CommandRule`), `None` for the tool's own rule.
+/// `refuted`: the result shows the access did not happen (its shell
+/// command was skipped or failed on it, or its push went elsewhere), so it
+/// is `Rejected` whatever else the result says.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Candidate {
     pub kind: AccessKind,
@@ -44,6 +47,7 @@ pub(crate) struct Candidate {
     pub via: Extraction,
     pub payload: WritePayload,
     pub rule: Option<CommandRule>,
+    pub refuted: bool,
 }
 
 impl Candidate {
@@ -54,6 +58,7 @@ impl Candidate {
             via,
             payload: WritePayload::CallArguments,
             rule: None,
+            refuted: false,
         }
     }
 
@@ -64,6 +69,7 @@ impl Candidate {
             via,
             payload: WritePayload::CallArguments,
             rule: None,
+            refuted: false,
         }
     }
 

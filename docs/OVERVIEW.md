@@ -1749,14 +1749,25 @@ Features Index:
       execute_bash and str_replace_editor are known tools. Each write
       carries its outcome (Delivered, Rejected, Unknown), judged in one
       place per tool and, for git, curl/wget and gh/glab, from the
-      command's output; reads need a delivered result; a write's locators
-      never depend on its result. ConversationContext learns the
-      persistent shell's directory and clones from shell calls. Builds the
+      command's output, and accesses of commands the output shows skipped
+      or failed (a failed cd before &&, command not found, a reader's
+      missing operand) are refuted; a push's or pull's printed To/From
+      remote wins over the clone binding; reads need a delivered result; a
+      write's locators never depend on its result. ConversationContext is
+      the conversation's shell state (ShellState: the persistent shell's
+      directory, including configured persistent_shells such as the AI
+      Village's bash, cd -, the home directory once an output shows it
+      with ~ places tracked home-relative until then, clones by remote
+      name, bounded), learnt from shell calls and their output; the
+      gateway's extraction step keeps one per agent and conversation and
+      records no read of a result without text. Builds the
       stored AccessOp with the write's spans (originated, forwarded from an
       input, plus self-relayed sources; none for an Unseen payload).
     entry_points:
       - crates/flow/src/extract/mod.rs
       - crates/flow/src/extract/context.rs
+      - crates/flow/src/extract/bash/state.rs
+      - crates/flow/src/extract/bash/evidence.rs
       - crates/flow/src/extract/outcome.rs
       - crates/flow/src/extract/mcp/config.rs
       - crates/flow/src/extract/spans.rs
