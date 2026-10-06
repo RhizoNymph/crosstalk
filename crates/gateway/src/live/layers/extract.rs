@@ -7,7 +7,9 @@
 //! of the exchange are stored when its write calls are extracted. For one
 //! delta of exchange `X` (agent `a`, conversation `c`):
 //!
-//! 1. A new system prompt sets `c`'s [`ConversationContext`].
+//! 1. A new system prompt starts `a`'s context in `c` ([`ConversationContext`],
+//!    one per agent and conversation); a changed one keeps what the context
+//!    learnt and only fills a working directory it did not know.
 //! 2. The delta's new inputs are taken in request order. A tool call in an
 //!    assistant message among them (history the request carries: after a
 //!    compaction, or in a new conversation that replays its transcript) is
@@ -20,13 +22,20 @@
 //!      call, so its held writes are released;
 //!    - else nothing: the result is dropped.
 //!
-//!    A write held without a result gets its [`Extracted::WriteResult`]; a
+//!    A call made in an output is extracted in the context it was made in
+//!    (kept with the call), so its writes line up with the ones held. A
+//!    write held without a result gets its [`Extracted::WriteResult`]; a
 //!    read is an [`Extracted::Read`] by `a` in `X`, at `X`'s start, naming
-//!    the result part. A history call that no output of `a` made yields
-//!    reads only (its writes happened in an exchange never seen). A
-//!    result `a` was already delivered (the same call and result content,
-//!    in any conversation) is not read again
-//!    (`flow.extract.replayed-result-read-once`).
+//!    the result part, which is a part of a message of `X`'s request (or
+//!    output, for a server tool) with text: a result with no text (an
+//!    empty output) is no read (`flow.extract.read-locates-its-result`).
+//!    A history call that no output of `a` made yields reads only (its
+//!    writes happened in an exchange never seen). A result `a` was already
+//!    delivered (the same call and result content, in any conversation) is
+//!    not read again (`flow.extract.replayed-result-read-once`). Every
+//!    result then teaches `a`'s context in `c` what it shows
+//!    ([`ConversationContext::observe`]: the shell's directory, home and
+//!    remotes), in request order, whether or not it was read.
 //! 3. Every tool call in `X`'s output is an [`Extracted::ToolCall`]; a
 //!    known tool's writes are [`Extracted::Write`]s held without an
 //!    outcome, carrying the spans [`write_spans`] finds at the call's part
@@ -74,6 +83,11 @@ pub enum ExtractStepError {
 struct Pending {
     /// The conversation whose output made it.
     conversation: ConversationId,
+    /// The context it was extracted in, which its result is extracted in
+    /// too: the writes held from the call line up with the ones the result
+    /// judges (`flow.extract.write-locators-from-call`) even when another
+    /// result taught the context in between.
+    context: ConversationContext,
     call: ToolCall,
     /// Its writes, held by the flow consumer, by locator order.
     writes: Vec<(crosstalk_spec::derived::flow::resource::Locator, AccessId)>,
@@ -88,6 +102,9 @@ enum Answered {
     History(ToolCall),
 }
 
+/// One agent's conversation: its context is its own.
+type ContextKey = (AgentId, ConversationId);
+
 /// A delivery's identity per agent: a digest of the call (id, name,
 /// arguments) and the result (outcome, content).
 type DeliveryKey = (AgentId, [u8; 32]);
@@ -99,7 +116,9 @@ pub struct Extraction {
     messages: BlobMessages<LiveBlobs>,
     spans: MemoryProvenanceStore,
     config: ExtractConfig,
-    contexts: BTreeMap<ConversationId, ConversationContext>,
+    /// Each agent's context in each conversation, learnt from what its
+    /// calls' results showed.
+    contexts: BTreeMap<ContextKey, ConversationContext>,
     /// Calls made in an output, by agent and call id; one per conversation
     /// that made a call with that id.
     pending: BTreeMap<(AgentId, String), Vec<Pending>>,
@@ -140,11 +159,15 @@ impl Extraction {
     ) -> Result<(), ExtractStepError> {
         let mut out = Vec::new();
         let mut delivered = Vec::new();
+        let key = (delta.agent, delta.conversation);
         if let Some(system) = delta.new_system
             && let Some(message) = self.message(system).await?
         {
+            let stated = context_of(&message);
             self.contexts
-                .insert(delta.conversation, context_of(&message));
+                .entry(key)
+                .and_modify(|context| context.restate(&stated))
+                .or_insert(stated);
         }
         for hash in &delta.new_inputs {
             let Some(message) = self.message(*hash).await? else {
@@ -170,14 +193,19 @@ impl Extraction {
                         };
                         let key =
                             delivery_key(delta.agent, answered.call(), result, &message, part);
+                        let call = answered.call().clone();
                         if matches!(answered, Answered::History(_))
                             && (self.delivered.contains(&key) || delivered.contains(&key))
                         {
                             tracing::debug!(exchange = %delta.exchange.ulid_text(), call = %result.call_id.0, "result already delivered to the agent; not read again");
-                            continue;
+                        } else {
+                            delivered.push(key);
+                            let has_text = message
+                                .part_text(part.index)
+                                .is_ok_and(|text| !text.is_empty());
+                            self.result(delta, at, answered, result, part, has_text, &mut out);
                         }
-                        delivered.push(key);
-                        self.result(delta, at, answered, result, part, &mut out);
+                        self.observe(delta, &call, result);
                     }
                 }
                 MessageBody::System(_) | MessageBody::User(_) => {}
@@ -223,7 +251,11 @@ impl Extraction {
                         &message,
                         result_part,
                     ));
-                    self.result(delta, at, answered, result, result_part, &mut out);
+                    let has_text = message
+                        .part_text(result_part.index)
+                        .is_ok_and(|text| !text.is_empty());
+                    self.result(delta, at, answered, result, result_part, has_text, &mut out);
+                    self.observe(delta, call, result);
                 }
             }
         }
@@ -284,14 +316,21 @@ impl Extraction {
         ToolExtractors::new(&self.config, &context).handles(call)
     }
 
-    fn extractors_for(&self, conversation: ConversationId) -> (ExtractConfig, ConversationContext) {
-        (
-            self.config.clone(),
-            self.contexts
-                .get(&conversation)
-                .cloned()
-                .unwrap_or_default(),
-        )
+    /// `delta`'s agent's context in its conversation, as it stands.
+    fn context_of(&self, delta: &ConversationDelta) -> ConversationContext {
+        self.contexts
+            .get(&(delta.agent, delta.conversation))
+            .cloned()
+            .unwrap_or_default()
+    }
+
+    /// Let `delta`'s agent's context in its conversation learn from a
+    /// call's result (after the result was extracted).
+    fn observe(&mut self, delta: &ConversationDelta, call: &ToolCall, result: &ToolResult) {
+        self.contexts
+            .entry((delta.agent, delta.conversation))
+            .or_default()
+            .observe(&self.config, call, Some(result));
     }
 
     /// A call in `delta`'s output: its writes held, the call kept for its
@@ -307,8 +346,8 @@ impl Extraction {
         sources: &BTreeMap<SpanId, AgentId>,
         out: &mut Vec<Extracted>,
     ) {
-        let (config, context) = self.extractors_for(delta.conversation);
-        let extractors = ToolExtractors::new(&config, &context);
+        let context = self.context_of(delta);
+        let extractors = ToolExtractors::new(&self.config, &context);
         if !extractors.handles(call) {
             return;
         }
@@ -354,13 +393,16 @@ impl Extraction {
         calls.retain(|pending| pending.conversation != delta.conversation);
         calls.push(Pending {
             conversation: delta.conversation,
+            context,
             call: call.clone(),
             writes,
         });
     }
 
-    /// A result in `delta` answering `answered`: the call's held writes
-    /// released with their outcome, its reads extracted.
+    /// A result in `delta` answering `answered`, at `part` (with text or
+    /// not): the call's held writes released with their outcome, its reads
+    /// extracted when the part has text to locate them at.
+    #[allow(clippy::too_many_arguments)]
     fn result(
         &mut self,
         delta: &ConversationDelta,
@@ -368,16 +410,17 @@ impl Extraction {
         answered: Answered,
         result: &ToolResult,
         part: PartRef,
+        has_text: bool,
         out: &mut Vec<Extracted>,
     ) {
-        // A call is extracted in the context of the conversation that made
-        // it.
-        let (call, writes, conversation) = match answered {
-            Answered::Output(pending) => (pending.call, pending.writes, pending.conversation),
-            Answered::History(call) => (call, Vec::new(), delta.conversation),
+        // A call made in an output is extracted in the context it was made
+        // in; a history call in the context of the conversation it is seen
+        // in.
+        let (call, writes, context) = match answered {
+            Answered::Output(pending) => (pending.call, pending.writes, pending.context),
+            Answered::History(call) => (call, Vec::new(), self.context_of(delta)),
         };
-        let (config, context) = self.extractors_for(conversation);
-        let extractors = ToolExtractors::new(&config, &context);
+        let extractors = ToolExtractors::new(&self.config, &context);
         let accesses = match extractors.extract(&call, Some(result)) {
             Ok(accesses) => accesses,
             Err(error) => {
@@ -398,6 +441,11 @@ impl Extraction {
                         "a write extracted only with its result; not recorded"
                     ),
                 },
+                ExtractedOp::Read if !has_text => tracing::debug!(
+                    exchange = %delta.exchange.ulid_text(),
+                    call = %result.call_id.0,
+                    "a read whose result has no text; not recorded"
+                ),
                 ExtractedOp::Read => out.push(Extracted::Read(Observed {
                     id: access_id(delta.exchange, &result.call_id.0, "read", index, at),
                     agent: delta.agent,

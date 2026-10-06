@@ -1,0 +1,29 @@
+[invariant]
+id = "flow.extract.shell-skipped-command-no-access"
+statement = "For a shell call whose result is not flagged as an error, an access made by a command that bash's list semantics skip given the failures its output shows (a `cd` error naming the command's directory, `<name>: command not found`, a file reader's error naming its operand), or by a reader on an operand its error names, is no Read and a Rejected Write, with the Write's locator still the call's; a command after `;`, `&`, a newline or a parenthesis runs, a command after `&&` or `||` whose predecessor's status the output does not show is kept, and a failed `cd` leaves the shell's directory where it was."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+A shell result rarely carries exit statuses, but bash prints its own
+failures. `cd ai-wellbeing && sed -n '1,220p' wave2-visualization.html`
+whose output is `cd: ai-wellbeing: No such file or directory` read
+nothing (AI Village exchange 01KXED5HV034DD2CSEZCVNJ0FV), yet was recorded
+as a read of the repository file and could pair with another agent's
+write. Only failures the output names count: a command's success is
+unknown unless it is a `cd` whose stderr reaches the output, so `&&`
+chains after silent commands (`test`, `grep -q`) are kept as before. Write
+locators stay a function of the call (flow.extract.write-locators-from-call):
+only their outcome reads the output.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_flow::extract::tests::shell_state::a_read_after_a_failed_cd_in_an_and_list_never_happened",
+    "crosstalk_flow::extract::tests::shell_state::list_semantics_decide_which_commands_ran",
+    "crosstalk_flow::extract::tests::shell_state::a_failed_cd_teaches_nothing_and_a_skipped_one_does_not_move",
+    "crosstalk_flow::extract::tests::shell_state::write_locators_still_come_from_the_call",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
