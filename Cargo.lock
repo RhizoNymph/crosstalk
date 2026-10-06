@@ -901,9 +901,12 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "crosstalk-spec",
+ "crosstalk-store",
+ "crosstalk-testkit",
  "proptest",
  "serde",
  "serde_json",
+ "sqlx",
  "tempfile",
  "thiserror",
  "tokio",

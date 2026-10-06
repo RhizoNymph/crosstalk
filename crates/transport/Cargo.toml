@@ -3,21 +3,24 @@ name = "crosstalk-transport"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
-description = "L2 transport for crosstalk: the in-process event bus with consumer groups, retries and dead letters, and the blob store."
+description = "L2 transport for crosstalk: the in-process and Postgres event buses with consumer groups, retries and dead letters, the publish spool, and the blob store."
 
 [lints]
 workspace = true
 
 [dependencies]
 crosstalk-spec = { path = "../../spec" }
+crosstalk-store = { path = "../store" }
 blake3.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+sqlx.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["rt", "sync", "time", "macros"] }
 tracing.workspace = true
 
 [dev-dependencies]
+crosstalk-testkit = { path = "../testkit" }
 proptest.workspace = true
 tempfile.workspace = true
 tokio = { workspace = true, features = ["rt", "rt-multi-thread", "sync", "time", "macros", "test-util"] }

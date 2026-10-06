@@ -55,8 +55,10 @@ Overview:
     invariants are tested with (sim). crosstalk-testkit holds the builders,
     the synthetic Anthropic corpus and the fake upstream and client
     (testkit). crosstalk-transport has the in-process bus (MpscBus) with
-    consumer groups, retries, dead letters and envelope dedup, and the
-    content-addressed blob store (FsBlobStore, MemoryBlobStore)
+    consumer groups, retries, dead letters and envelope dedup, the
+    durable Postgres bus (PgBus, pg_bus) and the on-disk publish spool in
+    front of it (SpoolingBus, publish_spool), not yet wired into serve,
+    and the content-addressed blob store (FsBlobStore, MemoryBlobStore)
     (transport). crosstalk-canonical has the Anthropic Messages
     normalizer (L1): pure functions from a RawExchange to a
     NormalizedExchange (media bytes included), with streaming reassembly,
@@ -846,7 +848,8 @@ Features Index:
       changes, landed: EventId::derive, KeyedHasher::derive_key,
       BusError::SpoolFull, AuditOutcome::Interrupted with AuditIntent and
       AuditIntents, PgBus/SpoolingBus/PgFrontierSource docs, INV-1200 to
-      INV-1221; W1 to W9 not implemented): detections that survive
+      INV-1221; W1, transport, implemented: PgBus, SpoolingBus, DbLink,
+      see pg_bus and publish_spool): detections that survive
       a gateway restart. Surveys what is persisted today (serve runs Live
       on memory stores and MpscBus; the L3 to L7 Postgres stores exist but
       are unwired, and crosstalk migrate runs no layer migrations) and
@@ -914,13 +917,15 @@ Features Index:
       routes) with a loader that checks each case against its metadata; a
       hyper fake upstream that replays cases with paced event streams and
       stalls, disconnects, withholds or fails on command and records what
-      it received; and a hyper fake harness client that collects responses
-      chunk by chunk.
+      it received; a hyper fake harness client that collects responses
+      chunk by chunk; and DbLink, a loopback TCP relay to the test database
+      that a test cuts and restores to simulate an outage.
     entry_points:
       - crates/testkit/src/lib.rs
       - crates/testkit/src/corpus/anthropic.rs
       - crates/testkit/src/upstream/mod.rs
       - crates/testkit/src/client.rs
+      - crates/testkit/src/db_link.rs
       - crates/testkit/corpus/README.md
     depends_on: [type_spec, workspace]
     doc: docs/features/testkit.md
@@ -956,6 +961,51 @@ Features Index:
       - crates/transport/src/blob/memory.rs
     depends_on: [type_spec, wire_contract, workspace]
     doc: docs/features/transport.md
+  pg_bus:
+    description: >
+      PgBus (crosstalk-transport pg module, P7.3 workstream W1): the
+      durable single-node EventBus on Postgres, schema transport (events
+      log idempotent on envelope id, groups with admitted_through,
+      deliveries ready/held/delayed, dead letters). MpscBus's group
+      semantics (checked by a conformance suite run over both buses);
+      publishes commit in seq order under a transaction advisory lock;
+      next admits, makes due delays ready and takes a row FOR UPDATE SKIP
+      LOCKED in one transaction, waking on LISTEN/NOTIFY or a poll; ack
+      deadlines in a reaper task; delays from the injected clock;
+      recover_held returns a stopped process's held deliveries with the
+      attempt counted; group_stats for the frontier; prune for 7-day
+      retention behind the slowest group; DrainTarget for the spool. Not
+      yet built by serve (W8).
+    entry_points:
+      - crates/transport/src/pg/mod.rs
+      - crates/transport/src/pg/subscription.rs
+      - crates/transport/migrations/0001_bus.sql
+      - crates/transport/src/conformance/mod.rs
+      - crates/transport/src/integration/mod.rs
+    depends_on: [transport, store, postgres_stores]
+    doc: docs/features/pg_bus.md
+  publish_spool:
+    description: >
+      SpoolingBus (crosstalk-transport spool module, P7.3 workstream W1,
+      decision Q5): an EventBus decorator that appends what its inner bus
+      cannot take (Disconnected) to fsynced, checksummed segments on disk
+      and drains them in publish order, under their own ids, when the
+      inner bus answers (one batch transaction, then an atomically
+      replaced cursor). States Direct, Spooling, Draining, Corrupt change
+      under the publish mutex, so nothing overtakes the backlog. A torn
+      last record is truncated at open, any other bad record stops
+      draining; bounded by max_bytes (SpoolFull, never waits); LOCK per
+      directory; oldest_at for the frontier; discard_corrupt for the
+      operator. Unit, seeded DST with crashes, and integration tests over
+      PgBus through testkit's DbLink. Not yet built by serve (W8).
+    entry_points:
+      - crates/transport/src/spool/mod.rs
+      - crates/transport/src/spool/log.rs
+      - crates/transport/src/spool/drain.rs
+      - crates/transport/src/dst/spool.rs
+      - crates/testkit/src/db_link.rs
+    depends_on: [transport, pg_bus, testkit, postgres_stores]
+    doc: docs/features/publish_spool.md
   memory:
     description: >
       crosstalk-memory, the in-memory reference implementation of every

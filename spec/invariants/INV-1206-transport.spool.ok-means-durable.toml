@@ -15,5 +15,5 @@ dst = "crosstalk_transport::dst::spool_ok_survives_seeded_crashes"
 integration = "crosstalk_transport::integration::spool_publish_survives_restart_while_database_down"
 
 [evidence-review]
-dst = { agent = "false", human = "false" }
+dst = { agent = "true", human = "false" }
 integration = { agent = "false", human = "false" }

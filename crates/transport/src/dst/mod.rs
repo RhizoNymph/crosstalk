@@ -15,6 +15,7 @@ mod dedup;
 mod faults;
 mod replay;
 mod scenario;
+mod spool;
 
 use std::collections::HashSet;
 use std::num::NonZeroUsize;
@@ -858,4 +859,68 @@ async fn dedup_acks_suppressed_duplicates() {
 #[tokio::test(start_paused = true)]
 async fn dedup_never_suppresses_unhandled_id() {
     dedup::dedup_never_suppresses_unhandled_id().await;
+}
+
+// ---------------------------------------------------------------------------
+// The publish spool, over an inner bus that goes down, with crashes.
+// ---------------------------------------------------------------------------
+
+/// Seeds per spool check.
+const SPOOL_SEEDS: u64 = 24;
+
+/// `transport.spool.ok-means-durable`: across seeded outages and crashes
+/// (plain, mid-append, after a drained batch committed before the cursor
+/// moved, and before the switch back to direct), every publish that
+/// returned `Ok` reaches the inner bus once the spool drains, unchanged.
+#[tokio::test(start_paused = true)]
+async fn spool_ok_survives_seeded_crashes() {
+    let outcomes = spool::for_spool_seeds(
+        SPOOL_SEEDS,
+        true,
+        spool::SpoolOutcome::check_ok_in_log_in_order,
+    )
+    .await;
+    // Not vacuous: the runs crashed, tore appends, and published plenty.
+    assert!(outcomes.iter().map(|o| o.crashes).sum::<u32>() > 0);
+    assert!(outcomes.iter().map(|o| o.torn).sum::<u32>() > 0);
+    assert!(outcomes.iter().map(|o| o.ok.len()).sum::<usize>() > 100);
+}
+
+/// `transport.spool.drained-once-under-its-id`: every spooled envelope
+/// reaches the inner bus under the id (and with the bytes) it was spooled
+/// with, and a drain repeated after a crash between the batch's commit and
+/// the cursor adds nothing to the inner log.
+#[tokio::test(start_paused = true)]
+async fn spool_drains_each_record_once_under_its_id() {
+    let outcomes = spool::for_spool_seeds(SPOOL_SEEDS, true, |outcome| {
+        outcome.check_ok_in_log_in_order()?;
+        let distinct: HashSet<_> = outcome.log.iter().map(|e| e.id).collect();
+        if distinct.len() != outcome.log.len() {
+            return Err("an id landed in the inner log twice".to_owned());
+        }
+        Ok(())
+    })
+    .await;
+    assert!(
+        outcomes.iter().map(|o| o.resent).sum::<u64>() > 0,
+        "some run resent a drained batch, and the log absorbed it"
+    );
+}
+
+/// `transport.spool.no-overtaking`: while the spool holds a record, no
+/// envelope published after it reaches the inner bus first; and
+/// `oldest_at` is never later than an unsent `Ok` envelope's time
+/// (`topology.frontier.covers-spool`'s input).
+#[tokio::test(start_paused = true)]
+async fn spool_backlog_is_never_overtaken() {
+    for crashes in [false, true] {
+        spool::for_spool_seeds(SPOOL_SEEDS, crashes, |outcome| {
+            outcome.check_ok_in_log_in_order()?;
+            match outcome.oldest_violations.first() {
+                Some(violation) => Err(format!("oldest_at ran ahead: {violation}")),
+                None => Ok(()),
+            }
+        })
+        .await;
+    }
 }
