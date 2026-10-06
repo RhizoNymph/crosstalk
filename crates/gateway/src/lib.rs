@@ -40,6 +40,7 @@ pub mod ops;
 pub mod pipeline;
 pub mod role;
 pub mod server;
+pub mod spool;
 pub mod store;
 pub mod tasks;
 

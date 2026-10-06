@@ -40,11 +40,13 @@ use crosstalk_spec::ids::EventId;
 use crosstalk_spec::interfaces::l2_transport::{
     ConsumerGroup, Delivery, RetryPolicy, Subscription,
 };
+use crosstalk_spec::interfaces::l2_transport::EventBus;
 use crosstalk_spec::support::{Clock, Timestamp};
 use crosstalk_transport::{MpscBus, MpscSubscription};
 use tokio::sync::{mpsc, oneshot};
 
 use super::blobs::LiveBlobs;
+use super::store_set::{LiveStoreSet, MemorySet};
 use crate::pipeline::{Ingester, PublishError};
 
 /// The stores a live process shares between its stages and its surface.
@@ -89,13 +91,21 @@ impl ConversationStores for LayerStores {
 
 /// Where a stage publishes the events it decides: the pipeline's own
 /// publish path, so every envelope gets an id from the one generator.
-#[derive(Debug, Clone)]
-pub struct Publisher {
-    ingester: Ingester<LiveBlobs, MpscBus>,
+#[derive(Debug)]
+pub struct Publisher<E = MpscBus> {
+    ingester: Ingester<LiveBlobs, E>,
 }
 
-impl Publisher {
-    pub(crate) fn new(ingester: Ingester<LiveBlobs, MpscBus>) -> Self {
+impl<E> Clone for Publisher<E> {
+    fn clone(&self) -> Self {
+        Self {
+            ingester: self.ingester.clone(),
+        }
+    }
+}
+
+impl<E: EventBus + Sync> Publisher<E> {
+    pub(crate) fn new(ingester: Ingester<LiveBlobs, E>) -> Self {
         Self { ingester }
     }
 
@@ -158,13 +168,12 @@ impl Activity {
 }
 
 /// What every stage is built from. Clones share everything.
-#[derive(Clone)]
-pub struct StageContext {
+pub struct StageContext<S: LiveStoreSet = MemorySet> {
     /// The stores the surface reads: write them through the spec's traits.
-    pub stores: LiveStores,
+    pub stores: S::Stores,
     /// The layer stores only the stages read.
-    pub layers: LayerStores,
-    pub publisher: Publisher,
+    pub layers: S::Layers,
+    pub publisher: Publisher<S::Bus>,
     /// The clock the pipeline stamps with (a corpus or sim clock under
     /// replay).
     pub clock: Arc<dyn Clock>,
@@ -175,6 +184,20 @@ pub struct StageContext {
     /// The L7 watermark the topology stage last exposed, in microseconds
     /// (0 until it first advances).
     pub watermark: Arc<AtomicU64>,
+}
+
+impl<S: LiveStoreSet> Clone for StageContext<S> {
+    fn clone(&self) -> Self {
+        Self {
+            stores: self.stores.clone(),
+            layers: self.layers.clone(),
+            publisher: self.publisher.clone(),
+            clock: Arc::clone(&self.clock),
+            flow: self.flow,
+            seed: self.seed,
+            watermark: Arc::clone(&self.watermark),
+        }
+    }
 }
 
 /// Why a stage did not handle an envelope.
@@ -288,21 +311,27 @@ pub struct SlotTaken(pub Slot);
 
 /// A stage's task, given its subscription and control.
 pub type RunFuture = Pin<Box<dyn Future<Output = ()> + Send>>;
-type Run = Box<dyn FnOnce(MpscSubscription, Control) -> RunFuture + Send>;
+type Run<Sub> = Box<dyn FnOnce(Sub, Control) -> RunFuture + Send>;
 
 /// A stage, type-erased for its slot.
-pub(crate) struct Plug {
+pub(crate) struct Plug<Sub> {
     pub(crate) subjects: Vec<Subject>,
-    pub(crate) run: Run,
+    pub(crate) run: Run<Sub>,
 }
 
-/// The filled slots.
-#[derive(Default)]
-pub struct Stages {
-    slots: BTreeMap<Slot, Plug>,
+/// The filled slots, each run over a subscription of type `Sub` (the
+/// in-process bus's by default).
+pub struct Stages<Sub = MpscSubscription> {
+    slots: BTreeMap<Slot, Plug<Sub>>,
 }
 
-impl std::fmt::Debug for Stages {
+impl Default for Stages<MpscSubscription> {
+    fn default() -> Self {
+        Self::empty()
+    }
+}
+
+impl<Sub> std::fmt::Debug for Stages<Sub> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter
             .debug_struct("Stages")
@@ -311,7 +340,29 @@ impl std::fmt::Debug for Stages {
     }
 }
 
-impl Stages {
+impl<Sub> Stages<Sub> {
+    /// The filled slots, in slot order.
+    pub fn filled(&self) -> Vec<Slot> {
+        self.slots.keys().copied().collect()
+    }
+
+    /// The slots nothing fills yet, in slot order.
+    pub fn unfilled(&self) -> Vec<Slot> {
+        Slot::ALL
+            .into_iter()
+            .filter(|slot| !self.slots.contains_key(slot))
+            .collect()
+    }
+}
+
+impl<Sub: Subscription + Send + 'static> Stages<Sub> {
+    /// No slot filled.
+    pub fn empty() -> Self {
+        Self {
+            slots: BTreeMap::new(),
+        }
+    }
+
     /// Put `stage` in `slot`, run by the generic stage loop.
     pub fn fill<S: Stage>(&mut self, slot: Slot, stage: S) -> Result<(), SlotTaken> {
         let subjects = stage.subjects();
@@ -330,7 +381,7 @@ impl Stages {
         task: F,
     ) -> Result<(), SlotTaken>
     where
-        F: FnOnce(MpscSubscription, Control) -> Fut + Send + 'static,
+        F: FnOnce(Sub, Control) -> Fut + Send + 'static,
         Fut: Future<Output = ()> + Send + 'static,
     {
         if self.slots.contains_key(&slot) {
@@ -344,20 +395,7 @@ impl Stages {
         Ok(())
     }
 
-    /// The filled slots, in slot order.
-    pub fn filled(&self) -> Vec<Slot> {
-        self.slots.keys().copied().collect()
-    }
-
-    /// The slots nothing fills yet, in slot order.
-    pub fn unfilled(&self) -> Vec<Slot> {
-        Slot::ALL
-            .into_iter()
-            .filter(|slot| !self.slots.contains_key(slot))
-            .collect()
-    }
-
-    pub(crate) fn into_plugs(self) -> BTreeMap<Slot, Plug> {
+    pub(crate) fn into_plugs(self) -> BTreeMap<Slot, Plug<Sub>> {
         self.slots
     }
 }
@@ -395,9 +433,9 @@ pub const DERIVED_SUBJECTS: [Subject; 27] = [
 
 /// Settle one delivery on the bus by how it was handled. Shared by the
 /// generic loop and custom stage tasks.
-pub async fn settle_delivery(
+pub async fn settle_delivery<Sub: Subscription>(
     slot: Slot,
-    subscription: &mut MpscSubscription,
+    subscription: &mut Sub,
     retry: RetryPolicy,
     delivery: &Delivery,
     outcome: Result<(), StageError>,
@@ -434,7 +472,7 @@ pub async fn settle_delivery(
 
 /// The generic stage loop: commands first, then deliveries, until the bus
 /// shuts down.
-async fn run<S: Stage>(mut stage: S, mut subscription: MpscSubscription, control: Control) {
+async fn run<S: Stage, Sub: Subscription>(mut stage: S, mut subscription: Sub, control: Control) {
     let Control {
         retry,
         mut commands,

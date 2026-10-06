@@ -15,8 +15,15 @@ world = ["dep:crosstalk-world"]
 
 [dependencies]
 crosstalk-spec = { path = "../../spec" }
+crosstalk-analysis = { path = "../analysis" }
+crosstalk-canonical = { path = "../canonical" }
+crosstalk-flow = { path = "../flow" }
 crosstalk-memory = { path = "../memory" }
+crosstalk-provenance = { path = "../provenance" }
+crosstalk-reconstruct = { path = "../reconstruct" }
+crosstalk-store = { path = "../store" }
 crosstalk-surface = { path = "../surface" }
+crosstalk-topology = { path = "../topology" }
 crosstalk-transport = { path = "../transport" }
 crosstalk-world = { path = "../world", optional = true }
 axum = { workspace = true, features = ["http1", "tokio", "tracing"] }

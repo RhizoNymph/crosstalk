@@ -6,13 +6,12 @@
 //! eviction follows the process's ticks (`Live::settle` and the periodic
 //! ticker) instead of a wall-time interval:
 //!
-//! - `ExchangeCaptured`: record the exchange (and its start, which the
-//!   extraction step stamps accesses with);
+//! - `ExchangeCaptured`: record the exchange (its start is what the
+//!   extraction step stamps accesses with, read back from the store with
+//!   `Provenance::started_at`, so a restart loses nothing);
 //! - `ConversationDelta`: scan it, extract it, then publish the envelopes
 //!   the scan yielded (`SpanOriginated`, `SpanRelayed`, `ContentMatched`);
 //! - a tick at `now`: expire spans past retention.
-
-use std::collections::BTreeMap;
 
 use crosstalk_memory::provenance::{IndexConfig, MemoryFingerprintIndex};
 use crosstalk_provenance::config::ProvenanceConfig;
@@ -22,7 +21,6 @@ use crosstalk_provenance::semantic::DisabledSemanticMatcher;
 use crosstalk_provenance::store::MemoryProvenanceStore;
 use crosstalk_spec::events::ingest::IngestEvent;
 use crosstalk_spec::events::{BusEvent, Envelope, Subject};
-use crosstalk_spec::ids::ExchangeId;
 use crosstalk_spec::interfaces::l2_transport::EventBus;
 use crosstalk_spec::support::Timestamp;
 use crosstalk_transport::MpscBus;
@@ -43,8 +41,6 @@ pub struct ProvenanceStage {
     engine: Engine,
     bus: MpscBus,
     extraction: Extraction,
-    /// Each recorded exchange's start.
-    started: BTreeMap<ExchangeId, Timestamp>,
 }
 
 impl ProvenanceStage {
@@ -63,7 +59,6 @@ impl ProvenanceStage {
             ),
             bus: ctx.stores.bus.clone(),
             extraction,
-            started: BTreeMap::new(),
         }
     }
 }
@@ -90,10 +85,7 @@ impl Stage for ProvenanceStage {
                 self.engine
                     .record_exchange(exchange)
                     .await
-                    .map_err(engine_error)?;
-                self.started
-                    .insert(exchange.meta.id, exchange.meta.started_at);
-                Ok(())
+                    .map_err(engine_error)
             }
             BusEvent::Ingest(IngestEvent::ConversationDelta(delta)) => {
                 let processed = self.engine.process(delta).await.map_err(engine_error)?;
@@ -102,9 +94,10 @@ impl Stage for ProvenanceStage {
                 // next delivery, so it sees a read's access before the
                 // content match the read carried.
                 let at = self
-                    .started
-                    .get(&delta.exchange)
-                    .copied()
+                    .engine
+                    .started_at(delta.exchange)
+                    .await
+                    .map_err(engine_error)?
                     .unwrap_or(envelope.at);
                 self.extraction
                     .delta(delta, at)

@@ -7,7 +7,7 @@ use crosstalk_gateway::cli::{Command, USAGE};
 use crosstalk_gateway::config::GatewayConfig;
 use crosstalk_gateway::logging::{self, Sink};
 use crosstalk_gateway::role::Role;
-use crosstalk_gateway::{gateway, healthcheck, inspect, store};
+use crosstalk_gateway::{gateway, healthcheck, inspect, spool, store};
 use crosstalk_spec::support::SystemClock;
 
 fn main() -> ExitCode {
@@ -49,18 +49,43 @@ async fn run(command: Command) -> ExitCode {
                 Err(error) => fail("loading the config", &error),
             }
         }
-        Command::Migrate { config } => {
+        Command::Migrate {
+            config,
+            reset_correlator,
+        } => {
             logging::init(Sink::Stdout, "info");
             let config = match GatewayConfig::load(&config) {
                 Ok(config) => config,
                 Err(error) => return fail("loading the config", &error),
             };
-            match store::migrate(&config, env).await {
+            let options = store::MigrateOptions { reset_correlator };
+            match store::migrate(&config, env, options, &SystemClock).await {
                 Ok(()) => {
                     tracing::info!("migrations complete");
                     ExitCode::SUCCESS
                 }
                 Err(error) => fail("migrating", &error),
+            }
+        }
+        Command::SpoolDiscardCorrupt { config } => {
+            logging::init(Sink::Stdout, "info");
+            let config = match GatewayConfig::load(&config) {
+                Ok(config) => config,
+                Err(error) => return fail("loading the config", &error),
+            };
+            match spool::discard_corrupt(&config).await {
+                Ok(Some(discarded)) => {
+                    println!(
+                        "discarded {} bytes of {} from offset {}",
+                        discarded.bytes, discarded.segment, discarded.offset
+                    );
+                    ExitCode::SUCCESS
+                }
+                Ok(None) => {
+                    println!("the spool has no corruption");
+                    ExitCode::SUCCESS
+                }
+                Err(error) => fail("discarding the spool's corruption", &error),
             }
         }
         Command::Healthcheck { url } => match healthcheck::check(&url).await {

@@ -291,3 +291,83 @@ fn the_extract_section_defaults_and_configures_the_extractors() {
         assert!(!parses(&changed), "accepted {bad}");
     }
 }
+
+fn minimal() -> serde_json::Value {
+    serde_json::json!({
+        "ingress": {
+            "listen": "127.0.0.1:0",
+            "routes": [],
+            "secrets": {"current": {"version": 1, "env": "CROSSTALK_SECRET_V1"}},
+        },
+        "ops": {"listen": "127.0.0.1:0"},
+        "blobs": {"root": "/var/lib/crosstalk/blobs"},
+    })
+}
+
+#[test]
+fn the_spool_section_defaults_under_the_data_directory() {
+    let config = GatewayConfig::from_json(&minimal().to_string()).expect("parses");
+    assert_eq!(config.spool, SpoolSection::default());
+    let data = Path::new("/var/lib/crosstalk");
+    let spool = config.spool.spool_config(data).expect("a spool config");
+    assert_eq!(spool.dir(), Path::new("/var/lib/crosstalk/spool"));
+    assert_eq!(spool.max_bytes(), 1 << 30);
+    assert_eq!(spool.segment_bytes(), 64 << 20);
+    assert_eq!(spool.drain_batch(), 256);
+    assert_eq!(spool.probe(), Duration::from_secs(1));
+}
+
+#[test]
+fn the_spool_section_is_checked() {
+    let data = Path::new("/var/lib/crosstalk");
+    let section = |spool: serde_json::Value| {
+        let mut value = minimal();
+        value["spool"] = spool;
+        GatewayConfig::from_json(&value.to_string()).map(|config| config.spool)
+    };
+    let custom = section(serde_json::json!({
+        "dir": "outage", "max_bytes": 4096, "segment_bytes": 1024, "drain_batch": 8, "probe_ms": 50
+    }))
+    .expect("parses");
+    let spool = custom.spool_config(data).expect("valid");
+    assert_eq!(spool.dir(), Path::new("/var/lib/crosstalk/outage"));
+    assert_eq!(spool.probe(), Duration::from_millis(50));
+    let absolute = section(serde_json::json!({"dir": "/var/lib/crosstalk/elsewhere"}))
+        .expect("parses");
+    assert!(absolute.spool_config(data).is_ok());
+    for dir in ["/tmp/spool", "../spool", "/var/lib/crosstalk"] {
+        let outside = section(serde_json::json!({ "dir": dir })).expect("parses");
+        assert!(
+            matches!(
+                outside.spool_config(data),
+                Err(InvalidSpoolSection::OutsideDataDir { .. } | InvalidSpoolSection::ParentComponent(_))
+            ),
+            "{dir}"
+        );
+    }
+    let segment_above_max = section(serde_json::json!({"max_bytes": 1024, "segment_bytes": 4096}))
+        .expect("parses");
+    assert!(matches!(
+        segment_above_max.spool_config(data),
+        Err(InvalidSpoolSection::Bounds(_))
+    ));
+    assert!(section(serde_json::json!({"max_bytes": 0})).is_err());
+    assert!(section(serde_json::json!({"surprise": 1})).is_err());
+}
+
+#[test]
+fn the_store_section_takes_the_bus_config() {
+    let mut value = minimal();
+    value["store"] = serde_json::json!({"pool": {"max_connections": 8}});
+    let config = GatewayConfig::from_json(&value.to_string()).expect("parses");
+    let store = config.store.expect("a store section");
+    assert_eq!(store.bus, crosstalk_transport::PgBusConfig::default());
+    value["store"]["bus"] = serde_json::json!({"ack_timeout_micros": 60_000_000});
+    let config = GatewayConfig::from_json(&value.to_string()).expect("parses");
+    assert_eq!(
+        config.store.expect("a store section").bus.ack_timeout.get(),
+        Duration::from_secs(60)
+    );
+    value["store"]["bus"] = serde_json::json!({"surprise": 1});
+    assert!(GatewayConfig::from_json(&value.to_string()).is_err());
+}
