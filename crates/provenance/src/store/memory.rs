@@ -129,6 +129,14 @@ impl ProvenanceStore for MemoryProvenanceStore {
         Ok(self.lock().exchanges.get(&id).cloned())
     }
 
+    async fn started_at(&self, id: ExchangeId) -> Result<Option<Timestamp>, ProvenanceStoreError> {
+        Ok(self
+            .lock()
+            .exchanges
+            .get(&id)
+            .map(|(record, _)| record.started_at))
+    }
+
     async fn spans(&self, ids: &[SpanId]) -> Result<Vec<SpanRecord>, ProvenanceStoreError> {
         let tables = self.lock();
         Ok(ids

@@ -1,0 +1,34 @@
+[invariant]
+id = "provenance.store.pg-agrees-with-memory"
+statement = "For any sequence of recorded exchanges, deltas and expiries, the engine over PgFingerprintIndex and PgProvenanceStore publishes the same envelopes and leaves the same exchange records, scan statuses, span records (states, hit counts, index sequences), matches, SpanIndex answers and index watermark as over the memory reference index and MemoryProvenanceStore, under every match rule (the spread, skeleton, inherited-fragment, reader-output, nearer-source and shadowed-fragment rules, short spans and context k-grams)."
+kind = "domain"
+property = "model-based"
+requires = ["integration"]
+rationale = """
+The match rules read the stores in ways a plain scan does not: copies of a
+span through ProvenanceStore::relays, token observations through
+FingerprintIndex::frequency, the origin exchange's request list, the
+Propagated hit counts that set the rarity bound, and the watermark that
+hides spans indexed after a scan began. The memory store is the
+reference model every rule's unit evidence runs on; a Postgres store whose
+ordering, retention boundary, sequence or hit counting differed would
+change detections only when deployed on Postgres, where no unit test
+looks. Each scenario runs from one seed on both and compares a full
+transcript.
+"""
+
+[evidence]
+integration = [
+    "crosstalk_provenance::integration::pg_engine_agrees_with_memory",
+    "crosstalk_provenance::integration::rules::pg_spread_and_skeleton_agree_with_memory",
+    "crosstalk_provenance::integration::rules::pg_inherited_fragments_agree_with_memory",
+    "crosstalk_provenance::integration::rules::pg_reader_output_rules_agree_with_memory",
+    "crosstalk_provenance::integration::rules::pg_own_output_replay_agrees_with_memory",
+    "crosstalk_provenance::integration::rules::pg_forward_direct_read_agrees_with_memory",
+    "crosstalk_provenance::integration::rules::pg_shadowed_fragments_agree_with_memory",
+    "crosstalk_provenance::integration::rules::pg_short_spans_and_context_kgrams_agree_with_memory",
+    "crosstalk_provenance::integration::restart::pg_token_observations_age_out_with_memory",
+]
+
+[evidence-review]
+integration = { agent = "true", human = "false" }

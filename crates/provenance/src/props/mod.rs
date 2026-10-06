@@ -288,10 +288,10 @@ proptest! {
                 let span = originate(&mut world, a, &crate::tests::fixtures::sentence(&format!("s{n}")), 1).await;
                 hits.push(SemanticHit { span: span.span.id, read_range: range, score: Similarity::new(*score).expect("score") });
             }
-            let World { engine, store, messages, ids, config } = world;
+            let World { engine, store, messages, ids, config, ran } = world;
             let index = engine.into_index();
             let engine = crate::engine::Provenance::new(&config, index, store.clone(), FakeSemantic::returning(hits), messages.clone());
-            let mut world = World { engine, store, messages, ids, config };
+            let mut world = World { engine, store, messages, ids, config, ran };
             let ran = world.run(Turn::new(b, at(2)).input(user_text(read))).await;
             for stored in world.matches_of(ran.exchange) {
                 if let MatchKind::Semantic(score) = stored.content.kind() {

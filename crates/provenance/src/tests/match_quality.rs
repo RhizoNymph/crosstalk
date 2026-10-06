@@ -518,7 +518,7 @@ async fn chatter(world: &mut World, vocabulary: &[&str], texts: usize, at_second
 }
 
 /// The words of the template tests, seen everywhere in their worlds.
-const COMMON: [&str; 58] = [
+pub(crate) const COMMON: [&str; 58] = [
     "please",
     "review",
     "plan",
