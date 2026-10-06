@@ -24,6 +24,7 @@ use super::clock::{self, Clock, SECOND};
 use super::live::Feed;
 use super::store::State;
 use super::world::World;
+use super::world::conversations::LazyConversations;
 
 /// How often the ticker publishes.
 pub const TICK: Duration = Duration::from_secs(2);
@@ -39,6 +40,9 @@ pub struct Snapshot {
     pub world: World,
     pub state: State,
     pub watermark: Timestamp,
+    /// The full world's conversations cut at `cutoff`, made on the
+    /// snapshot's first conversation read.
+    pub conversations: LazyConversations,
 }
 
 impl Snapshot {
@@ -51,6 +55,7 @@ impl Snapshot {
             world,
             state,
             watermark: clock::replay_watermark(cutoff),
+            conversations: LazyConversations::default(),
         }
     }
 }

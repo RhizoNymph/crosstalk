@@ -408,8 +408,10 @@ impl QueryApi for FixtureBackend {
         page: &PageRequest<ConversationList>,
     ) -> Result<Page<ConversationRow, ConversationList>> {
         require(caller, Permission::View)?;
-        self.read(|ctx| queries::conversations::list(ctx, filter, page))
-            .await
+        self.read(|ctx| {
+            queries::conversations::list(&queries::conversations::Cv::of(ctx)?, filter, page)
+        })
+        .await
     }
 
     async fn conversation(
@@ -418,7 +420,8 @@ impl QueryApi for FixtureBackend {
         id: ConversationId,
     ) -> Result<Option<ConversationHead>> {
         require(caller, Permission::View)?;
-        self.read(|ctx| queries::conversations::head(ctx, id)).await
+        self.read(|ctx| queries::conversations::head(&queries::conversations::Cv::of(ctx)?, id))
+            .await
     }
 
     async fn conversation_turns(
@@ -428,8 +431,10 @@ impl QueryApi for FixtureBackend {
         window: &TurnWindow,
     ) -> Result<Option<TurnPage>> {
         require(caller, Permission::View)?;
-        self.read(|ctx| queries::conversations::turns::window(ctx, id, window))
-            .await
+        self.read(|ctx| {
+            queries::conversations::turns::window(&queries::conversations::Cv::of(ctx)?, id, window)
+        })
+        .await
     }
 
     async fn span_readers(
@@ -439,8 +444,10 @@ impl QueryApi for FixtureBackend {
         page: &PageRequest<SpanReaderList>,
     ) -> Result<Option<Page<Reader, SpanReaderList>>> {
         require(caller, Permission::View)?;
-        self.read(|ctx| queries::conversations::readers(ctx, span, page))
-            .await
+        self.read(|ctx| {
+            queries::conversations::readers(&queries::conversations::Cv::of(ctx)?, span, page)
+        })
+        .await
     }
 
     async fn exchange_turns(
@@ -449,8 +456,13 @@ impl QueryApi for FixtureBackend {
         ids: &IdBatch<ExchangeId>,
     ) -> Result<BTreeMap<ExchangeId, ExchangePlacement>> {
         require(caller, Permission::View)?;
-        self.read(|ctx| Ok(queries::conversations::exchange_turns(ctx, ids)))
-            .await
+        self.read(|ctx| {
+            Ok(queries::conversations::exchange_turns(
+                &queries::conversations::Cv::of(ctx)?,
+                ids,
+            ))
+        })
+        .await
     }
 
     async fn span_points(
@@ -459,8 +471,13 @@ impl QueryApi for FixtureBackend {
         ids: &IdBatch<SpanId>,
     ) -> Result<BTreeMap<SpanId, SpanPoint>> {
         require(caller, Permission::View)?;
-        self.read(|ctx| Ok(queries::conversations::span_points(ctx, ids)))
-            .await
+        self.read(|ctx| {
+            Ok(queries::conversations::span_points(
+                &queries::conversations::Cv::of(ctx)?,
+                ids,
+            ))
+        })
+        .await
     }
 
     async fn conversation_text(
@@ -471,8 +488,15 @@ impl QueryApi for FixtureBackend {
         limit: TextLimit,
     ) -> Result<Option<ConversationText>> {
         require(caller, Permission::Content)?;
-        self.read(|ctx| queries::conversations::text::window(ctx, id, window, limit))
-            .await
+        self.read(|ctx| {
+            queries::conversations::text::window(
+                &queries::conversations::Cv::of(ctx)?,
+                id,
+                window,
+                limit,
+            )
+        })
+        .await
     }
 
     async fn part_text(
@@ -482,8 +506,10 @@ impl QueryApi for FixtureBackend {
         slice: TextSlice,
     ) -> Result<Option<PartText>> {
         require(caller, Permission::Content)?;
-        self.read(|ctx| queries::conversations::text::part(ctx, part, slice))
-            .await
+        self.read(|ctx| {
+            queries::conversations::text::part(&queries::conversations::Cv::of(ctx)?, part, slice)
+        })
+        .await
     }
 
     async fn agent_names(
