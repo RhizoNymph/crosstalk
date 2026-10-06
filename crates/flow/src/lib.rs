@@ -14,4 +14,10 @@ pub mod extract;
 pub mod store;
 
 #[cfg(test)]
+mod dst;
+
+#[cfg(test)]
+mod integration;
+
+#[cfg(test)]
 mod tests {}

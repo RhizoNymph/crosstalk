@@ -7,5 +7,5 @@ mod detection;
 mod holding;
 mod model;
 mod registry;
-mod support;
+pub(crate) mod support;
 mod verdicts;

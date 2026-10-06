@@ -32,7 +32,8 @@ use super::path::{AbsolutePath, Place};
 
 /// A repository's canonical identity. Only [`RepoId::parse`] and
 /// [`RepoId::forge`] make one.
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(try_from = "StoredRepoId")]
 pub struct RepoId {
     /// `host/owner/name`, or the local path.
     id: String,
@@ -50,6 +51,44 @@ impl Ord for RepoId {
     fn cmp(&self, other: &Self) -> Ordering {
         // The locator is a function of the id.
         self.id.cmp(&other.id)
+    }
+}
+
+/// A [`RepoId`] as stored, checked on the way back in.
+#[derive(serde::Deserialize)]
+struct StoredRepoId {
+    id: String,
+    locator: Locator,
+}
+
+/// Why a stored repository identity was refused: it is not the one its
+/// locator canonically names.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("stored repository {id:?} is not canonical")]
+pub struct StoredRepoError {
+    id: String,
+}
+
+impl TryFrom<StoredRepoId> for RepoId {
+    type Error = StoredRepoError;
+
+    fn try_from(stored: StoredRepoId) -> Result<Self, Self::Error> {
+        let rebuilt = match &stored.locator {
+            Locator::Repository { host, owner, name } => {
+                Self::forge(&host.0, &format!("{owner}/{name}"))
+            }
+            Locator::File { host: None, path } => {
+                AbsolutePath::parse(path).ok().and_then(Self::local)
+            }
+            Locator::File { .. }
+            | Locator::Url { .. }
+            | Locator::Mcp { .. }
+            | Locator::Opaque { .. } => None,
+        };
+        match rebuilt {
+            Some(repo) if repo.id == stored.id && repo.locator == stored.locator => Ok(repo),
+            _ => Err(StoredRepoError { id: stored.id }),
+        }
     }
 }
 
@@ -247,7 +286,7 @@ pub const MAX_BINDINGS: usize = 256;
 
 /// One remote of one clone: the clone's root, the remote's name and the
 /// repository it names.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 struct Binding {
     root: Place,
     remote: String,
@@ -259,8 +298,37 @@ struct Binding {
 /// clone's files are its `origin`'s (else its latest bound remote's). A
 /// later binding of the same root and remote replaces the earlier one; at
 /// most [`MAX_BINDINGS`] are kept, oldest dropped first.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(try_from = "Vec<Binding>")]
 pub struct RepoBindings(Vec<Binding>);
+
+/// Why stored clone bindings were refused.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum StoredBindingsError {
+    #[error("{0} bindings is more than the {MAX_BINDINGS} kept")]
+    TooMany(usize),
+    #[error("a clone root and remote is bound twice")]
+    Duplicate,
+}
+
+impl TryFrom<Vec<Binding>> for RepoBindings {
+    type Error = StoredBindingsError;
+
+    fn try_from(bindings: Vec<Binding>) -> Result<Self, Self::Error> {
+        if bindings.len() > MAX_BINDINGS {
+            return Err(StoredBindingsError::TooMany(bindings.len()));
+        }
+        for (index, binding) in bindings.iter().enumerate() {
+            if bindings[..index]
+                .iter()
+                .any(|earlier| earlier.root == binding.root && earlier.remote == binding.remote)
+            {
+                return Err(StoredBindingsError::Duplicate);
+            }
+        }
+        Ok(Self(bindings))
+    }
+}
 
 impl RepoBindings {
     /// Bind `root`'s `origin` to `repo`.
@@ -325,6 +393,13 @@ impl RepoBindings {
                 .map(|binding| &binding.repo),
             None => self.files_binding(root).map(|binding| &binding.repo),
         }
+    }
+
+    /// Whether a clone root is still home-relative.
+    pub(crate) fn has_home_relative(&self) -> bool {
+        self.0
+            .iter()
+            .any(|binding| matches!(binding.root, Place::Home(_)))
     }
 
     /// Every `Home` root made absolute under `home`.

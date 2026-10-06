@@ -85,6 +85,43 @@ records it (`"scenario"`), as do `bench.env` and the printed headline.
   different agents' outputs. Compare boilerplate runs with boilerplate
   runs only.
 
+### Holdout runs
+
+The bench (a2a-transmission-bench) keeps a holdout split of demo-swarm runs
+that nobody tunes against: they are scored only in the bench's release
+runs, which report aggregates. A run scored here (with `report/`) is
+development data and can never become a holdout, so holdout runs are made
+with `--holdout`:
+
+```sh
+bash deploy/run.sh bench --yes --holdout --seed 1000001 --scenario headline
+bash deploy/run.sh bench --yes --holdout --seed 1000002 --scenario boilerplate
+```
+
+- **Seeds.** Holdout runs need a reserved seed, `1_000_000 + n` for the n-th
+  holdout run; every other run must use a seed below 1,000,000. The bench
+  refuses either the other way, so a development run cannot spend a holdout
+  seed. The seed is recorded in `bench.env` (`seed=`, `holdout=1`).
+- **Stops after fetching.** Steps 1 to 7 run as usual (fresh world, swarm,
+  watermark, export and evidence, snapshot of the exchange log and blobs);
+  step 8 (scoring) does not. There is no `report/` and no `score.txt`.
+  `swarm.txt` holds the swarm's own report (generator traffic: sessions,
+  writes, reads, planted transmissions; nothing the gateway detected) and is
+  never echoed to the terminal. `swarm-fetch`'s output, which counts the
+  export's rows per state and so summarises the detector, is not kept:
+  `fetch.log` says only whether the fetch succeeded and the export and
+  evidence files' byte sizes. A failed fetch keeps its output in
+  `fetch.err` and the run is not a usable holdout. The bench prints the run
+  id and its file list.
+- **Where it goes.** On node0 the run is under `deploy/bench/holdout/<run>/`.
+  Copy it to the bench machine's dataset root, outside every git repo,
+  never under `bench-runs/`:
+  `rsync -a node0:<deploy dir>/bench/holdout/<run>/ ~/Data/ai/agents/demo-swarm-holdout/<run>/`.
+- **Same scenarios** as development runs (headline and boilerplate), so the
+  holdout measures the same thing.
+- Once `ct-bench-detect fetch` (crosstalk #112) lands, a holdout run also
+  saves its outputs, as development runs will.
+
 ## Data and control flow
 
 ```text
@@ -287,6 +324,9 @@ like the `DEMO_*` variables they are not in `.env.example`.
   before any run directory exists.
 - **No truncated export.** The export is fetched only once Live's watermark
   has passed the swarm's end.
+- **A holdout run is never scored here.** `--holdout` stops before
+  scoring and prints no metrics; holdout seeds (>= 1,000,000) are refused
+  without `--holdout`, and `--holdout` refuses any other seed.
 - **One run, one directory.** The run id is the UTC second the swarm
   starts; an existing directory stops the run.
 - **The world is fresh:** an empty wiki and empty detection state at the

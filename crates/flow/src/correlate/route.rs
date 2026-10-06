@@ -7,6 +7,7 @@ use crosstalk_spec::derived::flow::transmission::{
 };
 use crosstalk_spec::derived::provenance::matching::{Carrier, ContentMatch};
 use crosstalk_spec::observed::message::ToolName;
+use serde::{Deserialize, Serialize};
 
 use super::ids::Derive;
 use super::key::MediumKey;
@@ -70,7 +71,7 @@ pub fn choose(
 
 /// A route as part of a transmission's identity, ordered so the
 /// correlator's state iterates deterministically.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum RouteKey {
     /// A channel transmission, by the medium it opened in.
     Medium(MediumKey),
@@ -82,7 +83,7 @@ pub enum RouteKey {
 }
 
 /// `DelegationDirection`, ordered.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Direction {
     ParentToChild,
     ChildToParent,

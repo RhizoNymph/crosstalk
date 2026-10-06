@@ -8,6 +8,7 @@ use crosstalk_spec::interfaces::l5_flow::RegistryError;
 use crosstalk_spec::interfaces::l5_flow::channels::TrafficError;
 use crosstalk_spec::interfaces::l5_flow::transmissions::TransmissionStoreError;
 
+use super::durability::DurabilityError;
 use super::publish::PublishError;
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -20,6 +21,8 @@ pub enum StepError {
     Transmissions(TransmissionStoreError),
     #[error("publishing: {0}")]
     Publish(#[from] PublishError),
+    #[error("flow durability: {0}")]
+    Durability(#[from] DurabilityError),
     /// An update for a transmission the store does not hold.
     #[error("no stored transmission {}", .0.ulid_text())]
     MissingTransmission(TransmissionId),
@@ -52,6 +55,7 @@ impl StepError {
             | Self::Registry(RegistryError::Store { .. })
             | Self::Transmissions(TransmissionStoreError::Store { .. })
             | Self::Publish(PublishError::Bus(BusError::Disconnected)) => false,
+            Self::Durability(error) => error.is_permanent(),
             Self::Traffic(_)
             | Self::Registry(_)
             | Self::Transmissions(TransmissionStoreError::InvalidCursor)

@@ -39,8 +39,9 @@ pub const ROUTE_KINDS: [RouteKind; 4] = [
 ];
 
 /// The view-state keys a filter form carries as hidden inputs; the filter
-/// keys themselves come from its fields.
-const BASE_KEYS: [&str; 5] = ["from", "to", "v", "w", "g"];
+/// keys themselves come from its fields. A followed view carries `follow`
+/// in place of `from` and `to`, so applying a filter keeps it followed.
+const BASE_KEYS: [&str; 6] = ["from", "to", "follow", "v", "w", "g"];
 
 /// One offered value.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -495,6 +496,15 @@ mod tests {
         state.scope.filter.route_kinds = vec![RouteKind::Direct];
         let keys: Vec<String> = base_inputs(&state).into_iter().map(|(k, _)| k).collect();
         assert_eq!(keys, ["from", "to", "v", "w", "g"]);
+    }
+
+    #[test]
+    fn a_followed_filter_form_keeps_following() {
+        let state = state().following(crate::url::follow::FollowSpan::Day);
+        let inputs = base_inputs(&state);
+        let keys: Vec<&str> = inputs.iter().map(|(k, _)| k.as_str()).collect();
+        assert_eq!(keys, ["follow", "v", "w", "g"]);
+        assert_eq!(inputs[0].1, "1d");
     }
 
     #[test]

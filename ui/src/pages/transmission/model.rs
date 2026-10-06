@@ -12,7 +12,7 @@ use crosstalk_spec::interfaces::l8_surface::excerpt::{Excerpt, Excerpted};
 use crosstalk_spec::interfaces::l8_surface::summary::TransmissionStateKind;
 
 use crate::components::{format_bytes, format_duration, format_time, short_id};
-use crate::pages::common::links::agent_url;
+use crate::pages::common::links::{agent_url, exchange_url, span_url};
 use crate::pages::common::lookup::AgentNames;
 use crate::pages::common::transmissions::Named;
 use crate::url::view_state::ViewState;
@@ -221,6 +221,10 @@ pub struct MatchView {
     pub sender: Named,
     pub origin: QuoteView,
     pub read: QuoteView,
+    /// The sender's turn holding the originated span (`/spans/{id}`).
+    pub sender_turn: String,
+    /// The reader's turn that read it (`/exchanges/{id}`).
+    pub reader_turn: String,
 }
 
 pub fn match_views(
@@ -241,6 +245,8 @@ pub fn match_views(
                 sender: named(content.origin_agent(), names, state),
                 origin: QuoteView::new(m.origin()),
                 read: QuoteView::new(m.read()),
+                sender_turn: span_url(content.origin(), state),
+                reader_turn: exchange_url(content.reader_exchange(), state),
             }
         })
         .collect()

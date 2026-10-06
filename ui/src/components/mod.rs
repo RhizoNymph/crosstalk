@@ -2,6 +2,7 @@
 
 pub mod badge;
 pub mod feedback;
+pub mod follow;
 pub mod form;
 pub mod href;
 pub mod live;

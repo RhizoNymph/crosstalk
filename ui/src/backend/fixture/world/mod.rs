@@ -16,13 +16,14 @@ pub mod blobs;
 pub mod catalog;
 mod channels;
 mod config;
+pub mod conversations;
 mod drafts;
 mod evidence;
 mod history;
 mod letters;
 mod retention;
 mod rules;
-mod states;
+pub(crate) mod states;
 pub mod topics;
 mod traffic;
 

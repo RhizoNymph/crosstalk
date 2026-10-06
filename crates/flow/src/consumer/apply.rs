@@ -32,6 +32,7 @@ use crosstalk_spec::interfaces::l5_flow::{
 };
 use crosstalk_spec::support::{NonEmpty, Timestamp};
 
+use super::durability::FlowDurability;
 use super::{FlowConsumer, Step, StepError, decisions};
 use crate::correlate::lifecycle::{self, Stage, UpdateKind};
 use crate::correlate::{Decided, Derive, MediumKey};
@@ -62,12 +63,13 @@ fn record(transmission: &Transmission) -> Option<Step> {
     matches!(transmission.route, Route::Channel(_)).then(|| Step::Record(transmission.clone()))
 }
 
-impl<R, T, A, B> FlowConsumer<R, T, A, B>
+impl<R, T, A, B, D> FlowConsumer<R, T, A, B, D>
 where
     R: ChannelRegistry + ChannelTraffic + Send + Sync,
     T: TransmissionStore + Send + Sync,
     A: AgentReads + Send + Sync,
     B: EventBus + Send + Sync,
+    D: FlowDurability,
 {
     pub(super) async fn decide(&mut self, decided: Decided) -> Result<Vec<Step>, StepError> {
         let opened_at = decided.opened_at;
@@ -138,11 +140,23 @@ where
             window_closes_at: timing.window_closes_at(opened_at),
         };
         if let Some(stored) = self.transmissions.transmission(id).await? {
-            return Ok(if stored.state == state {
+            // Opened before (a redelivery, or a restore re-feeding its
+            // accesses): its resource's evidence still goes to the channel
+            // it was routed through, as when it was first opened.
+            let handed = match (on, &stored.route) {
+                (OpensOn::Resource(resource), Route::Channel(channel)) => decisions(
+                    self.shards
+                        .rekey(MediumKey::Resource(resource), MediumKey::Channel(*channel)),
+                ),
+                _ => Vec::new(),
+            };
+            let mut steps = if stored.state == state {
                 self.announce_open(&stored, co_access)
             } else {
                 Vec::new()
-            });
+            };
+            steps.extend(handed);
+            return Ok(steps);
         }
         let mut handed = Vec::new();
         let channel = match on {
@@ -203,11 +217,11 @@ where
     ) -> Result<Vec<Step>, StepError> {
         let state = TransmissionState::Confirmed(confirmed.clone());
         if let Some(stored) = self.transmissions.transmission(id).await? {
-            return Ok(if stored.state == state {
-                vec![Step::Publish(confirmed_event(&stored, &confirmed))]
+            return if stored.state == state {
+                Ok(vec![Step::Publish(confirmed_event(&stored, &confirmed))])
             } else {
-                Vec::new()
-            });
+                self.reconfirm(stored, &confirmed).await
+            };
         }
         let transmission = Transmission {
             id,
@@ -231,6 +245,9 @@ where
         let stored = self.stored(id).await?;
         let state = TransmissionState::Confirmed(confirmed.clone());
         if stored.state != state {
+            if Stage::of(&stored.state) == Some(Stage::Confirmed) {
+                return self.reconfirm(stored, &confirmed).await;
+            }
             if !Self::admits(&stored, UpdateKind::Confirm) {
                 return Ok(Vec::new());
             }
@@ -245,6 +262,52 @@ where
         Ok(record(&transmission)
             .into_iter()
             .chain([Step::Publish(confirmed_event(&transmission, &confirmed))])
+            .collect())
+    }
+
+    /// A confirmation decided again for a transmission the store holds
+    /// confirmed with other content: a restored correlator that saw the
+    /// matches of the stored confirmation and of its extensions at once
+    /// confirms with all of them. The stored confirmation's event is
+    /// published again (under its own id: a no-op unless it was lost), and
+    /// the matches it lacks extend it, as the extensions would have.
+    async fn reconfirm(
+        &mut self,
+        mut transmission: Transmission,
+        confirmed: &Confirmed,
+    ) -> Result<Vec<Step>, StepError> {
+        let before = transmission.clone();
+        let stored = match &mut transmission.state {
+            TransmissionState::Confirmed(stored)
+            | TransmissionState::Classified {
+                confirmed: stored, ..
+            }
+            | TransmissionState::Aggregated {
+                confirmed: stored, ..
+            } => stored,
+            TransmissionState::Detected
+            | TransmissionState::AwaitingContent { .. }
+            | TransmissionState::Suspected { .. }
+            | TransmissionState::Discarded { .. } => return Ok(Vec::new()),
+        };
+        let announced = confirmed_event(&before, stored);
+        let mut changed = false;
+        for content in confirmed.content().iter() {
+            if !stored.content().iter().any(|known| known == content) {
+                match stored.extend(content.clone()) {
+                    Ok(()) => changed = true,
+                    Err(mixed) => {
+                        tracing::warn!(transmission = %transmission.id.ulid_text(), error = ?mixed, "match not extended");
+                    }
+                }
+            }
+        }
+        if changed {
+            self.transmissions.save(transmission.clone()).await?;
+        }
+        Ok(record(&transmission)
+            .into_iter()
+            .chain([Step::Publish(announced)])
             .collect())
     }
 

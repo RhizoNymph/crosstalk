@@ -16,4 +16,4 @@ checkpoint changes nothing observable.
 dst = "crosstalk_flow::dst::restore_from_checkpoint_decides_as_uninterrupted"
 
 [evidence-review]
-dst = { agent = "false", human = "false" }
+dst = { agent = "true", human = "false" }

@@ -30,7 +30,7 @@ use crate::pages::common::action::{
 };
 use crate::pages::common::flash::{Flash, flash};
 use crate::pages::common::form::FormFields;
-use crate::pages::common::links::agent_url;
+use crate::pages::common::links::{agent_conversations_url, agent_url};
 use crate::pages::common::lookup::{AgentNames, OperatorNames, agent_names, operator_names};
 use crate::pages::view::view_state;
 use crate::url::ulid::UlidId;
@@ -240,6 +240,7 @@ async fn agent_page(
                         <div><dt class="inline">"transmissions in "</dt><dd class="inline tabular-nums text-zinc-800 dark:text-zinc-200">(profile.transmissions_in)</dd></div>
                         <div><dt class="inline">"out "</dt><dd class="inline tabular-nums text-zinc-800 dark:text-zinc-200">(profile.transmissions_out)</dd></div>
                         <div><dt class="inline">"last seen "</dt><dd class="inline text-zinc-800 dark:text-zinc-200">(profile.last_seen)</dd></div>
+                        <div><a class=(LINK) href=(agent_conversations_url(profile.id, &state)) data-conversations="true">"Conversations"</a></div>
                     </dl>
                 </header>
                 if let Some(alias) = profile.alias_of {

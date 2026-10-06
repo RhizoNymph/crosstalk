@@ -3,6 +3,7 @@
 use crosstalk_spec::derived::flow::access::Access;
 use crosstalk_spec::ids::{ChannelId, ResourceId};
 use crosstalk_spec::interfaces::l5_flow::OpensOn;
+use serde::{Deserialize, Serialize};
 
 /// Where an access's evidence is correlated: the canonical channel its
 /// resource is on, or the resource itself while it is on no channel.
@@ -10,7 +11,7 @@ use crosstalk_spec::interfaces::l5_flow::OpensOn;
 /// evidence lives on one shard (`flow.correlator.shard-affinity`), and a
 /// resource's evidence moves to its channel's medium when a channel is
 /// discovered from it (`flow.correlator.resource-shard-handoff`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum MediumKey {
     Channel(ChannelId),
     Resource(ResourceId),

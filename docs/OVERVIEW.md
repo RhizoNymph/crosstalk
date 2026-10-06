@@ -411,34 +411,40 @@ Features Index:
     depends_on: []
     doc: docs/features/type_spec.md
   follow_mode:
-    status: design
+    status: slim subset built; the rest designed and deferred
     description: >
-      Keeping UI views live as a gateway produces data. A follow=<span>
-      page key resolves on every render to the window ending at the
-      present (rounded up to a bucket) and is pinned into today's citeable
-      from/to URLs for everything below the page; the provisional tail
-      after the watermark is marked. Pages refresh by a server re-render
-      that Topcoat merges into the DOM, triggered by a tracked signal that
-      <ct-live> sets (replacing the dev-hook region swap), so the WebGL
-      elements keep their nodes and update in place (topology keeps node
-      positions and places new nodes with fixed-node ForceAtlas2; the time
-      brush stays anchored right). Includes the spec gap list (the present,
-      the bucket width, a coalesced traffic event, channel events for
-      traffic-driven listing changes, data revisions, projection
-      extensions), the fixture's controllable clock and deterministic
-      trickle, the testing strategy and a parallel implementation plan.
+      Keeping UI views live as a gateway produces data. Built: a
+      follow=<span> page key (presets 1h, 6h, 1d, 7d; exclusive with
+      from/to) that resolves on every render to [align_up(now) − span,
+      align_up(now)) from the request's present, with the URL never
+      rewritten; / and /topology follow the last day by default and show a
+      follow bar ("Following the last 1 d · Pin", or "Follow" when pinned)
+      and a "provisional after" header label; every other page redirects a
+      followed URL to its pinned window, and data routes and shards refuse
+      follow. A followed page refreshes through <ct-live> on its watch
+      tokens, watermark events and a 30 s timer, paused while the tab is
+      hidden; the region swap keeps the topology's graph and brush
+      (data-live-keep), which take a window-only data-src change as a slide
+      and merge in place. Deferred: head/traffic events, data-rev,
+      fixed-node ForceAtlas2 re-layout, topic-version announcements, follow
+      on explore and lists, the fixture's manual clock and trickle, the spec
+      gap list, and replacing the dev-hook region swap with signal-driven
+      re-renders.
     entry_points:
+      - ui/src/url/follow.rs
       - ui/src/url/view_state.rs
       - ui/src/pages/view.rs
-      - ui/src/components/live.rs
-      - ui/src/data/live.rs
-      - ui/elements/src/live/element.ts
+      - ui/src/components/follow.rs
+      - ui/src/data/query.rs
+      - ui/elements/src/live/follow.ts
+      - ui/elements/src/live/refresh.ts
+      - ui/elements/src/shared/slide.ts
       - ui/elements/src/shared/element.ts
       - ui/elements/src/topology/element.ts
     depends_on: [ui, query_surface, type_spec]
     doc: docs/features/follow_mode.md
   conversation_view:
-    status: design
+    status: implemented
     description: >
       Operator page for one agent's conversation, turn by turn: inputs of
       any role in request order and outputs, with provenance marks (text
@@ -449,7 +455,9 @@ Features Index:
       with View, text with Content; turns paged by citeable index windows.
       Reads through the L8 conversation reads (conversation_reads,
       INV-1000..1029).
-    entry_points: []
+    entry_points:
+      - ui/src/pages/conversation/mod.rs
+      - ui/src/backend/fixture/world/conversations/mod.rs
     depends_on: [ui, query_surface, type_spec, conversation_reads]
     doc: docs/features/conversation_view.md
   conversation_reads:
@@ -811,14 +819,20 @@ Features Index:
       transactional outbox relayed to an EventSink after commit (at least
       once). The directory caches supersessions for the synchronous
       canonical(); ShardKey keys correlator shards by canonical channel and
-      PgShardTicks keeps the shards' tick checkpoints. Model-tested against
+      PgShardTicks reads the shards' tick records, which only the
+      consumer's checkpoint writes (PgFlowDurability, migration
+      0003_restart: recording order, access resolutions, tool calls, held
+      writes, checkpoints). PgExtractionLedger keeps the extraction step's
+      ledger (0004_extract_ledger). Model-tested against
       crosstalk-memory's reference stores with the reference harnesses'
       proptest strategies.
     entry_points:
       - crates/flow/src/store/mod.rs
       - crates/flow/src/store/registry/mod.rs
       - crates/flow/src/store/transmissions.rs
+      - crates/flow/src/store/restart.rs
       - crates/flow/migrations/0001_flow_store.sql
+      - crates/flow/migrations/0003_restart.sql
     depends_on: [store, memory, channel_semantics]
     doc: docs/features/flow_store.md
   topology_store:
@@ -862,7 +876,10 @@ Features Index:
       BusError::SpoolFull, AuditOutcome::Interrupted with AuditIntent and
       AuditIntents, PgBus/SpoolingBus/PgFrontierSource docs, INV-1200 to
       INV-1221; W1, transport, implemented: PgBus, SpoolingBus, DbLink,
-      see pg_bus and publish_spool): detections that survive
+      see pg_bus and publish_spool; W4, flow, implemented: checkpoints with
+      deferred acks, held writes, access recording order, the extraction
+      step and its ledger in crosstalk-flow, stamped outbox, see
+      flow_correlator, flow_store and flow_extract): detections that survive
       a gateway restart. Surveys what is persisted today (serve runs Live
       on memory stores and MpscBus; the L3 to L7 Postgres stores exist but
       are unwired, and crosstalk migrate runs no layer migrations) and
@@ -1618,7 +1635,9 @@ Features Index:
       the gateway's URL). The UI declares no traits of its own: the
       clock, bucket width, export formats and rule version come from
       QueryApi::present (app::present, once per request), and where a
-      default view ends from AppBackend::view_end.
+      default view ends from AppBackend::view_end. The overview and the
+      topology follow the present by default (follow=1d, see follow_mode);
+      every other page shows a pinned window.
       Built from the workspace root into deploy/ui.Dockerfile and
       deploy/ui.demo.Dockerfile with its Topcoat asset bundle.
     entry_points:
@@ -1774,9 +1793,18 @@ Features Index:
       gateway's extraction step keeps one per agent and conversation and
       records no read of a result without text. Builds the
       stored AccessOp with the write's spans (originated, forwarded from an
-      input, plus self-relayed sources; none for an Unseen payload).
+      input, plus self-relayed sources; none for an Unseen payload). The
+      extraction step itself now lives here (extract::step::ExtractionStep,
+      P7.3 W4): generic over an ExtractionLedger (MemoryExtractionLedger,
+      PgExtractionLedger), a span reader and a message reader; each delta is
+      computed on an overlay, handed to the flow consumer (FlowInputs), and
+      only then committed with extract_done, so a redelivered delta yields
+      the same inputs or nothing. The gateway's L4 stage calls it over the
+      memory ledger.
     entry_points:
       - crates/flow/src/extract/mod.rs
+      - crates/flow/src/extract/step/mod.rs
+      - crates/flow/src/extract/step/ledger.rs
       - crates/flow/src/extract/context.rs
       - crates/flow/src/extract/bash/state.rs
       - crates/flow/src/extract/bash/evidence.rs
@@ -1819,13 +1847,26 @@ Features Index:
       queue with retries. Time is only input event times and ticks of the
       injected clock, so replayed corpora settle on the replay clock. Its
       input from extraction is a local type until the spec has an event
-      for it.
+      for it. Restart durability (P7.3 W4): a FlowDurability port (Volatile,
+      MemoryDurability, PgFlowDurability) keeps held writes, tool calls and
+      each access's resolved medium as they are taken; a durable consumer
+      checkpoints its shards (only when its queue is empty) with their tick
+      records in one transaction and acks a delivery only once a checkpoint
+      covers it; restore loads the checkpoint (an incompatible one is a
+      start error naming --reset-correlator), the held writes and re-feeds
+      the inputs recorded after it in their recorded media. Envelope ids are
+      derived from the events. The extraction step hands its inputs over
+      through FlowInputs (DurableInputs waits for them to be stored). A
+      restart DST compares crashed-and-restored runs with uninterrupted ones.
     entry_points:
       - crates/flow/src/correlate/windowed.rs
       - crates/flow/src/correlate/pairing.rs
       - crates/flow/src/consumer/mod.rs
       - crates/flow/src/consumer/shards.rs
       - crates/flow/src/consumer/apply.rs
+      - crates/flow/src/consumer/restore.rs
+      - crates/flow/src/consumer/durability.rs
+      - crates/flow/src/dst/mod.rs
     depends_on: [type_spec, channel_semantics, memory, sim, testkit, transport]
     doc: docs/features/flow_correlator.md
   search_alerts:

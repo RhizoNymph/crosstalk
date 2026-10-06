@@ -1,9 +1,76 @@
 # Follow mode
 
-Status: **design**, with every decision decided ([Decisions](#decisions)).
-Nothing here is implemented yet. This document is the
-design and the requirements it puts on the spec (`crosstalk-spec`), the
-gateway and the fixture.
+Status: **slim subset built** (branch `feat/ui-follow-mode`). The rest
+of the design is **deferred**: it stays here, decided
+([Decisions](#decisions)), and every section below says which part it is.
+This document is the full design and the requirements it puts on the
+spec (`crosstalk-spec`), the gateway and the fixture.
+
+## Status
+
+### Built
+
+1. **The `follow=<span>` key** (`ui/src/url/follow.rs`,
+   `ui/src/url/view_state.rs`). Four presets only, `1h`, `6h`, `1d` and
+   `7d` (`FollowSpan`, an enum, so no other span is representable; other
+   text is a 400 naming `follow`). `follow` with `from` or `to` is a 400
+   (`ViewStateError::FollowWithWindow`). The window is
+   `[align_up(now) − span, align_up(now))` with `now` the request's
+   `present().now`, resolved on every render and refresh
+   (`Defaults::follow_end`). `ViewState` keeps the concrete window and
+   records `follow: Option<FollowSpan>`. `to_query` prints `follow` in
+   place of `from`/`to`, and `pinned()` drops it for everything below
+   the page. The URL is never rewritten when the window slides. `v`
+   stays pinned, and the filter, weighting and mode are kept as before.
+   The follow end is `present().now` rather than `AppBackend::view_end`
+   because a fixture replay's view end stays on the data's end; on every
+   other backend they are equal.
+2. **Defaults.** `/` and `/topology` (`pages::view::followed_view_state`)
+   redirect a URL with no window to `follow=1d`. Every other page keeps
+   the pinned 24 h default and redirects a followed URL (a navigation link
+   from a followed page) to the window it resolves to now, keeping its own
+   keys. Navigation, toggles, chips and the topology filter form carry
+   `follow`.
+3. **The follow bar** (`ui/src/components/follow.rs`): "Following the last
+   1 d · Pin" on a followed `/` or `/topology`, Pin linking to the same
+   page at the resolved `from`/`to`. A pinned `/` or `/topology` shows
+   "Follow" (`follow=1d`, the rest of the view kept).
+4. **Refresh triggers** (`ui/elements/src/live/follow.ts`,
+   `live/element.ts`, `live/refresh.ts`, `shared/slide.ts`,
+   `shared/element.ts`). A followed page declares `watermark` and
+   `[data-live-follow]`, so `<ct-live>` refreshes it on its watch tokens,
+   `watermark` events and a 30 s timer. While the tab is hidden the timer
+   is paused and refreshes are skipped, and becoming visible refreshes
+   once. The 4 s throttle and the editing guard are today's. Pinned pages
+   are unchanged. The elements took option one: the region swap keeps the
+   topology's `[data-live-keep]` graph and brush nodes and applies the
+   fresh `data-src`, and an element takes a change of its window keys
+   alone as a slide and merges in place (positions kept, edges flash).
+   Data routes refuse `follow` altogether.
+5. **The provisional label.** The header's existing watermark label on `/`
+   and `/topology` reads "provisional after W" when the window ends after
+   the watermark, and "final up to W" otherwise
+   (`components::follow::finality`; the graph keeps it current between
+   refreshes through `data-window-end`).
+
+### Deferred
+
+- `head` and `traffic` feed events (S3), so slides and new traffic do not
+  wait for the timer or a watermark.
+- `data-rev` and the quiet same-URL refetch it drives.
+- ForceAtlas2 re-layout of new nodes with existing nodes fixed, and a
+  re-layout button. New nodes are placed by `planMerge` as before.
+- Topic-version announcements on the follow bar ("v3 is now active ·
+  Switch").
+- Follow on explore and on the list pages (channels, agents, topics), and
+  everything in [Per page](#per-page) beyond `/` and `/topology`.
+- The fixture's manual clock and trickle ([Fixture changes](#fixture-changes)).
+  Tests use `Clock::Replay` (`FixtureBackend::try_replay_at`).
+- Replacing the dev-hook region swap with signal-driven re-renders
+  ([Refresh mechanism](#refresh-mechanism)): separate tech debt.
+- Arbitrary spans, the follow-preserving brush, the "Link" button, the
+  provisional hatching and captions outside the header, per-page refresh
+  intervals and jitter, and every [spec requirement](#spec-requirements).
 
 Follow mode keeps an operator UI view current while a real gateway keeps
 producing data. A followed view's time window ends at the present and slides
@@ -134,6 +201,8 @@ URLs](ui.md#view-state-and-urls), [Live updates](ui.md#live-updates) and the
 
 ### The `follow` key
 
+> **Partly built.** Built with presets only (`1h`, `6h`, `1d`, `7d`), no other spans; other pages redirect `follow` to their pinned window rather than following. See [Status](#status).
+
 `follow=<span>` is a shared view-state key, like `from` and `to`. A span is
 `<n><unit>` with `n` a positive decimal integer and `unit` one of `m`, `h`,
 `d`. The canonical form uses the largest unit that divides the span exactly
@@ -168,6 +237,8 @@ and any other valid span is accepted (D11, accepted default).
     followed overview or topology keeps following.
 
 ### Types
+
+> **Partly built.** Built as `ViewState::follow: Option<FollowSpan>` (an enum of the presets) with `pinned()` and `following()`, not `PageView`/`Anchor`; `Defaults` gained `follow_end`, not `head`/`watermark`.
 
 The parsed state keeps today's `ViewState` with a concrete, aligned window,
 so every page, shard, route and helper that reads `state.scope.window` is
@@ -246,6 +317,8 @@ marked rather than cut off.
 
 ### The provisional tail
 
+> **Partly built.** Only the page header of `/` and `/topology` ("provisional after W"). The brush hatching, graph meta line, tile captions and list column headers are deferred.
+
 A followed window always has a provisional tail. A pinned window has one
 when its end is after the watermark. Each surface shows it:
 
@@ -265,6 +338,8 @@ when its end is after the watermark. Each surface shows it:
   "in window, provisional after 14:05".
 
 ### Pin, unpin, copy and brush
+
+> **Partly built.** Pin and Follow are built (Follow uses `1d`, not the current window's span). "Link" and the follow-preserving brush are deferred: brushing pins.
 
 - **Pin.** A followed page shows a follow bar (`components::follow`):
   "Following the last 1 d · final up to 14:05 · [Pin] [Link]". Pin is a
@@ -297,6 +372,8 @@ when its end is after the watermark. Each surface shows it:
 
 ### Topic version while following
 
+> **Deferred.** `v` stays pinned (built); the announcement and Switch link are not.
+
 The URL's `v` stays pinned while following, so every linked view still
 reads one version and a re-fit cannot change a followed view's topics under
 it. When a `topic-version` event makes another version active, the follow
@@ -317,6 +394,8 @@ rebuilt, so topology and explore declare nothing and never refresh. A pinned
 window re-renders the same window, so a `watermark` event shows no new data.
 
 ### Spike: a server-read signal re-renders and merges
+
+> **Deferred.** Replacing the dev-hook region swap is separate tech debt. The slim build keeps the swap and keeps `[data-live-keep]` elements across it.
 
 Topcoat 0.9's documented behaviour (`docs/runtime.md`, "Reading signals on
 the server") is that a signal read on the server with `.get()` makes a
@@ -346,6 +425,8 @@ So follow mode needs no region swap and no private hook. `refresh.ts` and
 `data-live-region` are deleted.
 
 ### The new `<ct-live>` contract
+
+> **Deferred.** `<ct-live>` stays in the root layout with today's contract, plus the follow pacer.
 
 `<ct-live>` moves out of the root layout into the pages that watch
 something. It is rendered by one component, which also creates the refresh
@@ -390,6 +471,8 @@ pub fn live(cx: &Cx, spec: LiveSpec) -> (Generation, impl View);
   connection (export, audit, pipeline). That also saves connections.
 
 ### What asks for a refresh
+
+> **Partly built.** Entity events (as today), `watermark` on a followed page, a 30 s timer while following, and one refresh on becoming visible. `head` and `traffic` events and `decide` are deferred.
 
 `<ct-live>` turns feed items into decisions with one pure function,
 `decide(view, item) → Refresh | Ignore | Notice`, unit-tested over every
@@ -437,6 +520,8 @@ re-render restores it.
 
 ### Control flow
 
+> **Deferred.** Describes the signal-driven re-render.
+
 ```text
 gateway store commits ─▶ Changed ─▶ feed log ─▶ /data/live (SSE)  ◀── head timer (UI route)
                                                     │ entity | watermark | traffic | head | resync
@@ -455,6 +540,8 @@ page signal `refresh` ◀── @change            (tracked read on the server)
 ```
 
 ### Element contract additions
+
+> **Partly built.** The slide is built (`shared/slide.ts`, `PayloadElement.slideKeys`/`slide`, topology and brush). `data-rev`, the stale badge and the `merge` hook classification are deferred.
 
 Applies to `PayloadElement` (`ui/elements/src/shared/element.ts`) and so to
 every element:
@@ -481,6 +568,8 @@ The classification is a pure function, `classifySrcChange(old, new) →
 and percent-encoding.
 
 ## Per page
+
+> **Partly built.** Only `/` and `/topology` follow; the rest of this table is deferred.
 
 | Page | Watches (in follow mode, added) | Refresh | Elements |
 | --- | --- | --- | --- |
@@ -511,6 +600,8 @@ have stable row ids, so they keep their nodes and a new row is marked (see
 [Lists](#lists-and-pagination)).
 
 ### Topology
+
+> **Partly built.** A followed topology re-renders in full and keeps its graph and brush (slide merge). ForceAtlas2 placement of new nodes with existing ones fixed, the re-layout button and `data-rev` are deferred.
 
 The re-render recomputes:
 
@@ -635,6 +726,8 @@ Each of these needs the page to learn about the change. A traffic refresh
 
 ### Explore
 
+> **Deferred.** Explore does not follow.
+
 **Projection.** The spec's stored projections are frozen by design
 (`aggregates/projection/mod.rs`): "a projection is computed once and stored,
 and a cited view is read back exactly", and "Points are frozen at fit
@@ -710,6 +803,8 @@ The topic sidebar (`topic_sizes`, sparklines) is re-rendered with the page.
 
 ### Lists and pagination
 
+> **Deferred.** List pages do not follow.
+
 Channels, agents, alerts, a channel's suspected transmissions and the
 drawer's edge transmissions are keyset-paginated, newest first by a key that
 never changes (`paging.rs`; ids for channels, agents and alerts, which are
@@ -738,6 +833,8 @@ time-sortable ULIDs, `ids.rs`). In follow mode:
 
 ### Overview counts and alerts
 
+> **Partly built.** The counts move with the window on every refresh; the provisional caption on the tiles and new-row marking are deferred.
+
 The overview's activity counts are `topology`'s for the resolved window, so
 a refresh moves them with the window. The provisional caption covers the
 tail. The queues (open alerts, unreviewed and unconfirmed channels) are "as
@@ -746,6 +843,8 @@ alert fired by new traffic (a `NewChannel` on discovery) appears through its
 `alert` event in the newest-alerts list, marked as a new row.
 
 ## Load and backpressure
+
+> **Partly built.** Built: hidden-tab pause, the 4 s throttle (one interval for every page) and the bfcache close/reopen as before. Jitter, per-page intervals and connection sharing are deferred.
 
 ### Browser
 
@@ -839,6 +938,8 @@ topology tab.
   per interval.
 
 ## Spec requirements
+
+> **Deferred.** None of these are needed by the slim build; no spec change was made.
 
 For the bottom-up effort that owns `spec/types/` and the gateway. Priority
 P0 is needed for follow mode against a real gateway; P1 makes it efficient
@@ -999,6 +1100,8 @@ should make the boundary a checked property.
 
 ## Fixture changes
 
+> **Deferred.** The slim build is tested on `Clock::Replay`.
+
 The fixture must produce a steady, deterministic trickle of new data so
 follow mode can be built and tested before the gateway exists. The
 conformance effort on `feat/ui-conformance` is extracting the fixture into
@@ -1122,6 +1225,8 @@ route.
 
 ## Testing strategy
 
+> **Partly built.** The slim build's tests are listed in the [UI doc](ui.md#view-state-and-urls) files and in `ui/src/pages/follow_tests.rs`, `ui/src/url/follow.rs` and `ui/elements/test/follow.test.ts`.
+
 Tests come first in every workstream. They are the acceptance criteria of
 the implementation plan.
 
@@ -1229,6 +1334,8 @@ It writes screenshots in both colour schemes. It runs on demand
 
 ## Implementation plan
 
+> **Deferred.** Superseded for now by the slim build; kept for the deferred work.
+
 Workstreams are split by area of concern, so separate agents can build them
 in parallel in separate worktrees. Branch names follow the change's
 function. Every workstream writes its tests first.
@@ -1270,6 +1377,28 @@ and the docs. W7 and W5 meet only at the element's public contract.
 | S* | the bottom-up effort | none | The [spec requirements](#spec-requirements) |
 
 ## Files
+
+**Built (slim subset):**
+
+| Path | Role | Key interfaces |
+| --- | --- | --- |
+| `ui/src/url/follow.rs` (new) | The span presets and the followed window | `FollowSpan`, `InvalidFollowSpan`, `FollowSpan::window` |
+| `ui/src/url/view_state.rs` | `follow` in the view state | `RawViewState::follow`, `ViewState::follow`, `pinned`, `following`, `KEYS`, `Defaults::follow_end`, `ViewStateError::{Follow, FollowWithWindow}` |
+| `ui/src/pages/view.rs` | Defaults and the page policies | `defaults` (`follow_end`), `view_state`, `followed_view_state`, `Window` |
+| `ui/src/data/query.rs` | Data routes refuse `follow` | `StrictViewStateError::Follow` |
+| `ui/src/components/follow.rs` (new) | The follow bar and the finality label | `follow_bar`, `finality` |
+| `ui/src/pages/overview/`, `ui/src/pages/topology/` | Follow by default; bar and label; pinned `data-src`s and shard state; kept elements | `followed_view_state`, `id="topology-graph"`/`"topology-brush"` with `data-live-keep` |
+| `ui/src/pages/topology/filters.rs` | The filter form carries `follow` | `BASE_KEYS` |
+| `ui/src/pages/follow_tests.rs` (new) | Router tests on the fixture, the world and http | |
+| `ui/elements/src/live/follow.ts` (new) | The 30 s timer and the hidden-tab pause | `FollowPacer`, `FOLLOW_INTERVAL_MS` |
+| `ui/elements/src/live/element.ts` | `<ct-live>` paces a followed page | |
+| `ui/elements/src/live/refresh.ts` | Keeps `[data-live-keep]` elements across the swap | `KEEP_ATTRIBUTE` |
+| `ui/elements/src/shared/slide.ts` (new) | What a slide is | `isSlide`, `attributeChanges` |
+| `ui/elements/src/shared/element.ts` | Survive a move, merge a slide | `slideKeys`, `slide`, `attached`, `detached` |
+| `ui/elements/src/topology/element.ts`, `timebrush/element.ts` | Slide merge; the graph keeps "provisional after" current | |
+| `ui/elements/test/follow.test.ts` (new) | Pacer, slide and attribute tests | |
+
+**The full design** touches:
 
 The design touches these files (existing unless marked new). Fixture paths
 are relative to the fixture's crate root (`ui/src/backend/fixture/` today,

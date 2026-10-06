@@ -32,7 +32,8 @@ use crate::extract::resource::{AbsolutePath, FileScope, Place, RepoBindings, Rep
 
 /// The conversation's shell, and the host its files live on. Built once
 /// per conversation by the flow consumer and kept with it.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ConversationContext {
     shell: ShellState,
     file_host: Option<Host>,

@@ -27,10 +27,14 @@ use crosstalk_spec::ids::{AgentId, ChannelId, ExchangeId};
 use crosstalk_spec::observed::message::{ToolCallId, ToolName};
 use crosstalk_spec::support::Timestamp;
 
+use super::checkpoint::{
+    Checkpoint, CheckpointError, Incompatible, SNAPSHOT_FORMAT, ShardSnapshot, ShardState,
+    StoredCheckpoint,
+};
 use crate::correlate::{ContentRetention, Decided, Kin, MediumKey, ReadPart, WindowedCorrelator};
 
 /// The consumer's correlator shards.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Shards {
     shards: Vec<WindowedCorrelator>,
     /// Which medium each read part was routed to, with the read's time.
@@ -61,6 +65,80 @@ impl Shards {
                 .collect(),
             reads: BTreeMap::new(),
         }
+    }
+
+    /// Every shard's state, encoded for a checkpoint
+    /// ([`SNAPSHOT_FORMAT`]). Each read routing goes with the shard its
+    /// medium lives on.
+    pub fn checkpoint(&self) -> Result<Checkpoint, CheckpointError> {
+        let mut states: Vec<ShardState> = self
+            .shards
+            .iter()
+            .map(|shard| ShardState {
+                correlator: shard.state(),
+                reads: BTreeMap::new(),
+            })
+            .collect();
+        for (part, (medium, at)) in &self.reads {
+            if let Some(state) = states.get_mut(self.medium_shard(*medium)) {
+                state.reads.insert(*part, (*medium, *at));
+            }
+        }
+        let mut shards = Vec::with_capacity(states.len());
+        for (index, (state, shard)) in states.iter().zip(&self.shards).enumerate() {
+            let index = u32::try_from(index).map_err(|_| CheckpointError::Encode {
+                shard: u32::MAX,
+                reason: "more shards than a u32 counts".to_owned(),
+            })?;
+            shards.push(ShardSnapshot {
+                shard: index,
+                ticked_through: shard.last_tick(),
+                state: state.encode(index)?,
+            });
+        }
+        Ok(Checkpoint {
+            format: SNAPSHOT_FORMAT,
+            shards,
+        })
+    }
+
+    /// The shards `stored` was taken from, under `timing` and `retention`,
+    /// when it is a checkpoint of `count` shards in this binary's format.
+    pub fn restore(
+        timing: CorrelationTiming,
+        retention: ContentRetention,
+        count: NonZeroUsize,
+        stored: &StoredCheckpoint,
+    ) -> Result<Self, Incompatible> {
+        if stored.format != SNAPSHOT_FORMAT {
+            return Err(Incompatible::Format {
+                found: stored.format,
+                reads: SNAPSHOT_FORMAT,
+            });
+        }
+        if usize::try_from(stored.count).ok() != Some(count.get()) {
+            return Err(Incompatible::ShardCount {
+                found: stored.count,
+                configured: count.get(),
+            });
+        }
+        let mut shards = Vec::with_capacity(count.get());
+        let mut reads = BTreeMap::new();
+        for index in 0..stored.count {
+            let row = stored
+                .shards
+                .iter()
+                .find(|row| row.shard == index)
+                .ok_or(Incompatible::MissingShard { shard: index })?;
+            let state = ShardState::decode(index, &row.state)?;
+            reads.extend(state.reads);
+            shards.push(WindowedCorrelator::from_state(
+                timing,
+                retention,
+                state.correlator,
+            ));
+        }
+        Ok(Self { shards, reads })
     }
 
     pub fn count(&self) -> usize {

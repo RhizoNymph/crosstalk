@@ -22,12 +22,18 @@ model-tested against the `crosstalk-memory` reference stores.
   and read by `resource_use`; indexed by id for the coming
   `AccessStore::accesses`.
 - Declarations, promotion, supersession and policy history.
-- The transactional outbox and its relay (`EventSink`, `Relay`).
+- The transactional outbox and its relay (`EventSink`, `BusSink`, `Relay`, `Stamp`, `SinkError`).
 - Server-side cursors for the registry's three lists (`prune_cursors`).
 - The supersession directory cache, `ShardKey` (the correlator's shard key:
   the canonical channel, or the resource while it is on no channel) and the
   shard tick checkpoints (`PgShardTicks`).
 - `ChannelIdSource` and `UlidChannelIds` for declared channel ids.
+- `PgFlowDurability` (`store/restart.rs`, migration `0003_restart.sql`):
+  the flow consumer's `FlowDurability` on Postgres (held writes, tool
+  calls, access resolutions, shard checkpoints with their tick records,
+  the reset); see [flow_correlator.md](flow_correlator.md#restart-durability).
+- `PgExtractionLedger` (`store/ledger.rs`, `0004_extract_ledger.sql`): the
+  extraction step's ledger; see [flow_extract.md](flow_extract.md).
 
 ## Non-scope
 
@@ -45,23 +51,42 @@ model-tested against the `crosstalk-memory` reference stores.
 
 ## Decisions
 
-**Publishing: a transactional outbox, relayed after commit.** A store
-publishes what it decides (`ChannelDiscovered` from discover, which decides
-Created vs Existing inside its transaction; `ChannelPromoted`; `VerdictSet`;
-every `Changed`). The deciding transaction stages its events in
-`flow.outbox`; after the commit the store relays every staged event to its
-`EventSink` (a `tokio::sync::mpsc::UnboundedSender<BusEvent>` the wiring
-drains into the bus) and deletes the rows. Consequences:
+**Publishing: a transactional outbox, stamped once, relayed after
+commit** (`flow.outbox.stable-envelope-id`, INV-1212). A store publishes
+what it decides (`ChannelDiscovered` from discover, which decides Created
+vs Existing inside its transaction; `ChannelPromoted`; `VerdictSet`; every
+`Changed`). The deciding transaction stages its events in `flow.outbox`,
+unstamped. After the commit the store's `Relay<S>` runs over its sink
+`S: EventSink` (the stores are `PgChannelRegistry<D, S>` and
+`PgTransmissionStore<D, S>`):
+
+1. in its own transaction it takes the next rows (`FOR UPDATE SKIP
+   LOCKED`, `seq` order), stamps each unstamped row with
+   `EventSink::stamp()` (`envelope_id`, `at`, migration `0003_restart`;
+   the `outbox_stamped` check refuses a half stamp) and commits;
+2. it publishes each row as an `Envelope` under its stamp, in `seq` order,
+   awaiting `EventSink::publish`;
+3. it deletes the published rows.
+
+`BusSink<E, R>` is the wiring's sink: it stamps from a ULID generator at
+the injected clock's reading and publishes on a spec `EventBus`, awaited.
+`Relay::relay` runs until the outbox is empty; the wiring calls it at start
+before the flow group subscribes. Consequences:
 
 - a refused or rolled-back write publishes nothing; a retried transaction
   stages its events once (failed attempts roll back with them);
-- nothing is relayed before its change is visible, so a consumer that
+- nothing is published before its change is visible, so a consumer that
   re-queries on an event sees the change;
-- delivery is at least once: if the relay fails or the receiver is gone, the
-  events stay staged and any later relay on the database (any node) sends
-  them; a relay whose own commit fails may resend;
-- concurrent relays take disjoint rows (`FOR UPDATE SKIP LOCKED`); events of
-  two concurrent writes can be relayed out of commit order.
+- each event is published under one envelope id, fixed before its first
+  publish: a relay that fails (the error is logged after a write, returned
+  by `Relay::relay`) or crashes after the stamp, after a publish or before
+  the delete leaves its rows stamped, and the next relay republishes them
+  under the same ids, which a bus idempotent on ids (`PgBus`) holds once;
+- the unbounded mpsc sink and the gateway forwarder it needed are gone, and
+  with them the window where a crash between the relay's delete and the
+  forwarder's publish lost events;
+- concurrent relays stamp disjoint rows (`FOR UPDATE SKIP LOCKED`); events
+  of two concurrent writes can be published out of commit order.
 
 **Serializable writes.** Every write runs in one `SERIALIZABLE` transaction
 under `crosstalk_store::retry_serializable` (default policy, overridable with
@@ -129,7 +154,8 @@ surface      ── declare (config) / set_policy / promote / promotion_coverage
    COMMIT  (40001 / 40P01: rerun the whole body)
      │
      ▼
-   Relay::relay   SELECT .. FOR UPDATE SKIP LOCKED ─▶ EventSink ─▶ DELETE sent rows
+   Relay::relay   txn: SELECT .. FOR UPDATE SKIP LOCKED, stamp unstamped rows, COMMIT
+                  ─▶ EventSink::publish(Envelope { stamped id, at }) ─▶ DELETE published rows
    promote only:  directory.extend(superseded → promoted)
 ```
 
@@ -163,9 +189,28 @@ the window and sums accesses per canonical agent and kind.
 | `channel_traffic` | transmission_id, channel_id (stored route), opened_at, confirmed, transmission | PK transmission_id; `(channel_id, opened_at DESC, transmission_id DESC)` |
 | `transmissions` | id, state, route, channel_id, opened_at, transmission | PK id; `(state, channel_id, opened_at DESC, id DESC)`; `(opened_at, id)` |
 | `verdicts` | transmission_id, revision, verdict, record | PK (transmission_id, revision) |
-| `outbox` | seq, event, staged_at | PK seq |
+| `outbox` | seq, event, staged_at, envelope_id, at (stamp, `0003_restart`) | PK seq; `outbox_stamped` |
 | `cursors` | token, list, binding, after_key, issued_at | PK token; issued_at |
-| `shard_ticks` | shard, ticked_through | PK shard |
+| `shard_ticks` | shard, ticked_through | PK shard; written only with the shard's checkpoint (INV-1216) |
+
+Restart tables (`0003_restart.sql`):
+
+| Table or column | Holds | Keys and indexes |
+| --- | --- | --- |
+| sequence `recording` | the order accesses and tool calls were recorded in | - |
+| `accesses.recorded_seq` | the access's recording number (rows before the migration numbered by it) | unique, default `nextval('recording')` |
+| `accesses.resolved`, `resolved_channel` | the channel the consumer resolved the access to (NULL: none), stored right after the access | `accesses_resolved` check |
+| `tool_calls` | recorded_seq, agent, call_id, name, at | PK recorded_seq; rows a checkpoint covers are deleted with it |
+| `held_writes` | access_id, settles_at, write (`Observed<WriteCall>` JSON) | PK access_id; settles_at |
+| `checkpoints` | shard, format, shards, ticked_through, recorded_through, taken_at, state (bytea) | PK shard |
+
+A checkpoint's transaction (`SERIALIZABLE`): `recorded_through` = the
+highest recording number committed (never below the stored one), every
+shard's row upserted, rows of shards past the count deleted, each shard's
+`shard_ticks` row moved forward to its snapshot's tick, tool calls up to
+`recorded_through` deleted. A restore reads checkpoint, held writes and the
+inputs after `recorded_through` (accesses joined with their resource's
+locator) in one `REPEATABLE READ` snapshot.
 
 `channel_traffic` is the registry's record of channel transmissions
 (`record_transmission`), kept apart from `transmissions` (the transmission
@@ -181,11 +226,15 @@ recorded, not what was saved.
 | `crates/flow/src/store/mod.rs` | Module docs, re-exports, migrations | `MIGRATIONS`, `migrate`, every type below |
 | `crates/flow/src/store/codec.rs` | Ids, times and JSON to columns and back | `CodecError` |
 | `crates/flow/src/store/error.rs` | `Fault` inside bodies, mapping into spec errors | `FlowStoreError` |
-| `crates/flow/src/store/outbox.rs` | Staging and relaying events | `EventSink`, `Relay` |
+| `crates/flow/src/store/outbox.rs` | Staging, stamping and relaying events | `EventSink`, `BusSink`, `Relay`, `Stamp`, `SinkError` |
+| `crates/flow/src/integration/outbox.rs` | relay crash points over Postgres (INV-1212) | - |
 | `crates/flow/src/store/cursor.rs` | The cursor book and paging | `prune_cursors` |
 | `crates/flow/src/store/directory.rs` | Supersession cache, shard keys | `ShardKey`, `ShardIndex` |
 | `crates/flow/src/store/ids.rs` | Declared channel ids | `ChannelIdSource`, `UlidChannelIds`, `IdSourceError` |
-| `crates/flow/src/store/shards.rs` | Shard tick checkpoints | `PgShardTicks` |
+| `crates/flow/src/store/shards.rs` | Shard tick records, read (`of`, `ticked_through`) | `PgShardTicks` |
+| `crates/flow/migrations/0003_restart.sql` | Outbox stamps, recording order, resolutions, tool calls, held writes, checkpoints | — |
+| `crates/flow/src/store/restart.rs` | The consumer's durability | `PgFlowDurability` (`new`, `reset_correlator`) |
+| `crates/flow/src/integration/checkpoint.rs` | `PgFlowDurability` over Postgres (INV-1216) | - |
 | `crates/flow/src/store/registry/mod.rs` | The registry and its trait impls | `PgChannelRegistry` |
 | `crates/flow/src/store/registry/rows.rs` | Row reads and writes, lookup, policy history | — |
 | `crates/flow/src/store/registry/declarations.rs` | declare, set_policy, promote, coverage bodies | — |
@@ -215,6 +264,9 @@ recorded, not what was saved.
 - `save` keeps the verdict log (INV-811); `set` never writes the
   transmission (INV-529), stages `VerdictSet` once per append (INV-527).
 - Supersession resolves in one step (INV-651), in SQL and in the cache.
+- `shard_ticks` never names a tick later than its shard's stored
+  checkpoint (INV-1216): `PgShardTicks` only reads, and the checkpoint
+  writes both in one transaction.
 - No `unwrap`/`expect` outside tests; every stored value that fails to
   decode is a typed `CodecError` surfaced as the operation's `Store` error.
 
@@ -233,7 +285,10 @@ recorded, not what was saved.
   over the network.
 - Integration (Postgres): `tests::registry` (one per registry invariant),
   `tests::concurrency` (discover races, declaration races),
-  `tests::verdicts` (outbox, verdicts, at-least-once relay).
+  `tests::verdicts` (outbox, verdicts, at-least-once relay),
+  `integration::outbox::outbox_relay_publishes_each_event_once_under_its_stamped_id`
+  (a relay failing, or dropped after the stamp and after a publish before
+  its delete; a new relay publishes each event once under its stamp).
 
 ## Transmission holding
 

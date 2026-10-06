@@ -1,0 +1,20 @@
+[invariant]
+id = "flow.correlator.handoff-carries-exchange-starts"
+statement = "When a medium's evidence is handed to another correlator shard, that shard learns the start of every exchange the handed accesses belong to, and decides the matches waiting there for one of those starts, as if the accesses had reached it directly."
+kind = "coordination"
+requires = ["unit"]
+rationale = """
+A non-channel match is collected once its reader exchange's start is known,
+and the correlator learns a start from the accesses it is fed. A read fed
+on a resource's shard and handed to its channel's shard used to leave the
+channel shard without the start, so a delegation or direct match routed
+there waited forever. Whether it did depended on the order of the hand-off
+and the access, which a restore (re-feeding accesses) changes; learning the
+starts on hand-off makes the outcome independent of that order.
+"""
+
+[evidence]
+unit = "crosstalk_flow::correlate::tests::handoff_starts::a_handed_read_starts_its_exchange_on_the_target_shard"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

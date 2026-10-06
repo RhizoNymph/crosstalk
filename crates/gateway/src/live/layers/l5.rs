@@ -16,7 +16,6 @@
 use crosstalk_flow::consumer::{Extracted, FlowConsumer, FlowDeps, SUBJECTS};
 use crosstalk_memory::flow::{MemoryChannels, MemoryVerdicts};
 use crosstalk_memory::reconstruct::MemoryAgents;
-use crosstalk_spec::ids::SeededRandom;
 use crosstalk_spec::interfaces::l2_transport::Subscription;
 use crosstalk_transport::{MpscBus, MpscSubscription};
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -41,7 +40,6 @@ pub fn fill(
             agents: ctx.stores.agents.clone(),
             bus: ctx.stores.bus.clone(),
             clock: ctx.clock.clone(),
-            entropy: SeededRandom::new(ctx.seed ^ 0x5F10),
         },
     );
     stages.fill_task(

@@ -23,7 +23,9 @@ use crate::pages::channels::list::Activity;
 use crate::pages::channels::model::origin_kind;
 use crate::pages::common::action::require;
 use crate::pages::common::form::invalid;
-use crate::pages::common::links::{agent_url, channel_url, transmission_url};
+use crate::pages::common::links::{
+    agent_conversations_url, agent_url, channel_url, transmission_url,
+};
 use crate::pages::common::lookup::{AgentNames, agent_names};
 use crate::pages::common::paging::{Count, parse_cursor};
 use crate::pages::common::transmissions::summary_name;
@@ -122,6 +124,8 @@ pub struct AgentPanel {
     pub last_seen: String,
     pub edges: Vec<EdgeItem>,
     pub focus_url: String,
+    /// The agent's conversations.
+    pub conversations_url: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -362,6 +366,7 @@ pub async fn load(
                     })
                     .await,
                     focus_url: focus_url(&state, vec![canonical], Vec::new(), sel),
+                    conversations_url: agent_conversations_url(canonical, &state),
                 })
             }
         },

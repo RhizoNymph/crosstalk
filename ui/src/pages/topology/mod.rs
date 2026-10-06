@@ -13,10 +13,20 @@
 //! edges are all bucket boundaries, so a brushed window is aligned and the
 //! URL it navigates to is canonical.
 //!
-//! Live updates do not re-render the page: the graph and the brush follow
-//! the feed themselves (`data-live`), refetch their payloads on a
-//! `watermark` event and merge them in place, and the graph keeps the
-//! header's `data-topology-stat` numbers current.
+//! On a pinned window, live updates do not re-render the page: the graph
+//! and the brush follow the feed themselves (`data-live`), refetch their
+//! payloads on a `watermark` event and merge them in place, and the graph
+//! keeps the header's `data-topology-stat` numbers current.
+//!
+//! The page follows the present by default (`follow=1d`). A followed page
+//! is re-rendered by `<ct-live>` on `watermark` events and a timer
+//! (`components::follow`), so its window slides. The graph and the brush
+//! carry `data-live-keep`: the re-render keeps their nodes, and their
+//! `data-src`, which names the newly resolved window, changes in place.
+//! They take a change of window alone as a slide and merge the refetched
+//! payload rather than redrawing, so the graph keeps its layout. Their
+//! `data-src`s and the drawer's state always name the pinned window: data
+//! routes and shards never take `follow`.
 
 pub mod drawer;
 pub mod filters;
@@ -45,12 +55,13 @@ use self::lists::model::{GraphLists, load as load_lists};
 use self::lists::{ListTab, graph_lists, selection_sync};
 use self::query::{RawTopologyQuery, TopologyQuery, submitted_filter};
 use crate::app::{backend, caller, present};
+use crate::components::follow::{finality, follow_bar};
 use crate::components::{Tab, error_panel, format_time, href, segmented};
 use crate::data::elements::{TIMEBRUSH_JS, TOPOLOGY_JS};
 use crate::error::UiError;
 use crate::pages::common::action::{require, status_of};
 use crate::pages::common::form::{FormFields, invalid};
-use crate::pages::view::{page_defaults_error, view_state};
+use crate::pages::view::{followed_view_state, page_defaults_error};
 use crate::url::scope::{align_down, align_up};
 use crate::url::view_state::{GraphMode, ViewState, format_time as rfc3339};
 use crosstalk_spec::interfaces::l8_surface::QueryApi;
@@ -106,7 +117,7 @@ struct Summary {
     agents: usize,
     edges: usize,
     transmissions: u64,
-    watermark: String,
+    watermark: Timestamp,
 }
 
 /// The agents-mode graph of the view: the header's numbers, and the lists'
@@ -139,13 +150,13 @@ fn summary(graph: &Watermarked<TopologyGraph>) -> Summary {
         transmissions: value.edges().iter().fold(0u64, |sum, e| {
             sum.saturating_add(e.stats.transmissions.get())
         }),
-        watermark: format_time(graph.watermark.at()),
+        watermark: graph.watermark.at(),
     }
 }
 
 #[page("/topology")]
 async fn topology_get(cx: &Cx) -> Result<impl View> {
-    let state = view_state(cx).await?;
+    let state = followed_view_state(cx).await?;
     let form: FormFields = parse_query_params(cx).unwrap_or_default();
     let query = query_params::<RawTopologyQuery>(cx)
         .map_err(|e| invalid("query", e))
@@ -266,7 +277,9 @@ async fn header_bar(
             s.transmissions.to_string(),
         )
     });
-    let watermark = headline.map(|s| format!("final up to {}", s.watermark));
+    let window_end = rfc3339(state.scope.window.end());
+    let watermark =
+        headline.map(|s| finality(state.scope.window, s.watermark, &format_time(s.watermark)));
     Ok(view! {
         <header class="mb-3 flex flex-wrap items-end justify-between gap-3">
             <div>
@@ -283,9 +296,10 @@ async fn header_bar(
                         " transmissions · "
                     }
                     if let Some(watermark) = watermark {
-                        <span data-topology-stat="watermark" title="Buckets before this time are final">(watermark)</span>
+                        <span data-topology-stat="watermark" data-window-end=(window_end) title="Buckets before this time are final">(watermark)</span>
                     }
                 </p>
+                follow_bar(path: PATH, state: state, extra: pairs.clone())
             </div>
             <div class="flex flex-wrap items-center gap-2">
                 segmented(label: "Graph mode", items: mode)
@@ -315,15 +329,17 @@ async fn workspace(
     lists: std::result::Result<GraphLists, UiError>,
 ) -> Result<impl View> {
     let collapse = query.collapse;
-    let topology_src = href("/data/topology", state, &[]);
+    // Below the page, the window is always the one this render resolved.
+    let pinned = state.pinned();
+    let topology_src = href("/data/topology", &pinned, &[]);
     // The view state was built from this request's present, so it reads.
     let present = present(cx)
         .await
         .map_err(|e| page_defaults_error(cx, UiError::Query(e.clone())))?;
-    let brush_src = timeline_src(state, present.now, present.bucket_width);
+    let brush_src = timeline_src(&pinned, present.now, present.bucket_width);
     let brush_from = rfc3339(state.scope.window.start());
     let brush_to = rfc3339(state.scope.window.end());
-    let state_query = state.to_query();
+    let state_query = pinned.to_query();
     let initial = query.sel.encode();
     let selected = initial.clone();
     let initial_tab = ListTab::for_selection(&query.sel).code();
@@ -336,6 +352,8 @@ async fn workspace(
         <div class="grid grid-cols-1 items-start gap-4 lg:grid-cols-[minmax(0,1fr)_18rem] xl:grid-cols-[minmax(0,1fr)_24rem]">
             <div class="min-w-0 lg:col-start-1 lg:row-start-1 xl:row-span-2">
                 <ct-topology
+                    id="topology-graph"
+                    data-live-keep=""
                     class="block h-[36rem] rounded border border-zinc-200 dark:border-zinc-800"
                     data-src=(topology_src)
                     data-live="/data/live"
@@ -351,6 +369,8 @@ async fn workspace(
                     })
                 ></ct-topology>
                 <ct-timebrush
+                    id="topology-brush"
+                    data-live-keep=""
                     class="mt-2 block h-24 rounded border border-zinc-200 dark:border-zinc-800"
                     data-src=(brush_src)
                     data-live="/data/live"
@@ -358,7 +378,7 @@ async fn workspace(
                     data-to=(brush_to)
                     @change=$(|e: Event| {
                         let _brushed = e.target.value;
-                        raw!("((value) => { const v = String(value); const i = v.indexOf('/'); if (i < 0) return; const enc = (s) => encodeURIComponent(s).replace(/%3A/g, ':'); const kept = location.search.slice(1).split('&').filter((p) => { const k = p.split('=')[0]; return p !== '' && k !== 'from' && k !== 'to'; }); location.assign(location.pathname + '?from=' + enc(v.slice(0, i)) + '&to=' + enc(v.slice(i + 1)) + (kept.length > 0 ? '&' + kept.join('&') : '')); })(${_brushed})");
+                        raw!("((value) => { const v = String(value); const i = v.indexOf('/'); if (i < 0) return; const enc = (s) => encodeURIComponent(s).replace(/%3A/g, ':'); const kept = location.search.slice(1).split('&').filter((p) => { const k = p.split('=')[0]; return p !== '' && k !== 'from' && k !== 'to' && k !== 'follow'; }); location.assign(location.pathname + '?from=' + enc(v.slice(0, i)) + '&to=' + enc(v.slice(i + 1)) + (kept.length > 0 ? '&' + kept.join('&') : '')); })(${_brushed})");
                     })
                 ></ct-timebrush>
                 <p class="mt-1 text-[11px] text-zinc-500">"Drag on the time brush to choose a window; click an edge or node, or an agent or channel in the lists, to inspect it."</p>
