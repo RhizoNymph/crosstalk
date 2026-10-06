@@ -17,6 +17,12 @@
 //! | a003 | 0 | the task | GET p2 |
 //! | a003 | 1 | GET p2 → `P2` (a transmission from a001) | GET p1 |
 //! | a003 | 2 | GET p1 → `P1` (a transmission from a001) | text |
+//!
+//! The run's exchanges start ten seconds apart from `T0` + 10 s (the
+//! header's start is `T0`), inside the run window its rows imply: the rows
+//! are timed near the run's end (`T0` + 100 s, the miss at `T0` + 101 s),
+//! plus the default minute of slack. [`write_with_prior_run`] also logs,
+//! an hour before, an earlier run that reused a002's session id.
 
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
@@ -46,7 +52,7 @@ use crosstalk_spec::interfaces::l8_surface::export::{
 };
 use crosstalk_spec::interfaces::l8_surface::summary::TopicUnder;
 use crosstalk_spec::observed::message::{MessageBody, PartRef, encoding};
-use crosstalk_spec::support::{TimeWindow, Watermark};
+use crosstalk_spec::support::{TimeWindow, Timestamp, Watermark};
 use crosstalk_testkit::build::message::{
     assistant, assistant_text, system_text, tool_call, tool_result, user_text,
 };
@@ -117,12 +123,18 @@ pub struct Written {
     pub a003: Vec<Turn>,
     /// The gateway's confirmed transmissions, as the export holds them.
     pub transmissions: Vec<Transmission>,
+    /// The earlier run's exchanges in a002's session, an hour before the
+    /// run (empty unless written by [`write_with_prior_run`]).
+    pub prior_a002: Vec<Turn>,
 }
 
 struct Log {
     ids: Ids,
     envelopes: Vec<Envelope>,
     bodies: Vec<MessageBody>,
+    /// When the exchanges' run started.
+    base: Timestamp,
+    /// Seconds since `base` of the last exchange.
     clock: u64,
 }
 
@@ -131,7 +143,7 @@ impl Log {
     /// afterwards the history holds the response and `result`, if any.
     fn turn(&mut self, agent: &mut Agent, response: MessageBody, result: Option<MessageBody>) {
         self.clock += 1;
-        let at = after(T0, Duration::from_secs(self.clock * 10));
+        let at = after(self.base, Duration::from_secs(self.clock * 10));
         let session = agent.session.clone();
         let credential = agent.credential;
         let normalized = NormalizedExchangeBuilder::new(&mut self.ids)
@@ -211,8 +223,8 @@ pub fn delivery(
         "content": {"blake3": blake3_hex(text), "sha256": "00".repeat(32),
             "excerpt": text.chars().take(80).collect::<String>(),
             "at": {"message": 3, "block": 0, "tool_use_id": reader_call}},
-        "at_ms": 1000, "at_unix_ms": 1_790_812_801_000_u64,
-        "written_at_unix_ms": 1_790_812_800_500_u64, "read_at_unix_ms": 1_790_812_801_000_u64})
+        "at_ms": 100_000, "at_unix_ms": 1_790_812_900_000_u64,
+        "written_at_unix_ms": 1_790_812_899_500_u64, "read_at_unix_ms": 1_790_812_900_000_u64})
 }
 
 /// The truth rows the fixture's run implies, plus two the exchange log
@@ -254,7 +266,7 @@ pub fn truth_rows() -> Vec<serde_json::Value> {
         json!({"kind": "miss", "world": WORLD, "reader": "a002", "reader_key_group": 1, "page": "p9",
             "reader_session": "session-a002", "reader_turn": 3, "reader_tool_use_id": "toolu_m",
             "read_tool": {"name": "http_request", "input": {"method": "GET", "url": url("p9")}},
-            "at_ms": 2000, "at_unix_ms": 1_790_812_802_000_u64}),
+            "at_ms": 101_000, "at_unix_ms": 1_790_812_901_000_u64}),
         // Line 7: the turn is off by one.
         delivery(
             "transmission",
@@ -341,12 +353,48 @@ fn channel_transmission(
 
 /// Writes the whole fixture under `dir`: the truth file holds `truth`.
 pub fn write(dir: &Path, truth: &[serde_json::Value]) -> Written {
+    write_runs(dir, truth, false, 0)
+}
+
+/// [`write`], with an earlier run an hour before in the same exchange log:
+/// a002's session id reused, its first two turns (`GET p1`, then the read
+/// of `P1` with the same tool use id), and a confirmed detection a001 →
+/// a002 read in that earlier run's second turn.
+pub fn write_with_prior_run(dir: &Path, truth: &[serde_json::Value]) -> Written {
+    write_runs(dir, truth, true, 0)
+}
+
+/// [`write`], with the run's clock `behind_secs` seconds behind the
+/// header's: its exchanges start at `T0` + 10 s − `behind_secs`, ten
+/// seconds apart, as when the swarm's host and the gateway's disagree.
+pub fn write_skewed(dir: &Path, truth: &[serde_json::Value], behind_secs: u64) -> Written {
+    write_runs(dir, truth, false, behind_secs)
+}
+
+fn write_runs(dir: &Path, truth: &[serde_json::Value], prior: bool, behind_secs: u64) -> Written {
     let mut log = Log {
         ids: Ids::seeded(7),
         envelopes: Vec::new(),
         bodies: Vec::new(),
+        base: Timestamp::from_micros(T0.as_micros() - 3_600_000_000),
         clock: 0,
     };
+    let mut prior_a002 = prior.then(|| Agent::new(&mut log.ids, "a002"));
+    if let Some(agent) = &mut prior_a002 {
+        log.turn(
+            agent,
+            get("toolu_r1", "p1"),
+            Some(tool_result("toolu_r1", P1)),
+        );
+        log.turn(
+            agent,
+            get("toolu_r2", "p1"),
+            Some(tool_result("toolu_r2", P1)),
+        );
+    }
+    let prior_a002 = prior_a002.map_or_else(Vec::new, |agent| agent.turns);
+    log.base = Timestamp::from_micros(T0.as_micros() - behind_secs * 1_000_000);
+    log.clock = 0;
     let mut a001 = Agent::new(&mut log.ids, "a001");
     let mut a002 = Agent::new(&mut log.ids, "a002");
     let mut a003 = Agent::new(&mut log.ids, "a003");
@@ -467,7 +515,18 @@ pub fn write(dir: &Path, truth: &[serde_json::Value]) -> Written {
         P1,
         300,
     );
-    let parts = [found, self_read, reread];
+    let mut parts = vec![found, self_read, reread];
+    if let Some(read) = prior_a002.get(1) {
+        parts.push(channel_transmission(
+            &mut ids,
+            (gateway.a001, gateway.a002),
+            &p1,
+            (a001.turns[0].id, a001.turns[0].response),
+            (read.id, read.last_tool.expect("a tool result")),
+            P1,
+            50,
+        ));
+    }
     let evidence: Vec<TransmissionEvidence> =
         parts.iter().map(|parts| evidence_of(parts, &p1)).collect();
     let transmissions: Vec<Transmission> =
@@ -500,6 +559,7 @@ pub fn write(dir: &Path, truth: &[serde_json::Value]) -> Written {
         a002: a002.turns,
         a003: a003.turns,
         transmissions,
+        prior_a002,
     }
 }
 
@@ -611,7 +671,7 @@ pub fn unattributed(reader: (&str, &str, u32, &str), page: &str, text: &str) -> 
         "content": {"blake3": blake3_hex(text), "sha256": "00".repeat(32),
             "excerpt": text.chars().take(80).collect::<String>(),
             "at": {"message": 3, "block": 0, "tool_use_id": reader_call}},
-        "at_ms": 1000, "at_unix_ms": 1_790_812_801_000_u64})
+        "at_ms": 100_000, "at_unix_ms": 1_790_812_900_000_u64})
 }
 
 /// Appends to the fixture's evidence file one access-only transmission
@@ -659,6 +719,44 @@ fn access_only(written: &Written, discarded: bool) -> (TransmissionParts, Resour
         builder.build_parts().expect("an access-only transmission"),
         p2,
     )
+}
+
+/// Appends to the fixture's evidence file one access-only transmission
+/// a001 → a002 over p1 read at a002's turn 2, `discarded` or else
+/// suspected: the read the truth calls a reread (line 5), which the
+/// gateway's confirmed reread detection also lands on.
+pub fn append_access_only_reread(written: &Written, discarded: bool) {
+    let mut ids = Ids::seeded(31);
+    let (writer, reader) = (ids.agent(), ids.agent());
+    let p1 = ResourceBuilder::new(&mut ids)
+        .url("http", "wiki:8090", "/pages/p1", None)
+        .build();
+    let builder = TransmissionBuilder::new(&mut ids)
+        .between(writer, reader)
+        .opened_at(after(T0, Duration::from_secs(500)))
+        .accesses(|cross| {
+            cross
+                .resource(p1.id)
+                .write_access(|access| {
+                    access.in_exchange(written.a001[0].id).part(PartRef {
+                        message: written.a001[0].response,
+                        index: 0,
+                    })
+                })
+                .read_access(|access| {
+                    access.in_exchange(written.a002[2].id).part(PartRef {
+                        message: written.a002[2].last_tool.expect("a tool result"),
+                        index: 0,
+                    })
+                })
+        });
+    let builder = if discarded {
+        builder.discarded()
+    } else {
+        builder.suspected()
+    };
+    let parts = builder.build_parts().expect("an access-only transmission");
+    append_evidence(written, &evidence_of(&parts, &p1));
 }
 
 fn append_evidence(written: &Written, evidence: &TransmissionEvidence) {

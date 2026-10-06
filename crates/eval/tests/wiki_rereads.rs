@@ -9,7 +9,9 @@
 //! the correlator, by design, folds into the first. The texts are the real
 //! ones; the export around them is synthetic.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
+
+use tempfile::TempDir;
 
 use crosstalk_eval::corpus::{TraceSource, World};
 use crosstalk_eval::datasets::wiki::{WikiSelection, WikiSource};
@@ -33,10 +35,14 @@ type Rev<'a> = (&'a str, Vec<&'a str>, (usize, usize, usize, usize));
 /// `(from, to, revision read at)` of a label, by name.
 type Edge = (String, String, String);
 
-/// An export of `PAGE` with `revisions`, in order, one minute apart.
-fn export(name: &str, revisions: &[Rev<'_>]) -> PathBuf {
-    let dir = Path::new(env!("CARGO_TARGET_TMPDIR")).join(format!("wiki-rereads-{name}"));
-    std::fs::create_dir_all(&dir).unwrap_or_else(|e| panic!("{e}"));
+/// An export of `PAGE` with `revisions`, in order, one minute apart, in a
+/// directory of its own so tests running in parallel never share one.
+fn export(name: &str, revisions: &[Rev<'_>]) -> TempDir {
+    let tmp = tempfile::Builder::new()
+        .prefix(&format!("wiki-rereads-{name}-"))
+        .tempdir_in(env!("CARGO_TARGET_TMPDIR"))
+        .unwrap_or_else(|e| panic!("{e}"));
+    let dir = tmp.path();
     let mut rows = Vec::new();
     for (at, (author, body, (a0, a1, b0, b1))) in revisions.iter().enumerate() {
         let seq = at + 1;
@@ -65,12 +71,12 @@ fn export(name: &str, revisions: &[Rev<'_>]) -> PathBuf {
     };
     std::fs::write(dir.join("revisions.jsonl"), lines(&rows)).unwrap_or_else(|e| panic!("{e}"));
     std::fs::write(dir.join("pages.jsonl"), lines(&[page])).unwrap_or_else(|e| panic!("{e}"));
-    dir
+    tmp
 }
 
 /// The real page's first five revisions: Jun24 edits twice, so its second
 /// read rereads the header.
-fn bridge() -> PathBuf {
+fn bridge() -> TempDir {
     let header: Vec<&str> = HEADER.lines().collect();
     let mut body = header.clone();
     let mut revisions = vec![("ResearchHelper7690", body.clone(), (0, 0, 0, 2))];
@@ -148,7 +154,7 @@ fn triple(from: &str, to: &str, at: &str) -> Edge {
 
 #[test]
 fn a_second_read_of_the_same_lines_is_a_reread_control() {
-    let world = world(&bridge());
+    let world = world(bridge().path());
     let (transmissions, rereads) = labels(&world);
     let (helper, jun24, feb19, dec22) = (
         "ResearchHelper7690",
@@ -203,7 +209,7 @@ fn runs_of_one_revision_in_one_read_are_all_transmissions() {
             ),
         ],
     );
-    let (transmissions, rereads) = labels(&world(&root));
+    let (transmissions, rereads) = labels(&world(root.path()));
     let mut expected = vec![
         triple("WriterA", "WriterB", "@2"),
         triple("WriterA", "WriterC", "@3"),
@@ -231,7 +237,7 @@ fn detector() -> LiveDetector<GatewayBackend> {
 fn the_live_detector_finds_every_first_read_and_no_reread() {
     let root = bridge();
     let mut source =
-        WikiSource::open(&root, &WikiSelection::default()).unwrap_or_else(|e| panic!("{e}"));
+        WikiSource::open(root.path(), &WikiSelection::default()).unwrap_or_else(|e| panic!("{e}"));
     let summary = run(&mut source, &mut detector(), 10, |_, _| {});
     assert!(summary.failures.is_empty(), "{:?}", summary.failures);
     let total = summary.score.total(&Selector::default());
@@ -249,7 +255,7 @@ fn the_live_detector_finds_every_first_read_and_no_reread() {
 fn the_reference_matcher_reports_a_reread_at_the_first_read_only() {
     let root = bridge();
     let mut source =
-        WikiSource::open(&root, &WikiSelection::default()).unwrap_or_else(|e| panic!("{e}"));
+        WikiSource::open(root.path(), &WikiSelection::default()).unwrap_or_else(|e| panic!("{e}"));
     let mut reference = crosstalk_eval::pipeline::ReferenceDetector::default();
     let summary = run(&mut source, &mut reference, 10, |_, _| {});
     assert!(summary.failures.is_empty(), "{:?}", summary.failures);

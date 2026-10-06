@@ -18,15 +18,15 @@ use crosstalk_spec::interfaces::l8_surface::export::{
 };
 use tokio::sync::RwLock;
 
-use super::digest::RowDigest;
 use super::plan::PlannedRows;
 use super::record;
 use crate::backend::fixture::store::State;
+use crosstalk_surface::export::Blake3RowHasher;
 
 /// The rows of one fixture export, ending with its trailer.
 #[derive(Debug)]
 pub struct ExportRows {
-    rows: SealedRows<PlannedRows, RowDigest>,
+    rows: SealedRows<PlannedRows, Blake3RowHasher>,
     ledger: Ledger,
 }
 
@@ -39,7 +39,7 @@ impl ExportRows {
         request: ExportRequest,
     ) -> Self {
         Self {
-            rows: SealedRows::new(header, rows, RowDigest::new()),
+            rows: SealedRows::new(header, rows, Blake3RowHasher::new()),
             ledger: Ledger {
                 state,
                 caller,

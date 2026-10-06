@@ -205,15 +205,19 @@ Overview:
       and forwarding setting.
       The swarm benchmark (ct-eval swarm) instead scores the live gateway:
       it joins the demo swarm's ground truth to the gateway's exchange log
-      and blobs, and scores a saved L8 transmissions export and its evidence,
+      (cut to the run window, so a reused session id's earlier-run
+      exchanges and detections are excluded and reported) and blobs, and
+      scores a saved L8 transmissions export and its evidence,
       suspected and discarded transmissions as access-only predictions
       from their evidence's accesses (reported as access-only recall,
-      apart from overall). The truth's session rows map every gateway
+      apart from overall; a suspected one under a negative control is
+      reported apart from the violations, never gated). The truth's session rows map every gateway
       session to its swarm agent; it scores under
       demo-swarm/<scenario> (headline or boilerplate), and its gates are
       those named detector "gateway-export". A discarded co-access that
       aligns with no label is dismissed (the detector's own "no"), never a
-      false positive or a control violation. ct-eval replay --run <dir>
+      false positive or a control violation; the control it fell under is
+      recorded ("dismissed on reread controls: N"). ct-eval replay --run <dir>
       replays a saved bench run's exchange log and blobs through
       crosstalk_gateway::live::Live in memory with the run's flow windows
       (bench.env), reads the export and evidence back through the same L8
@@ -812,6 +816,32 @@ Features Index:
       - crates/topology/migrations/0001_topology.sql
     depends_on: [type_spec, store, memory, transport, channel_semantics]
     doc: docs/features/topology_store.md
+  postgres_stores:
+    description: >
+      Reviewed design (roadmap P7.3, PR #103, not implemented): detections that survive
+      a gateway restart. Surveys what is persisted today (serve runs Live
+      on memory stores and MpscBus; the L3 to L7 Postgres stores exist but
+      are unwired, and crosstalk migrate runs no layer migrations) and
+      proposes a durable PgBus (transport schema: event log, groups,
+      deliveries, dead letters), outbox rows stamped with a stable
+      envelope id before an idempotent publish, derived envelope ids for
+      every consumer (EventId::derive), L5 correlator checkpoints with
+      deferred acks plus a held-writes table, an access sequence and an
+      extraction ledger, a fsynced on-disk publish spool (SpoolingBus) that
+      keeps captures made while the database is down and drains them in
+      order under their envelope ids, PgTopicCatalog, PgProjectionStore, PgAuditLog,
+      PgOperatorStore and PgSinkRegistry, PgFrontierSource in the
+      composer, one pipeline process per database (advisory lock),
+      retention per store, and the restart semantics of /readyz, /healthz
+      and the API. Includes the test strategy (reference-model agreement,
+      restart equivalence, conformance on Postgres), the spec changes
+      proposed, the parallel workstreams and the nine recorded decisions.
+    entry_points:
+      - docs/features/postgres_stores.md
+      - crates/gateway/src/live/mod.rs
+      - crates/store/src/migrate.rs
+    depends_on: [store, gateway, transport, reconstruct, provenance, flow_store, flow_correlator, search_alerts, topology_store, surface_service, conformance]
+    doc: docs/features/postgres_stores.md
   sim:
     description: >
       crosstalk-sim, the deterministic simulation kit for every dst
@@ -1507,7 +1537,8 @@ Features Index:
       spec's SpanIndex, AccessStore and channel reads; one documented
       alignment rule and a scorer with TP/FP/FN by dataset, route, carrier
       kind, match or access class and tier, negative-control violations
-      and a DetectionQuality bridge keyed by QualityMatch; a Detector seam
+      (content classes only; access-only ones reported apart) and a
+      DetectionQuality bridge keyed by QualityMatch; a Detector seam
       with the naive reference matcher (channel rereads of a span already
       reported to the reader dropped; escape-aware matching classed as
       Exact, Normalized or Decoded([JsonString | YamlString]) through one

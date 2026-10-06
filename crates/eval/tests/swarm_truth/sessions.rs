@@ -332,12 +332,16 @@ fn the_shipped_gates_hold_the_demo_swarm_gates() {
             "demo-swarm/headline",
             "demo-swarm/headline",
             "demo-swarm/headline",
+            "demo-swarm/headline",
+            "demo-swarm/headline",
+            "demo-swarm/boilerplate",
+            "demo-swarm/boilerplate",
             "demo-swarm/boilerplate"
         ]
     );
-    // A swarm run checks all four, and only them.
+    // A swarm run checks all eight, and only them.
     let dir = fixture::dir("gates-shipped");
     let written = fixture::write(&dir, &fixture::truth_rows());
     let outcome = run(&inputs(&written), 50, &gates).expect("the run scores");
-    assert_eq!(outcome.report.gates.len(), 4);
+    assert_eq!(outcome.report.gates.len(), 8);
 }
