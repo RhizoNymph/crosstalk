@@ -9,7 +9,7 @@
 //!
 //! [`FlowStoreError`] is the typed error of what this module adds beyond the
 //! spec traits: connecting, migrating, the directory refresh, the outbox
-//! relay and the shard checkpoints.
+//! relay (with its sink's failure) and the shard checkpoints.
 
 use crosstalk_spec::interfaces::l5_flow::channels::TrafficError;
 use crosstalk_spec::interfaces::l5_flow::transmissions::TransmissionStoreError;
@@ -19,6 +19,7 @@ use crosstalk_store::{DbFailure, SerializableError, StoreError, TxError, classif
 
 use super::codec::CodecError;
 use super::ids::IdSourceError;
+use super::outbox::SinkError;
 
 /// What failed in a flow store operation, below the spec error it reports.
 #[derive(Debug, thiserror::Error)]
@@ -51,6 +52,9 @@ pub enum FlowStoreError {
     /// No channel id could be drawn.
     #[error(transparent)]
     Ids(#[from] IdSourceError),
+    /// The outbox relay's sink did not stamp or publish an event.
+    #[error("outbox sink: {0}")]
+    Sink(SinkError),
 }
 
 impl From<sqlx::Error> for FlowStoreError {

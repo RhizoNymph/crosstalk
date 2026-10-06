@@ -22,7 +22,7 @@ model-tested against the `crosstalk-memory` reference stores.
   and read by `resource_use`; indexed by id for the coming
   `AccessStore::accesses`.
 - Declarations, promotion, supersession and policy history.
-- The transactional outbox and its relay (`EventSink`, `Relay`).
+- The transactional outbox and its relay (`EventSink`, `BusSink`, `Relay`, `Stamp`, `SinkError`).
 - Server-side cursors for the registry's three lists (`prune_cursors`).
 - The supersession directory cache, `ShardKey` (the correlator's shard key:
   the canonical channel, or the resource while it is on no channel) and the
@@ -45,23 +45,42 @@ model-tested against the `crosstalk-memory` reference stores.
 
 ## Decisions
 
-**Publishing: a transactional outbox, relayed after commit.** A store
-publishes what it decides (`ChannelDiscovered` from discover, which decides
-Created vs Existing inside its transaction; `ChannelPromoted`; `VerdictSet`;
-every `Changed`). The deciding transaction stages its events in
-`flow.outbox`; after the commit the store relays every staged event to its
-`EventSink` (a `tokio::sync::mpsc::UnboundedSender<BusEvent>` the wiring
-drains into the bus) and deletes the rows. Consequences:
+**Publishing: a transactional outbox, stamped once, relayed after
+commit** (`flow.outbox.stable-envelope-id`, INV-1212). A store publishes
+what it decides (`ChannelDiscovered` from discover, which decides Created
+vs Existing inside its transaction; `ChannelPromoted`; `VerdictSet`; every
+`Changed`). The deciding transaction stages its events in `flow.outbox`,
+unstamped. After the commit the store's `Relay<S>` runs over its sink
+`S: EventSink` (the stores are `PgChannelRegistry<D, S>` and
+`PgTransmissionStore<D, S>`):
+
+1. in its own transaction it takes the next rows (`FOR UPDATE SKIP
+   LOCKED`, `seq` order), stamps each unstamped row with
+   `EventSink::stamp()` (`envelope_id`, `at`, migration `0003_restart`;
+   the `outbox_stamped` check refuses a half stamp) and commits;
+2. it publishes each row as an `Envelope` under its stamp, in `seq` order,
+   awaiting `EventSink::publish`;
+3. it deletes the published rows.
+
+`BusSink<E, R>` is the wiring's sink: it stamps from a ULID generator at
+the injected clock's reading and publishes on a spec `EventBus`, awaited.
+`Relay::relay` runs until the outbox is empty; the wiring calls it at start
+before the flow group subscribes. Consequences:
 
 - a refused or rolled-back write publishes nothing; a retried transaction
   stages its events once (failed attempts roll back with them);
-- nothing is relayed before its change is visible, so a consumer that
+- nothing is published before its change is visible, so a consumer that
   re-queries on an event sees the change;
-- delivery is at least once: if the relay fails or the receiver is gone, the
-  events stay staged and any later relay on the database (any node) sends
-  them; a relay whose own commit fails may resend;
-- concurrent relays take disjoint rows (`FOR UPDATE SKIP LOCKED`); events of
-  two concurrent writes can be relayed out of commit order.
+- each event is published under one envelope id, fixed before its first
+  publish: a relay that fails (the error is logged after a write, returned
+  by `Relay::relay`) or crashes after the stamp, after a publish or before
+  the delete leaves its rows stamped, and the next relay republishes them
+  under the same ids, which a bus idempotent on ids (`PgBus`) holds once;
+- the unbounded mpsc sink and the gateway forwarder it needed are gone, and
+  with them the window where a crash between the relay's delete and the
+  forwarder's publish lost events;
+- concurrent relays stamp disjoint rows (`FOR UPDATE SKIP LOCKED`); events
+  of two concurrent writes can be published out of commit order.
 
 **Serializable writes.** Every write runs in one `SERIALIZABLE` transaction
 under `crosstalk_store::retry_serializable` (default policy, overridable with
@@ -129,7 +148,8 @@ surface      ── declare (config) / set_policy / promote / promotion_coverage
    COMMIT  (40001 / 40P01: rerun the whole body)
      │
      ▼
-   Relay::relay   SELECT .. FOR UPDATE SKIP LOCKED ─▶ EventSink ─▶ DELETE sent rows
+   Relay::relay   txn: SELECT .. FOR UPDATE SKIP LOCKED, stamp unstamped rows, COMMIT
+                  ─▶ EventSink::publish(Envelope { stamped id, at }) ─▶ DELETE published rows
    promote only:  directory.extend(superseded → promoted)
 ```
 
@@ -163,7 +183,7 @@ the window and sums accesses per canonical agent and kind.
 | `channel_traffic` | transmission_id, channel_id (stored route), opened_at, confirmed, transmission | PK transmission_id; `(channel_id, opened_at DESC, transmission_id DESC)` |
 | `transmissions` | id, state, route, channel_id, opened_at, transmission | PK id; `(state, channel_id, opened_at DESC, id DESC)`; `(opened_at, id)` |
 | `verdicts` | transmission_id, revision, verdict, record | PK (transmission_id, revision) |
-| `outbox` | seq, event, staged_at | PK seq |
+| `outbox` | seq, event, staged_at, envelope_id, at (stamp, `0003_restart`) | PK seq; `outbox_stamped` |
 | `cursors` | token, list, binding, after_key, issued_at | PK token; issued_at |
 | `shard_ticks` | shard, ticked_through | PK shard |
 
@@ -181,7 +201,8 @@ recorded, not what was saved.
 | `crates/flow/src/store/mod.rs` | Module docs, re-exports, migrations | `MIGRATIONS`, `migrate`, every type below |
 | `crates/flow/src/store/codec.rs` | Ids, times and JSON to columns and back | `CodecError` |
 | `crates/flow/src/store/error.rs` | `Fault` inside bodies, mapping into spec errors | `FlowStoreError` |
-| `crates/flow/src/store/outbox.rs` | Staging and relaying events | `EventSink`, `Relay` |
+| `crates/flow/src/store/outbox.rs` | Staging, stamping and relaying events | `EventSink`, `BusSink`, `Relay`, `Stamp`, `SinkError` |
+| `crates/flow/src/integration/outbox.rs` | relay crash points over Postgres (INV-1212) | - |
 | `crates/flow/src/store/cursor.rs` | The cursor book and paging | `prune_cursors` |
 | `crates/flow/src/store/directory.rs` | Supersession cache, shard keys | `ShardKey`, `ShardIndex` |
 | `crates/flow/src/store/ids.rs` | Declared channel ids | `ChannelIdSource`, `UlidChannelIds`, `IdSourceError` |
@@ -233,7 +254,10 @@ recorded, not what was saved.
   over the network.
 - Integration (Postgres): `tests::registry` (one per registry invariant),
   `tests::concurrency` (discover races, declaration races),
-  `tests::verdicts` (outbox, verdicts, at-least-once relay).
+  `tests::verdicts` (outbox, verdicts, at-least-once relay),
+  `integration::outbox::outbox_relay_publishes_each_event_once_under_its_stamped_id`
+  (a relay failing, or dropped after the stamp and after a publish before
+  its delete; a new relay publishes each event once under its stamp).
 
 ## Transmission holding
 
