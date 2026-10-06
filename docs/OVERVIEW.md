@@ -1012,6 +1012,23 @@ Features Index:
       - crates/ingress/src/config.rs
     depends_on: [type_spec, workspace, sim, testkit]
     doc: docs/features/ingress.md
+  claude_code_oauth:
+    description: >
+      Design (phase 1, not implemented): capturing Claude Code on a Claude
+      Pro/Max subscription through ANTHROPIC_BASE_URL. The OAuth bearer
+      token and anthropic-beta's OAuth capability pass through unchanged;
+      the token is hashed on arrival with the KeyedHasher and never stored;
+      refresh goes to platform.claude.com and never through the gateway.
+      Proposes classifying a Bearer sent with an oauth- beta value as
+      OauthAccessToken whatever its shape, and proving that one agent per
+      harness session survives token refreshes and that no token byte
+      reaches any output.
+    entry_points:
+      - crates/ingress/src/identify.rs
+      - crates/ingress/src/credential.rs
+      - crates/reconstruct/src/evidence/scope.rs
+    depends_on: [ingress, reconstruct, gateway, testkit, e2e_smoke]
+    doc: docs/features/claude_code_oauth.md
   spec_primitives:
     description: >
       Roadmap P0.7: what several layers must compute identically, moved
