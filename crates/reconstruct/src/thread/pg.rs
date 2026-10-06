@@ -15,15 +15,18 @@
 //! The same transaction records the call's turn and, for a new
 //! conversation, its traffic source and origin columns (migration
 //! `0004_conversation_reads`); its `reads` submodule serves the spec's
-//! `ConversationReads` from them.
+//! `ConversationReads` from them. [`PgConversations`] also serves the
+//! spec's `ExchangePlacements` from `thread_records`.
 
 mod reads;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-use crosstalk_spec::ids::{AgentId, ConversationId, ExchangeId, MessageHash};
-use crosstalk_spec::interfaces::l3_reconstruction::{ThreadError, ThreadOutcome};
+use crosstalk_spec::ids::{AgentId, ConversationId, ExchangeId, KeyedHasher, MessageHash};
+use crosstalk_spec::interfaces::l3_reconstruction::{
+    ExchangePlacements, Placement, ThreadError, ThreadOutcome,
+};
 use crosstalk_spec::observed::conversation::{Conversation, ConversationOrigin};
 use crosstalk_spec::observed::message::Role;
 use crosstalk_spec::support::Timestamp;
@@ -42,6 +45,7 @@ use crate::agents::codec::{
     message_hash, micros,
 };
 use crate::error::{StorageFailure, StoreReason, TxFailure, tx};
+use crate::ids::{CONVERSATIONS_CURSOR_LABEL, cursor_key};
 
 fn role_text(role: Role) -> &'static str {
     match role {
@@ -648,6 +652,13 @@ impl PgConversations {
         self
     }
 
+    /// The same store, its list cursors keyed from the deployment `secret`
+    /// ([`crate::ids::CONVERSATIONS_CURSOR_LABEL`]), so cursors issued
+    /// before a restart resolve after it.
+    pub fn with_cursor_secret(self, secret: &KeyedHasher) -> Self {
+        self.with_cursor_key(cursor_key(secret, CONVERSATIONS_CURSOR_LABEL))
+    }
+
     /// Use `config` for every threading call.
     pub fn with_config(mut self, config: ThreadConfig) -> Self {
         self.config = config;
@@ -675,6 +686,30 @@ impl PgConversations {
     pub fn with_retry(mut self, retry: SerializableRetry) -> Self {
         self.retry = retry;
         self
+    }
+}
+
+impl ExchangePlacements for PgConversations {
+    /// The agent and conversation of `exchange`'s thread record
+    /// (`reconstruct.placement.as-threaded`): one read of
+    /// `thread_records`, which the threading transaction wrote.
+    async fn placement(&self, exchange: ExchangeId) -> Result<Option<Placement>, ThreadError> {
+        let read = async {
+            let row: Option<(String,)> = sqlx::query_as(
+                "SELECT outcome FROM reconstruct.thread_records WHERE exchange = $1",
+            )
+            .bind(id_text(exchange))
+            .fetch_optional(&self.pool)
+            .await?;
+            row.map(|(outcome,)| {
+                from_json::<StoredOutcome>("thread_records.outcome", &outcome)
+                    .map(|stored| Placement::of(&ThreadOutcome::from(stored)))
+            })
+            .transpose()
+            .map_err(TxFailure::from)
+        };
+        read.await
+            .map_err(|failure| ThreadError::from_failure(&StorageFailure::from(failure)))
     }
 }
 

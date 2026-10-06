@@ -10,8 +10,11 @@
 //!
 //! Each write checks before it changes anything, so a refusal leaves the
 //! store as it was and publishes nothing. Each accepted write publishes
-//! `Changed::Agent` (see [`super`] for who else is announced). `AgentSeen`
-//! is the consumer's: it knows which evidence a resolution found new.
+//! `Changed::Agent` (see [`super`] for who else is announced). A `create`
+//! of an agent from traffic also publishes `AgentSeen` for each item of its
+//! evidence, in order, and an `attach_evidence` for the item it attached:
+//! the announcement commits with the write, so a delivery redone after the
+//! write (which finds the evidence held) never loses it.
 
 use crate::ids::AgentId;
 #[cfg(doc)]

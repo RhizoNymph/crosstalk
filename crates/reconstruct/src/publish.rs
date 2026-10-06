@@ -1,24 +1,30 @@
 //! Where L3's stores publish the events of the decisions they take.
 //!
-//! A store write appends its events to the transaction's outbox table and,
-//! once the transaction commits, hands them to its [`EventSink`] and
-//! deletes the outbox rows. A sink failure leaves the rows, and
-//! `PgAgents::flush_outbox` publishes them later, so an event is published
-//! at least once and never before its change is visible.
+//! A store write appends its events to the transaction's outbox table.
+//! Once the transaction commits, the store's relay (`agents::outbox`)
+//! stamps each staged row with an envelope id and time from its
+//! [`EventSink`] ([`EventSink::stamp`]) in a transaction of its own,
+//! commits the stamps, publishes each row as an [`Envelope`] under its
+//! stamp, and then deletes the published rows. A failure anywhere leaves
+//! the rows, and `PgAgents::flush_outbox` relays them later under the ids
+//! they were stamped with (`reconstruct.outbox.stable-envelope-id`,
+//! INV-1211): an event is published at least once, never before its change
+//! is visible, and every publish of it carries one envelope id, so a bus
+//! that is idempotent on ids (`PgBus`) holds it once.
 //!
-//! [`BusSink`] is the wiring's sink: it puts each event in an envelope and
-//! publishes it on the spec's `EventBus`. Its envelope ids come from a ULID
-//! generator over the clock the wiring hands it (a store never reads a
-//! clock itself).
+//! [`BusSink`] is the wiring's sink: it stamps at the injected clock's
+//! reading with a ULID generator (a store never reads a clock itself) and
+//! publishes on the spec's `EventBus`, awaiting the bus.
 
 use std::sync::{Arc, Mutex, PoisonError};
 
-use crosstalk_spec::events::{BusEvent, Envelope};
+use crosstalk_spec::events::Envelope;
+use crosstalk_spec::ids::EventId;
 use crosstalk_spec::ids::mint::{RandomSource, UlidExhausted, UlidGenerator};
 use crosstalk_spec::interfaces::l2_transport::{BusError, EventBus};
-use crosstalk_spec::support::Clock;
+use crosstalk_spec::support::{Clock, Timestamp};
 
-/// Why a sink did not take every event.
+/// Why a sink did not stamp or publish an event.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum SinkError {
     #[error("the bus refused an event: {0:?}")]
@@ -27,13 +33,29 @@ pub enum SinkError {
     Ids(UlidExhausted),
 }
 
-/// Takes the events a committed write publishes, in order.
-pub trait EventSink: Send + Sync + 'static {
-    fn publish(&self, events: Vec<BusEvent>) -> impl Future<Output = Result<(), SinkError>> + Send;
+/// The envelope id and time a staged event is published under, minted once
+/// per outbox row.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Stamp {
+    pub id: EventId,
+    pub at: Timestamp,
 }
 
-/// [`EventSink`] onto an [`EventBus`]: each event in its own envelope,
-/// stamped with the injected clock's reading.
+/// Stamps and publishes the events committed writes staged.
+pub trait EventSink: Send + Sync + 'static {
+    /// The stamp of one staged event. The relay calls it once per outbox
+    /// row, inside the transaction that records the stamp, and never again
+    /// for that row. Stamps are increasing.
+    fn stamp(&self) -> Result<Stamp, SinkError>;
+
+    /// Publish `envelope`; `Ok` once the bus holds it. The relay may
+    /// publish an envelope again under the same id (it stopped before
+    /// deleting the row); the bus deduplicates on the id.
+    fn publish(&self, envelope: Envelope) -> impl Future<Output = Result<(), SinkError>> + Send;
+}
+
+/// [`EventSink`] onto an [`EventBus`]: stamps from a ULID generator at the
+/// injected clock's reading, publishes awaiting the bus.
 pub struct BusSink<E, R> {
     bus: Arc<E>,
     clock: Arc<dyn Clock>,
@@ -63,20 +85,16 @@ where
     E: EventBus + Send + Sync + 'static,
     R: RandomSource + 'static,
 {
-    async fn publish(&self, events: Vec<BusEvent>) -> Result<(), SinkError> {
-        for event in events {
-            let at = self.clock.now();
-            let id = {
-                // A poisoned lock only means a minting call panicked; the
-                // generator's last id is still valid.
-                let mut ids = self.ids.lock().unwrap_or_else(PoisonError::into_inner);
-                ids.mint_at(at).map_err(SinkError::Ids)?
-            };
-            self.bus
-                .publish(Envelope { id, at, event })
-                .await
-                .map_err(SinkError::Bus)?;
-        }
-        Ok(())
+    fn stamp(&self) -> Result<Stamp, SinkError> {
+        let at = self.clock.now();
+        // A poisoned lock only means a minting call panicked; the
+        // generator's last id is still valid.
+        let mut ids = self.ids.lock().unwrap_or_else(PoisonError::into_inner);
+        let id = ids.mint_at(at).map_err(SinkError::Ids)?;
+        Ok(Stamp { id, at })
+    }
+
+    async fn publish(&self, envelope: Envelope) -> Result<(), SinkError> {
+        self.bus.publish(envelope).await.map_err(SinkError::Bus)
     }
 }

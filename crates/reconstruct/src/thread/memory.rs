@@ -506,6 +506,16 @@ impl MemoryConversations {
         self.cursors = Cursors { key };
         self
     }
+
+    /// The same store, its list cursors keyed from the deployment `secret`
+    /// ([`crate::ids::CONVERSATIONS_CURSOR_LABEL`]), as
+    /// `PgConversations::with_cursor_secret` keys them.
+    pub fn with_cursor_secret(self, secret: &crosstalk_spec::ids::KeyedHasher) -> Self {
+        self.with_cursor_key(crate::ids::cursor_key(
+            secret,
+            crate::ids::CONVERSATIONS_CURSOR_LABEL,
+        ))
+    }
 }
 
 impl ExchangePlacements for MemoryConversations {

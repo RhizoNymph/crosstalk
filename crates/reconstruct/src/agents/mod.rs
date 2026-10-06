@@ -13,9 +13,11 @@
 //!   agent table into a `table::Table`, decides there, and writes back
 //!   what the decision changed.
 //! - **Events** are appended to `reconstruct.outbox` in the transaction
-//!   that makes the change and handed to the [`EventSink`] after the
-//!   commit; the rows are deleted once the sink took them
-//!   ([`PgAgents::flush_outbox`] republishes leftovers).
+//!   that makes the change. After the commit the relay (`outbox`) stamps
+//!   each row with its envelope id and time in a transaction of its own,
+//!   publishes it through the [`EventSink`] and deletes it
+//!   ([`PgAgents::flush_outbox`] relays leftovers under the ids they were
+//!   stamped with; `reconstruct.outbox.stable-envelope-id`).
 //! - **Reads** run in a `REPEATABLE READ` read-only transaction, so a
 //!   profile's aliases, claims and last-seen time describe one snapshot.
 //! - **Time** is always an argument; merge ids come from the [`IdSource`]
@@ -24,6 +26,7 @@
 pub(crate) mod cache;
 pub mod codec;
 mod load;
+mod outbox;
 mod reads;
 mod resolve;
 pub(crate) mod table;
@@ -31,13 +34,13 @@ mod writes;
 
 use std::sync::Arc;
 
-use crosstalk_spec::ids::{AgentId, MergeId};
+use crosstalk_spec::ids::{AgentId, KeyedHasher, MergeId};
 use crosstalk_spec::interfaces::l3_reconstruction::AgentDirectory;
 use crosstalk_store::{Layer, Migrations, SerializableRetry, StoreError, migrate};
 use sqlx::PgPool;
 
 use crate::error::StorageFailure;
-use crate::ids::IdSource;
+use crate::ids::{AGENTS_CURSOR_LABEL, IdSource, cursor_key};
 use crate::publish::EventSink;
 
 use cache::DirectoryCache;
@@ -108,6 +111,24 @@ where
         };
         store.reload_directory().await?;
         Ok(store)
+    }
+
+    /// [`PgAgents::open`] with the agents list's cursor key derived from
+    /// the deployment `secret` ([`AGENTS_CURSOR_LABEL`]), so cursors issued
+    /// before a restart resolve after it.
+    pub async fn open_with_secret(
+        pool: PgPool,
+        sink: S,
+        merge_ids: M,
+        secret: &KeyedHasher,
+    ) -> Result<Self, StorageFailure> {
+        Self::open(
+            pool,
+            sink,
+            merge_ids,
+            cursor_key(secret, AGENTS_CURSOR_LABEL),
+        )
+        .await
     }
 
     /// Use `retry` for every write transaction.

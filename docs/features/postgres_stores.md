@@ -204,7 +204,7 @@ indexes. Its workstream finalizes it against the spec types' wire forms.
 | --- | --- | --- | --- |
 | L2 | `PgBus`, `PgDeadLetters` | **new**, Postgres | `transport/0001_bus.sql` |
 | L2 | `SpoolingBus` (publish spool) | **new**, local disk (data volume) | none (files under `<data dir>/spool/`) |
-| L3 | `PgAgents`, `PgConversations` | Postgres (exists); add `ExchangePlacements`; stable outbox ids | `reconstruct/0004_outbox_ids.sql` |
+| L3 | `PgAgents`, `PgConversations` | Postgres (exists); add `ExchangePlacements`; stable outbox ids | `reconstruct/0005_outbox_ids.sql` |
 | L4 | `PgProvenanceStore`, `PgFingerprintIndex` | Postgres (exists); add `SpanIndex` | none |
 | L4 | `TokenCache`, `KGramCache` | derived, rebuilt lazily | none |
 | L5 | `PgChannelRegistry`, `PgTransmissionStore`, `PgShardTicks` | Postgres (exists); stable outbox ids; access sequence | `flow/0002_restart.sql` |
@@ -337,7 +337,7 @@ No extension.
 - **Add `ExchangePlacements` for `PgConversations`**: `thread_records`
   already holds each exchange's conversation and outcome, so this is a
   read and needs no new table.
-- **Stable outbox ids** (`0004_outbox_ids.sql`):
+- **Stable outbox ids** (`0005_outbox_ids.sql`; `0004` is the conversation reads):
 
   ```sql
   ALTER TABLE outbox ADD COLUMN envelope_id text COLLATE "C" CHECK (length(envelope_id) = 26),
@@ -1326,7 +1326,7 @@ S (spec, first) ──┬─▶ W1 transport ─┐
 | --- | --- | --- | --- |
 | S (landed) | `feat/pg-spec` | `spec/types/ids*`, `spec/types/interfaces/l2_transport.rs`, `l7_topology.rs` (doc), `l8_surface/audit.rs`, `spec/invariants/INV-X-*` | the spec changes above, with type and unit evidence for `EventId::derive` |
 | W1 | `feat/pg-bus` | `crates/transport/{src/pg/**, src/spool/**, migrations/**, Cargo.toml}`, transport tests and dst made bus-generic; `crates/testkit/src/db_link.rs` | `PgBus`, `PgDeadLetters`, `group_stats`, `prune`, restart reset; **`SpoolingBus`** (segments, cursor, lock, states, drain, bounds, `oldest_at`, stats); `DbLink`; bus conformance over both buses; spool unit, DST and integration tests |
-| W2 | `feat/l3-restart` | `crates/reconstruct/**` | `ExchangePlacements` for `PgConversations`; outbox stamp + awaited bus sink; derived ids checked on redelivery; `0004_outbox_ids.sql` |
+| W2 | `feat/l3-restart` | `crates/reconstruct/**` | `ExchangePlacements` for `PgConversations`; outbox stamp + awaited bus sink; derived ids checked on redelivery; `0004_outbox_ids.sql`. **Implemented** (branch `feat/pg-w2-reconstruct`): the migration is `0005_outbox_ids.sql` (`0004` went to the conversation reads); `EventSink` gained `stamp`, and `agents::outbox::relay` stamps, publishes and deletes; `PgAgents::open_with_secret` and `with_cursor_secret` derive cursor keys (`crosstalk.cursor.v1.agents`, `crosstalk.cursor.v1.conversations`); tests `tests::pg_outbox`, `tests::pg_placement`, `tests::dst::redelivery_republishes_the_same_envelope_ids`, `tests::cursor_keys`. `AgentSeen` moved from the consumer to the agent store's outbox (staged by `create` from traffic and `attach_evidence`, memory reference changed to match), so a redelivery never loses it |
 | W3 | `feat/l4-pg-span-index` | `crates/provenance/**` | `SpanIndex` for `PgProvenanceStore`; `started_at` read; retention tests including token observations |
 | W4 | `feat/flow-checkpoint` | `crates/flow/**` (with `extract::step` moved in from the gateway, see below) | `0002_restart.sql`; outbox stamp + awaited sink; held writes; access sequence; checkpoint/restore; extraction ledger (memory + Pg); `Publisher` derived ids; restore DST |
 | W5 | `feat/l6-pg-topics-projections` | `crates/analysis/**` | `PgTopicCatalog`, `PgProjectionStore`, outbox stamp; model tests vs memory |
@@ -1400,7 +1400,7 @@ marked):
 | `crates/transport/src/pg/{mod,publish,subscribe,dead_letters,prune,stats}.rs` | `PgBus` | `PgBus`, `PgSubscription`, `PgDeadLetters`, `GroupStats`, `PgBusConfig` |
 | `crates/transport/src/spool/{mod,segment,record,cursor,drain,state}.rs` | the publish spool | `SpoolingBus`, `SpoolConfig`, `SpoolState`, `SpoolStats`, `SpoolError` (`Locked`, `Corrupt`, `Io`) |
 | `crates/testkit/src/db_link.rs` | a cuttable TCP relay to the test database | `DbLink` (`start`, `url`, `cut`, `restore`) |
-| `crates/reconstruct/migrations/0004_outbox_ids.sql`; `src/agents/writes.rs`; `src/thread/pg.rs` | stable outbox ids; `ExchangePlacements` | `PgConversations: ExchangePlacements` |
+| `crates/reconstruct/migrations/0005_outbox_ids.sql`; `src/agents/outbox.rs`; `src/publish.rs`; `src/thread/pg.rs`; `src/ids.rs` (W2, implemented) | stable outbox ids; `ExchangePlacements`; cursor keys from the secret | `PgConversations: ExchangePlacements`, `EventSink::stamp`, `Stamp`, `PgAgents::open_with_secret`, `cursor_key` |
 | `crates/provenance/src/store/pg.rs` | `SpanIndex`, `started_at` | `PgProvenanceStore: SpanIndex` |
 | `crates/flow/migrations/0002_restart.sql`; `src/store/outbox.rs`; `src/consumer/{checkpoint,restore,held}.rs`; `src/extract/{step,ledger}.rs` | checkpoint, held writes, ledger, extraction step | `Checkpoint`, `restore`, `ExtractionLedger`, `PgExtractionLedger`, `MemoryExtractionLedger`, `ExtractionStep` |
 | `crates/analysis/migrations/0003_outbox_ids.sql`, `0004_topics.sql`, `0005_projections.sql`; `src/topics/**`, `src/projections/**` | L6 stores | `PgTopicCatalog`, `PgProjectionStore` |
