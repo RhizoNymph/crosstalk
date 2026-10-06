@@ -34,6 +34,12 @@ datasets with corpus timestamps.
 - The consumer's config section (`FlowConfig`), with the settle window
   (`CorrelationTiming::settle_after`) derived from it, and the content
   retention (`ContentRetention`) bounding content-confirmed pairing.
+- Restart durability (P7.3, [postgres_stores.md](postgres_stores.md),
+  workstream W4): checkpoints of the shards with deferred acks, held writes
+  and tool calls kept as they are taken, the restore that re-feeds what the
+  checkpoint has not seen, envelope ids derived from the events, and the
+  durable hand-over from the extraction step (`FlowInputs`); see
+  [Restart durability](#restart-durability).
 
 ## Non-scope
 
@@ -51,9 +57,8 @@ datasets with corpus timestamps.
 - Wiring the consumer into `crosstalk_gateway::pipeline` (a later step).
   The consumer follows the exchange log's pattern: a group name, a subject
   list and a `run` over a `Subscription`.
-- Rebuilding correlator state after a restart. Evidence a shard held is
-  in memory; ids are derived, so replaying the inputs rebuilds the same
-  transmissions.
+- Wiring the durable consumer into the gateway (W8): the gateway's L5
+  stage still runs the volatile consumer and acks each delivery at once.
 - Correlation across processes: two consumer processes correlate their
   own inputs; the registry keeps one channel per resource between them.
 
@@ -183,6 +188,76 @@ a decision whose state is already stored goes on to the record and publish
 steps, so a step retried after its save committed completes. Events are
 published after the store write commits, in commit order.
 
+## Restart durability
+
+The consumer keeps what survives a restart in a `FlowDurability` port
+(`consumer::durability`): `Volatile` (memory mode: nothing survives, every
+delivery acked once its steps ran), `MemoryDurability` (the Postgres
+tables' model, for simulations) and `crate::store::PgFlowDurability`
+(migration `0003_restart.sql`). A consumer built with
+`FlowConsumer::with_durability` is durable; `FlowConsumer::new` stays
+volatile.
+
+```text
+extraction step ──deliver(batch)──▶ FlowInputs (DurableInputs: mpsc + oneshot reply)
+  handle_batch: Hold ─▶ FlowDurability::hold (held_writes row) ─▶ HeldWrites
+                Read / Write ─▶ add_resource, record_access (accesses.recorded_seq)
+                               ─▶ access_recorded (accesses.resolved_channel) ─▶ AccessRecorded ─▶ shards
+                Release / settle tick ─▶ record_access ─▶ Unhold (row deleted)
+                ToolCalled ─▶ tool_calls row ─▶ shards
+  reply Ok once the queue is empty, Backlogged otherwise (the caller retries its delta)
+bus delivery ─▶ handle_event ─▶ shards; the delivery stays unacked (durable)
+checkpoint (every checkpoint_every, or max_unacked deliveries waiting; only with an empty queue)
+  Shards::checkpoint ─▶ FlowDurability::save: one transaction writes every shard's
+  checkpoints row (format, shards, ticked_through, recorded_through = highest recording
+  number committed, state) and its shard_ticks row, and drops the tool calls it covers
+  ─▶ ack every delivery taken before it
+restore (start, before any input)
+  load: checkpoint, held writes, accesses and tool calls with recording number > recorded_through
+  Shards::restore (format or shard count it cannot read: FlowRestoreError::IncompatibleSnapshot)
+  held writes ─▶ HeldWrites (one whose access was re-fed: its row dropped)
+  re-feed in recording order: an access into the medium it was resolved to then
+  (hand-off to that channel first, AccessRecorded again, correlate); a tool call named again
+  ─▶ subscribe: the bus redelivers every unacked delivery
+```
+
+- **Snapshot.** Each shard's `CorrelatorState` (every field of a
+  `WindowedCorrelator` but its configuration: media, reads, uncarried,
+  timeless and direct matches, exchange starts, tool names, kinship, seen
+  accesses and matches, last tick) and the consumer's read routing for the
+  media whose home is that shard, as JSON (`SNAPSHOT_FORMAT` 1; maps as
+  lists of pairs). `Shards::restore` rebuilds exactly the shards a
+  checkpoint was taken from.
+- **Only when idle.** `FlowConsumer::checkpoint` refuses (`Busy`) while a
+  step waits in the queue: a decision stored but not published, or a held
+  write released but not dropped, would otherwise be covered and its
+  delivery acked.
+- **Re-feed in the recorded medium.** A channel transmission's id derives
+  from the medium it opened in, so a re-fed access must pair where it
+  first did. The consumer stores each access's resolution right after
+  recording it (`FlowDurability::access_recorded`); the restore re-feeds it
+  there, or resolves it again when the resolution was never stored.
+- **Repeated decisions.** `OpenChannel` for a stored transmission still
+  hands its resource's evidence to the stored channel; `Confirm` (or
+  `OpenConfirmed`) for a transmission stored confirmed with other content
+  extends it with the missing matches and republishes the stored
+  confirmation (`apply::reconfirm`), as the extensions the uninterrupted
+  consumer applied one by one.
+- **Hand-off carries exchange starts.** `WindowedCorrelator::absorb` learns
+  the start of every handed access's exchange and decides the matches
+  waiting for it, so a match routed to a channel shard before or after the
+  hand-off ends the same (found by the restart DST; no bench replay output
+  changed).
+- **Envelope ids** (`consumer::publish::envelope_id`): `AccessRecorded` per
+  access, `TransmissionConfirmed` and `TransmissionSuspected` per
+  transmission (one each; a repeat that saw more lands on the first's id),
+  `ChannelCrossAccessed` per co-access read and event digest; the envelope
+  `at` stays the clock's reading. `FlowDeps` no longer takes an entropy
+  seed.
+- **Reset** (`PgFlowDurability::reset_correlator`): empty shards at the
+  latest stored tick, covering everything recorded, under this binary's
+  format; what `crosstalk migrate --reset-correlator` runs (W8).
+
 ## Pairing rules and write outcomes
 
 Everything that decides whether evidence counts is in
@@ -256,24 +331,31 @@ TOML files use where they fit:
 | `crates/flow/src/correlate/ids.rs` | Derived ids | `Derive`, `transmission_id` |
 | `crates/flow/src/correlate/medium.rs` | One medium's evidence | `Medium` |
 | `crates/flow/src/correlate/decide.rs` | Pairing (access and content), opening and deciding channel transmissions | `pair`, `settle` |
-| `crates/flow/src/correlate/windowed.rs` | The shard's correlator | `WindowedCorrelator` (`new`, `with_retention`), `Decided`, `ReadPart`, `MediumEvidence`, `UNKNOWN_TOOL` |
-| `crates/flow/src/consumer/mod.rs` | The consumer: steps, events, ticks, run loop | `FlowConsumer`, `FlowDeps`, `GROUP`, `group`, `SUBJECTS` |
-| `crates/flow/src/consumer/input.rs` | The local input | `Extracted`, `Observed`, `WriteCall`, `ReadResult` |
+| `crates/flow/src/correlate/windowed.rs` | The shard's correlator | `WindowedCorrelator` (`new`, `with_retention`, `state`, `from_state`), `CorrelatorState`, `Decided`, `ReadPart`, `MediumEvidence`, `UNKNOWN_TOOL` |
+| `crates/flow/src/consumer/mod.rs` | The consumer: steps, events, ticks, batches, run loop with deferred acks | `FlowConsumer` (`new`, `with_durability`, `handle_batch`, `answer`, `run`), `FlowDeps`, `GROUP`, `group`, `SUBJECTS` |
+| `crates/flow/src/consumer/input.rs` | The local input and the extraction step's seam | `Extracted`, `Observed`, `WriteCall`, `ReadResult`, `ToolCalled`, `FlowInputs`, `NotDurable`, `DurableInputs`, `ExtractedBatch`, `InputSource` |
+| `crates/flow/src/consumer/durability.rs` | What survives a restart: the port | `FlowDurability`, `Volatile`, `MemoryDurability`, `Recovered`, `Recorded`, `Resolved`, `DurabilityError` |
+| `crates/flow/src/consumer/checkpoint.rs` | Snapshot types and errors | `Checkpoint`, `ShardSnapshot`, `StoredCheckpoint`, `SNAPSHOT_FORMAT`, `Incompatible`, `FlowRestoreError`, `CheckpointError` |
+| `crates/flow/src/consumer/restore.rs` | Checkpoint, restore, re-feed | `FlowConsumer::{checkpoint, restore}`, `Checkpointed`, `Restored` |
+| `crates/flow/src/correlate/snapshot.rs` | Serde for the correlator's state | `pairs`, `non_channel`, `timeless` |
 | `crates/flow/src/consumer/held.rs` | Writes held until their outcome | `HeldWrites` |
 | `crates/flow/src/consumer/shards.rs` | Shards and routing, handoff | `Shards` |
 | `crates/flow/src/consumer/resources.rs` | Resources and accesses | `resource_id` |
 | `crates/flow/src/consumer/apply.rs` | Decisions to stores and events | `discovered_channel_id` |
-| `crates/flow/src/consumer/publish.rs` | Envelopes on the injected clock | `Publisher`, `PublishError` |
+| `crates/flow/src/consumer/publish.rs` | Envelopes under ids derived from the event | `Publisher`, `PublishError`, `envelope_id` |
 | `crates/flow/src/consumer/settings.rs` | Config | `FlowConfig`, `Settings` (`content_retention` among them), `InvalidFlowConfig` (`ContentRetention` among them) |
 | `crates/flow/src/consumer/error.rs` | Step failures | `StepError` (`is_permanent`) |
 | `crates/flow/src/correlate/tests/` | Unit and property tests; shared fixtures | — |
 | `crates/flow/src/consumer/tests/` | Wiki scenario, rules, simulations | — |
+| `crates/flow/src/dst/` | Restart simulations and the checkpoint rules | — |
+| `crates/flow/src/integration/checkpoint.rs` | `PgFlowDurability` on Postgres | — |
 
 `FlowConfig` (`flow` section, milliseconds, every field defaulted):
 `{"correlation_window_ms": 600000, "evidence_window_ms": 120000,
 "suspected_ttl_ms": 1800000, "content_retention_ms": 2592000000,
-"shards": 1, "tick_ms": 1000}`; unknown fields are refused, zero durations
-and zero shards rejected, and a `content_retention_ms` shorter than
+"shards": 1, "tick_ms": 1000, "checkpoint_ms": 10000,
+"checkpoint_unacked": 512}`; unknown fields are refused, zero durations,
+zero shards and a zero `checkpoint_unacked` rejected, and a `content_retention_ms` shorter than
 `correlation_window_ms` rejected (`InvalidFlowConfig::ContentRetention`).
 `LiveConfig::flow` and the gateway config's `flow` section carry it
 unchanged.
@@ -301,6 +383,17 @@ unchanged.
 - New (INV-X): `flow.consumer.stored-transmission-never-regresses`,
   `flow.correlator.settles-on-the-injected-clock`,
   `flow.consumer.resource-evidence-follows-its-channel`.
+- Restart: `flow.consumer.restore-equivalent` (INV-1215, dst, flipped),
+  `flow.checkpoint.ticks-with-state` (INV-1216: checked after every DST
+  checkpoint; its Postgres evidence `integration::checkpoint` awaits a run
+  against node0), INV-1202's flow path
+  (`dst::redelivery_republishes_the_same_envelope_ids`). New (INV-X):
+  `flow.restore.refeed-in-recorded-medium`,
+  `flow.correlator.handoff-carries-exchange-starts`,
+  `flow.checkpoint.incompatible-refuses-start`,
+  `flow.consumer.acks-after-checkpoint`,
+  `flow.consumer.held-writes-survive-restart`. `PgShardTicks` has no
+  writer of its own: the checkpoint's transaction is the only one.
 - `flow.correlator.no-io` (INV-251) holds by construction (no clock, no
   store, no channel in `correlate/`); its lint does not exist yet, so its
   evidence is not flipped.
@@ -341,3 +434,19 @@ unchanged.
 - `consumer::tests::dst`: `crosstalk-sim` under paused time with matches
   and exchanges reordered, duplicated, dropped, redelivered and late, 24
   seeds each.
+- `dst`: a seeded scenario (five agents, one a sub-agent, three wiki pages,
+  held writes with and without results, late and repeated matches,
+  tool-result, user-turn and delegation matches, ticks every 5 s) run
+  uninterrupted and with crashes and outages (the bus and the durability
+  port refusing, so steps wait when the crash comes) at seeded points;
+  transmissions, recorded channel traffic and transmission events must be
+  equal (48 seeds by default, `CROSSTALK_FLOW_DST_SEEDS`; 600 passed);
+  checkpoints change no decision; every input handled twice publishes no
+  new envelope id. `dst::checkpoint`: exact snapshot round trip,
+  incompatible checkpoints, `Busy`, held writes and tool calls across a
+  restart, deferred acks in `run`, the checkpoint settings.
+- `integration::checkpoint` (Postgres): tick records never ahead of the
+  stored checkpoint through checkpoints and a reset; a restore reads back
+  held writes and exactly the inputs after the checkpoint, in recording
+  order, with their resolutions; a consumer restored over Postgres settles
+  a write held before its restart.

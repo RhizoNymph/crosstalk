@@ -31,7 +31,8 @@ use tokio::runtime::Handle;
 use tokio::sync::mpsc::unbounded_channel;
 
 use super::support::{Failure, SequenceIds, TestResult, db, reset};
-use crate::store::{EventSink, PgChannelRegistry, PgTransmissionStore};
+use crate::store::outbox::ChannelSink;
+use crate::store::{PgChannelRegistry, PgTransmissionStore};
 
 /// Cases and steps per model test. Every step reads the whole store back
 /// over the network, so fewer cases than the in-memory harnesses run.
@@ -93,7 +94,7 @@ async fn registry_case(
         pool,
         agents.clone(),
         Arc::new(SequenceIds(IdSequence::default())),
-        EventSink::new(sender),
+        ChannelSink::new(sender),
     )
     .await
     .map_err(|error| setup("open", error))?;
@@ -104,7 +105,7 @@ async fn verdict_case(pool: PgPool, ops: Vec<verdict_model::VerdictOp>) -> Resul
     reset(&pool).await.map_err(|error| setup("reset", error))?;
     let agents = registry_model::directory().await?;
     let (sender, events) = unbounded_channel();
-    let sut = PgTransmissionStore::new(pool, agents.clone(), EventSink::new(sender));
+    let sut = PgTransmissionStore::new(pool, agents.clone(), ChannelSink::new(sender));
     verdict_model::run_case(sut, events, agents, &ops).await
 }
 

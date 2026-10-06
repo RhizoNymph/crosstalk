@@ -13,7 +13,8 @@ use crosstalk_spec::interfaces::l5_flow::verdicts::{TransmissionVerdicts, Verdic
 use tokio::sync::mpsc::unbounded_channel;
 
 use super::support::{Failure, TestResult, agents, at, db, drain, ensure, same, transmissions};
-use crate::store::{EventSink, PgTransmissionStore};
+use crate::store::PgTransmissionStore;
+use crate::store::outbox::ChannelSink;
 
 fn stored(n: u8, state_number: u8) -> Result<Transmission, Failure> {
     Ok(Transmission {
@@ -176,7 +177,7 @@ async fn pg_outbox_keeps_events_until_relayed() -> TestResult {
     let (sender, receiver) = unbounded_channel();
     drop(receiver);
     let mut lost =
-        PgTransmissionStore::new(db.pool().clone(), agents().await?, EventSink::new(sender));
+        PgTransmissionStore::new(db.pool().clone(), agents().await?, ChannelSink::new(sender));
     lost.save(stored(0, 3)?)
         .await
         .map_err(|e| Failure::Unexpected(format!("{e:?}")))?;

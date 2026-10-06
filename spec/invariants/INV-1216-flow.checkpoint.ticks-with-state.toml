@@ -12,7 +12,7 @@ one transaction keeps them together.
 """
 
 [evidence]
-integration = "crosstalk_flow::integration::shard_ticks_never_ahead_of_checkpoint"
+integration = "crosstalk_flow::integration::checkpoint::shard_ticks_never_ahead_of_checkpoint"
 
 [evidence-review]
 integration = { agent = "false", human = "false" }

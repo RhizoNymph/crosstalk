@@ -10,9 +10,10 @@ use std::collections::BTreeMap;
 
 use crosstalk_spec::derived::flow::transmission::DelegationDirection;
 use crosstalk_spec::ids::AgentId;
+use serde::{Deserialize, Serialize};
 
 /// One agent as L3 resolves it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Kin {
     /// The canonical agent the id resolves to.
     pub canonical: AgentId,
@@ -31,8 +32,9 @@ impl Kin {
 }
 
 /// The agents the correlator knows, by the id their records carry.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Kinship {
+    #[serde(with = "super::snapshot::pairs")]
     agents: BTreeMap<AgentId, Kin>,
 }
 

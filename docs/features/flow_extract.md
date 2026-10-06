@@ -65,7 +65,11 @@ so locator equality is resource identity.
   (`cd -`), the home directory once an output shows it, and clones by
   remote name, learnt from `git clone`/`remote`/`config` and from the
   remote a push or pull prints. One per agent and conversation, kept by
-  the gateway's extraction step.
+  the extraction step's ledger.
+- The extraction step (`extract::step`, moved here from the gateway): each
+  conversation delta's tool calls and results as the flow consumer's
+  `Extracted` inputs, over a ledger (memory or Postgres) that commits a
+  delta's changes only once the consumer holds its inputs durably.
 - Which commands of a shell call ran, from the failures its output shows
   and the script's `&&`/`||`/`;`/`|` joins (`bash::evidence`): accesses of
   skipped commands, and reads of operands a reader could not open, are
@@ -159,7 +163,7 @@ extract_classified                                                     │
   dedupe ─▶ Vec<Classified> ◀──────────────────────────────────────────┘
   ResourceExtractor::extract ─▶ Classified::into_spec ─▶ ExtractedAccess
 
-consumer (gateway extract layer), per access:
+consumer (extract::step, run by the composer's L4 stage), per access:
   spans::write_spans(call part, writer, L4 spans, source agent)  ─▶ Vec<SpanId>
     WritePayload::Unseen (git push) ─▶ no spans
   spans::access_op(op, call part, result part, spans)             ─▶ AccessOp
@@ -361,6 +365,61 @@ repo/README.md` reads the repository file). A changed system prompt keeps
 what the context learnt (`ConversationContext::restate` only fills an
 unknown directory).
 
+### The extraction step and its ledger
+
+`extract::step::ExtractionStep<L, S, M>` is the step the gateway ran in
+`live/layers/extract.rs`, carried over unchanged (same pairing of results
+with calls, same contexts per agent and conversation, same access-id and
+delivery digests, domain strings included). It is generic over three
+ports, so `crosstalk-flow` depends on no other layer crate:
+
+- `ExtractionLedger` (`step::ledger`): what the step remembers between
+  deltas: contexts by (agent, conversation); pending calls by (agent, call
+  id), one per conversation, in the order made (`PendingCall`: the
+  conversation, the call-time context, the call, its held writes); history
+  calls by (conversation, call id); delivered results (`DeliveryKey`:
+  agent and BLAKE3 digest); and the exchanges whose delta committed
+  (`done`). `MemoryExtractionLedger` (the reference) and
+  `store::PgExtractionLedger` (migration `0004_extract_ledger.sql`)
+  implement it.
+- `SpanReader` (`exchange_spans`, `span_agent`) and `MessageReader`
+  (`message`): provenance's spans and the message bodies. The gateway
+  adapts `MemoryProvenanceStore` and `BlobMessages<LiveBlobs>`; W8 adapts
+  `PgProvenanceStore`.
+
+```text
+delta(delta, at, flow: impl FlowInputs)
+  ledger.done(exchange)? ─▶ AlreadyDone (nothing handed over)
+  extract(delta, at): every read and change through Working (a per-delta
+      overlay: reads see the delta's own changes; the ledger is untouched)
+      ─▶ (Vec<Extracted>, LedgerChanges)
+  flow.deliver(inputs)          Err(NotDurable) ─▶ ExtractStepError::Flow, nothing committed
+  ledger.commit(LedgerCommit { exchange, at, changes })   one transaction:
+      contexts (stamped at), pending lists rewritten whole, history put/taken,
+      delivered (stamped at, latest kept), extract_done(exchange, at)
+  ─▶ Extracted { inputs }
+expire(now, keep): delivered, contexts and done marks stamped before now - keep
+```
+
+The seam with L4 (`docs/features/postgres_stores.md`, "L5: flow
+checkpoint and restore"): the caller acks its delta only after `delta`
+returns `Ok`. A crash before the commit leaves the ledger as it was, so the
+redelivered delta extracts the same inputs (derived access ids), which the
+consumer takes idempotently; a crash after it finds the delta done. A
+failed message or span read also leaves the ledger untouched (the gateway's
+in-memory step had already changed its maps by then). The gateway's
+memory mode delivers into an `UnboundedSender<Extracted>`, which confirms
+at once; W8 wires the consumer's durable reply and calls `expire` on the
+L4 stage's tick with the content retention.
+
+Stored forms: a `ConversationContext` (with its `ShellState`, `Place`,
+`AbsolutePath`, `RepoBindings`, `RepoId`) is JSON, checked on the way back
+in (a non-canonical path, a home-relative place in a shell that knows its
+home, a repository id its locator does not name, more than `MAX_BINDINGS`
+or duplicate bindings are refused). A `ToolCall` has no serde form in the
+spec, so it is stored as the canonical encoding of an assistant message
+holding just that call (`ledger::stored_call`), decoded back exactly.
+
 ## Files
 
 | File | Role | Key exports |
@@ -395,7 +454,14 @@ unknown directory).
 | `extract/resource/key.rs` | MCP keys | `KeyCanon`, `KeyError` |
 | `extract/resource/repo.rs` | repositories and their threads | `RepoId` (`parse`, `forge`, `locator`, `forge_parts`, `file`), `ForgeRepo` (`thread`, `collection`), `ForgeStyle`, `ThreadKind`, `RepoBindings` (`bind`, `bind_remote`, `locate`, `locate_place`, `root_of`, `remote`, `resolve_home`), `ORIGIN`, `MAX_BINDINGS` |
 | `extract/tests/shell_state.rs` | the village's shell shapes: commands that never ran, printed remotes, persistent state | |
-| `crates/gateway/src/live/layers/extract.rs` | the extraction step: per agent and conversation contexts, observed after each result; a call's result extracted in its call-time context; no read of a result without text | `Extraction` |
+| `extract/step/mod.rs` | the extraction step: per agent and conversation contexts, observed after each result; a call's result extracted in its call-time context; no read of a result without text; the commit protocol | `ExtractionStep` (`new`, `ledger`, `delta`, `extract`, `expire`), `DeltaOutcome`, `ExtractStepError` |
+| `extract/step/ledger.rs` | the ledger port, its memory implementation and stored tool calls | `ExtractionLedger`, `MemoryExtractionLedger` (`state`), `LedgerState`, `LedgerCommit`, `LedgerChanges`, `PendingCall`, `DeliveryKey`, `LedgerError` |
+| `extract/step/ports.rs` | spans and message bodies | `SpanReader`, `MessageReader`, `PortError` |
+| `extract/step/working.rs` | one delta's overlay over the ledger | `Working` (crate) |
+| `extract/step/keys.rs` | access ids, delivery digests (pinned) | |
+| `extract/step/tests/` | the gateway's step cases on the memory ledger (`cases`), the commit protocol (`protocol`), context serde (`serde`), Postgres against memory (`pg`) over generated delta sequences (`script`) | |
+| `store/ledger.rs`, `migrations/0004_extract_ledger.sql` | the ledger on Postgres | `PgExtractionLedger` (`new`, `state`) |
+| `crates/gateway/src/live/layers/extract.rs` | adapter: the step over the memory ledger, the live blob store and provenance store, into the flow consumer's channel | `Extraction`, `ExtractStepError` (re-exported) |
 | `crates/eval/extract/ai-village.json` | the village's extractor configuration (`persistent_shells: ["bash"]`), for `ct-eval run --extract-config` | |
 | `extract/sites/mod.rs` | site rules | `SitesConfig`, `MediaWikiSite`, `HostPattern`, `SitePath`, `SiteAccess` |
 | `extract/sites/mediawiki.rs` | MediaWiki | `apply`, `canonical_title`, `page_locator` |
@@ -546,6 +612,12 @@ JSON, in the spec's conventions (snake_case keys, enums tagged
   home-normalized once the home is known, never invents a home, bounded,
   per agent), `flow.extract.read-locates-its-result` (the gateway's: a
   read names a result part of its exchange with text).
+- The extraction ledger changes only in `ExtractionLedger::commit`, once
+  per delta, after the flow side confirmed the delta's inputs; a delta
+  whose exchange is marked done hands nothing over. The Postgres ledger
+  agrees with the memory one on every generated delta sequence
+  (`extract::step::tests::pg`), and a refused delta retried hands over
+  what an unrefused run does (`extract::step::tests::protocol`).
 - A write whose content is not in the call (`WritePayload::Unseen`)
   carries no spans: a read of its resource is co-access evidence only.
 - Eval spec invariants tested here:
