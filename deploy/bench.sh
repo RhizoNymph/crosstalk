@@ -235,12 +235,33 @@ wait_caught_up() {
 # 7. The gateway's detections: the transmissions export and each one's
 # evidence, saved as export.jsonl and evidence.jsonl in the run directory.
 fetch_detections() {
-    local run="$1" quiet="${2:-0}"
-    compose --profile bench run --rm --no-deps -T bench \
+    local run="$1" quiet="${2:-0}" dir rc=0 out
+    dir="${here}/bench/${run}"
+    if [[ "$quiet" != 1 ]]; then
+        compose --profile bench run --rm --no-deps -T bench \
+            swarm-fetch --api "$bench_api_url" --token-env CROSSTALK_API_TOKEN \
+            --truth "/bench/${run}/truth.jsonl" --out "/bench/${run}" \
+            || bench_fail "ct-eval swarm-fetch failed; the detection state is still in crosstalk until it restarts"
+        return
+    fi
+    # Holdout: swarm-fetch's own output summarises the detector (rows per
+    # state), so it is not kept. fetch.log records only success, file names
+    # and byte sizes. On failure the output is kept in fetch.err for
+    # debugging: a failed fetch is not a usable holdout anyway.
+    out="$(compose --profile bench run --rm --no-deps -T bench \
         swarm-fetch --api "$bench_api_url" --token-env CROSSTALK_API_TOKEN \
-        --truth "/bench/${run}/truth.jsonl" --out "/bench/${run}" \
-        | bench_swarm_out "$quiet" "${here}/bench/${run}/fetch.log" \
-        || bench_fail "ct-eval swarm-fetch failed; the detection state is still in crosstalk until it restarts"
+        --truth "/bench/${run}/truth.jsonl" --out "/bench/${run}" 2>&1)" || rc=$?
+    if ((rc != 0)); then
+        printf '%s\n' "$out" >"${dir}/fetch.err"
+        echo "swarm-fetch failed (exit ${rc}); output in fetch.err" >"${dir}/fetch.log"
+        bench_fail "ct-eval swarm-fetch failed (exit ${rc}); see ${dir}/fetch.err (not a usable holdout run)"
+    fi
+    {
+        echo "swarm-fetch ok"
+        for f in export.jsonl evidence.jsonl; do
+            [[ -f "${dir}/${f}" ]] && echo "${f} $(wc -c <"${dir}/${f}") bytes"
+        done
+    } >"${dir}/fetch.log"
 }
 
 # After the export: copy the gateway's exchange log and blob store into the

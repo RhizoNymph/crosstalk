@@ -104,9 +104,15 @@ bash deploy/run.sh bench --yes --holdout --seed 1000002 --scenario boilerplate
   seed. The seed is recorded in `bench.env` (`seed=`, `holdout=1`).
 - **Stops after fetching.** Steps 1 to 7 run as usual (fresh world, swarm,
   watermark, export and evidence, snapshot of the exchange log and blobs);
-  step 8 (scoring) does not. There is no `report/`, no `score.txt`, and the
-  swarm's report and the fetch output go to `swarm.txt` and `fetch.log`
-  only, never the terminal. The bench prints the run id and its file list.
+  step 8 (scoring) does not. There is no `report/` and no `score.txt`.
+  `swarm.txt` holds the swarm's own report (generator traffic: sessions,
+  writes, reads, planted transmissions; nothing the gateway detected) and is
+  never echoed to the terminal. `swarm-fetch`'s output, which counts the
+  export's rows per state and so summarises the detector, is not kept:
+  `fetch.log` says only whether the fetch succeeded and the export and
+  evidence files' byte sizes. A failed fetch keeps its output in
+  `fetch.err` and the run is not a usable holdout. The bench prints the run
+  id and its file list.
 - **Where it goes.** On node0 the run is under `deploy/bench/holdout/<run>/`.
   Copy it to the bench machine's dataset root, outside every git repo,
   never under `bench-runs/`:
