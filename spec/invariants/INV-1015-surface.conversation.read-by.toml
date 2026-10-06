@@ -18,5 +18,5 @@ unit = [
 integration = "crosstalk_provenance::integration::reads::pg_readers_agree_with_memory"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }
 integration = { agent = "false", human = "false" }

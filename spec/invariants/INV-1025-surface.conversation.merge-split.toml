@@ -13,4 +13,4 @@ follow at once without rewriting history, as for every other read model.
 unit = "crosstalk_surface::tests::conversations::conversation_reads_follow_merges_and_unmerges"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }

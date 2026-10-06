@@ -234,3 +234,10 @@ recorded, not what was saved.
 - Integration (Postgres): `tests::registry` (one per registry invariant),
   `tests::concurrency` (discover races, declaration races),
   `tests::verdicts` (outbox, verdicts, at-least-once relay).
+
+## Transmission holding
+
+`TransmissionStore::holding` reads `flow.transmission_matches` (migration
+`0002_transmission_matches`): every content match a transmission holds,
+keyed as `MatchKey`, rewritten in `save`'s transaction and backfilled from
+the stored JSON. INV-1013.

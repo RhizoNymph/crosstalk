@@ -186,7 +186,7 @@ pub struct LiveReport {
 /// A running live process.
 pub struct Live {
     pipeline: Arc<LivePipeline>,
-    backend: InProcess<LiveBlobs>,
+    backend: InProcess<LiveBlobs, LayerStores>,
     context: StageContext,
     clock: LiveClock,
     activity: Activity,
@@ -230,7 +230,8 @@ impl Live {
         let bus = MpscBus::start(bus).map_err(LiveError::Bus)?;
         let (outbox, outboxed) = Outbox::channel();
         let (relay_events, relayed) = mpsc::unbounded_channel();
-        let backend = InProcess::start_with(
+        let layers = LayerStores::new(threading);
+        let backend = InProcess::start_with_reads(
             surface,
             Backbone {
                 bus: bus.clone(),
@@ -238,6 +239,7 @@ impl Live {
                 outbox,
                 events: relayed,
             },
+            layers.clone(),
         )
         .await?;
         let built = Pipeline::build(
@@ -250,7 +252,7 @@ impl Live {
         let activity = Activity::default();
         let context = StageContext {
             stores: backend.stores.clone(),
-            layers: LayerStores::new(threading),
+            layers,
             publisher: publisher.clone(),
             clock: reader,
             flow,

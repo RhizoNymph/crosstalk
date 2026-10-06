@@ -1,8 +1,12 @@
 //! L3: `crosstalk-reconstruct`'s consumer over the shared agent store and
-//! the live process's conversation store.
+//! the live process's conversation store. Each `ExchangeCaptured` is kept
+//! in L1's exchange store first, before it is threaded, so every turn the
+//! conversation reads list has its exchange record (in a live process the
+//! capture path publishes without an exchange store of its own).
 
 use std::sync::Arc;
 
+use crosstalk_canonical::exchanges::MemoryExchanges;
 use crosstalk_memory::reconstruct::MemoryAgents;
 use crosstalk_reconstruct::consumer::{ConsumerParts, ReconstructConsumer, subjects};
 use crosstalk_reconstruct::evidence::ChainEvidence;
@@ -10,8 +14,10 @@ use crosstalk_reconstruct::ids::UlidSource;
 use crosstalk_reconstruct::thread::{
     ConversationThreader, MemoryConversations, MessageReader, ReadsMembers,
 };
-use crosstalk_spec::events::{Envelope, Subject};
+use crosstalk_spec::events::ingest::IngestEvent;
+use crosstalk_spec::events::{BusEvent, Envelope, Subject};
 use crosstalk_spec::ids::{SeededRandom, UlidGenerator};
+use crosstalk_spec::interfaces::l1_canonical::exchanges::{ExchangeStore, StoredExchange};
 use crosstalk_transport::MpscBus;
 
 use crate::live::blobs::LiveBlobs;
@@ -25,6 +31,7 @@ type Consumer = ReconstructConsumer<MemoryAgents, Threader, LiveBlobs, ChainEvid
 /// The L3 slot's stage.
 pub struct Reconstruct {
     consumer: Consumer,
+    exchanges: MemoryExchanges,
 }
 
 impl Reconstruct {
@@ -43,6 +50,7 @@ impl Reconstruct {
             ids(0x3C0),
         );
         Self {
+            exchanges: ctx.layers.exchanges.clone(),
             consumer: ReconstructConsumer::new(ConsumerParts {
                 agents: ctx.stores.agents.clone(),
                 threader,
@@ -61,6 +69,17 @@ impl Stage for Reconstruct {
     }
 
     async fn handle(&mut self, envelope: &Envelope) -> Result<(), StageError> {
+        if let BusEvent::Ingest(IngestEvent::ExchangeCaptured(exchange)) = &envelope.event {
+            self.exchanges
+                .put(StoredExchange {
+                    exchange: exchange.as_ref().clone(),
+                    warnings: Vec::new(),
+                })
+                .await
+                .map_err(|error| StageError::Retry {
+                    reason: format!("exchange not stored: {error:?}"),
+                })?;
+        }
         self.consumer
             .handle(envelope)
             .await

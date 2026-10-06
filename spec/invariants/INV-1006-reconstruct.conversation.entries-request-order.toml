@@ -14,4 +14,4 @@ cannot say.
 unit = "crosstalk_reconstruct::tests::conversation_reads::turn_entries_keep_request_order_across_roles"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }

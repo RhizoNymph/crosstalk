@@ -699,3 +699,12 @@ feeder reads through it. `PgProvenanceStore` does not yet.
   fingerprints, not all its k-grams. Windows lying inside a text select the
   same k-grams in any text containing it, so boilerplate spans still read
   as frequent.
+
+## Conversation reads
+
+`store/reads.rs` serves the spec's `ProvenanceReads` over both stores
+(scan status, output spans of every origin with their state, relayed and
+forwarded ones included, matches by reader exchange, a span's readers
+newest first with keyed-tag cursors) and `SpanIndex` on
+`PgProvenanceStore`. See [conversation_reads.md](conversation_reads.md);
+INV-1012, 1014, 1015, 1023.

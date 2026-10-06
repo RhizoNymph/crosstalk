@@ -267,3 +267,8 @@ The dev-dependencies add `hyper`'s `server` feature, `http-body-util`'s
   test stub records requests over an `mpsc` channel.
 - **No `unwrap` or `expect` outside tests.** A `ReconnectPolicy::default`
   constant uses `unwrap_or`.
+
+## Conversation reads
+
+`HttpClient` implements the eight conversation methods over their routes
+([conversation_reads.md](conversation_reads.md)).

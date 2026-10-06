@@ -14,5 +14,5 @@ unit = "crosstalk_surface::tests::conversations::text_reads_need_content_and_rea
 integration = "crosstalk_api::http::integration::routes::every_route_refuses_a_caller_without_its_permission"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
-integration = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }
+integration = { agent = "true", human = "false" }

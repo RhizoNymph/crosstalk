@@ -13,4 +13,4 @@ misaligned read would put one message's text under another's marks.
 unit = "crosstalk_surface::tests::conversations::text_aligns_with_turns"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }

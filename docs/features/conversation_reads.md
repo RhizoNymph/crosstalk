@@ -65,7 +65,7 @@ where it deviates from that design (see "Deviations").
 | `conversation(id)` | `GET /conversations/{id}` | View | `Option<ConversationHead>` |
 | `conversation_turns(id, window)` | `GET /conversations/{id}/turns?window=` | View | `Option<TurnPage>` |
 | `span_readers(span, page)` | `GET /spans/{id}/readers?page=` | View | `Option<Page<Reader, SpanReaderList>>` |
-| `exchange_turns(ids)` | `POST /query/exchange-turns` (body: id array) | View | `BTreeMap<ExchangeId, TurnPoint>` |
+| `exchange_turns(ids)` | `POST /query/exchange-turns` (body: id array) | View | `BTreeMap<ExchangeId, ExchangePlacement>` (`{agent, conversation, turn}`, agent canonical at the read; unknown and unthreaded exchanges left out) |
 | `span_points(ids)` | `POST /query/span-points` (body: id array) | View | `BTreeMap<SpanId, SpanPoint>` |
 | `conversation_text(id, window, limit)` | `GET /conversations/{id}/text?window=&limit=` | Content | `Option<ConversationText>` |
 | `part_text(part, slice)` | `POST /query/part-text` (`{"part", "slice"}`) | Content | `Option<PartText>` |
@@ -132,7 +132,7 @@ Errors: `InputError::TextLimitOutOfRange { max, got }`,
 | --- | --- | --- |
 | `ExchangeStore` | `l1_canonical::exchanges` | `put(StoredExchange)` (idempotent by id, first kept) |
 | `ExchangeReads` | same | `exchanges(&IdBatch<ExchangeId>)`, `list(&ExchangeQuery { window }, &PageRequest<ExchangeList>)` |
-| `ConversationReads` | `l3_reconstruction::conversations` | `list(&ConversationQuery, page)`, `conversation(id)`, `successors(id)`, `turns(id, &TurnWindow) -> Option<TurnSlice>`, `locate(&IdBatch<ExchangeId>)`, `branch_turn(parent, shared_prefix)` |
+| `ConversationReads` | `l3_reconstruction::conversations` | `list(&ConversationQuery, page)`, `conversation(id)`, `successors(id)`, `turns(id, &TurnWindow) -> Option<TurnSlice>`, `locate(&IdBatch<ExchangeId>) -> BTreeMap<ExchangeId, ExchangePlacement>`, `branch_turn(parent, shared_prefix)` |
 | `ProvenanceReads: SpanIndex` | `l4_provenance::reads` | `output_spans(&IdBatch<ExchangeId>)`, `matches_read_in(&IdBatch<ExchangeId>)`, `readers(span, page) -> Option<ReaderPage>`, `scan_status(&IdBatch<ExchangeId>)` |
 | `TransmissionStore::holding` | `l5_flow::transmissions` | `holding(&BTreeSet<MatchKey>) -> BTreeMap<MatchKey, TransmissionId>` |
 
@@ -193,15 +193,17 @@ conversation_text(id, window, limit)
   require Content; same turns and entries; BlobStore::get; PartText::cut per part
 part_text(part, slice)
   require Content; BlobStore::get(part.message); PartText::cut
-exchange_turns(ids) → ConversationReads::locate
+exchange_turns(ids) → ConversationReads::locate + canonical(agent)
 span_points(ids)    → SpanIndex::spans + locate + canonical
 span_readers(span)  → ProvenanceReads::readers + locate + holding
 ```
 
 Writes:
 
-- Capture (L1) puts each exchange in the `ExchangeStore` before it
-  publishes `ExchangeCaptured`.
+- L1's `ExchangeStore` keeps each captured exchange. In the gateway's
+  live process the L3 stage puts each `ExchangeCaptured` exchange into it
+  before threading it (the capture path itself has no exchange store yet;
+  the serve-mode JSONL log stays as it was).
 - L3 threading records, in the same atomic step as the threading
   decision, each appended entry's `carried_over` flag and one turn row
   (conversation, turn, exchange, first ordinal, entry count, agent, start,
@@ -295,7 +297,34 @@ delegated-from, traffic-counts.
 13. `SpanReaderList`'s key is (reader exchange start, match id): a span can
     be matched several times in one reader exchange.
 14. `ConversationTraffic` counts content-holding transmissions only.
+15. `exchange_turns` returns `ExchangePlacement { agent, conversation,
+    turn }` (agreed with crosstalk-eval), not `TurnPoint`; L3's `locate`
+    returns the same type with the agent as recorded.
+16. `StoredExchange::warnings` are empty for exchanges the live process
+    keeps: `ExchangeCaptured` carries no normalizer warnings.
 
 ## Implementation
 
-Stage B (see the commit log of `feat/conversation-reads`).
+| File | Role |
+| --- | --- |
+| `crates/canonical/src/exchanges/{mod,pg,tests}.rs`, `migrations/0001_exchanges.sql` | `MemoryExchanges`, `PgExchanges` (schema `canonical`), keyed-tag cursors |
+| `crates/reconstruct/src/thread/{store,plan,memory,pg}.rs` | `ThreadInput::source`; `carried_over` decided by the compaction plan; one turn row per recorded outcome (memory and `conversation_turns`) |
+| `crates/reconstruct/src/thread/reads.rs`, `memory/reads.rs`, `pg/reads.rs` | `ConversationReads` on both stores; cursor tags over the query binding |
+| `crates/reconstruct/migrations/0004_conversation_reads.sql` | source, origin kind and link, times, turn count; `carried_over`; `conversation_turns` with a best-effort backfill (pre-existing turns get time 0) |
+| `crates/provenance/src/store/reads.rs` | `ProvenanceReads` on both stores, `SpanIndex` on `PgProvenanceStore`; readers paged newest first with keyed-tag cursors |
+| `crates/flow/src/store/transmissions.rs`, `migrations/0002_transmission_matches.sql` | `holding` over `flow.transmission_matches`, rewritten on every `save`, backfilled from stored JSON |
+| `crates/memory/src/flow/verdicts/mod.rs` | `holding` on `MemoryVerdicts` |
+| `crates/surface/src/stores.rs` | `SurfaceStores::{Exchanges, Conversations, Provenance}` |
+| `crates/surface/src/query/conversations/{mod,turns,marks,text}.rs` | the eight methods |
+| `crates/api/src/in_process/reads.rs` | `ConversationStores` (`MemoryStores<B, R = Unrecorded>`), `InProcess::start_with_reads` |
+| `crates/api/src/http/dispatch.rs`, `crates/client/src/query.rs`, `crates/conformance/src/routed.rs` | routes, client methods, forwarding |
+| `crates/gateway/src/live/{stage,mod}.rs`, `layers/l3.rs` | `LayerStores` (exchanges, conversations, provenance) shared by the stages and the surface |
+| `ui/src/backend/{dispatch,fixture/surface}.rs`, `ui/src/error.rs` | forwarding; the fixture answers empty after the permission check (phase B seeds it) |
+
+Tests: `crosstalk_reconstruct::tests::{conversation_reads,pg_conversation_reads}`,
+`crosstalk_provenance::tests::reads`, `crosstalk_provenance::integration::reads`,
+`crosstalk_canonical::exchanges::tests`, `crosstalk_flow::store::tests::holding`,
+`crosstalk_memory::flow::verdicts::tests::holding_finds_the_transmission_holding_each_match`,
+`crosstalk_surface::tests::conversations` (over `tests::conversation_fakes`),
+`crosstalk_gateway::live::tests::an_ingested_exchange_reads_back_as_a_conversation_turn`,
+and the api route cases and client calls for every new route.

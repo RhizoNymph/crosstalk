@@ -15,8 +15,8 @@ unit = [
     "crosstalk_reconstruct::tests::conversation_reads::turn_windows_are_clipped_to_the_turns_there_are",
     "crosstalk_surface::tests::conversations::turns_window_is_the_index_range",
 ]
-integration = "crosstalk_reconstruct::tests::pg_conversation_reads::pg_turn_windows_agree_with_memory"
+integration = "crosstalk_reconstruct::tests::pg_conversation_reads::pg_conversation_reads_agree_with_memory"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }
 integration = { agent = "false", human = "false" }

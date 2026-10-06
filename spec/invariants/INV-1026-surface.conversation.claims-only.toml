@@ -13,4 +13,4 @@ identity would let any client name itself as another harness.
 unit = "crosstalk_surface::tests::conversations::claims_come_from_the_turns_harness_claims"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }

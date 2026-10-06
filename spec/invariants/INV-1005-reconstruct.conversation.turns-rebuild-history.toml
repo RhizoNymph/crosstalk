@@ -13,4 +13,4 @@ no stored message is outside every turn and none is shown twice.
 property = "crosstalk_reconstruct::tests::conversation_reads::turns_rebuild_the_stored_history"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }

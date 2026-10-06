@@ -14,4 +14,4 @@ stored id alone would hide half a merged agent's history.
 unit = "crosstalk_surface::tests::conversations::list_follows_merges_and_unmerges"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }

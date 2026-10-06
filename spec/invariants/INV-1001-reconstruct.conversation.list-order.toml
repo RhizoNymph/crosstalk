@@ -11,8 +11,8 @@ skip or repeat conversations while new ones are threaded.
 
 [evidence]
 property = "crosstalk_reconstruct::tests::conversation_reads::list_traversal_matches_the_model"
-integration = "crosstalk_reconstruct::tests::pg_conversation_reads::pg_list_traversal_matches_memory"
+integration = "crosstalk_reconstruct::tests::pg_conversation_reads::pg_conversation_reads_agree_with_memory"
 
 [evidence-review]
-property = { agent = "false", human = "false" }
+property = { agent = "true", human = "false" }
 integration = { agent = "false", human = "false" }

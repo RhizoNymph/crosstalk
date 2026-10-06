@@ -13,7 +13,7 @@
 //! bounded by the retention.
 //!
 //! Each write also records its turn (the spec's `ConversationReads`, read
-//! in [`reads`]).
+//! in its `reads` submodule).
 
 mod reads;
 

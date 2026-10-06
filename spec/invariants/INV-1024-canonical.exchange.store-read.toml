@@ -12,9 +12,9 @@ proxy.
 """
 
 [evidence]
-unit = "crosstalk_memory::canonical::tests::exchange_store_keeps_the_first_put_and_lists_newest_first"
+unit = "crosstalk_canonical::exchanges::tests::exchange_store_keeps_the_first_put_and_lists_newest_first"
 integration = "crosstalk_canonical::exchanges::tests::pg_exchange_store_agrees_with_memory"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }
 integration = { agent = "false", human = "false" }
