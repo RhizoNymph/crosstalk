@@ -370,3 +370,210 @@ async fn futures_join<F: Future<Output = ()> + 'static>(tasks: Vec<F>) {
         })
         .await;
 }
+
+/// A bus that fails the publishes a seeded plan names, as a consumer that
+/// stops between its store writes and its publishes sees it, and records
+/// every envelope it was handed.
+#[derive(Debug, Clone, Default)]
+struct FlakyBus {
+    /// Every envelope handed over and accepted, duplicates included.
+    published: std::sync::Arc<std::sync::Mutex<Vec<crosstalk_spec::events::Envelope>>>,
+    /// Whether each next publish fails, in order; publishes past the plan
+    /// land.
+    plan: std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<bool>>>,
+}
+
+impl FlakyBus {
+    fn published(&self) -> Vec<crosstalk_spec::events::Envelope> {
+        self.published
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+}
+
+impl crosstalk_spec::interfaces::l2_transport::EventBus for FlakyBus {
+    type Subscription = super::rig::Silent;
+
+    async fn publish(
+        &self,
+        envelope: crosstalk_spec::events::Envelope,
+    ) -> Result<(), crosstalk_spec::interfaces::l2_transport::BusError> {
+        let fails = self
+            .plan
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .pop_front()
+            .unwrap_or(false);
+        if fails {
+            return Err(crosstalk_spec::interfaces::l2_transport::BusError::Disconnected);
+        }
+        self.published
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(envelope);
+        Ok(())
+    }
+
+    async fn subscribe(
+        &self,
+        _subjects: &[crosstalk_spec::events::Subject],
+        _group: crosstalk_spec::interfaces::l2_transport::ConsumerGroup,
+        _retry: crosstalk_spec::interfaces::l2_transport::RetryPolicy,
+    ) -> Result<super::rig::Silent, crosstalk_spec::interfaces::l2_transport::BusError> {
+        Ok(super::rig::Silent)
+    }
+}
+
+type FlakyConsumer = crate::consumer::ReconstructConsumer<
+    crosstalk_memory::reconstruct::MemoryAgents,
+    super::rig::Threader,
+    crosstalk_transport::blob::MemoryBlobStore,
+    crate::evidence::ChainEvidence,
+    crate::ids::UlidSource<crosstalk_spec::ids::mint::SeededRandom>,
+    FlakyBus,
+>;
+
+/// A consumer over fresh reference stores, publishing on `bus`, with the
+/// rig's id seeds and `rig`'s message bodies.
+fn flaky_consumer(rig: &Rig, bus: &FlakyBus) -> FlakyConsumer {
+    use crosstalk_memory::support::{IdSequence, Outbox};
+    let agents =
+        crosstalk_memory::reconstruct::MemoryAgents::new(IdSequence::default(), Outbox::none());
+    let threader = crate::thread::ConversationThreader::new(
+        MemoryConversations::new(),
+        std::sync::Arc::clone(&rig.scene.messages),
+        crate::thread::ReadsMembers(agents.clone()),
+        super::support::ulids(11),
+    );
+    crate::consumer::ReconstructConsumer::new(crate::consumer::ConsumerParts {
+        agents,
+        threader,
+        messages: std::sync::Arc::clone(&rig.scene.messages),
+        deriver: crate::evidence::ChainEvidence::default(),
+        agent_ids: super::support::ulids(13),
+        bus: std::sync::Arc::new(bus.clone()),
+    })
+}
+
+/// Deliver `order` to `consumer`; a delivery that fails is delivered again
+/// at a seeded later point, as the bus redelivers a nacked delivery.
+async fn deliver_until_handled(
+    rig: &mut Rig,
+    consumer: &mut FlakyConsumer,
+    exchanges: &[Exchange],
+    order: Vec<usize>,
+    rng: &mut SimRng,
+) -> Result<usize, CheckFailed> {
+    let mut queue: std::collections::VecDeque<usize> = order.into();
+    let mut failures = 0;
+    while let Some(n) = queue.pop_front() {
+        let envelope = rig.captured(&exchanges[n]);
+        match consumer.handle(&envelope).await {
+            Ok(_) => {}
+            Err(crate::consumer::ConsumeError::Publish(_)) => {
+                failures += 1;
+                let at = below(rng, queue.len() as u64 + 1) as usize;
+                queue.insert(at, n);
+            }
+            Err(error) => return Err(fail(format!("delivery failed: {error}"))),
+        }
+    }
+    Ok(failures)
+}
+
+/// `transport.consumer.derived-envelope-ids` for L3: deliveries whose
+/// publishes fail at seeded points (the consumer stopped after its writes)
+/// are redelivered until handled. Every envelope id carries one event,
+/// every exchange's delta is published under one id, and that id and every
+/// other id published are the ones an uninterrupted run over the same
+/// traffic publishes.
+#[test]
+fn redelivery_republishes_the_same_envelope_ids() {
+    sim_test(
+        "redelivery_republishes_the_same_envelope_ids",
+        &config(),
+        |ctx: SimCtx| async move {
+            let mut rig = Rig::new();
+            let exchanges = traffic(&mut rig, 8).await;
+            let mut rng = ctx.rng();
+            let order = schedule(&mut rng, exchanges.len());
+
+            let calm = FlakyBus::default();
+            let mut uninterrupted = flaky_consumer(&rig, &calm);
+            deliver_until_handled(
+                &mut rig,
+                &mut uninterrupted,
+                &exchanges,
+                order.clone(),
+                &mut rng,
+            )
+            .await?;
+
+            let flaky = FlakyBus::default();
+            {
+                let mut plan = flaky
+                    .plan
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                for _ in 0..64 {
+                    plan.push_back(below(&mut rng, 3) == 0);
+                }
+            }
+            let mut interrupted = flaky_consumer(&rig, &flaky);
+            let failures =
+                deliver_until_handled(&mut rig, &mut interrupted, &exchanges, order, &mut rng)
+                    .await?;
+            tracing::debug!(failures, "publishes failed and redelivered");
+
+            let contents = |envelopes: &[crosstalk_spec::events::Envelope]| {
+                let mut by_id: BTreeMap<EventId, BTreeSet<String>> = BTreeMap::new();
+                for envelope in envelopes {
+                    by_id
+                        .entry(envelope.id)
+                        .or_default()
+                        .insert(format!("{:?}", envelope.event));
+                }
+                by_id
+            };
+            let expected = contents(&calm.published());
+            let got = contents(&flaky.published());
+            for (id, events) in &got {
+                ctx.check(events.len() == 1, || {
+                    format!("{} carries {} events", id.ulid_text(), events.len())
+                })?;
+                ctx.check(expected.contains_key(id), || {
+                    format!(
+                        "{} is not an id the uninterrupted run published",
+                        id.ulid_text()
+                    )
+                })?;
+            }
+            let delta_ids = |envelopes: Vec<crosstalk_spec::events::Envelope>| {
+                let mut by_exchange: BTreeMap<ExchangeId, BTreeSet<EventId>> = BTreeMap::new();
+                for envelope in envelopes {
+                    if let BusEvent::Ingest(IngestEvent::ConversationDelta(delta)) = envelope.event
+                    {
+                        by_exchange
+                            .entry(delta.exchange)
+                            .or_default()
+                            .insert(envelope.id);
+                    }
+                }
+                by_exchange
+            };
+            let calm_deltas = delta_ids(calm.published());
+            let flaky_deltas = delta_ids(flaky.published());
+            ctx.check(flaky_deltas.len() == exchanges.len(), || {
+                "an exchange's delta was never published".to_owned()
+            })?;
+            ctx.check(flaky_deltas.values().all(|ids| ids.len() == 1), || {
+                format!("a delta was published under several ids: {flaky_deltas:?}")
+            })?;
+            ctx.check(flaky_deltas == calm_deltas, || {
+                "the deltas' ids differ from the uninterrupted run's".to_owned()
+            })?;
+            Ok(())
+        },
+    );
+}

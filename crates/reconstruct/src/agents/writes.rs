@@ -1,5 +1,6 @@
 //! The store's writes: the merge log, renames, the agent lifecycle, claims
-//! and activity, and the outbox they publish through.
+//! and activity. Each stages its events in the outbox (`super::outbox`) and
+//! relays them after the commit.
 
 use std::sync::Arc;
 
@@ -21,6 +22,7 @@ use crosstalk_store::{TxError, retry_serializable};
 use sqlx::PgConnection;
 
 use super::codec::{count, id_text, json, micros};
+use super::outbox::{self, Rows};
 use super::table::{Diff, Table, changed};
 use super::{PgAgents, load, resolve};
 use crate::error::{StorageFailure, StoreReason, TxFailure, tx};
@@ -107,77 +109,28 @@ async fn persist(conn: &mut PgConnection, table: &Table, diff: &Diff) -> Result<
     Ok(())
 }
 
-/// Append `events` to the outbox, returning their rows.
-pub(super) async fn outbox(
-    conn: &mut PgConnection,
-    events: &[BusEvent],
-) -> Result<Vec<i64>, TxFailure> {
-    let mut seqs = Vec::with_capacity(events.len());
-    for event in events {
-        let (seq,): (i64,) =
-            sqlx::query_as("INSERT INTO reconstruct.outbox (event) VALUES ($1) RETURNING seq")
-                .bind(json(event)?)
-                .fetch_one(&mut *conn)
-                .await?;
-        seqs.push(seq);
-    }
-    Ok(seqs)
-}
-
 impl<S, M> PgAgents<S, M>
 where
     S: EventSink,
     M: IdSource<MergeId> + 'static,
 {
-    /// Hand committed events to the sink, then delete their outbox rows. A
-    /// sink failure leaves the rows for [`PgAgents::flush_outbox`].
-    pub(super) async fn publish(&self, events: Vec<BusEvent>, seqs: Vec<i64>) {
-        if events.is_empty() {
+    /// Relay the outbox rows a committed write staged (`outbox::relay`). A
+    /// failure leaves them, stamped, for [`PgAgents::flush_outbox`].
+    pub(super) async fn publish(&self, seqs: Vec<i64>) {
+        if seqs.is_empty() {
             return;
         }
-        let count = events.len();
-        match self.sink.publish(events).await {
-            Ok(()) => {
-                let deleted = sqlx::query("DELETE FROM reconstruct.outbox WHERE seq = ANY($1)")
-                    .bind(&seqs)
-                    .execute(&self.pool)
-                    .await;
-                if let Err(error) = deleted {
-                    tracing::warn!(events = count, error = %error, "published outbox rows not deleted; they will be published again");
-                }
-            }
-            Err(error) => {
-                tracing::warn!(events = count, error = %error, "events not published; left in the outbox");
-            }
+        if let Err(error) = outbox::relay(&self.pool, &*self.sink, Rows::Staged(&seqs)).await {
+            tracing::warn!(events = seqs.len(), error = %error, "staged events not all published; left in the outbox");
         }
     }
 
-    /// Publish every event left in the outbox (a sink failed, or the
-    /// process stopped between a commit and its publish), oldest first.
-    /// Returns how many were published.
+    /// Relay every event left in the outbox (a sink failed, or the process
+    /// stopped between a commit and its publish), oldest first, each under
+    /// the envelope id it was stamped with, or a new stamp when it has
+    /// none. Returns how many were published.
     pub async fn flush_outbox(&self) -> Result<usize, StorageFailure> {
-        let rows: Vec<(i64, String)> =
-            sqlx::query_as("SELECT seq, event FROM reconstruct.outbox ORDER BY seq")
-                .fetch_all(&self.pool)
-                .await?;
-        let mut events = Vec::with_capacity(rows.len());
-        let mut seqs = Vec::with_capacity(rows.len());
-        for (seq, event) in rows {
-            events.push(super::codec::from_json("outbox.event", &event)?);
-            seqs.push(seq);
-        }
-        let published = events.len();
-        self.sink
-            .publish(events)
-            .await
-            .map_err(|error| StorageFailure::Blobs {
-                reason: format!("outbox not published: {error}"),
-            })?;
-        sqlx::query("DELETE FROM reconstruct.outbox WHERE seq = ANY($1)")
-            .bind(&seqs)
-            .execute(&self.pool)
-            .await?;
-        Ok(published)
+        outbox::relay(&self.pool, &*self.sink, Rows::All).await
     }
 
     /// Point the directory cache at what a committed merge or unmerge left.
@@ -201,7 +154,7 @@ where
                 let mut table = load::merge_table(conn).await.map_err(tx)?;
                 let applied = decide(&mut table).map_err(TxError::Abort)?;
                 persist(conn, &table, &applied.diff).await.map_err(tx)?;
-                let seqs = outbox(conn, &applied.events).await.map_err(tx)?;
+                let seqs = outbox::stage(conn, &applied.events).await.map_err(tx)?;
                 let pointers: Vec<(AgentId, Option<AgentId>)> = applied
                     .diff
                     .agents
@@ -220,9 +173,8 @@ where
         .await
         .map_err(ResolveError::from_tx)?;
         self.repoint_cache(&pointers);
-        let value = applied.value.clone();
-        self.publish(applied.events, seqs).await;
-        Ok(value)
+        self.publish(seqs).await;
+        Ok(applied.value)
     }
 }
 
@@ -278,14 +230,14 @@ where
                 }
                 let applied = table.rename(agent, label, by).map_err(TxError::Abort)?;
                 persist(conn, &table, &applied.diff).await.map_err(tx)?;
-                let seqs = outbox(conn, &applied.events).await.map_err(tx)?;
+                let seqs = outbox::stage(conn, &applied.events).await.map_err(tx)?;
                 Ok((applied, seqs))
             })
         })
         .await
         .map_err(ResolveError::from_tx)?;
         let change = applied.value;
-        self.publish(applied.events, seqs).await;
+        self.publish(seqs).await;
         Ok(change)
     }
 
@@ -372,17 +324,16 @@ where
             + 'static,
     {
         let write = Arc::new(write);
-        let (events, seqs) = retry_serializable(&self.pool, &self.retry, |conn| {
+        let seqs = retry_serializable(&self.pool, &self.retry, |conn| {
             let write = Arc::clone(&write);
             Box::pin(async move {
                 let events = write(&mut *conn).await?;
-                let seqs = outbox(conn, &events).await.map_err(tx)?;
-                Ok((events, seqs))
+                outbox::stage(conn, &events).await.map_err(tx)
             })
         })
         .await
         .map_err(AgentLifecycleError::from_tx)?;
-        self.publish(events, seqs).await;
+        self.publish(seqs).await;
         Ok(())
     }
 }

@@ -17,7 +17,8 @@ crate: it depends on `crosstalk-spec` and `crosstalk-store` only;
   (`evidence::scope`).
 - `PgAgents`: every L3 agent store trait on Postgres (`AgentDirectory`,
   `IdentityResolver`, `AgentLifecycle`, `ClaimStore`, `ActivityStore`,
-  `AgentReads`), with its migrations, outbox and directory cache.
+  `AgentReads`), with its migrations, outbox relay (stable envelope ids,
+  INV-1211) and directory cache.
 - Threading (`Threader`): `ConversationThreader` over a
   `ConversationStore` (`MemoryConversations`, `PgConversations`): prefix
   matching, forks and retries, compaction, WebSocket increment resolution,
@@ -27,7 +28,13 @@ crate: it depends on `crosstalk-spec` and `crosstalk-store` only;
   `MemoryConversations` also implements the spec's `ExchangePlacements`
   (an exchange's agent and conversation, as its recorded outcome placed
   it; `reconstruct.placement.as-threaded`), which `Live` exposes for
-  eval. `PgConversations` does not yet.
+  eval. `PgConversations` implements it too, from `thread_records`.
+- List cursor keys derived from the deployment secret
+  (`ids::cursor_key`, `KeyedHasher::derive_key` under
+  `crosstalk.cursor.v1.agents` and `crosstalk.cursor.v1.conversations`;
+  `PgAgents::open_with_secret`, `with_cursor_secret` on both conversation
+  stores), so list cursors survive a restart (decision Q4 of
+  [postgres_stores](postgres_stores.md)).
 - The L3 bus consumer (`consumer`): `ExchangeCaptured` in; attribution,
   claims and activity, threading; `AgentSeen` and `ConversationDelta` out.
 
@@ -87,7 +94,8 @@ Tables in schema `reconstruct` (`migrations/0001_agents.sql`): `agents`
 (one row per item, the wire JSON as lookup key, its variant tag),
 `merges` (record JSON, one open record per source), `vetoes`, `claims`
 (per attributed agent and claim, latest time by `GREATEST`), `activity`,
-`outbox`.
+`outbox` (with `envelope_id` and `at` since `0005_outbox_ids.sql`, both
+or neither: `outbox_stamped`).
 
 - Merges and unmerges run `SERIALIZABLE` (`retry_serializable`): the
   agent table, merge log and vetoes are read in one statement into an
@@ -97,9 +105,20 @@ Tables in schema `reconstruct` (`migrations/0001_agents.sql`): `agents`
 - Lifecycle writes (`create`, `advance`, `attach_evidence`) are targeted
   `SERIALIZABLE` transactions; `create` from traffic and `FirstTraffic`
   record activity in the same transaction.
-- After commit: the directory cache is repointed, then the events go to
-  the `EventSink` and their outbox rows are deleted; a sink failure leaves
-  them for `flush_outbox`.
+- After commit: the directory cache is repointed, then the write's outbox
+  rows are relayed (`agents::outbox::relay`, INV-1211):
+  1. a transaction of its own takes the rows (`FOR UPDATE SKIP LOCKED`, in
+     `seq` order), stamps each row without an envelope id with
+     `EventSink::stamp` (an id and time from the injected clock and a ULID
+     generator in `BusSink`), and commits;
+  2. each row is published as an `Envelope` under its stamp, in `seq`
+     order, awaiting `EventSink::publish` (`BusSink`: `EventBus::publish`);
+  3. the published rows are deleted.
+  A failure or a stop anywhere leaves the rows, stamped once step 1
+  committed; `flush_outbox` (run at start, before the stage subscribes)
+  relays every row left, in batches of 256, under the ids they carry. A
+  bus idempotent on ids (`PgBus`) therefore holds each event once; an
+  uncommitted row is never seen by a relay.
 - Reads (`list`, `cluster`, `names`) take one snapshot statement of every
   table (JSON aggregates, one round trip) and build the read models with
   the spec's checked constructors. List cursors are `<last id>_<tag>`, the
@@ -206,19 +225,20 @@ stable per-corpus API key.
 | `crates/reconstruct/src/lib.rs` | Crate root | modules |
 | `src/evidence/mod.rs` | Evidence derivers | `ApiKeyEvidence`, `HeaderEvidence`, `PromptFingerprintEvidence`, `ChainEvidence`, `parent_agent_evidence`, `session_evidence` |
 | `src/evidence/scope.rs` | Identity scope and caller evidence | `CallerScope`, `scope_of`, `caller_evidence` |
-| `src/ids.rs` | Id sources and derived envelope ids | `IdSource`, `UlidSource`, `derived_event_id` |
-| `src/publish.rs` | Event sinks | `EventSink`, `BusSink`, `SinkError` |
+| `src/ids.rs` | Id sources, derived envelope ids, cursor keys from the deployment secret | `IdSource`, `UlidSource`, `derived_event_id`, `cursor_key`, `AGENTS_CURSOR_LABEL`, `CONVERSATIONS_CURSOR_LABEL` |
+| `src/publish.rs` | Event sinks: stamp, then publish awaited | `EventSink` (`stamp`, `publish`), `Stamp`, `BusSink`, `SinkError` |
 | `src/error.rs` | Storage failures to spec errors | `StorageFailure`, `StoreReason` |
-| `src/agents/mod.rs` | The Postgres agent store | `PgAgents` (`open`, `with_retry`, `reload_directory`, `apply_event`, `members`, `flush_outbox`), `MIGRATIONS`, `run_migrations` |
+| `src/agents/mod.rs` | The Postgres agent store | `PgAgents` (`open`, `open_with_secret`, `with_retry`, `reload_directory`, `apply_event`, `members`, `flush_outbox`), `MIGRATIONS`, `run_migrations` |
 | `src/agents/table.rs` | Merge-log decisions and read models over loaded rows | `Table`, `Diff`, `Applied` (crate) |
-| `src/agents/{load,writes,resolve,reads,cache,codec}.rs` | Snapshot loading; writes and outbox; `resolve`; `AgentReads`; directory cache; column codecs | — |
+| `src/agents/{load,writes,resolve,reads,cache,codec}.rs` | Snapshot loading; writes; `resolve`; `AgentReads`; directory cache; column codecs | — |
+| `src/agents/outbox.rs` | Staging and the relay (stamp, publish, delete) | `stage`, `relay`, `Rows` (crate) |
 | `src/thread/mod.rs` | The threader | `ConversationThreader`, `ClusterMembers`, `ReadsMembers`, `outcome_kind` |
 | `src/thread/{history,plan,store}.rs` | Chain hashes and request analysis; the decision (including the seen-elsewhere filter); the store trait and its input | `Entry`, `ChainHash`, `ConversationStore`, `ThreadInput` (with `at`), `RequestKind`, `ResponseKey`, `TranscriptEntry` |
 | `src/thread/config.rs` | Typed threading configuration | `ThreadConfig`, `SeenRetention`, `ThreadConfigError`, `DEFAULT_SEEN_RETENTION` |
-| `src/thread/{memory,pg}.rs` | Conversation stores, each with its seen-message set | `MemoryConversations` (`new`, `with_config`), `PgConversations` (`new`, `with_retry`, `with_config`, `forget_seen`) |
+| `src/thread/{memory,pg}.rs` | Conversation stores, each with its seen-message set | `MemoryConversations` (`new`, `with_config`, `with_cursor_key`, `with_cursor_secret`), `PgConversations` (`new`, `with_retry`, `with_config`, `with_cursor_key`, `with_cursor_secret`, `forget_seen`); both `ExchangePlacements` |
 | `src/thread/messages.rs` | Message bodies and facts | `MessageReader`, `Facts`, `DEFAULT_SUMMARY_PREAMBLES` |
 | `src/consumer/{mod,attribute}.rs` | The bus consumer | `ReconstructConsumer`, `ConsumerParts`, `Handled`, `ConsumeError`, `run`, `group`, `subjects`, `GROUP`, `attribute`, `derive_parent`, `corroborated` |
-| `crates/reconstruct/migrations/000{1,2,3}_*.sql` | Schema `reconstruct`: agents, conversations, seen messages | — |
+| `crates/reconstruct/migrations/000{1,2,3,4,5}_*.sql` | Schema `reconstruct`: agents, conversations, seen messages, conversation reads, outbox stamps | — |
 | `src/tests/` | Tests by area (paths below) | — |
 | `src/tests/refresh.rs` | A rotating (OAuth) credential refreshed inside one harness session keeps the agent and its conversation; two sessions on one token are two agents (INV-1157, [claude_code_oauth](claude_code_oauth.md)) | — |
 
@@ -241,7 +261,21 @@ stable per-corpus API key.
   `tests::table`: derivation, attribution, parents, conflicts, merges and
   conversations, the store's decisions without a database.
 - `tests::dst`: `crosstalk-sim` schedules of duplicate and reordered
-  deliveries, a secret rotation, and concurrent threaders.
+  deliveries, a secret rotation, and concurrent threaders; and
+  `redelivery_republishes_the_same_envelope_ids` (INV-1202): publishes
+  failing at seeded points, the delivery redelivered until handled, every
+  id carrying one event and every id one an uninterrupted run publishes.
+- `tests::cursor_keys`: cursor keys stable per secret and label; a
+  conversation list cursor resolves on a store handle keyed from the same
+  secret and is refused under another.
+- `tests::pg_outbox` (gated): the relay's crash points (failure before and
+  after publishing, a dropped relay, a store opened anew) publish each
+  staged event once under its stamped id (INV-1211); an uncommitted row is
+  never relayed; stamps increase; an agents list cursor keyed from the
+  secret resolves after a reopen and is refused under another secret.
+- `tests::pg_placement` (gated): `ExchangePlacements` on `PgConversations`
+  against `MemoryConversations` on generated scripts, every third exchange
+  unthreaded.
 - `tests::pg_agents`, `tests::pg_props`, `tests::pg_threads` (gated on
   `TEST_DATABASE_URL`, at most three databases at a time): the model test
   against `crosstalk-memory`'s reference (`check_agent_store_with`),
@@ -269,8 +303,20 @@ stable per-corpus API key.
   a conversation's history is its deltas' request suffixes, not their
   new inputs alone (INV-152, 390).
 - Evidence paths: `crosstalk_reconstruct::tests::<area>::<fn>`.
+- Every outbox event is published under the envelope id stamped on its
+  row before its first publish, and only after the staging transaction
+  committed (INV-1211). Envelopes the consumer publishes have ids derived
+  from the exchange (INV-1202).
+- Known gap: an `AgentSeen` whose publish fails after its evidence was
+  attached is not republished on redelivery (the redelivery finds the
+  evidence held and announces nothing). The redelivery DST checks ids, not
+  this completeness. Closing it needs the announcement staged with the
+  attach (a store outbox event), which changes the reference store's
+  events.
 - Not yet evidenced (still `agent = "false"`): the store-level `dst`
-  invariants INV-141, 144, 161, 508, 540, 608, 612.
+  invariants INV-141, 144, 161, 508, 540, 608, 612; INV-1211 and
+  INV-1202 (their reconstruct tests exist; the Postgres test has not run
+  here, and INV-1202's `dst` flag covers five consumers).
 
 ## Conversation reads
 

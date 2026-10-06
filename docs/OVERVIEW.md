@@ -1285,9 +1285,11 @@ Features Index:
       (evidence::scope, ready for per-corpus replay scoping); PgAgents,
       every L3 agent store trait on Postgres (merge log with exact unmerges,
       vetoes, renames, resolve, lifecycle, claims, activity, reads; an
-      outbox; an in-process directory cache), model-tested against
+      outbox whose relay stamps each row with its envelope id and time
+      before the first publish, INV-1211; an in-process directory cache;
+      list cursor keys derived from the deployment secret), model-tested against
       crosstalk-memory; ConversationThreader over MemoryConversations or
-      PgConversations (prefix chains, forks, compaction from summary
+      PgConversations (both serve ExchangePlacements; prefix chains, forks, compaction from summary
       turns, WebSocket increment resolution scoped by upstream and identity
       scope, system turns anywhere, every message kept in order under an
       ordinal, a per-agent seen-message set within a configured retention
