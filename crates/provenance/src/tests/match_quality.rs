@@ -640,11 +640,24 @@ async fn template_skeleton_with_other_slot_words_is_not_matched() {
             "backfill lag",
             "lock time",
         ),
+        // The fourth writer's "For cache invalidation, {c} matters more
+        // than" fill was "purge queue", the read's own fill: the read then
+        // shared a slot-filled run ("n, purge queue matters more than")
+        // with that writer alone, not only skeleton. Before coincident
+        // template stretches stayed the writer's own
+        // (`provenance.span.coincident-template-originated`), that k-gram
+        // straddled a relay's end and was posted under nobody, so the test
+        // never saw it. Holders count by fingerprint, so making the words
+        // common in the chatter cannot make a one-writer run boilerplate:
+        // the fill is now "versioned keys", and the read shares only the
+        // skeleton with every writer, as the test means. A shared slot
+        // fill matches its writer by design
+        // (`a_template_sentence_with_a_unique_slot_fill_matches_its_writer`).
         (
             "cache invalidation",
             "ttl jitter",
             "purge queue",
-            "purge queue",
+            "versioned keys",
         ),
         ("queue sharding", "rebalancing", "hot keys", "ordering"),
     ];
@@ -675,6 +688,58 @@ async fn template_skeleton_with_other_slot_words_is_not_matched() {
         brief_matches(&matches)
     );
     assert!(matches.is_empty(), "{}", brief_matches(&matches));
+}
+
+/// `provenance.span.coincident-template-originated`, its tradeoff stated
+/// as a test: a template sentence whose slot fill no other writer chose
+/// ("purge queue retention windows", at least the short-span floor of 24
+/// characters) is the writer's own, and a reader of another page holding
+/// the same fill matches that writer, even though the sentence's skeleton
+/// is everywhere. Before, the skeleton around the fill was relayed to the
+/// first writer, and the fill, between two relays, was posted under
+/// nobody.
+#[tokio::test]
+async fn a_template_sentence_with_a_unique_slot_fill_matches_its_writer() {
+    let mut world = World::new(real(50));
+    chatter(&mut world, &COMMON, 30, 1).await;
+    let sentence = |a: &str| {
+        format!(
+            "Our notes on cache invalidation still say write-through is fine; that is no \
+             longer true. For cache invalidation, {a} matters more than ttl jitter at our \
+             current scale."
+        )
+    };
+    let mut writers = Vec::new();
+    for (n, fill) in [
+        "stale reads",
+        "write-through",
+        "stampede",
+        "purge queue retention windows",
+    ]
+    .iter()
+    .enumerate()
+    {
+        let agent = world.agent();
+        writers.push(agent);
+        super::scenarios::originate(&mut world, agent, &sentence(fill), 1 + 120 * n as u64).await;
+    }
+    let chooser = writers[3];
+    let reader = world.agent();
+    let read = world
+        .run(Turn::new(reader, at(1000)).input(tool_result(
+            "call_1",
+            "Nobody owns write-through yet. For cache invalidation, purge queue retention \
+             windows matters more than write-through at our current scale.",
+        )))
+        .await;
+    let matches = world.matches_of(read.exchange);
+    assert!(
+        matches
+            .iter()
+            .any(|stored| stored.content.origin_agent() == chooser),
+        "{}",
+        brief_matches(&matches)
+    );
 }
 
 /// A distinctive passage of 64 characters or more inside a templated page

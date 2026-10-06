@@ -745,10 +745,13 @@ feeder reads through it. `PgProvenanceStore` answers the same through
 
   One more `ReaderOutput` false match on each held-out boilerplate run (a
   73- and a 91-character coincident sentence); no new channel false match
-  on held-out runs. **Tradeoff:** a slot-filled fragment only one writer
-  wrote (`template_skeleton_with_other_slot_words_is_not_matched`'s
-  "n, purge queue matters more than") is now indexed under it and matched
-  where read; before it straddled a relay's end and was posted under nobody.
+  on held-out runs. **Tradeoff:** a slot fill only one writer chose is
+  now indexed under it and matched where read
+  (`a_template_sentence_with_a_unique_slot_fill_matches_its_writer`);
+  before it sat between relays or straddled a relay's end and was posted
+  under nobody. `template_skeleton_with_other_slot_words_is_not_matched`
+  had a writer share the read's own slot fill; its world now uses another
+  fill, so the read shares only skeleton.
 - **Bench run 20261006T021639Z** (boilerplate, staging 8090af0, 135
   negative controls): 7 `Channel` / `ToolResult` / `Exact` false matches
   of 32 to 46 bytes besides the 15 `ReaderOutput` ones. Each is a short

@@ -26,7 +26,7 @@ nobody because it straddled a relay's end.
 """
 
 [evidence]
-unit = ["crosstalk_provenance::tests::bench_verbatim_template::a_verbatim_template_page_matches_its_writer_cache_2", "crosstalk_provenance::tests::bench_verbatim_template::a_verbatim_template_page_matches_its_writer_rate_0", "crosstalk_provenance::tests::bench_verbatim_template::a_verbatim_template_page_matches_its_writer_cache_10", "crosstalk_provenance::tests::bench_verbatim_template::earlier_template_holders_are_not_matched_by_the_pages_reader", "crosstalk_provenance::tests::bench_verbatim_template::coincident_stretches_are_relayed_when_no_rare_token_is_required", "crosstalk_provenance::tests::match_quality::short_distinctive_broadcast_matches_the_first_writer"]
+unit = ["crosstalk_provenance::tests::bench_verbatim_template::a_verbatim_template_page_matches_its_writer_cache_2", "crosstalk_provenance::tests::bench_verbatim_template::a_verbatim_template_page_matches_its_writer_rate_0", "crosstalk_provenance::tests::bench_verbatim_template::a_verbatim_template_page_matches_its_writer_cache_10", "crosstalk_provenance::tests::bench_verbatim_template::earlier_template_holders_are_not_matched_by_the_pages_reader", "crosstalk_provenance::tests::bench_verbatim_template::coincident_stretches_are_relayed_when_no_rare_token_is_required", "crosstalk_provenance::tests::match_quality::short_distinctive_broadcast_matches_the_first_writer", "crosstalk_provenance::tests::match_quality::a_template_sentence_with_a_unique_slot_fill_matches_its_writer"]
 integration = "crosstalk_provenance::integration::rules::pg_coincident_templates_agree_with_memory"
 
 [evidence-review]
