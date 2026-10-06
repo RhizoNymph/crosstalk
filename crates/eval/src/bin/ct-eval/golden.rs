@@ -232,7 +232,7 @@ pub fn manifest_spec(args: &SourceArgs, source: &AnySource) -> Result<ManifestSp
 /// Who wrote a run's predictions: the detector, the crosstalk commit, and
 /// the setting gates select on.
 pub fn detector_info(args: &RunArgs) -> DetectorInfo {
-    let version = manifest::crosstalk_commit().unwrap_or_else(|| manifest::UNKNOWN.to_owned());
+    let version = manifest::CROSSTALK_COMMIT.to_owned();
     let (name, variant) = match args.detector {
         DetectorChoice::Reference => {
             let config = args.matcher.config();

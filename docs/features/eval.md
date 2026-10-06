@@ -341,6 +341,7 @@ read it as a fetch, for `ct-eval run --extract-config` once the gateway's
 | `src/datasets/wiki/` | collusion-wiki as a `TraceSource` (see below) | `WikiSource`, `WikiSelection` (`demo`), `tools`, `DATASET` |
 | `src/datasets/swarm/` | swarm-traces as a `TraceSource` (see below) | `SwarmSource`, `SwarmSelection`, `codec::decode`, `ChainTally`, `DATASET` |
 | `src/bin/ct-eval/main.rs` | CLI | `run`, `truth` |
+| `build.rs` | records the crosstalk commit (`CROSSTALK_EVAL_GIT`) the golden export's manifest names | |
 | `src/golden/` | the golden export (below) | `export`, `WorldExport`, `GoldenRun`, `ExportWriter`, `PredictionsWriter`, `ManifestSpec`, `verify`, `Gap`, `Lossy`, `GoldenError`, `swarm::export` |
 | `src/bin/ct-eval/golden.rs` | `export`, `run --predictions-out`, `verify` | `ExportArgs`, `manifest_spec`, `detector_info` |
 | `datasets.toml` | dataset root and paths | |
@@ -749,8 +750,12 @@ whose detection or predictions failed `failed { reason }` and no rows.
   `a2a-bench/1 source`) over the files read: SALT's selected trace files,
   every file under the dataset's directory for the others (`.git` and
   `.cache` skipped), in byte order of their `/`-separated relative paths;
-  the converter (crate version, crosstalk commit read from the checkout's
-  `.git`); the selection flags that apply to the dataset (a repeatable
+  the converter (crate version, and the crosstalk commit the binary was
+  built from: `build.rs` records `git rev-parse HEAD`, with `-dirty` when
+  tracked files differ from it, as `CROSSTALK_EVAL_GIT`, read with `env!`
+  into `manifest::CROSSTALK_COMMIT`; `unknown` without git, never a build
+  failure; the script reruns when `HEAD`, its ref, the packed refs or the
+  index change, so an edit nobody staged keeps the last recorded state); the selection flags that apply to the dataset (a repeatable
   flag as one list); the pace (seed, min, max) for datasets the virtual
   clock paces; per world its exchanges, its label rows and its `notes`;
   the three files' digests.
@@ -796,7 +801,11 @@ dropped swarm transmissions and swarm agent conflicts.
   (`WorldInputs::new`, `check_labels`, `check_predictions`) before a
   command succeeds; `verify` re-reads every file through its framing.
 - The same selection gives the same manifest whether the export is
-  written or not, and the same bytes on rerun (tested).
+  written or not, and the same bytes on rerun (tested). `converter.git`
+  is fixed when the binary is built, so an export and a run by one binary
+  name the same manifest whatever the checkout's HEAD is when they run
+  (tested in one process). A predictions file's `detector.version` is the
+  same commit.
 - Every label's content text is the text at its location in the exported
   message's part text, and every exported message's part text is the
   spec's (tested).
