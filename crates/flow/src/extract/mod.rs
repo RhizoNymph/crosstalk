@@ -39,6 +39,7 @@ pub mod outcome;
 pub mod resource;
 pub mod sites;
 pub mod spans;
+pub mod step;
 
 #[cfg(test)]
 mod fuzz;
