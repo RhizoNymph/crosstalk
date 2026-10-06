@@ -71,7 +71,7 @@ fn text_part(text: TextView, marks: Vec<MarkView>) -> PartView {
 }
 
 fn inbound() -> MarkView {
-    MarkView::Inbound(InboundView {
+    MarkView::Inbound(Box::new(InboundView {
         from: named("al0"),
         route: Some("wiki.example.org".into()),
         route_url: Some("/channels/W".into()),
@@ -83,7 +83,7 @@ fn inbound() -> MarkView {
         transmission: Some(link("transmission …T", "/transmissions/T")),
         state: Some("confirmed".into()),
         delegation: None,
-    })
+    }))
 }
 
 fn originated(readers: usize, more: u32) -> MarkView {

@@ -273,6 +273,7 @@ impl Conversations {
     }
 
     /// The named cases; `None` only before [`build`].
+    #[cfg(test)]
     pub fn cases(&self) -> Option<&Cases> {
         self.cases.as_ref()
     }

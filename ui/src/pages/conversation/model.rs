@@ -250,7 +250,7 @@ pub fn segments(from: u32, text: &str, marks: &[Marked]) -> Vec<Segment> {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum MarkView {
     /// Text another agent originated, read in this part.
-    Inbound(InboundView),
+    Inbound(Box<InboundView>),
     /// Text this agent originated, and who read it later.
     Originated(OriginatedView),
     /// Text this agent copied from a span or an input.

@@ -329,7 +329,7 @@ async fn text_run(segment: Segment) -> Result<impl View> {
 async fn mark_row(mark: MarkView) -> Result<impl View> {
     Ok(view! {
         match mark {
-            MarkView::Inbound(inbound) => inbound_row(mark: inbound),
+            MarkView::Inbound(inbound) => inbound_row(mark: *inbound),
             MarkView::Originated(originated) => originated_row(mark: originated),
             MarkView::Relayed(relayed) => relayed_row(mark: relayed),
         }

@@ -15,6 +15,7 @@
 //! twenty turns from a multiple of twenty.
 
 use crosstalk_spec::ids::SpanId;
+use crosstalk_spec::interfaces::l8_surface::conversation::{CorpusId, OriginKind, ReplayFilter};
 use topcoat::router::query_params;
 
 use crate::error::UiError;
@@ -131,35 +132,24 @@ pub struct RawListQuery {
     pub replay: Option<String>,
 }
 
-/// How a conversation began.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum OriginChoice {
-    Root,
-    Fork,
-    Compaction,
+/// The origins the list filters on, in the spec's `OriginKind`.
+pub const ORIGINS: [OriginKind; 3] = [OriginKind::Root, OriginKind::Fork, OriginKind::Compaction];
+
+/// An origin's query code.
+pub fn origin_code(origin: OriginKind) -> &'static str {
+    match origin {
+        OriginKind::Root => "root",
+        OriginKind::Fork => "fork",
+        OriginKind::Compaction => "compaction",
+    }
 }
 
-pub const ORIGINS: [OriginChoice; 3] = [
-    OriginChoice::Root,
-    OriginChoice::Fork,
-    OriginChoice::Compaction,
-];
-
-impl OriginChoice {
-    pub fn code(self) -> &'static str {
-        match self {
-            Self::Root => "root",
-            Self::Fork => "fork",
-            Self::Compaction => "compaction",
-        }
-    }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Root => "Started here",
-            Self::Fork => "Forks",
-            Self::Compaction => "Compactions",
-        }
+/// An origin's filter label.
+pub fn origin_label(origin: OriginKind) -> &'static str {
+    match origin {
+        OriginKind::Root => "started here",
+        OriginKind::Fork => "forks",
+        OriginKind::Compaction => "compactions",
     }
 }
 
@@ -174,6 +164,17 @@ pub enum ReplayChoice {
 }
 
 impl ReplayChoice {
+    /// The spec filter this choice asks for.
+    pub fn filter(&self) -> ReplayFilter {
+        match self {
+            Self::Include => ReplayFilter::Include,
+            Self::Exclude => ReplayFilter::Exclude,
+            Self::Only(corpus) => ReplayFilter::Only {
+                corpus: corpus.clone().map(CorpusId),
+            },
+        }
+    }
+
     pub fn code(&self) -> String {
         match self {
             Self::Include => String::new(),
@@ -187,7 +188,7 @@ impl ReplayChoice {
 /// The conversation list's query.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ListQuery {
-    pub origins: Vec<OriginChoice>,
+    pub origins: Vec<OriginKind>,
     pub replay: ReplayChoice,
 }
 
@@ -204,13 +205,13 @@ impl ListQuery {
         {
             let origin = ORIGINS
                 .into_iter()
-                .find(|o| o.code() == code)
+                .find(|o| origin_code(*o) == code)
                 .ok_or_else(|| invalid("origin", format!("unknown value {code:?}")))?;
             if !origins.contains(&origin) {
                 origins.push(origin);
             }
         }
-        origins.sort();
+        origins.sort_by_key(|o| ORIGINS.iter().position(|x| x == o));
         let replay = match raw.replay.as_deref().map(str::trim) {
             None | Some("" | "include") => ReplayChoice::Include,
             Some("exclude") => ReplayChoice::Exclude,
@@ -232,7 +233,7 @@ impl ListQuery {
                 "origin",
                 self.origins
                     .iter()
-                    .map(|o| o.code())
+                    .map(|o| origin_code(*o))
                     .collect::<Vec<_>>()
                     .join(","),
             ),
@@ -240,13 +241,14 @@ impl ListQuery {
         ]
     }
 
-    pub fn toggle_origin(&self, origin: OriginChoice) -> Self {
+    pub fn toggle_origin(&self, origin: OriginKind) -> Self {
         let mut next = self.clone();
         if let Some(at) = next.origins.iter().position(|o| *o == origin) {
             next.origins.remove(at);
         } else {
             next.origins.push(origin);
-            next.origins.sort();
+            next.origins
+                .sort_by_key(|o| ORIGINS.iter().position(|x| x == o));
         }
         next
     }
@@ -333,7 +335,7 @@ mod tests {
         let query = list(Some("compaction,root,root"), Some("only:agentdojo")).expect("parse");
         assert_eq!(
             query.origins,
-            vec![OriginChoice::Root, OriginChoice::Compaction]
+            vec![OriginKind::Root, OriginKind::Compaction]
         );
         assert_eq!(query.replay, ReplayChoice::Only(Some("agentdojo".into())));
         let pairs = query.pairs();
@@ -381,10 +383,10 @@ mod tests {
 
     #[test]
     fn toggling_an_origin_adds_or_removes_it() {
-        let query = ListQuery::default().toggle_origin(OriginChoice::Fork);
-        assert_eq!(query.origins, vec![OriginChoice::Fork]);
-        assert!(query.toggle_origin(OriginChoice::Fork).origins.is_empty());
-        let both = query.toggle_origin(OriginChoice::Root);
-        assert_eq!(both.origins, vec![OriginChoice::Root, OriginChoice::Fork]);
+        let query = ListQuery::default().toggle_origin(OriginKind::Fork);
+        assert_eq!(query.origins, vec![OriginKind::Fork]);
+        assert!(query.toggle_origin(OriginKind::Fork).origins.is_empty());
+        let both = query.toggle_origin(OriginKind::Root);
+        assert_eq!(both.origins, vec![OriginKind::Root, OriginKind::Fork]);
     }
 }

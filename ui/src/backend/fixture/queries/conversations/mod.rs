@@ -196,17 +196,18 @@ pub fn head(ctx: &Ctx, id: ConversationId) -> Result<Option<ConversationHead>> {
                 tx.transmission.route,
                 Route::Delegation(DelegationDirection::ParentToChild)
             );
-            if delegated && delegated_from.is_none() {
-                if let Some(parent) = span_point(ctx, content.origin()) {
-                    delegated_from = Some(DelegationLink {
-                        transmission: tx.transmission.id,
-                        parent,
-                        child: TurnPoint {
-                            conversation: id,
-                            turn: index(i),
-                        },
-                    });
-                }
+            if delegated
+                && delegated_from.is_none()
+                && let Some(parent) = span_point(ctx, content.origin())
+            {
+                delegated_from = Some(DelegationLink {
+                    transmission: tx.transmission.id,
+                    parent,
+                    child: TurnPoint {
+                        conversation: id,
+                        turn: index(i),
+                    },
+                });
             }
         }
         for (span, _) in conversations.spans_of(turn.exchange) {
@@ -270,10 +271,7 @@ pub fn readers(
     if ctx.world.conversations.span(span).is_none() {
         return Ok(None);
     }
-    let items: Vec<(Key, Reader)> = marks::readers(ctx, span)
-        .into_iter()
-        .map(|(key, reader)| (key, reader))
-        .collect();
+    let items: Vec<(Key, Reader)> = marks::readers(ctx, span);
     page::paginate(
         "span_readers",
         page::digest(&span.as_ulid()),
