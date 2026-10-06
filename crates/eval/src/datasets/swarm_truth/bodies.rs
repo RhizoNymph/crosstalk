@@ -25,6 +25,9 @@ pub enum BodyError {
 /// Somewhere message bodies can be read from.
 pub trait Bodies {
     fn message(&mut self, hash: MessageHash) -> Result<Message, BodyError>;
+
+    /// A media blob's raw bytes (a `Media` part names it by hash).
+    fn media(&mut self, hash: MessageHash) -> Result<Vec<u8>, BodyError>;
 }
 
 /// Messages held in memory.
@@ -50,6 +53,11 @@ impl Bodies for MemoryBodies {
             .get(&hash)
             .cloned()
             .ok_or(BodyError::Missing(hash))
+    }
+
+    /// Holds no media.
+    fn media(&mut self, hash: MessageHash) -> Result<Vec<u8>, BodyError> {
+        Err(BodyError::Missing(hash))
     }
 }
 
@@ -103,6 +111,18 @@ impl Bodies for BlobBodies {
         })?;
         Ok(Message { hash, body })
     }
+
+    fn media(&mut self, hash: MessageHash) -> Result<Vec<u8>, BodyError> {
+        let bytes = self
+            .runtime
+            .block_on(self.store.get(hash))
+            .map_err(|error: BlobError| BodyError::Store {
+                hash,
+                reason: format!("{error:?}"),
+            })?
+            .ok_or(BodyError::Missing(hash))?;
+        Ok(bytes.to_vec())
+    }
 }
 
 /// Any [`Bodies`], each body decoded once.
@@ -117,6 +137,11 @@ impl<B: Bodies> Cached<B> {
             inner,
             seen: HashMap::new(),
         }
+    }
+
+    /// A media blob's bytes, uncached.
+    pub fn media(&mut self, hash: MessageHash) -> Result<Vec<u8>, BodyError> {
+        self.inner.media(hash)
     }
 
     pub fn get(&mut self, hash: MessageHash) -> Result<&Message, BodyError> {

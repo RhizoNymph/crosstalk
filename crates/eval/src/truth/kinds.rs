@@ -27,6 +27,14 @@ pub enum Tier {
     /// through a medium its sender never wrote (INV-963). Reported apart, as
     /// missed by design, not as a real miss.
     OutOfReach,
+    /// The construction guarantees it, but the sender forwarded the
+    /// content from its own tool output (SALT: a pasted `get_log` or
+    /// `inspect_database` result), so it is the sender's input relayed, not
+    /// text it originated. L4 indexes it under the sender only with
+    /// `ProvenanceConfig::forwarding` on (`provenance.index.forwarded-indexed`).
+    /// Reported apart, like `OutOfReach`: with forwarding off (the shipped
+    /// default) these are known misses, never counted against `overall`.
+    Forwarding,
 }
 
 /// Where the content sits in the reader's exchange: the spec's
