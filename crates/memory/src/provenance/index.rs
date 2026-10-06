@@ -30,7 +30,7 @@
 //! span offset. The trait does not order hits, so the harness compares
 //! them as multisets.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::num::NonZeroU16;
 use std::time::Duration;
 
@@ -138,6 +138,13 @@ impl IndexConfig {
 
 /// The index's data: postings, observations and where each indexed span
 /// sits, no text.
+///
+/// `counts` and `oldest` summarize `observations` so a frequency is one
+/// map read: `counts[f]` is how many observations hold `f`, and `oldest`
+/// the earliest observation time. While `oldest` still counts at a query's
+/// `now`, every observation does (counting is monotone in the observation
+/// time), so the count is the frequency; otherwise the observations are
+/// counted one by one, as the definition says.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub(crate) struct IndexState {
     /// Each fingerprint's postings: the span and the k-gram's offset in it.
@@ -147,26 +154,66 @@ pub(crate) struct IndexState {
     pub(crate) spans: BTreeMap<SpanId, IndexedSpan>,
     /// One entry per observed text: its time and distinct fingerprints.
     pub(crate) observations: Vec<(Timestamp, BTreeSet<Fingerprint>)>,
+    /// How many of `observations` hold each fingerprint (absent: none).
+    counts: HashMap<Fingerprint, u64>,
+    /// The earliest time in `observations` (`None` when there are none).
+    oldest: Option<Timestamp>,
 }
 
 impl IndexState {
     fn frequency(&self, config: &IndexConfig, now: Timestamp, fingerprint: Fingerprint) -> u64 {
-        let count = self
-            .observations
-            .iter()
-            .filter(|(at, fingerprints)| {
-                config.counts(*at, now) && fingerprints.contains(&fingerprint)
-            })
-            .count();
-        u64::try_from(count).unwrap_or(u64::MAX)
+        match self.oldest {
+            None => 0,
+            Some(oldest) if config.counts(oldest, now) => {
+                self.counts.get(&fingerprint).copied().unwrap_or(0)
+            }
+            Some(_) => {
+                let count = self
+                    .observations
+                    .iter()
+                    .filter(|(at, fingerprints)| {
+                        config.counts(*at, now) && fingerprints.contains(&fingerprint)
+                    })
+                    .count();
+                u64::try_from(count).unwrap_or(u64::MAX)
+            }
+        }
     }
 
     fn boilerplate(&self, config: &IndexConfig, now: Timestamp, fingerprint: Fingerprint) -> bool {
         self.frequency(config, now, fingerprint) > config.cutoff
     }
 
+    fn observe(&mut self, at: Timestamp, fingerprints: BTreeSet<Fingerprint>) {
+        for fingerprint in &fingerprints {
+            *self.counts.entry(*fingerprint).or_insert(0) += 1;
+        }
+        self.oldest = Some(self.oldest.map_or(at, |oldest| oldest.min(at)));
+        self.observations.push((at, fingerprints));
+    }
+
     fn age_out(&mut self, config: &IndexConfig, now: Timestamp) {
-        self.observations.retain(|(at, _)| config.counts(*at, now));
+        match self.oldest {
+            Some(oldest) if !config.counts(oldest, now) => {}
+            // Nothing observed, or every observation still counts.
+            _ => return,
+        }
+        let counts = &mut self.counts;
+        self.observations.retain(|(at, fingerprints)| {
+            let kept = config.counts(*at, now);
+            if !kept {
+                for fingerprint in fingerprints {
+                    if let Some(count) = counts.get_mut(fingerprint) {
+                        *count -= 1;
+                        if *count == 0 {
+                            counts.remove(fingerprint);
+                        }
+                    }
+                }
+            }
+            kept
+        });
+        self.oldest = self.observations.iter().map(|(at, _)| *at).min();
     }
 }
 
@@ -277,9 +324,7 @@ impl FingerprintIndex for MemoryFingerprintIndex {
         let mut state = self.state.write();
         state.age_out(&self.config, now);
         if self.config.counts(at, now) {
-            state
-                .observations
-                .push((at, fingerprints.iter().copied().collect()));
+            state.observe(at, fingerprints.iter().copied().collect());
         }
         Ok(())
     }

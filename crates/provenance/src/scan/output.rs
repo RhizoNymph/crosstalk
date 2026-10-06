@@ -77,8 +77,10 @@ impl Scanner {
         M: SemanticMatcher + Sync,
         L: MessageSource + Sync,
     {
-        let coverage = self.coverage(&loaded.inputs());
+        let inputs = loaded.inputs();
+        let coverage = self.coverage(&inputs);
         let drafts = self.segmenter().segment_against(output, &coverage);
+        self.keep_coverage(&inputs, coverage);
         let parts = text_parts(output);
         let mut pieces: Vec<(PartRef, Piece)> = Vec::new();
         for draft in drafts {

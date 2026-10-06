@@ -44,7 +44,7 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
-pub use self::ingest::{IngestError, Ingester, PublishError};
+pub use self::ingest::{Bodies, IngestError, Ingester, PublishError};
 pub use self::stats::{PipelineCounts, PipelineStats, PutRetry};
 use crate::capture::CaptureStage;
 use crate::config::GatewayConfig;
@@ -94,6 +94,9 @@ pub struct Deps<B, E> {
     pub capture: Option<mpsc::Receiver<RawExchange>>,
     /// The exchange log, for a role that runs the bus consumers.
     pub exchange_log: Option<ExchangeLog>,
+    /// Which message bodies an ingest puts (`Bodies::PutEvery` unless
+    /// the blob store never drops a body).
+    pub bodies: Bodies,
 }
 
 impl<B, E> Deps<B, E> {
@@ -105,6 +108,7 @@ impl<B, E> Deps<B, E> {
             id_entropy,
             capture: None,
             exchange_log: None,
+            bodies: Bodies::PutEvery,
         }
     }
 }
@@ -156,6 +160,7 @@ where
             id_entropy,
             capture,
             exchange_log,
+            bodies,
         } = deps;
         // Subscribed before the capture stage exists, so no envelope is
         // published before every consumer's group does.
@@ -178,6 +183,7 @@ where
             id_entropy,
             settings.put_retry,
             Arc::new(PipelineStats::new()),
+            bodies,
         );
         let log_stats = Arc::new(LogStats::new());
         let mut tasks = Tasks::new();

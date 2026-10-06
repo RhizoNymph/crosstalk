@@ -71,6 +71,7 @@ RawExchange ──anthropic::normalize──────────────
   ─▶ NormalizedExchange { exchange, messages, warnings, media: [MediaBlob] (hash order) }
 
 capture::store(blobs, &normalized)   (async; awaited by the capture task)
+capture::store_unless(blobs, &normalized, stored)   (the same, skipping messages stored(hash) says are in blobs)
   for each message: blobs.put(encode(body)) == message.hash, else HashMismatch
   for each media blob: blobs.put(bytes) == hash
 ```

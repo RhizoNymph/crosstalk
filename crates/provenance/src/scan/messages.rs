@@ -1,9 +1,15 @@
 //! Where the scanner reads message bodies: the blob store, decoded with the
 //! spec's canonical encoding.
+//!
+//! Every exchange's request history is read again on each scan, so
+//! [`BlobMessages`] keeps recently decoded bodies with the bytes they were
+//! decoded from: a read whose stored bytes equal the kept ones is the kept
+//! message (decoding is a function of the bytes), and anything else is
+//! decoded and checked as before.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::future::Future;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crosstalk_spec::ids::MessageHash;
 use crosstalk_spec::interfaces::l2_transport::{BlobError, BlobStore};
@@ -38,15 +44,34 @@ pub trait MessageSource {
     ) -> impl Future<Output = Result<Option<Message>, LoadError>> + Send;
 }
 
-/// Bodies from a spec `BlobStore`.
+/// How many encoded bytes [`BlobMessages`] keeps decoded bodies for.
+pub const DECODED_BUDGET: usize = 128 << 20;
+
+/// Bodies from a spec `BlobStore`. Clones share the store and the kept
+/// decoded bodies.
 #[derive(Debug, Clone)]
 pub struct BlobMessages<B> {
     blobs: B,
+    decoded: Arc<Mutex<Decoded>>,
 }
 
 impl<B> BlobMessages<B> {
     pub fn new(blobs: B) -> Self {
-        Self { blobs }
+        Self::with_budget(blobs, DECODED_BUDGET)
+    }
+
+    /// Keeping decoded bodies for at most `budget` encoded bytes.
+    pub fn with_budget(blobs: B, budget: usize) -> Self {
+        Self {
+            blobs,
+            decoded: Arc::new(Mutex::new(Decoded::new(budget))),
+        }
+    }
+
+    fn decoded(&self) -> std::sync::MutexGuard<'_, Decoded> {
+        self.decoded
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
     }
 }
 
@@ -60,6 +85,9 @@ impl<B: BlobStore + Sync> MessageSource for BlobMessages<B> {
             }
             Err(BlobError::Corrupt(hash)) => return Err(LoadError::Corrupt(hash)),
         };
+        if let Some(message) = self.decoded().get(hash, &bytes) {
+            return Ok(Some(message));
+        }
         let body = encoding::decode(&bytes).map_err(|_| LoadError::Undecodable(hash))?;
         // `decode` accepts exactly the bytes `encode` writes, so the bytes'
         // digest is the body's hash.
@@ -67,7 +95,85 @@ impl<B: BlobStore + Sync> MessageSource for BlobMessages<B> {
         if stored != hash {
             return Err(LoadError::Corrupt(hash));
         }
-        Ok(Some(Message { hash, body }))
+        let message = Message { hash, body };
+        self.decoded().put(hash, bytes, message.clone());
+        Ok(Some(message))
+    }
+}
+
+/// Decoded bodies by hash, with the bytes each was decoded from, least
+/// recently used evicted first within a budget of bytes.
+#[derive(Debug)]
+struct Decoded {
+    entries: HashMap<MessageHash, DecodedEntry>,
+    /// Each entry's last use, oldest first.
+    uses: BTreeMap<u64, MessageHash>,
+    clock: u64,
+    held: usize,
+    budget: usize,
+}
+
+#[derive(Debug)]
+struct DecodedEntry {
+    bytes: Vec<u8>,
+    message: Message,
+    used: u64,
+}
+
+impl Decoded {
+    fn new(budget: usize) -> Self {
+        Self {
+            entries: HashMap::new(),
+            uses: BTreeMap::new(),
+            clock: 0,
+            held: 0,
+            budget,
+        }
+    }
+
+    /// The message kept for `hash` when it was decoded from exactly
+    /// `bytes`.
+    fn get(&mut self, hash: MessageHash, bytes: &[u8]) -> Option<Message> {
+        self.clock += 1;
+        let now = self.clock;
+        let entry = self.entries.get_mut(&hash)?;
+        if entry.bytes != bytes {
+            return None;
+        }
+        self.uses.remove(&entry.used);
+        entry.used = now;
+        self.uses.insert(now, hash);
+        Some(entry.message.clone())
+    }
+
+    fn put(&mut self, hash: MessageHash, bytes: Vec<u8>, message: Message) {
+        let weight = bytes.len();
+        if weight > self.budget {
+            return;
+        }
+        self.clock += 1;
+        let used = self.clock;
+        if let Some(replaced) = self.entries.insert(
+            hash,
+            DecodedEntry {
+                bytes,
+                message,
+                used,
+            },
+        ) {
+            self.uses.remove(&replaced.used);
+            self.held -= replaced.bytes.len();
+        }
+        self.uses.insert(used, hash);
+        self.held += weight;
+        while self.held > self.budget {
+            let Some((_, oldest)) = self.uses.pop_first() else {
+                break;
+            };
+            if let Some(evicted) = self.entries.remove(&oldest) {
+                self.held -= evicted.bytes.len();
+            }
+        }
     }
 }
 
