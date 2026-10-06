@@ -4,6 +4,8 @@
 //! | --- | --- | --- |
 //! | [`check_audit_log`] | `AuditLog` | the trait itself |
 //! | [`check_operator_store`] | `OperatorStore` | [`OperatorStoreSubject`]: the store and the `AuditLog` its loads record into |
+//! | [`check_audit_intents`] | `AuditIntents` | the trait itself (and its `AuditLog`) |
+//! | [`check_sink_registry`] | `SinkRegistry` | a registry configured with the sinks the harness draws |
 //!
 //! `check_audit_log` also checks `surface.audit.append-only`: an entry a
 //! query returned is returned unchanged by every later query it matches.
@@ -14,24 +16,28 @@ use proptest::prelude::*;
 
 use crosstalk_spec::ids::{AlertId, AuditId, ConfigHash};
 use crosstalk_spec::interfaces::l8_surface::audit::{
-    AuditAuthor, AuditBody, AuditEntry, AuditError, AuditFilter, AuditLog, AuditOutcome,
-    AuditSubject, ConfigChange, ConfigOutcome, ConfigRecord, OperatorRecord,
+    AuditAuthor, AuditBody, AuditEntry, AuditError, AuditFilter, AuditIntent, AuditIntents,
+    AuditLog, AuditOutcome, AuditSubject, ConfigChange, ConfigOutcome, ConfigRecord,
+    OperatorRecord, Rejection,
 };
 use crosstalk_spec::interfaces::l8_surface::operators::{
     AccessConfig, CallerError, Operator, OperatorConfig, OperatorLoadError, OperatorName,
     OperatorStore, OperatorStoreError, RequestIdentity, TrustedOperator,
 };
+use crosstalk_spec::interfaces::l8_surface::sinks::SinkRegistry;
 use crosstalk_spec::interfaces::l8_surface::{
-    ActionOutcome, Caller, CallerSnapshot, OperatorAction, Permission, PermissionSet,
+    ActionOutcome, Caller, CallerSnapshot, OperatorAction, Permission, PermissionSet, SinkError,
+    SinkKind,
 };
 use crosstalk_spec::paging::{AuditList, PageRequest, PageSize};
 use crosstalk_spec::support::{Blake3, Timestamp};
 
-use crate::model::build::{audit_id, operator, raw, ts, window};
+use crate::model::build::{audit_id, operator, raw, sink, ts, window};
 use crate::model::{Divergence, HarnessConfig, ModelMismatch, holds, run, same};
 use crate::support::IdSequence;
 use crate::surface::audit::InMemoryAuditLog;
 use crate::surface::operators::InMemoryOperatorStore;
+use crate::surface::sinks::{InMemorySinkRegistry, SinkConfig};
 
 #[derive(Debug, Clone)]
 pub enum AuditOp {
@@ -383,6 +389,272 @@ where
                 theirs.sort();
                 ours.sort();
                 same(step, "config entries", &theirs, &ours)?;
+            }
+            Ok::<(), Divergence>(())
+        })
+    })
+}
+
+#[derive(Debug, Clone)]
+pub enum IntentOp {
+    /// `AuditIntents::intend` for operator `by` acknowledging alert `about`.
+    Intend {
+        id: u64,
+        at: u64,
+        by: u64,
+        about: u64,
+    },
+    /// `AuditIntents::complete` with the entry of that call and `outcome`
+    /// (0: applied, 1: unchanged, 2: not found): the entry of an intent
+    /// when the fields agree with one, a mismatch or a plain entry when not.
+    Complete {
+        id: u64,
+        at: u64,
+        by: u64,
+        about: u64,
+        outcome: u8,
+    },
+    /// `AuditLog::append`, as in [`check_audit_log`].
+    Append {
+        id: u64,
+        at: u64,
+        operator_entry: bool,
+        by: u64,
+        about: u64,
+    },
+    Recover,
+    Query {
+        about: Option<u64>,
+        size: u16,
+    },
+}
+
+fn intent_op() -> impl Strategy<Value = IntentOp> {
+    prop_oneof![
+        4 => (0u64..6, 0u64..4, 0u64..2, 0u64..2)
+            .prop_map(|(id, at, by, about)| IntentOp::Intend { id, at, by, about }),
+        4 => (0u64..6, 0u64..4, 0u64..2, 0u64..2, 0u8..3)
+            .prop_map(|(id, at, by, about, outcome)| IntentOp::Complete { id, at, by, about, outcome }),
+        2 => (0u64..6, 0u64..4, any::<bool>(), 0u64..2, 0u64..2)
+            .prop_map(|(id, at, operator_entry, by, about)| IntentOp::Append { id, at, operator_entry, by, about }),
+        1 => Just(IntentOp::Recover),
+        2 => (prop::option::of(0u64..2), 1u16..4)
+            .prop_map(|(about, size)| IntentOp::Query { about, size }),
+    ]
+}
+
+/// The intent of operator `by`'s acknowledgement of alert `about`, accepted
+/// at `at`, under id `id`.
+fn intent(id: u64, at: u64, by: u64, about: u64) -> Option<AuditIntent> {
+    let caller = CallerSnapshot::new(operator(by), PermissionSet::ALL).ok()?;
+    AuditIntent::new(
+        audit_id(id),
+        ts(at),
+        caller,
+        OperatorAction::Acknowledge {
+            alert: AlertId::from_ulid(raw(about)),
+        },
+    )
+    .ok()
+}
+
+fn intent_outcome(outcome: u8) -> AuditOutcome {
+    match outcome {
+        0 => AuditOutcome::Succeeded(ActionOutcome::Applied),
+        1 => AuditOutcome::Succeeded(ActionOutcome::Unchanged),
+        _ => AuditOutcome::Rejected(Rejection::NotFound),
+    }
+}
+
+/// Random intents, completions (matching their intent or not), plain
+/// appends over the same ids, recoveries and traversals against the
+/// reference. `make` builds a fresh, empty log.
+///
+/// Also checks `surface.audit.no-silent-effect` against an oracle of its
+/// own: after a recovery, every intent the subject accepted and no
+/// completion removed has an `Interrupted` entry under its id.
+pub fn check_audit_intents<S, F, Fut>(harness: HarnessConfig, make: F) -> Result<(), ModelMismatch>
+where
+    S: AuditIntents,
+    F: Fn() -> Fut,
+    Fut: Future<Output = S>,
+{
+    let strategy = prop::collection::vec(intent_op(), 1..harness.max_ops);
+    run(harness, strategy, |runtime, ops| {
+        runtime.block_on(async {
+            let mut subject = make().await;
+            let mut reference = InMemoryAuditLog::new();
+            let mut pending: BTreeMap<AuditId, AuditIntent> = BTreeMap::new();
+            for (step, op) in ops.iter().enumerate() {
+                let label = format!("{op:?}");
+                match op {
+                    IntentOp::Intend { id, at, by, about } => {
+                        let Some(intent) = intent(*id, *at, *by, *about) else {
+                            continue;
+                        };
+                        let theirs = subject.intend(&intent).await;
+                        same(step, &label, &theirs, &reference.intend(&intent).await)?;
+                        if theirs.is_ok() {
+                            pending.insert(intent.id(), intent);
+                        }
+                    }
+                    IntentOp::Complete {
+                        id,
+                        at,
+                        by,
+                        about,
+                        outcome,
+                    } => {
+                        let Some(intent) = intent(*id, *at, *by, *about) else {
+                            continue;
+                        };
+                        let Ok(entry) = intent.entry(intent_outcome(*outcome)) else {
+                            continue;
+                        };
+                        let theirs = subject.complete(entry.clone()).await;
+                        same(step, &label, &theirs, &reference.complete(entry).await)?;
+                        if theirs.is_ok() {
+                            pending.remove(&intent.id());
+                        }
+                    }
+                    IntentOp::Append {
+                        id,
+                        at,
+                        operator_entry,
+                        by,
+                        about,
+                    } => {
+                        let Some(one) = entry(*id, *at, *operator_entry, *by, *about) else {
+                            continue;
+                        };
+                        let theirs = subject.append(one.clone()).await;
+                        same(step, &label, &theirs, &reference.append(one).await)?;
+                    }
+                    IntentOp::Recover => {
+                        let theirs = subject.recover_interrupted().await;
+                        same(
+                            step,
+                            &label,
+                            &theirs,
+                            &reference.recover_interrupted().await,
+                        )?;
+                        let read = |error: AuditError| Divergence::new(step, format!("{error:?}"));
+                        let logged = audit_entries(&subject).await.map_err(read)?;
+                        for (id, intent) in std::mem::take(&mut pending) {
+                            let recorded = logged.iter().any(|entry| entry == &intent.interrupted());
+                            holds(step, recorded, || {
+                                format!("intent {id:?} left no Interrupted entry")
+                            })?;
+                        }
+                    }
+                    IntentOp::Query { about, size } => {
+                        let Ok(size) = PageSize::new(*size) else {
+                            continue;
+                        };
+                        let filter = AuditFilter {
+                            subject: about.map(|n| AuditSubject::Alert(AlertId::from_ulid(raw(n)))),
+                            ..AuditFilter::default()
+                        };
+                        same(
+                            step,
+                            &label,
+                            &traverse(&subject, &filter, size).await,
+                            &traverse(&reference, &filter, size).await,
+                        )?;
+                    }
+                }
+            }
+            Ok::<(), Divergence>(())
+        })
+    })
+}
+
+#[derive(Debug, Clone)]
+pub enum SinkOp {
+    /// A delivery to sink `sink` at `at`: succeeded, or failed with
+    /// `status` (`Unreachable` when 0).
+    Record {
+        sink: u64,
+        at: u64,
+        failed: Option<u16>,
+    },
+    Sinks,
+}
+
+fn sink_op() -> impl Strategy<Value = SinkOp> {
+    prop_oneof![
+        3 => (0u64..5, 0u64..100, prop::option::of(0u16..3))
+            .prop_map(|(sink, at, failed)| SinkOp::Record { sink, at, failed }),
+        1 => Just(SinkOp::Sinks),
+    ]
+}
+
+const SINK_KINDS: [SinkKind; 3] = [SinkKind::Webhook, SinkKind::Slack, SinkKind::Log];
+
+fn sink_configs() -> impl Strategy<Value = Vec<SinkConfig>> {
+    prop::collection::vec((0u64..4, 0usize..3, 0usize..3), 0..5).prop_map(|sinks| {
+        sinks
+            .into_iter()
+            .map(|(id, kind, n)| SinkConfig {
+                id: sink(id),
+                kind: SINK_KINDS[kind],
+                name: NAMES[n].to_owned(),
+            })
+            .collect()
+    })
+}
+
+/// Random configured sinks (one listed twice keeps its last definition),
+/// then random deliveries, known and unknown, against the reference.
+/// `make` builds a fresh registry configured with the sinks given.
+pub fn check_sink_registry<S, F, Fut>(harness: HarnessConfig, make: F) -> Result<(), ModelMismatch>
+where
+    S: SinkRegistry,
+    F: Fn(Vec<SinkConfig>) -> Fut,
+    Fut: Future<Output = S>,
+{
+    let strategy = (
+        sink_configs(),
+        prop::collection::vec(sink_op(), 1..harness.max_ops),
+    );
+    run(harness, strategy, |runtime, (configured, ops)| {
+        runtime.block_on(async {
+            let mut subject = make(configured.clone()).await;
+            let mut reference = InMemorySinkRegistry::new(configured.clone());
+            same(
+                0,
+                "configured",
+                &subject.sinks().await,
+                &reference.sinks().await,
+            )?;
+            for (step, op) in ops.iter().enumerate() {
+                let label = format!("{op:?}");
+                match op {
+                    SinkOp::Record { sink: n, at, failed } => {
+                        let outcome = match failed {
+                            None => Ok(ts(*at)),
+                            Some(0) => Err(SinkError::Unreachable {
+                                reason: format!("down at {at}"),
+                            }),
+                            Some(status) => Err(SinkError::Rejected {
+                                status: 400 + status,
+                            }),
+                        };
+                        same(
+                            step,
+                            &label,
+                            &subject.record_delivery(sink(*n), outcome.clone()).await,
+                            &reference.record_delivery(sink(*n), outcome).await,
+                        )?;
+                    }
+                    SinkOp::Sinks => {}
+                }
+                same(
+                    step,
+                    "sinks",
+                    &subject.sinks().await,
+                    &reference.sinks().await,
+                )?;
             }
             Ok::<(), Divergence>(())
         })
