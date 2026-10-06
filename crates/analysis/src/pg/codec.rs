@@ -71,6 +71,7 @@ id_text!(
     crosstalk_spec::ids::TopicId,
     crosstalk_spec::ids::AlertId,
     crosstalk_spec::ids::AlertRuleId,
+    crosstalk_spec::ids::ProjectionId,
 );
 
 /// A time as its `bigint` column holds it.

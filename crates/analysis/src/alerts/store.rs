@@ -17,51 +17,15 @@ use crosstalk_spec::events::insight::InsightEvent;
 use crosstalk_spec::ids::{AlertRuleId, TopicId, TransmissionId};
 use crosstalk_spec::interfaces::l6_analysis::alerts::{AlertActionError, AlertReadError};
 use crosstalk_spec::interfaces::l6_analysis::{RuleError, TriageError};
-use crosstalk_store::{SerializableError, TxError};
 use sqlx::PgConnection;
 
 use crate::pg::StorageFailure;
 use crate::pg::codec::{from_json, id_text, to_i32, to_json, to_u32};
 
-/// A spec error with a `Store { reason }` variant, which every storage
-/// failure becomes.
-pub trait Failure: Sized {
-    fn store(reason: String) -> Self;
-}
+pub use crate::pg::tx::Failure;
+pub(crate) use crate::pg::tx::{abort, fail, finish};
 
-macro_rules! failure {
-    ($($error:ty),* $(,)?) => {
-        $(
-            impl Failure for $error {
-                fn store(reason: String) -> Self {
-                    Self::Store { reason }
-                }
-            }
-        )*
-    };
-}
-
-failure!(RuleError, TriageError, AlertActionError, AlertReadError);
-
-/// A storage failure inside a transaction body. A driver error goes back to
-/// `retry_serializable` (which retries a serialization failure or deadlock);
-/// anything else aborts with the spec error's `Store` variant.
-pub(crate) fn abort<E: Failure>(failure: impl Into<StorageFailure>) -> TxError<E> {
-    failure.into().into_tx(|failure| E::store(failure.reason()))
-}
-
-/// A storage failure outside a transaction.
-pub(crate) fn fail<E: Failure>(failure: impl Into<StorageFailure>) -> E {
-    E::store(failure.into().reason())
-}
-
-/// A finished transaction's result as the spec error.
-pub(crate) fn finish<T, E: Failure>(result: Result<T, SerializableError<E>>) -> Result<T, E> {
-    result.map_err(|error| match error {
-        SerializableError::Aborted(error) => error,
-        SerializableError::Store(store) => E::store(store.to_string()),
-    })
-}
+crate::pg::tx::failure!(RuleError, TriageError, AlertActionError, AlertReadError);
 
 /// What the `alerts` consumer last made current.
 #[derive(Debug, Clone, PartialEq)]
