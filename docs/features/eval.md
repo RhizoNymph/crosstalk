@@ -1387,18 +1387,28 @@ report's `sessions`).
 **Gates** (`gates.toml`, `detector = "gateway-export"`, by scenario
 dataset id):
 
-| Dataset | Gate | Bound | First bench |
-| --- | --- | --- | --- |
-| `demo-swarm/headline` | channel / tool_result / exact recall | ≥ 0.95 | 1.000 (58 / 58) |
-| `demo-swarm/headline` | channel / tool_result / exact precision | ≥ 0.90 | 0.951 |
-| `demo-swarm/headline` | negative-control violations, reason `reread` | ≤ 0 | 9 (L4's reread dedup is to remove them); 1 on 20261005T184212Z, a discarded co-access, 0 once dismissed |
-| `demo-swarm/boilerplate` | `fp_per_1k` | ≤ 10,000 (placeholder) | not run yet |
+Calibrated on the clean node0 runs of 2026-10-06 (staging 8090af0, unique
+sessions per run):
 
-The boilerplate ceiling is a loose placeholder, to calibrate from a
-measured run after L4 match quality lands. Overall precision is not
-gated: its false positives are template-phrase ReaderOutput matches,
-pending the L4 ReaderOutput floor and more entropy in the swarm's
-generator. Each agent's system prompt carries `[style:<scenario>]`,
+| Dataset | Gate | Bound | Calibration run |
+| --- | --- | --- | --- |
+| `demo-swarm/headline` | overall recall | ≥ 0.95 | 1.000 (55 / 55), 20261006T020835Z |
+| `demo-swarm/headline` | overall precision | ≥ 0.95 | 1.000 (0 false) |
+| `demo-swarm/headline` | channel / tool_result / exact recall | ≥ 0.95 | 1.000 (54 / 54) |
+| `demo-swarm/headline` | channel / tool_result / exact precision | ≥ 0.95 | 1.000 |
+| `demo-swarm/headline` | negative-control violations, reason `reread` | ≤ 0 | 0 (31 discarded predictions dismissed) |
+| `demo-swarm/boilerplate` | `fp_per_1k` | ≤ 130 | 89.1 (22 / 247), 20261006T021639Z |
+| `demo-swarm/boilerplate` | overall recall | ≥ 0.95 | 1.000 (50 / 50) |
+| `demo-swarm/boilerplate` | overall precision | ≥ 0.80 | 0.883 |
+
+The boilerplate run's 22 false positives are 15 unobserved/reader_output
+template sentences, accepted with `reader_output.min_chars = 64`, and 7
+channel/exact. One false positive moves the rate by about 4 per 1k, and
+Poisson noise on 22 is about ±19 per 1k, so the ceiling sits about two
+standard deviations above the measured rate. The first bench
+(20261005T155320Z, before L4 match quality and unique sessions) scored
+precision 0.175 and is kept above for history only. Each agent's system
+prompt carries `[style:<scenario>]`,
 text identical across agents: no truth row names it, so it is never a
 label, and a detection of it is a false positive.
 
