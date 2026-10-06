@@ -153,6 +153,24 @@ pub struct RunSummary {
     pub unscored: Unscored,
 }
 
+/// What became of one loaded world, for [`run_with`]'s observer.
+#[derive(Debug, Clone, Copy)]
+pub enum WorldOutcome<'a> {
+    /// Detected, predicted and scored.
+    Scored {
+        world: &'a World,
+        detection: &'a Detection,
+        predictions: &'a [Prediction],
+    },
+    /// The detector took the world in but has nothing that detects yet.
+    Unscored { world: &'a World, ingested: u64 },
+    /// Detection or predictions failed; the run recorded `error` and went on.
+    Failed {
+        world: &'a World,
+        error: &'a WorldError,
+    },
+}
+
 /// Runs `detector` over every world of `source` and scores it. A world that
 /// fails to load or detect is recorded and skipped; the run goes on.
 /// `observe` sees each world after it is scored (progress, truth dumps).
@@ -161,6 +179,25 @@ pub fn run<S: TraceSource, D: Detector>(
     detector: &mut D,
     example_cap: usize,
     mut observe: impl FnMut(&World, &[Prediction]),
+) -> RunSummary {
+    run_with(source, detector, example_cap, |outcome| {
+        if let WorldOutcome::Scored {
+            world, predictions, ..
+        } = outcome
+        {
+            observe(world, predictions);
+        }
+    })
+}
+
+/// [`run`], with `observe` seeing every loaded world's outcome in source
+/// order: scored (with its detection), unscored or failed. A world that
+/// fails to load has no world to observe and is only recorded.
+pub fn run_with<S: TraceSource, D: Detector>(
+    source: &mut S,
+    detector: &mut D,
+    example_cap: usize,
+    mut observe: impl FnMut(WorldOutcome<'_>),
 ) -> RunSummary {
     let mut scorer = Scorer::new(example_cap);
     let mut failures = Vec::new();
@@ -179,10 +216,15 @@ pub fn run<S: TraceSource, D: Detector>(
             Ok(detection) => detection,
             Err(source) => {
                 tracing::warn!(world = %name, error = %source, "detection failed");
-                failures.push(WorldError::Detect {
+                let error = WorldError::Detect {
                     world: name,
                     source,
+                };
+                observe(WorldOutcome::Failed {
+                    world: &world,
+                    error: &error,
                 });
+                failures.push(error);
                 continue;
             }
         };
@@ -195,16 +237,25 @@ pub fn run<S: TraceSource, D: Detector>(
             );
             unscored.worlds += 1;
             unscored.ingested += ingested;
+            observe(WorldOutcome::Unscored {
+                world: &world,
+                ingested,
+            });
             continue;
         }
         let predicted = match predictions(&world, &detection) {
             Ok(predicted) => predicted,
             Err(source) => {
                 tracing::warn!(world = %name, error = %source, "predictions failed");
-                failures.push(WorldError::Predict {
+                let error = WorldError::Predict {
                     world: name,
                     source,
+                };
+                observe(WorldOutcome::Failed {
+                    world: &world,
+                    error: &error,
                 });
+                failures.push(error);
                 continue;
             }
         };
@@ -217,7 +268,11 @@ pub fn run<S: TraceSource, D: Detector>(
             predictions = predicted.len(),
             "scored world"
         );
-        observe(&world, &predicted);
+        observe(WorldOutcome::Scored {
+            world: &world,
+            detection: &detection,
+            predictions: &predicted,
+        });
     }
     RunSummary {
         score: scorer.finish(),

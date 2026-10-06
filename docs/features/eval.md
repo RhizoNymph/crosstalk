@@ -46,6 +46,10 @@ as dev-dependencies.
 - **The demo swarm benchmark** (`ct-eval swarm`): the live gateway scored
   on the demo swarm's traffic against the swarm's own ground truth (see
   its section below).
+- **The golden export** (`ct-eval export --format a2a-bench/1`, `run
+  --predictions-out`, `swarm --export-out --predictions-out`, `verify`):
+  worlds, labels and predictions in the bench's detector-neutral format
+  (see "Golden export (a2a-bench/1)" below).
 
 ## Non-scope
 
@@ -305,7 +309,7 @@ read it as a fetch, for `ct-eval run --extract-config` once the gateway's
 | `src/truth/mod.rs` | labels | `Expectation` (with `AccessOnly`), `ExpectedTransmission`/`TransmissionLabel`, `ExpectedAccess` (a channel transmission only access evidence finds), `NegativeControl`/`NegativeLabel`, `NegativeReason`, `Exemption`/`ExemptionReason`, `AgentCluster`, `RouteExpectation`, `ExpectedContent`, `InvalidLabel` |
 | `src/truth/kinds.rs` | label dimensions the spec lacks, helpers over spec ones | `Tier` (with `OutOfReach` and `Forwarding`), `CarrierKind` (the spec's, re-exported), `MatchNeed` (with spec `Codec`s; `json_string`, `yaml_string`, `through_json_string`, `two_string_levels`, `tier`; and `Undecodable` for out-of-reach labels), `json_escapes`, `TWO_STRING_LEVELS`, `route_rank`/`cmp_route` (order for spec `RouteKind`), `locator_key` (a spec `Locator` as one string) |
 | `src/truth/jsonl.rs` | truth as JSONL | `write`, `read` |
-| `src/predict/mod.rs` | predictions | `Prediction`, `PredictedRoute`, `EvidenceClass`, `AgentMap`, `AgentMapError`, `Directory`, `WorldDirectory`, `from_transmission`, `PredictError` |
+| `src/predict/mod.rs` | predictions | `Prediction`, `PredictedRoute`, `EvidenceClass`, `AgentMap` (`attribution`: the detector's agent of each exchange), `AgentMapError`, `Directory`, `WorldDirectory`, `from_transmission`, `PredictError` |
 | `src/predict/reads.rs` | the read seam: the spec's read traits, batched | `ChannelResources`, `RegistryResources`, `Reads`, `Resolved` (`gather`), `ReadError`, `ready` |
 | `src/predict/memory.rs` | eval-owned stores behind the seam | `SpanTable` (`SpanIndex`), `AccessTable` (`AccessStore`), `ChannelTable` (`ChannelResources`) |
 | `src/score/align.rs` | **the alignment rule** | `aligns`, `exempts`, `violates`, `specificity` |
@@ -320,7 +324,7 @@ read it as a fetch, for `ct-eval run --extract-config` once the gateway's
 | `src/reference/decode.rs` | base64, hex, URL decoding | `decode_candidates` |
 | `src/reference/shingle.rs` | k-gram rolling hashes | `shingles`, `covered` |
 | `src/reference/route.rs` | carrier and route | `find_call`, `extract_resource`, `parse_url`, `normalize_path` |
-| `src/pipeline.rs` | the run loop and the detector seam | `Detector`, `Detection`, `DetectionStatus`, `ReferenceDetector`, `run`, `predictions`, `RunSummary`, `Unscored`, `WorldError` |
+| `src/pipeline.rs` | the run loop and the detector seam | `Detector`, `Detection`, `DetectionStatus`, `ReferenceDetector`, `run`, `run_with` (every loaded world's `WorldOutcome`: scored, unscored or failed), `predictions`, `RunSummary`, `Unscored`, `WorldError` |
 | `src/gateway.rs` | the gateway pipeline as a detector | `PipelineDetector`, `ingest_world`, `subscribe`, `capture_group`, `CorpusClock`, `Captured`, `PipelineError` |
 | `src/detect/live/mod.rs` | the live seam | `LiveBackend`, `LiveWorld`, `LiveDetector`, `LiveSettings` (`short`, `with_windows`, `with_forwarding`), `Forwarding` (`Off`, the shipped default, or `On`), `Attribution`, `BackendError`, `LiveError`, `LiveRead`, `gateway_backend`, `all_time` |
 | `src/detect/live/gateway.rs` | the `LiveBackend` over `crosstalk_gateway::live::Live` | `GatewayBackend` (`with_extract`, `live_config`: `LiveSettings::forwarding` becomes `ProvenanceConfig::with_forwarding`), `GatewayWorld`, `flow_config` |
@@ -337,6 +341,8 @@ read it as a fetch, for `ct-eval run --extract-config` once the gateway's
 | `src/datasets/wiki/` | collusion-wiki as a `TraceSource` (see below) | `WikiSource`, `WikiSelection` (`demo`), `tools`, `DATASET` |
 | `src/datasets/swarm/` | swarm-traces as a `TraceSource` (see below) | `SwarmSource`, `SwarmSelection`, `codec::decode`, `ChainTally`, `DATASET` |
 | `src/bin/ct-eval/main.rs` | CLI | `run`, `truth` |
+| `src/golden/` | the golden export (below) | `export`, `WorldExport`, `GoldenRun`, `ExportWriter`, `PredictionsWriter`, `ManifestSpec`, `verify`, `Gap`, `Lossy`, `GoldenError`, `swarm::export` |
+| `src/bin/ct-eval/golden.rs` | `export`, `run --predictions-out`, `verify` | `ExportArgs`, `manifest_spec`, `detector_info` |
 | `datasets.toml` | dataset root and paths | |
 | `gates.toml` | regression gates | |
 | `tests/` | integration tests (`gates_search.rs` is the gates file lookup; `pipeline.rs` is the sim smoke test of `Pipeline::ingest`; `live.rs` drives `LiveDetector` over a scripted backend on crosstalk-memory's stores, with transmissions in every state; `live_gateway.rs` runs `--detector live` over the real `Live` on the SALT, wiki and splice fixtures and checks two runs are byte-identical; `gates_detector.rs` is gates by detector; `score_many_labels.rs` is one prediction finding several labels; `score_discarded.rs` is a discarded reread co-access dismissed, not a violation; `access_only.rs` is access-only labels and their scoring; `clock.rs` is the pace; `unobserved.rs` is the unobserved out-of-reach need; `forwarding.rs` is the SALT forwarding tier, its accounting in the report, `--forwarding` on the real `Live`, and gates by forwarding); `tests/fixtures/salt/` holds synthetic SALT-shaped traces | |
@@ -616,6 +622,175 @@ open-swe's trajectory slot `t` makes call `i` at `(i, t, 0)`; splices,
 wiki worlds, swarm-traces and cipher pairs count calls per world. τ²-bench,
 AI Village and LMCache keep their recorded times. `tests/clock.rs` checks
 the bounds, the order and the determinism.
+
+## Golden export (a2a-bench/1)
+
+The golden export writes ct-eval's worlds, labels and predictions in the
+detector-neutral bench format `a2a-bench/1` (crate `a2a-bench-format`,
+the bench repository's `crates/format`; its normative doc is
+`docs/features/format.md` there), so the standalone benchmark proves
+parity with ct-eval by byte diffs (separation design §7.1). It is a pure
+serialisation of existing types: nothing is re-derived, and what the
+format cannot express is refused, never worked around.
+
+`a2a-bench-format` is a path dependency of this crate only (not the
+workspace) until the bench repository is pushed; it moves to a pinned git
+tag before the change merges.
+
+### Commands
+
+```text
+ct-eval export --format a2a-bench/1 --dataset salt [the selection flags of run] --out DIR
+ct-eval run    --dataset salt [...] --predictions-out FILE
+ct-eval swarm  --truth … --exchanges … --export … [--export-out DIR] [--predictions-out FILE] [--detector-version V]
+ct-eval verify --export DIR [--predictions FILE]
+```
+
+- `export` writes `manifest.json`, `messages.jsonl`, `exchanges.jsonl` and
+  `labels.jsonl` for the selected worlds, then reads them back and checks
+  them (`verify`). A world that fails to load is skipped, as `run` skips
+  it.
+- `run --predictions-out` converts each world exactly as `export` does,
+  but to sinks (`ExportWriter::sink`), so it derives the same manifest
+  without writing the export, and writes the predictions file naming that
+  manifest's digest. Each world's rows are checked against the world
+  (`check_predictions`) as they are written, and the file is read back.
+- `swarm --export-out/--predictions-out` does the same for a demo-swarm
+  bench run (below).
+- `verify` checks an export, and a predictions file made on it, with the
+  format's checks.
+
+### Data and control flow
+
+```text
+World ──▶ golden::export (world.rs)
+            WorldBuilder::exchange per CorpusExchange (time order):
+              message::convert for each message not yet seen (spec MessageHash → bench MessageId)
+              Exchange { id: from_raw, at_us, client, request, response, fidelity, source }
+            labels::exchange_agents (one row per exchange) + labels::truth ("t<index>")
+      ──▶ WorldExport ──▶ ExportWriter::world: WorldInputs::new + check_labels, then the three sections
+Detection ──▶ predictions::rows (attribution, unattributed, transmission rows)
+          ──▶ PredictionsWriter::world: check_predictions, spilled to <file>.partial
+finish ──▶ Manifest (ManifestSpec + trailers' digests) ──▶ PredictionsHeader { manifest_digest } ──▶ predictions file
+```
+
+`GoldenRun` drives both commands from `pipeline::run_with`'s
+`WorldOutcome`s: a scored world gets status `scored` and its rows, an
+unscored one (`--detector pipeline`) `no_consumers { ingested }`, one
+whose detection or predictions failed `failed { reason }` and no rows.
+
+### Mapping
+
+- **Messages.** The spec's message boundaries and part order are kept,
+  so a part index is the same on both sides and a spec `PartRef
+  { MessageHash, index }` is a bench `(MessageId, part)`. Dropped:
+  reasoning and tool-call signatures, opaque reasoning's payload
+  (`Reasoning::Opaque` → `reasoning_opaque`), media bytes (a media part
+  keeps its kind, `image`, `audio` or `document`, as its media type:
+  the spec records no MIME type), unknown blocks' kind and raw JSON. Tool
+  results carry no tool name. Tool-call arguments are the spec's
+  canonical JSON text, accepted only if it is the bench's canonical form
+  too (`CanonicalJson::from_canonical`), else the export fails. Two spec
+  bodies that differ only in what the bench drops are one bench message.
+  Messages are written once per world, in first-use order.
+- **Exchanges.** Ids are carried as they are (`ExchangeId::from_raw` on
+  the spec's 128 bits): a derived id is the format's `exchange_id` of the
+  same dataset, source and time (tested for every fixture exchange), and
+  the gateway's minted ids are the gateway's. `request.messages` is the
+  spec's request in order, system messages inline wherever they are;
+  `response.messages` is the response (a failed exchange's partial
+  response, if any, with no stop reason). `client` is the credential
+  digest (`k<secret version>:<hex>`), the harness session, the request's
+  ordinal in it (the demo swarm only), the vendor and the model.
+  `request.tools` is absent: no corpus records tool schemas.
+- **Labels.** One `exchange_agent` row per exchange, then the truth in
+  order with ids `t<index>`: `transmission`, `access_only`,
+  `negative_control`, `exemption` (`agent_cluster` is refused, below).
+  Every dimension (tier, carrier, need and codecs, route and resource,
+  reasons, coverage) maps one to one. A label's content and an
+  exemption's place are in its reader exchange. A control's place is in
+  its reader exchange when it names one; SALT's and AgentDojo's shared
+  prompts and boilerplate name a message but no exchange (every exchange
+  of the reader that carries it), and SALT's rejected sends an origin
+  with no exchange: those locations go to the first exchange of the reader
+  (an origin: of the sender) that carries the message, and the control's
+  `reader_exchange` stays absent.
+- **Resources.** `Repository` → `repository`; a `File` on a
+  `<host>/<owner…>/<name>` host → `repo_file`; a `File` with no host →
+  `file`; `Url` → `url` (its canonical text); `Opaque` → `opaque`.
+- **Predictions.** Rows per world: `attribution` (each detector agent,
+  its spec `AgentId`'s ULID text, and the exchanges the detector placed
+  under it: `AgentMap::attribution`, every exchange by its corpus agent for
+  the reference, L3's placements for `--detector live`), `unattributed`
+  (an agent the evidence names that holds no exchange), then every
+  transmission by id with its state, its `QualityMatch` and, as
+  `predict::from_transmission` reads them, one `matches` entry per
+  `ContentMatch` (read location, origin from the matched span's
+  `IndexedSpan`, match kind, carrier, route) or one `co_access` entry per
+  `CoAccess` (the write's and the read's whole parts, the resource);
+  detected and awaiting-content ones carry their state only.
+- **Manifest.** Dataset, `dataset_version` 1, split `dev`; the source's
+  path under the data root, its revision (a Hugging Face snapshot's hash
+  from the symlink target, a local-dir download's commit from
+  `.cache/huggingface/download/*.metadata`, or the git `HEAD` of a
+  checkout at or below the dataset's directory, else `unknown`) and a
+  BLAKE3 (derive-key context `crosstalk-eval golden source`) over the
+  files read: SALT's selected trace files, every file under the dataset's
+  directory for the others (`.git` and `.cache` skipped); the converter
+  (crate version, crosstalk commit read from the checkout's `.git`); the
+  selection flags that apply to the dataset (a repeatable flag as
+  `name[i]`); the pace (seed, min, max) for datasets the virtual clock
+  paces; per-world exchange counts; the three files' digests.
+
+### The demo swarm
+
+`golden::swarm::export` turns a bench run into one world: the log's
+exchanges inside the run window of the sessions the truth names (each its
+session owner's, with `client.session` and `client.turn`), in
+(`started_at`, id) order, their bodies from the blobs, labels from the
+truth file (`resolve`), and coverage `complete { construction }`. Its
+source revision is the truth header's run id, its digest over the truth
+file and the exchange log, its selection the run-window margins.
+Predictions are the transmissions `detected::choose` picks. The gateway's
+export places no exchange under an agent, so attribution is what ct-eval
+ties agents through: a confirmed transmission's reader exchanges are its
+reader's, an access's exchange its canonical agent's
+(`AccessDetail::agent`), and an access's own agent id an alias of that
+canonical one; a sender tied to no exchange is `unattributed`. A
+transmission whose evidence lies outside the world is dropped and
+counted, as ct-eval drops its predictions.
+
+### Gaps: what the format cannot express
+
+The export stops with `GoldenError::Unexpressible(Gap)`:
+
+| Gap | Where it occurs |
+| --- | --- |
+| `ClusterRow`: the format's `agent_cluster` row holds `kind` twice (the row's tag and the cluster's kind), so no reader accepts the line | a ct-eval `AgentCluster` (no converter emits one) and a demo-swarm key group of two or more agents (both node0 runs have one agent per key) |
+| `UncarriedLocation`: a place named by a message no exchange carries | τ²-bench's shared-source controls on a record after the reader's last call |
+| `ChannelResources`: a channel route holding no or several canonical resources | a merged channel, if a detector produces one |
+| `FileOnHost`, `McpLocator`: a file on a machine host, an MCP resource | none in the corpora's labels |
+| `IncrementalRequest`, `NoCredential`: an exchange carrying only an increment, or no credential | none in the corpora |
+| `ExchangeTiedTwice`: a demo-swarm exchange tied to two detector agents | none in the node0 runs |
+
+Details the format has no field for are written without them and counted
+(`Lossy`, printed after every export): media kinds as media types,
+unknown blocks, failed exchanges, semantic similarities, unattributed
+agents, single-agent key groups, dropped swarm transmissions and swarm
+agent conflicts.
+
+### Invariants
+
+- An export, and a run's predictions, pass the format's checks
+  (`WorldInputs::new`, `check_labels`, `check_predictions`) before a
+  command succeeds; `verify` re-reads every file through its framing.
+- The same selection gives the same manifest whether the export is
+  written or not, and the same bytes on rerun (tested).
+- Every label's content text is the text at its location in the exported
+  message's part text, and every exported message's part text is the
+  spec's (tested).
+- The swarm-traces export holds its labels' text, which is the attack
+  payload itself: keep it out of anything shared.
 
 ## SALT specifics
 

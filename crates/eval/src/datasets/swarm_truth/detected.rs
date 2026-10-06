@@ -301,6 +301,49 @@ pub fn predictions<B: Bodies>(
     bodies: &mut Cached<B>,
     diagnostics: &mut Diagnostics,
 ) -> Vec<Prediction> {
+    let chosen = choose(exported, evidence, outside, diagnostics);
+    let directory = SwarmDirectory::learn(&chosen, index, bodies, diagnostics);
+    let mut out = Vec::new();
+    for item in chosen {
+        let transmission = item.transmission();
+        match from_transmission(transmission, &directory) {
+            Ok(made) => out.extend(made),
+            Err(PredictError::UnknownAgent(agent)) => diagnostics.push(Diagnostic {
+                line: None,
+                row: None,
+                side: Side::Row,
+                failure: JoinFailure::UnknownDetectedAgent {
+                    transmission: transmission.id,
+                    agent,
+                },
+                effect: Effect::PredictionsDropped,
+            }),
+            Err(other) => diagnostics.push(Diagnostic {
+                line: None,
+                row: None,
+                side: Side::Row,
+                failure: JoinFailure::Unpredictable {
+                    transmission: transmission.id,
+                    reason: other.to_string(),
+                },
+                effect: Effect::PredictionsDropped,
+            }),
+        }
+    }
+    out.sort_by(|a, b| a.sort_key().cmp(&b.sort_key()));
+    out
+}
+
+/// The evidence [`predictions`] predicts from: every exported
+/// transmission's (one without evidence is reported), then every suspected
+/// or discarded transmission's the export cannot hold, less those read
+/// only outside the run window (reported).
+pub fn choose<'a>(
+    exported: &Exported,
+    evidence: &'a [TransmissionEvidence],
+    outside: &HashSet<ExchangeId>,
+    diagnostics: &mut Diagnostics,
+) -> Vec<&'a TransmissionEvidence> {
     let by_id: BTreeMap<TransmissionId, &TransmissionEvidence> = evidence
         .iter()
         .map(|item| (item.transmission().id, item))
@@ -341,36 +384,7 @@ pub fn predictions<B: Bodies>(
         }
         None => true,
     });
-    let directory = SwarmDirectory::learn(&chosen, index, bodies, diagnostics);
-    let mut out = Vec::new();
-    for item in chosen {
-        let transmission = item.transmission();
-        match from_transmission(transmission, &directory) {
-            Ok(made) => out.extend(made),
-            Err(PredictError::UnknownAgent(agent)) => diagnostics.push(Diagnostic {
-                line: None,
-                row: None,
-                side: Side::Row,
-                failure: JoinFailure::UnknownDetectedAgent {
-                    transmission: transmission.id,
-                    agent,
-                },
-                effect: Effect::PredictionsDropped,
-            }),
-            Err(other) => diagnostics.push(Diagnostic {
-                line: None,
-                row: None,
-                side: Side::Row,
-                failure: JoinFailure::Unpredictable {
-                    transmission: transmission.id,
-                    reason: other.to_string(),
-                },
-                effect: Effect::PredictionsDropped,
-            }),
-        }
-    }
-    out.sort_by(|a, b| a.sort_key().cmp(&b.sort_key()));
-    out
+    chosen
 }
 
 /// Whether `evidence` is of a suspected or discarded transmission: one the

@@ -3,6 +3,16 @@
 version = 4
 
 [[package]]
+name = "a2a-bench-format"
+version = "0.1.0"
+dependencies = [
+ "blake3",
+ "serde",
+ "serde_json",
+ "thiserror",
+]
+
+[[package]]
 name = "adler2"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -650,6 +660,7 @@ dependencies = [
 name = "crosstalk-eval"
 version = "0.1.0"
 dependencies = [
+ "a2a-bench-format",
  "anyhow",
  "base64 0.22.1",
  "blake3",

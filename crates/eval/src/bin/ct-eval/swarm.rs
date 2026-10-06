@@ -15,6 +15,7 @@ use crosstalk_eval::datasets::swarm_truth::{
     Inputs, Options, SwarmOutcome, default_blobs, default_evidence, run_with as run_swarm,
     truth_file,
 };
+use crosstalk_eval::golden::swarm as golden_swarm;
 use crosstalk_eval::report::table::render;
 use crosstalk_spec::support::{TimeWindow, Timestamp};
 use serde::Serialize;
@@ -59,6 +60,18 @@ pub struct SwarmArgs {
     /// milliseconds: room for clock skew between the swarm and the gateway.
     #[arg(long, default_value_t = DEFAULT_LEAD_MS)]
     run_lead_ms: u64,
+    /// Write the run's world and labels in the bench format `a2a-bench/1`
+    /// here (manifest.json, messages.jsonl, exchanges.jsonl, labels.jsonl).
+    #[arg(long)]
+    export_out: Option<PathBuf>,
+    /// Write the gateway's detections in the bench format here, naming the
+    /// manifest of that export.
+    #[arg(long)]
+    predictions_out: Option<PathBuf>,
+    /// The gateway build that ran, for the predictions header (its image
+    /// digest, say).
+    #[arg(long, default_value = "unrecorded")]
+    detector_version: String,
 }
 
 #[derive(Args)]
@@ -115,6 +128,28 @@ pub fn run(args: SwarmArgs) -> Result<ExitCode> {
     print!("{text}");
     if let Some(out) = &args.out {
         write_report(out, &outcome, &text)?;
+    }
+    if args.export_out.is_some() || args.predictions_out.is_some() {
+        let outputs = golden_swarm::Outputs {
+            export: args.export_out.clone(),
+            predictions: args.predictions_out.clone(),
+            detector_version: args.detector_version.clone(),
+        };
+        let finished = golden_swarm::export(&inputs, options.margins, &outputs)
+            .context("writing the a2a-bench/1 export")?;
+        let verified = match (&args.export_out, &args.predictions_out) {
+            (Some(dir), predictions) => Some(
+                crosstalk_eval::golden::verify(dir, predictions.as_deref())
+                    .context("checking the a2a-bench/1 export")?,
+            ),
+            (None, Some(path)) => {
+                crosstalk_eval::golden::verify::predictions_file(path, &finished.manifest)
+                    .context("checking the a2a-bench/1 predictions")?;
+                None
+            }
+            (None, None) => None,
+        };
+        super::golden::report(&finished, verified)?;
     }
     Ok(if outcome.report.gates_failed() {
         ExitCode::from(2)

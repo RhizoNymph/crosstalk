@@ -1,0 +1,283 @@
+//! A detection as bench prediction rows.
+//!
+//! The rows of one world, in order:
+//!
+//! 1. `attribution`: each detector agent (its spec `AgentId`'s ULID text)
+//!    and the world exchanges the detector attributed to it, from the
+//!    detection's [`AgentMap`](crate::predict::AgentMap)
+//!    (`AgentMap::attribution`), by agent id;
+//! 2. `unattributed`: every agent the evidence names that holds no
+//!    exchange (a sender the detector cannot place), by agent id;
+//! 3. `transmission`: every transmission of the detection, by id, with its
+//!    state and, as `predict::from_transmission` reads them, its quality
+//!    (`QualityMatch`) and evidence: one `matches` entry per `ContentMatch`
+//!    of a confirmed, classified or aggregated one, one `co_access` entry
+//!    per `CoAccess` record of a suspected or discarded one, none for a
+//!    detected or awaiting-content one.
+//!
+//! Locations translate as labels' do: a content match's read location is in
+//! its reader exchange, its origin (the matched span's `IndexedSpan`) in the
+//! span's exchange, a co-access's read and write in their accesses'
+//! exchanges. A channel route is the bench resource of the channel's one
+//! canonical resource; a channel holding none or several has no bench form.
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use a2a_bench_format as bench;
+use bench::predictions::{
+    Attribution, CoAccess, ContentEvidence, Prediction, Quality, State, Transmission,
+    TransmissionFields, Unattributed,
+};
+use crosstalk_spec::aggregates::quality::QualityMatch;
+use crosstalk_spec::derived::flow::access::{AccessKind, AccessOp};
+use crosstalk_spec::derived::flow::evidence::CoAccess as SpecCoAccess;
+use crosstalk_spec::derived::flow::transmission::{
+    Route as SpecRoute, Transmission as SpecTransmission, TransmissionState,
+};
+use crosstalk_spec::derived::flow::verdict::Judgeable;
+use crosstalk_spec::ids::{AgentId, ExchangeId};
+
+use super::world::MessageIndex;
+use super::{Gap, GoldenError, Lossy, ids, kinds, resource};
+use crate::predict::Directory;
+
+/// How [`rows`] treats a transmission it cannot locate (an access the
+/// evidence lacks, a part or exchange outside the world).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unlocated {
+    /// Fail the world, as `pipeline::predictions` does.
+    Fail,
+    /// Drop the transmission and count it, as the demo swarm's
+    /// `detected::predictions` drops its predictions.
+    Drop,
+}
+
+/// The prediction rows of one world's detection (module docs).
+/// `attribution` is the detector's agent of each exchange it placed, by
+/// canonical id; `aliases` maps any other id the evidence names to its
+/// canonical one.
+pub fn rows(
+    transmissions: &[SpecTransmission],
+    directory: &impl Directory,
+    attribution: &BTreeMap<ExchangeId, AgentId>,
+    aliases: &BTreeMap<AgentId, AgentId>,
+    unlocated: Unlocated,
+    index: &MessageIndex,
+    lossy: &mut Lossy,
+) -> Result<Vec<Prediction>, GoldenError> {
+    let mut held: BTreeMap<AgentId, Vec<ExchangeId>> = BTreeMap::new();
+    for (exchange, agent) in attribution {
+        held.entry(*agent).or_default().push(*exchange);
+    }
+    let mut sorted: Vec<&SpecTransmission> = transmissions.iter().collect();
+    sorted.sort_by_key(|transmission| transmission.id);
+    let mut named = BTreeSet::new();
+    let mut rows = Vec::with_capacity(sorted.len());
+    let canonical = |agent: AgentId| aliases.get(&agent).copied().unwrap_or(agent);
+    for transmission in sorted {
+        let mut names = BTreeSet::new();
+        match convert(
+            transmission,
+            directory,
+            index,
+            &canonical,
+            &mut names,
+            lossy,
+        ) {
+            Ok(row) => {
+                named.extend(names);
+                rows.push(Prediction::Transmission(row));
+            }
+            Err(
+                GoldenError::UnknownAccess(_)
+                | GoldenError::WrongAccess { .. }
+                | GoldenError::UnlocatedAccess { .. }
+                | GoldenError::UnknownExchange(_)
+                | GoldenError::UnknownMessage(_),
+            ) if unlocated == Unlocated::Drop => lossy.dropped_transmissions += 1,
+            Err(error) => return Err(error),
+        }
+    }
+    let mut out = Vec::with_capacity(held.len() + rows.len());
+    for (agent, exchanges) in &held {
+        out.push(Prediction::Attribution(Attribution {
+            agent: ids::detector_agent(*agent)?,
+            exchanges: exchanges.iter().copied().map(ids::exchange).collect(),
+        }));
+    }
+    for agent in named.iter().filter(|agent| !held.contains_key(agent)) {
+        lossy.unattributed_agents += 1;
+        out.push(Prediction::Unattributed(Unattributed {
+            agent: ids::detector_agent(*agent)?,
+        }));
+    }
+    out.extend(rows);
+    Ok(out)
+}
+
+/// One transmission row; the agents its evidence names go to `named`.
+fn convert(
+    transmission: &SpecTransmission,
+    directory: &impl Directory,
+    index: &MessageIndex,
+    canonical: &impl Fn(AgentId) -> AgentId,
+    named: &mut BTreeSet<AgentId>,
+    lossy: &mut Lossy,
+) -> Result<Transmission, GoldenError> {
+    let id = ids::transmission(transmission.id)?;
+    let state = state(&transmission.state);
+    let mut fields = TransmissionFields {
+        id: id.clone(),
+        state,
+        quality: None,
+        matches: Vec::new(),
+        co_access: Vec::new(),
+    };
+    if let Ok(judgeable) = transmission.state.judgeable() {
+        fields.quality = Some(quality(QualityMatch::from(judgeable)));
+        match judgeable {
+            Judgeable::Confirmed(confirmed) => {
+                let route = route(&transmission.route, directory)?;
+                let (from, to) = (canonical(confirmed.from()), canonical(transmission.to));
+                named.insert(from);
+                named.insert(to);
+                for content in confirmed.content().iter() {
+                    let origin_at = match directory.span(content.origin()) {
+                        Some(span) => Some(index.location(span.exchange, &span.location)?),
+                        None => None,
+                    };
+                    fields.matches.push(ContentEvidence {
+                        from: ids::detector_agent(from)?,
+                        to: ids::detector_agent(to)?,
+                        reader_exchange: ids::exchange(content.reader_exchange()),
+                        read_at: index.location(content.reader_exchange(), &content.read_at())?,
+                        origin_at,
+                        kind: kinds::match_kind(content.kind(), lossy),
+                        carrier: kinds::carrier(content.carrier().kind()),
+                        route: route.clone(),
+                    });
+                }
+            }
+            Judgeable::Suspected(records) | Judgeable::Discarded(records) => {
+                for record in records.iter() {
+                    fields.co_access.push(co_access(
+                        transmission,
+                        record,
+                        directory,
+                        index,
+                        canonical,
+                        named,
+                    )?);
+                }
+            }
+        }
+    }
+    Transmission::new(fields).map_err(|source| GoldenError::Transmission {
+        transmission: id.to_string(),
+        source,
+    })
+}
+
+/// One co-access record, read as `predict::from_transmission` reads it: the
+/// write's agent to the read's agent, the read's whole tool result and the
+/// write's whole tool call.
+fn co_access(
+    transmission: &SpecTransmission,
+    record: &SpecCoAccess,
+    directory: &impl Directory,
+    index: &MessageIndex,
+    canonical: &impl Fn(AgentId) -> AgentId,
+    named: &mut BTreeSet<AgentId>,
+) -> Result<CoAccess, GoldenError> {
+    let (write, _) = directory
+        .access(record.write())
+        .ok_or(GoldenError::UnknownAccess(record.write()))?;
+    let (read, read_resource) = directory
+        .access(record.read())
+        .ok_or(GoldenError::UnknownAccess(record.read()))?;
+    let AccessOp::Write { call, .. } = &write.op else {
+        return Err(GoldenError::WrongAccess {
+            access: write.id,
+            expected: AccessKind::Write,
+        });
+    };
+    let AccessOp::Read { result } = &read.op else {
+        return Err(GoldenError::WrongAccess {
+            access: read.id,
+            expected: AccessKind::Read,
+        });
+    };
+    let read_at = directory
+        .whole_part(read.exchange, *result)
+        .ok_or(GoldenError::UnlocatedAccess { access: read.id })?;
+    let write_at = directory
+        .whole_part(write.exchange, *call)
+        .ok_or(GoldenError::UnlocatedAccess { access: write.id })?;
+    let resource = match route(&transmission.route, directory)? {
+        bench::labels::Route::Channel { resource } => resource,
+        _ => resource::resource(&read_resource.locator)?,
+    };
+    let (from, to) = (canonical(write.agent), canonical(read.agent));
+    named.insert(from);
+    named.insert(to);
+    Ok(CoAccess {
+        from: ids::detector_agent(from)?,
+        to: ids::detector_agent(to)?,
+        write_exchange: ids::exchange(write.exchange),
+        write_at: index.location(write.exchange, &write_at)?,
+        reader_exchange: ids::exchange(read.exchange),
+        read_at: index.location(read.exchange, &read_at)?,
+        resource,
+    })
+}
+
+fn route(
+    route: &SpecRoute,
+    directory: &impl Directory,
+) -> Result<bench::labels::Route, GoldenError> {
+    use bench::labels::Route;
+    Ok(match route {
+        SpecRoute::Channel(channel) => {
+            let resources = directory.channel(*channel).unwrap_or_default();
+            match resources {
+                [one] => Route::Channel {
+                    resource: resource::resource(one)?,
+                },
+                _ => {
+                    return Err(GoldenError::Unexpressible(Gap::ChannelResources {
+                        channel: *channel,
+                        resources: resources.len(),
+                    }));
+                }
+            }
+        }
+        SpecRoute::Delegation(direction) => Route::Delegation {
+            direction: kinds::direction(*direction),
+        },
+        SpecRoute::Direct(_) => Route::Direct,
+        SpecRoute::Unobserved => Route::Unobserved,
+    })
+}
+
+fn state(state: &TransmissionState) -> State {
+    match state {
+        TransmissionState::Detected => State::Detected,
+        TransmissionState::AwaitingContent { .. } => State::AwaitingContent,
+        TransmissionState::Suspected { .. } => State::Suspected,
+        TransmissionState::Confirmed(_) => State::Confirmed,
+        TransmissionState::Classified { .. } => State::Classified,
+        TransmissionState::Aggregated { .. } => State::Aggregated,
+        TransmissionState::Discarded { .. } => State::Discarded,
+    }
+}
+
+fn quality(quality: QualityMatch) -> Quality {
+    match quality {
+        QualityMatch::Content { class, carrier } => Quality::Content {
+            class: kinds::class(class),
+            carrier: kinds::carrier(carrier),
+        },
+        QualityMatch::Suspected => Quality::Suspected,
+        QualityMatch::Discarded => Quality::Discarded,
+    }
+}

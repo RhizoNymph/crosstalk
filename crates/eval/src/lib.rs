@@ -15,6 +15,7 @@ pub mod corpus;
 pub mod datasets;
 pub mod detect;
 pub mod gateway;
+pub mod golden;
 pub mod ids;
 pub mod keys;
 pub mod location;

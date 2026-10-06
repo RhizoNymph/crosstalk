@@ -6,6 +6,8 @@
 //! ct-eval truth --dataset salt [--root DIR] [--limit N] [--include TEXT]… [--out FILE]
 //! ct-eval swarm --truth FILE --exchanges LOG [--blobs DIR] --export FILE [--evidence FILE] [--out DIR] [--gates FILE]
 //! ct-eval swarm-fetch --api URL [--token-env VAR] [--truth FILE | --since-unix-ms MS] --out DIR
+//! ct-eval export --format a2a-bench/1 --dataset salt [the selection flags of run] --out DIR
+//! ct-eval verify --export DIR [--predictions FILE]
 //! ct-eval run   --dataset ai-village [--mode window|claude-code] [--from DAY] [--to DAY] [--limit N] …
 //! ```
 //!
@@ -29,6 +31,10 @@
 //!
 //! `run` prints the table, writes `report.json` and `report.txt` to `--out`,
 //! and exits 2 when a gate fails. `truth` writes the labels as JSONL.
+//! `export` writes the selected worlds and labels in the bench format
+//! `a2a-bench/1`, and `run --predictions-out FILE` the run's predictions in
+//! it, naming the manifest of the matching export (`golden`); `verify`
+//! checks an export and a predictions file with the format's checks.
 //! `--detector live` scores the gateway's live composition
 //! (`crosstalk_gateway::live::Live`, a fresh one per world) through
 //! `detect::live`.
@@ -58,7 +64,7 @@ use crosstalk_eval::datasets::wiki::{WikiSelection, WikiSource};
 use crosstalk_eval::detect::live::{Forwarding, LiveDetector, LiveSettings, gateway_backend};
 use crosstalk_eval::gateway::PipelineDetector;
 use crosstalk_eval::keys::DatasetId;
-use crosstalk_eval::pipeline::{Detector, ReferenceDetector, run};
+use crosstalk_eval::pipeline::{Detector, ReferenceDetector, WorldOutcome, run_with};
 use crosstalk_eval::predict::Prediction;
 use crosstalk_eval::reference::ReferenceConfig;
 use crosstalk_eval::report::gates::{GATES_ENV, GateDetector, GateSearch, GatesFrom};
@@ -68,6 +74,7 @@ use crosstalk_eval::truth::jsonl;
 use crosstalk_flow::extract::ExtractConfig;
 use tracing_subscriber::EnvFilter;
 
+mod golden;
 mod replay;
 mod swarm;
 
@@ -90,6 +97,10 @@ enum Command {
     SwarmFetch(swarm::FetchArgs),
     /// Replay a saved bench run through the live composition and score it.
     Replay(replay::ReplayArgs),
+    /// Write the selected worlds and labels in a benchmark format.
+    Export(Box<golden::ExportArgs>),
+    /// Check an export (and a predictions file) with the format's checks.
+    Verify(golden::VerifyArgs),
 }
 
 #[derive(Clone, Copy, ValueEnum)]
@@ -269,6 +280,10 @@ struct RunArgs {
     /// ids, agents, routes and locations, never text.
     #[arg(long)]
     predictions: Option<PathBuf>,
+    /// Write the run's predictions here in the bench format `a2a-bench/1`,
+    /// naming the manifest `ct-eval export` writes for the same selection.
+    #[arg(long)]
+    predictions_out: Option<PathBuf>,
     /// Which detector to run.
     #[arg(long, value_enum, default_value_t = DetectorChoice::Reference)]
     detector: DetectorChoice,
@@ -541,12 +556,26 @@ fn run_command(args: RunArgs) -> Result<ExitCode> {
         None => None,
     };
     let mut dumped: std::io::Result<()> = Ok(());
-    let observe = |world: &World, predicted: &[Prediction]| {
-        if matches!(args.source.dataset, Dataset::AiVillage) {
-            unlabelled.observe(world, predicted);
+    let mut golden = match &args.predictions_out {
+        Some(path) => Some(golden::predictions_run(&args, &source, path)?),
+        None => None,
+    };
+    let observe = |outcome: WorldOutcome<'_>| {
+        if let WorldOutcome::Scored {
+            world,
+            predictions: predicted,
+            ..
+        } = outcome
+        {
+            if matches!(args.source.dataset, Dataset::AiVillage) {
+                unlabelled.observe(world, predicted);
+            }
+            if let (Some(out), Ok(())) = (dump.as_mut(), &dumped) {
+                dumped = write_predictions(out, world, predicted);
+            }
         }
-        if let (Some(out), Ok(())) = (dump.as_mut(), &dumped) {
-            dumped = write_predictions(out, world, predicted);
+        if let Some((run, _)) = golden.as_mut() {
+            run.observe(outcome);
         }
     };
     let (name, summary) = match args.detector {
@@ -554,12 +583,12 @@ fn run_command(args: RunArgs) -> Result<ExitCode> {
             let mut detector = ReferenceDetector {
                 config: args.matcher.config(),
             };
-            let summary = run(&mut source, &mut detector, examples, observe);
+            let summary = run_with(&mut source, &mut detector, examples, observe);
             (detector.name().to_owned(), summary)
         }
         DetectorChoice::Pipeline => {
             let mut detector = PipelineDetector::new(args.seed)?;
-            let summary = run(&mut source, &mut detector, examples, observe);
+            let summary = run_with(&mut source, &mut detector, examples, observe);
             (detector.name().to_owned(), summary)
         }
         DetectorChoice::Live => {
@@ -582,13 +611,22 @@ fn run_command(args: RunArgs) -> Result<ExitCode> {
                 None => gateway_backend(),
             };
             let mut detector = LiveDetector::new(backend, settings)?;
-            let summary = run(&mut source, &mut detector, examples, observe);
+            let summary = run_with(&mut source, &mut detector, examples, observe);
             (detector.name().to_owned(), summary)
         }
     };
     dumped.context("writing predictions")?;
     if let Some(mut out) = dump {
         out.flush().context("writing predictions")?;
+    }
+    if let (Some((run, spec)), Some(path)) = (golden, &args.predictions_out) {
+        let finished = run
+            .finish(&spec, Some(golden::detector_info(&args)))
+            .context("writing the a2a-bench/1 predictions")?;
+        let rows = crosstalk_eval::golden::verify::predictions_file(path, &finished.manifest)
+            .context("checking the a2a-bench/1 predictions")?;
+        golden::report(&finished, None)?;
+        eprintln!("predictions file checked: {rows} rows");
     }
     // Forwarding is a live setting: every other detector runs as shipped.
     let forwarding = match args.detector {
@@ -718,6 +756,8 @@ fn main() -> ExitCode {
         Command::Swarm(args) => swarm::run(args),
         Command::SwarmFetch(args) => swarm::fetch(args),
         Command::Replay(args) => replay::run(args),
+        Command::Export(args) => golden::export(*args),
+        Command::Verify(args) => golden::verify_command(args),
     };
     match result {
         Ok(code) => code,
