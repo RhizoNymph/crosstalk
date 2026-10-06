@@ -288,7 +288,13 @@ Each agent works like this:
 
 - **Identity.** It is named `agent-NNN`. Its key group is
   `i / agents-per-key`, and its `x-api-key` is `sk-ant-demoGGGG-<40 hex>`
-  for group `GGGG`, stable per seed. Its system prompt names its focus
+  for group `GGGG`, derived from the seed and the run id. Its conversations'
+  session ids are too, from their own random stream. So two runs with the
+  same seed (every bench run uses `--seed 42`) never share a key or a
+  session: a long-lived gateway does not thread a new run into an old
+  run's conversations, and a scorer joining on sessions cannot mix runs.
+  Everything else an agent does (tasks, pages, timing) depends on the seed
+  alone, so same-seed runs stay comparable. Its system prompt names its focus
   topic (`i mod topics`) and the wiki's URL, and ends with the scenario's
   style marker.
 - **Conversations.** Each has a fresh UUID-shaped

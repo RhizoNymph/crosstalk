@@ -162,13 +162,14 @@ pub async fn run(
         gateway: config.gateway.client(gateway_addr, config.idle_timeout),
         wiki: config.wiki.client(wiki_addr, config.idle_timeout),
         config: config.clone(),
+        run: run.clone(),
         clock,
     });
     let (events, inbox) = mpsc::channel(4096);
     let collector = tokio::spawn(collect(
         CollectorSetup {
             info: RunInfo {
-                run,
+                run: run.clone(),
                 seed: config.seed,
                 scenario: config.scenario,
                 agents,
@@ -188,7 +189,7 @@ pub async fn run(
     let (stop, stopped) = watch::channel(false);
     let mut tasks = JoinSet::new();
     for index in 0..agents {
-        let agent = Agent::new(&config, index);
+        let agent = Agent::new(&config, &run, index);
         let delay = config.ramp.mul_f64(f64::from(index) / f64::from(agents));
         let (shared, events, mut stopped) = (Arc::clone(&shared), events.clone(), stopped.clone());
         tasks.spawn(async move {
