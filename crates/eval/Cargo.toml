@@ -13,10 +13,9 @@ name = "ct-eval"
 path = "src/bin/ct-eval/main.rs"
 
 [dependencies]
-# The bench's on-disk format. A path dependency until the bench repository
-# is pushed (fix/cli-parity-followups at b347f83); it moves to a pinned git tag before
-# merge.
-a2a-bench-format = { path = "../../../../a2a-transmission-bench/fix-cli-parity-followups/crates/format" }
+# The bench's on-disk format, pinned to the bench repository's
+# a2a-bench-format-v1.0.0 tag (commit c289eda, which includes b347f83).
+a2a-bench-format = { git = "https://github.com/RhizoNymph/a2a-transmission-bench", tag = "a2a-bench-format-v1.0.0" }
 crosstalk-spec = { path = "../../spec" }
 crosstalk-flow = { path = "../flow" }
 crosstalk-gateway = { path = "../gateway" }
