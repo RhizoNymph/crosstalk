@@ -127,9 +127,8 @@ impl AuditIntents for InMemoryAuditLog {
 
     async fn recover_interrupted(&mut self) -> Result<Vec<AuditId>, AuditError> {
         let mut state = lock(&self.state);
-        let mut leftover: Vec<AuditIntent> = std::mem::take(&mut state.intents)
-            .into_values()
-            .collect();
+        let mut leftover: Vec<AuditIntent> =
+            std::mem::take(&mut state.intents).into_values().collect();
         leftover.sort_by_key(|intent| (intent.at(), intent.id()));
         let mut recovered = Vec::with_capacity(leftover.len());
         for intent in leftover {

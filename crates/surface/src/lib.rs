@@ -16,6 +16,14 @@
 //!   the edge store, whose graphs describe their nodes with it.
 //! - Time comes from the injected spec `Clock`; ids the surface mints come
 //!   from one ULID generator over it.
+//! - [`pg`] holds L8's Postgres stores: `PgAuditLog` (`AuditLog` and
+//!   `AuditIntents`), `PgOperatorStore` and `PgSinkRegistry`, in schema
+//!   `surface`. Operator actions record a write-ahead intent before their
+//!   effect, and [`Surface::recover_interrupted`] turns those a stopped
+//!   process left into `Interrupted` entries at start.
+//! - Cursor keys: [`Surface::with_secret`] derives the surface's from the
+//!   deployment secret, so its cursors survive a restart; [`Surface::new`]
+//!   draws one (tests, memory mode).
 //!
 //! Roadmap: P2.6 (L8 surface over spec traits) and P7.3 (surface on Postgres).
 //! A layer crate: it depends on the spec, never on another layer crate.
@@ -28,17 +36,21 @@ pub mod export;
 mod ids;
 pub mod live;
 pub mod nodes;
+pub mod pg;
 mod query;
 mod service;
 pub mod stores;
 
 pub use config::SurfaceConfig;
+pub use cursor::SURFACE_CURSOR_LABEL;
 pub use nodes::{NodeCache, NodeFeeder};
 pub use service::Surface;
 pub use stores::{EvidenceRecords, RecordReadError, SurfaceStores};
 
 #[cfg(test)]
 mod dst;
+#[cfg(test)]
+mod integration;
 #[cfg(test)]
 mod props;
 #[cfg(test)]

@@ -5,11 +5,22 @@
 //!
 //! A token carries the resume point (the topic-model version the first page
 //! resolved and the last id served) and a digest of the request it was
-//! issued for, authenticated with a keyed BLAKE3 MAC under a key drawn when
-//! the surface starts. So a token the surface did not issue, one whose
-//! payload was changed, and one presented with another request all fail
-//! [`CursorKey::open`] and become `InvalidCursor`; nothing is stored per
-//! cursor.
+//! issued for, authenticated with a keyed BLAKE3 MAC. So a token the
+//! surface did not issue, one whose payload was changed, and one presented
+//! with another request all fail [`CursorKey::open`] and become
+//! `InvalidCursor`; nothing is stored per cursor.
+//!
+//! **The key.** A running gateway derives it from the deployment secret
+//! ([`CursorKey::derive`], `KeyedHasher::derive_key` under a per-purpose
+//! label such as [`SURFACE_CURSOR_LABEL`]), so a cursor issued before a
+//! restart resolves after it, and on every node sharing the secret
+//! (`surface.cursor.survives-restart`); rotating the secret invalidates
+//! outstanding cursors (decision Q4). Tests and memory mode may draw one
+//! ([`CursorKey::draw`]), which dies with the process.
+//!
+//! The Postgres audit log pages with the same key type through
+//! [`CursorKey::issue`] and [`CursorKey::resume`]: an opaque position (its
+//! last `(at, id)`) instead of a [`Resume`].
 //!
 //! ```text
 //! token = hex(version u32 BE ‖ last id u128 BE ‖ request digest 32 B) "_" hex(MAC 16 B)
@@ -23,10 +34,14 @@ use std::sync::{Mutex, PoisonError};
 
 use crosstalk_spec::aggregates::topic::{EmbeddingModel, TopicModelVersion};
 use crosstalk_spec::ids::RandomSource;
+use crosstalk_spec::ids::secret::KeyedHasher;
 use crosstalk_spec::paging::Cursor;
 use crosstalk_spec::support::{from_hex, hex};
 
 const PAYLOAD_LEN: usize = 4 + 16 + 32;
+
+/// The label the surface's own cursor key is derived under.
+pub const SURFACE_CURSOR_LABEL: &str = "crosstalk.cursor.v1.surface";
 const MAC_LEN: usize = 16;
 
 /// The key the surface's cursors are authenticated with. Never serialized
@@ -56,6 +71,36 @@ impl CursorKey {
             *chunk = random.next_u64().to_le_bytes();
         }
         Self(key)
+    }
+
+    /// The key derived from the deployment secret's current version for
+    /// `label` (`crosstalk.cursor.v1.<store>`): the same secret and label
+    /// give the same key in every process.
+    pub fn derive(secret: &KeyedHasher, label: &'static str) -> Self {
+        Self(*secret.derive_key(label).as_bytes())
+    }
+
+    /// A cursor resuming after the opaque `position`, for the request
+    /// whose digest is `request`. `None` when the token would be longer
+    /// than a cursor may be.
+    pub fn issue<L>(&self, position: &[u8], request: &[u8; 32]) -> Option<Cursor<L>> {
+        let mut payload = Vec::with_capacity(32 + position.len());
+        payload.extend_from_slice(request);
+        payload.extend_from_slice(position);
+        let mac = self.mac(&payload);
+        Cursor::from_token(format!("{}_{}", hex(position), hex(&mac))).ok()
+    }
+
+    /// The position `cursor` resumes after, if this key issued it for the
+    /// request whose digest is `request`.
+    pub fn resume<L>(&self, cursor: &Cursor<L>, request: &[u8; 32]) -> Option<Vec<u8>> {
+        let (position, mac) = cursor.token().split_once('_')?;
+        let position = from_hex(position).ok()?;
+        let mac = from_hex(mac).ok()?;
+        let mut payload = Vec::with_capacity(32 + position.len());
+        payload.extend_from_slice(request);
+        payload.extend_from_slice(&position);
+        (self.mac(&payload) == mac.as_slice()).then_some(position)
     }
 
     /// A cursor resuming at `resume` for the request whose digest is
@@ -167,6 +212,13 @@ impl RequestDigest {
 
     pub fn tag(mut self, tag: u8) -> Self {
         self.0.update(&[tag]);
+        self
+    }
+
+    /// Arbitrary bytes, length-prefixed so no two splits collide.
+    pub fn bytes(mut self, bytes: &[u8]) -> Self {
+        self.0.update(&(bytes.len() as u64).to_le_bytes());
+        self.0.update(bytes);
         self
     }
 

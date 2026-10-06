@@ -541,7 +541,8 @@ where
                         let read = |error: AuditError| Divergence::new(step, format!("{error:?}"));
                         let logged = audit_entries(&subject).await.map_err(read)?;
                         for (id, intent) in std::mem::take(&mut pending) {
-                            let recorded = logged.iter().any(|entry| entry == &intent.interrupted());
+                            let recorded =
+                                logged.iter().any(|entry| entry == &intent.interrupted());
                             holds(step, recorded, || {
                                 format!("intent {id:?} left no Interrupted entry")
                             })?;
@@ -630,7 +631,11 @@ where
             for (step, op) in ops.iter().enumerate() {
                 let label = format!("{op:?}");
                 match op {
-                    SinkOp::Record { sink: n, at, failed } => {
+                    SinkOp::Record {
+                        sink: n,
+                        at,
+                        failed,
+                    } => {
                         let outcome = match failed {
                             None => Ok(ts(*at)),
                             Some(0) => Err(SinkError::Unreachable {

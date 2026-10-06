@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use crosstalk_spec::aggregates::series::BucketWidth;
 use crosstalk_spec::aliases::Aliases;
-use crosstalk_spec::ids::{AgentId, ChannelId, EntityId, SeededRandom};
+use crosstalk_spec::ids::{AgentId, ChannelId, EntityId, KeyedHasher, SeededRandom};
 use crosstalk_spec::interfaces::l3_reconstruction::AgentDirectory;
 use crosstalk_spec::interfaces::l5_flow::ChannelDirectory;
 use crosstalk_spec::interfaces::l7_topology::EdgeStore;
@@ -15,7 +15,7 @@ use crosstalk_spec::paging::{Cursor, Page, PageSize};
 use crosstalk_spec::support::{Clock, NonEmpty, TimeWindow, Timestamp};
 
 use crate::config::SurfaceConfig;
-use crate::cursor::{CursorKey, SearchModels};
+use crate::cursor::{CursorKey, SURFACE_CURSOR_LABEL, SearchModels};
 use crate::ids::IdMinter;
 use crate::live::FeedHandle;
 use crate::stores::SurfaceStores;
@@ -41,12 +41,16 @@ impl<S> std::fmt::Debug for Surface<S> {
 }
 
 impl<S: SurfaceStores> Surface<S> {
-    /// The surface over `stores`. `clock` stamps every acceptance time,
-    /// audit entry and `present`; `random` seeds the ids the surface mints
-    /// and the key its cursors are sealed with (`SeededRandom::new` in tests
-    /// and simulations, `SeededRandom::from_entropy` in a running gateway);
-    /// `feed` is the live feed `subscribe` attaches to
-    /// ([`crate::live::FeedWriter::spawn`]).
+    /// The surface over `stores`, its cursor key drawn from `random`, so
+    /// its cursors die with the process: for tests, simulations and memory
+    /// mode. A gateway over persistent stores uses
+    /// [`Surface::with_secret`].
+    ///
+    /// `clock` stamps every acceptance time, audit entry and `present`;
+    /// `random` seeds the ids the surface mints (`SeededRandom::new` in
+    /// tests and simulations, `SeededRandom::from_entropy` in a running
+    /// gateway, so a restart never mints a persisted id); `feed` is the
+    /// live feed `subscribe` attaches to ([`crate::live::FeedWriter::spawn`]).
     pub fn new(
         stores: S,
         clock: Arc<dyn Clock>,
@@ -55,6 +59,33 @@ impl<S: SurfaceStores> Surface<S> {
         feed: FeedHandle,
     ) -> Self {
         let cursors = CursorKey::draw(&mut random);
+        Self::build(stores, clock, config, random, feed, cursors)
+    }
+
+    /// As [`Surface::new`], with the cursor key derived from the deployment
+    /// secret under [`SURFACE_CURSOR_LABEL`]: a cursor issued before a
+    /// restart resolves after it with the same secret
+    /// (`surface.cursor.survives-restart`).
+    pub fn with_secret(
+        stores: S,
+        clock: Arc<dyn Clock>,
+        config: SurfaceConfig,
+        random: SeededRandom,
+        feed: FeedHandle,
+        secret: &KeyedHasher,
+    ) -> Self {
+        let cursors = CursorKey::derive(secret, SURFACE_CURSOR_LABEL);
+        Self::build(stores, clock, config, random, feed, cursors)
+    }
+
+    fn build(
+        stores: S,
+        clock: Arc<dyn Clock>,
+        config: SurfaceConfig,
+        random: SeededRandom,
+        feed: FeedHandle,
+        cursors: CursorKey,
+    ) -> Self {
         let ids = IdMinter::new(Arc::clone(&clock), random);
         Self {
             stores,
