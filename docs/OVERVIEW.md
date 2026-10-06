@@ -1396,7 +1396,10 @@ Features Index:
       SpanRelayed and ContentMatched; PgFingerprintIndex model-tested
       against crosstalk-memory's reference; L4's records (exchanges with
       per-exchange and per-message scan status, spans by id, matches by
-      reader message and by origin span) in memory and on Postgres; a
+      reader message and by origin span, and each exchange's start, read
+      back by the L4 stage so a restart loses none) in memory and on
+      Postgres, the Postgres pair model-tested against the memory one
+      under every match rule and across a restart; a
       semantic matcher stub until P6.2. Validated on AgentDojo: 9948 of
       9949 exposed injection slots matched.
     entry_points:

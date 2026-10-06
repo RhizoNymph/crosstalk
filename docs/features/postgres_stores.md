@@ -352,6 +352,18 @@ No extension.
 
 ### L4: provenance
 
+**Status (W3, `feat/pg-w3-provenance`): done in `crates/provenance`.**
+`SpanIndex` (and `ProvenanceReads`) on `PgProvenanceStore` landed earlier
+with the conversation reads (`store/reads.rs`); W3 added
+`ProvenanceStore::started_at` (memory and Postgres) and
+`Provenance::started_at` for the L4 stage, model-agreement tests of every
+match rule on Postgres (`integration::rules`), the restart replay and
+token-observation retention tests (`integration::restart`), and the
+consumer's derived-id DST (INV-1202's provenance path). No migration. W8
+switches `crates/gateway/src/live/layers/l4.rs` from its `started` map to
+`engine.started_at(delta.exchange)` (falling back to the envelope's time
+only when `None`).
+
 - `PgProvenanceStore` and `PgFingerprintIndex` already exist. The engine
   is replay-complete: a redelivered delta returns the stored envelopes,
   and a `Scanned` exchange redoes its index writes. The one known
@@ -1401,7 +1413,7 @@ marked):
 | `crates/transport/src/spool/{mod,segment,record,cursor,drain,state}.rs` | the publish spool | `SpoolingBus`, `SpoolConfig`, `SpoolState`, `SpoolStats`, `SpoolError` (`Locked`, `Corrupt`, `Io`) |
 | `crates/testkit/src/db_link.rs` | a cuttable TCP relay to the test database | `DbLink` (`start`, `url`, `cut`, `restore`) |
 | `crates/reconstruct/migrations/0005_outbox_ids.sql`; `src/agents/outbox.rs`; `src/publish.rs`; `src/thread/pg.rs`; `src/ids.rs` (W2, implemented) | stable outbox ids; `ExchangePlacements`; cursor keys from the secret | `PgConversations: ExchangePlacements`, `EventSink::stamp`, `Stamp`, `PgAgents::open_with_secret`, `cursor_key` |
-| `crates/provenance/src/store/pg.rs` | `SpanIndex`, `started_at` | `PgProvenanceStore: SpanIndex` |
+| `crates/provenance/src/store/{mod,memory,pg,reads}.rs`, `src/engine.rs` (W3, done) | `SpanIndex` (in `reads.rs`), `started_at` | `PgProvenanceStore: SpanIndex`, `ProvenanceStore::started_at`, `Provenance::started_at` |
 | `crates/flow/migrations/0002_restart.sql`; `src/store/outbox.rs`; `src/consumer/{checkpoint,restore,held}.rs`; `src/extract/{step,ledger}.rs` | checkpoint, held writes, ledger, extraction step | `Checkpoint`, `restore`, `ExtractionLedger`, `PgExtractionLedger`, `MemoryExtractionLedger`, `ExtractionStep` |
 | `crates/analysis/migrations/0003_outbox_ids.sql`, `0004_topics.sql`, `0005_projections.sql`; `src/topics/**`, `src/projections/**` | L6 stores | `PgTopicCatalog`, `PgProjectionStore` |
 | `crates/topology/migrations/0002_outbox_ids.sql`; `src/outbox.rs` | stable ids | - |
