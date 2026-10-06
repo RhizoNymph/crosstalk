@@ -36,7 +36,8 @@ Overview:
     has its extractors, correlator and consumer (flow_extract,
     flow_correlator) and its Postgres stores (flow_store); L7 has its
     Postgres edge store and bus consumer (topology_store); L6 has its
-    remote adapters (analysis) and Postgres search and alerts
+    remote adapters (analysis) and Postgres search, alerts, topic
+    catalog and projection store, plus the classification step
     (search_alerts).
     The L8 surface service
     (crosstalk-surface: QueryApi, OperatorActions, LiveFeed, export and
@@ -1745,12 +1746,26 @@ Features Index:
       AlertReads in SERIALIZABLE transactions with an outbox published after
       commit; RuleEvaluator is AlertRuleEval for every rule kind; AlertsStage
       is the alerts consumer group, built like the gateway pipeline's
-      stages. Model-tested against crosstalk-memory's harnesses.
+      stages. P7.3 W5 adds PgTopicCatalog (TopicCatalog, TopicLifecycle,
+      TopicAssignments; version numbers from a counter row, drops freeze
+      sizes and delete assignments in one transaction, the one publisher of
+      TopicVersionDropped), PgProjectionStore (ProjectionStore: jobs as
+      ProjectionInfo JSON, SKIP LOCKED claims under leases, frames as
+      bytea), the outbox relay with stable envelope ids (rows stamped in a
+      committed transaction before the first publish, republished under
+      the same id; INV-1213), and classify::Classifier, the analyze
+      consumer's classification step (decision saved before any effect and
+      replayed on redelivery, envelope id EventId::derive of the delivery),
+      for W8 to wire in place of the gateway's classifier. Model-tested
+      against crosstalk-memory's harnesses.
     entry_points:
       - crates/analysis/src/search/mod.rs
       - crates/analysis/src/alerts/mod.rs
       - crates/analysis/src/alerts/eval/mod.rs
       - crates/analysis/src/alerts/consumer.rs
+      - crates/analysis/src/topics/mod.rs
+      - crates/analysis/src/projections/mod.rs
+      - crates/analysis/src/classify/mod.rs
       - crates/analysis/src/pg/mod.rs
     depends_on: [type_spec, store, memory, gateway]
     doc: docs/features/search_alerts.md

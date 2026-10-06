@@ -14,10 +14,23 @@
 //! - [`alerts`]: the alert store on Postgres (`AlertRuleStore`,
 //!   `AlertTriage`, `AlertRuleMaintenance`, `AlertActions`, `AlertReads`),
 //!   rule evaluation (`AlertRuleEval`) and the `alerts` bus consumer.
+//! - [`topics`]: the topic catalog on Postgres (`TopicCatalog`,
+//!   `TopicLifecycle`), the one publisher of `TopicVersionDropped`.
+//! - [`projections`]: projection jobs and frames on Postgres
+//!   (`ProjectionStore`).
+//! - [`classify`]: the classification step of the `analyze` consumer
+//!   (`TransmissionConfirmed` to `TransmissionClassified`), idempotent on
+//!   redelivery, with its envelope id derived from the input.
 //! - [`pg`]: what the Postgres stores share (migrations, codec, cursors,
-//!   the outbox).
+//!   pages, the outbox and its relay).
 
 pub mod alerts;
+pub mod classify;
 pub mod pg;
+pub mod projections;
 pub mod remote;
 pub mod search;
+pub mod topics;
+
+#[cfg(test)]
+mod integration;
