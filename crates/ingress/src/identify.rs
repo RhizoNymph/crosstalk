@@ -16,11 +16,18 @@
 //! | Copilot (either kind), or any token shaped `tid=…` | any | `ExchangedToken` |
 //! | subscription | `Authorization` | `OauthAccessToken` |
 //! | subscription | a key header or `key=` | `ApiKey` |
+//! | Anthropic vendor API | `Authorization: Bearer` with the OAuth capability in `anthropic-beta` | `OauthAccessToken` |
 //! | vendor API | `Authorization: Bearer` shaped `sk-ant-oat…` or a JWT | `OauthAccessToken` |
 //! | vendor API | anything else | `ApiKey` |
 //!
 //! Claude Pro/Max traffic goes to api.anthropic.com, the same host as the
-//! API, so on a vendor API route the token's shape decides.
+//! API, so on a vendor API route two signals mark a subscription token:
+//! the documented one, an `anthropic-beta` value starting `oauth-` that
+//! Claude Code sends with a claude.ai login ([`OauthCapability`],
+//! `ingress.credential.oauth-capability-marks-oauth`), and the token's
+//! shape, for harnesses that omit the beta. Either is enough: a false
+//! `OauthAccessToken` only widens how harness ids are scoped, while a false
+//! `ApiKey` would split one agent at every token refresh.
 
 use std::sync::Arc;
 
@@ -57,6 +64,34 @@ pub enum CredentialSource {
     /// The `key` query parameter.
     QueryKey,
 }
+
+/// Whether a request carries Anthropic's OAuth capability: some
+/// comma-separated `anthropic-beta` value, trimmed, starts with `oauth-`
+/// (without regard to case). The value's date is not pinned: the gateway
+/// docs say not to allowlist beta values. Read from the head only.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OauthCapability {
+    Sent,
+    NotSent,
+}
+
+impl OauthCapability {
+    pub fn of(head: &RequestHead) -> Self {
+        let sent = head
+            .headers
+            .iter()
+            .filter(|(name, _)| name.eq_ignore_ascii_case("anthropic-beta"))
+            .flat_map(|(_, value)| value.split(','))
+            .any(|beta| {
+                beta.trim()
+                    .get(..OAUTH_BETA_PREFIX.len())
+                    .is_some_and(|prefix| prefix.eq_ignore_ascii_case(OAUTH_BETA_PREFIX))
+            });
+        if sent { Self::Sent } else { Self::NotSent }
+    }
+}
+
+const OAUTH_BETA_PREFIX: &str = "oauth-";
 
 /// Reads identity from headers and hashes it with the deployment secrets.
 /// Cheap to clone: clones share one hasher (the spec's hasher is not
@@ -111,6 +146,7 @@ impl HeaderIdentifier {
         source: CredentialSource,
         raw: RawCredential<'_>,
         kind: &UpstreamKind,
+        oauth: OauthCapability,
     ) -> CredentialScheme {
         let shape = raw.shape();
         match kind {
@@ -126,8 +162,13 @@ impl HeaderIdentifier {
                     CredentialScheme::ApiKey
                 }
             },
-            UpstreamKind::VendorApi(_) => match (source, shape) {
-                (CredentialSource::Bearer, TokenShape::AnthropicOauth | TokenShape::Jwt) => {
+            UpstreamKind::VendorApi(vendor) => match (source, shape, oauth) {
+                (CredentialSource::Bearer, _, OauthCapability::Sent)
+                    if *vendor == Vendor::Anthropic =>
+                {
+                    CredentialScheme::OauthAccessToken
+                }
+                (CredentialSource::Bearer, TokenShape::AnthropicOauth | TokenShape::Jwt, _) => {
                     CredentialScheme::OauthAccessToken
                 }
                 _ => CredentialScheme::ApiKey,
@@ -155,7 +196,7 @@ impl HeaderIdentifier {
     ) -> ClientContext {
         let credential = Self::raw_credential(head).map(|(source, raw)| {
             (
-                Self::scheme(source, raw, &upstream.kind),
+                Self::scheme(source, raw, &upstream.kind, OauthCapability::of(head)),
                 self.keys.credential(raw.bytes(), started_at),
             )
         });
@@ -193,7 +234,7 @@ impl ClientIdentifier for HeaderIdentifier {
         started_at: Timestamp,
     ) -> Option<CredentialRef> {
         Self::raw_credential(head).map(|(source, raw)| CredentialRef {
-            scheme: Self::scheme(source, raw, &upstream.kind),
+            scheme: Self::scheme(source, raw, &upstream.kind, OauthCapability::of(head)),
             hash: self.keys.credential(raw.bytes(), started_at).current,
         })
     }

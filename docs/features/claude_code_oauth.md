@@ -6,10 +6,12 @@ harness points `ANTHROPIC_BASE_URL` at the gateway and keeps its claude.ai
 login. The gateway forwards the traffic unchanged, captures the generation
 exchanges, and hashes the token on arrival. The raw token is never stored.
 
-Status: design (phase 1). Nothing below is implemented by this document.
-Most of the L0 and L3 machinery it relies on already exists
-([ingress](ingress.md), [reconstruct](reconstruct.md)). Phase 2 adds the
-hardening and tests listed under [Work](#work-phase-2).
+Status: implemented. Most of the L0 and L3 machinery already existed
+([ingress](ingress.md), [reconstruct](reconstruct.md)). This feature added
+the OAuth-capability scheme rule in L0 and the tests that prove the rest
+end to end, listed under [Files](#files). The table under
+[Before this feature](#before-this-feature-layer-by-layer) records what was
+already true and what this feature closed.
 
 ## Scope
 
@@ -110,27 +112,28 @@ A background research summary claimed that the Messages API rejects OAuth
 tokens. No official document says so, and [llm-gateway] describes this
 exact path as supported. That claim is not used in this design.
 
-## Today's behaviour, layer by layer
+## Before this feature, layer by layer
 
-Nothing in the current code breaks a Bearer-authenticated Anthropic
-request. The gaps are fragility and missing end-to-end proof.
+Nothing in the code broke a Bearer-authenticated Anthropic request. The
+gaps were fragility and missing end-to-end proof; each is now closed
+(the last column says how).
 
-| Concern | Today | Gap |
+| Concern | Before | Gap, and how it was closed |
 | --- | --- | --- |
 | Routing | Path prefix only (`routing.rs`); headers never steer it | none |
 | Forwarding | Only hop-by-hop fields and `Host` are removed (`proxy/headers.rs`). `authorization`, `anthropic-beta`, `anthropic-version` and the `?beta=true` query go upstream byte for byte. The passthrough property test already generates `Bearer` with `claude-code-20250219,oauth-2025-04-20` (`tests/passthrough.rs`) | none |
 | Response relay | Frame by frame. `ping` events, `anthropic-ratelimit-unified-*`, `retry-after`, `x-should-retry` and error bodies are passed unchanged | none |
 | Classification | `POST /v1/messages` is `Generation`. `count_tokens`, `/api/hello` and `/v1/models` are forwarded but not captured. Anything unclassified is still forwarded (and counted) | none |
 | Credential read | `Authorization` takes precedence over `x-api-key`. A `Bearer` token is read as a `RawCredential` borrow and hashed with the `KeyedHasher` (BLAKE3 keyed by the deployment secret) at the exchange's start (`identify.rs`, `credential.rs`) | none |
-| Scheme | On a `VendorApi` route, `Bearer` + shape `sk-ant-oat…` gives `OauthAccessToken`, and any other `Bearer` gives `ApiKey` | **Fragile.** If Anthropic changes the token prefix, OAuth tokens become `ApiKey` (`Stable`). L3 would then scope harness ids by credential hash, so every refresh would start a new agent. The documented signal, the OAuth capability in `anthropic-beta`, is ignored |
+| Scheme | On a `VendorApi` route, `Bearer` + shape `sk-ant-oat…` gives `OauthAccessToken`, and any other `Bearer` gives `ApiKey` | **Fragile.** If Anthropic changes the token prefix, OAuth tokens become `ApiKey` (`Stable`). L3 would then scope harness ids by credential hash, so every refresh would start a new agent. The documented signal, the OAuth capability in `anthropic-beta`, was ignored. **Closed:** `OauthCapability` (INV-1156) |
 | Decode head | `without_credentials` removes `authorization`, `x-api-key` and the other credential fields before the decoder sees the head | none |
-| RawExchange / bus / blobs / exchange log | Carry no request head. `ClientContext` carries only `CredentialRef { scheme, hash }` (INV-12) | not proven end to end for a subscription session |
+| RawExchange / bus / blobs / exchange log | Carry no request head. `ClientContext` carries only `CredentialRef { scheme, hash }` (INV-12) | not proven end to end. **Closed:** INV-1158 tests |
 | Logs | Ingress and gateway logs carry no headers, queries or bodies (`gateway/src/logging.rs` header; ingress `tracing` call sites) | none |
 | L3 scope | `scope_of`: account, else a stable credential, else the upstream. `OauthAccessToken` is `Rotating`, so harness ids are scoped by the upstream | see [Identity](#identity-across-refresh) |
 | L3 evidence | `RotatingCredential(hash)` has specificity 0: it is attached to the agent but never decides when a session or agent id is present | none |
 | L1 / canonical | No vendor or credential logic. The dialect comes from the upstream kind (`Reference` for both `VendorApi` and `Subscription` Anthropic) | none |
-| e2e scenario | `crates/e2e/src/scenario/wire.rs` sends `x-api-key` only | no subscription-shaped session |
-| Reconstruct tests | Rotating credentials appear in the evidence and property tests | no named test that a refresh inside one session keeps the agent |
+| e2e scenario | `crates/e2e/src/scenario/wire.rs` sends `x-api-key` only | no subscription-shaped session. **Closed:** `Credential::Subscription`, `Scenario::wiki_relay_subscription` |
+| Reconstruct tests | Rotating credentials appear in the evidence and property tests | no named test that a refresh keeps the agent. **Closed:** INV-1157 tests |
 
 ## Design
 
@@ -186,12 +189,12 @@ The scheme rule gains one documented input: the OAuth capability in
   false `ApiKey` splits one agent at every refresh. Leaning toward
   `OauthAccessToken` is therefore the safer error.
 
-In code, `HeaderIdentifier::scheme(source, raw, kind)` becomes
-`scheme(source, raw, kind, oauth_beta: bool)`, with `oauth_beta` computed
-from the head by a new `identify::oauth_capability(head)`. A
-`CredentialHints` struct is an alternative if more head-derived inputs
-appear. The function still reads only the token's shape, never its
-content.
+In code, `HeaderIdentifier::scheme(source, raw, kind, oauth)` takes an
+`identify::OauthCapability` (`Sent` or `NotSent`), computed from the head
+by `OauthCapability::of(head)`; `context` and the `ClientIdentifier`
+derivations pass it. The rule applies only to `VendorApi(Anthropic)`
+(`Subscription(Anthropic)` already makes every Bearer OAuth). The
+function still reads only the token's shape, never its content.
 
 ### Hashing (unchanged)
 
@@ -235,9 +238,16 @@ the same `x-claude-code-session-id`.
   credentials. A `setup-token` token lasts a year, so in practice the
   credential is stable there.
 
-Proposal: no new identity mechanism. Session continuity is the identity
-anchor, which is what `Stability::Rotating` already encodes. Phase 2 only
-proves it.
+No new identity mechanism: session continuity is the identity anchor,
+which is what `Stability::Rotating` already encodes. INV-1157 proves it.
+
+**Known limit: session-id spoofing.** With no account, harness ids are
+scoped by the upstream. Any client of the same gateway route that sends
+another user's `x-claude-code-session-id` is attributed to that user's
+agent. With an API key this cannot happen, because harness ids are then
+scoped by the stable credential. Session ids are random UUIDs, so it takes
+intent, not accident. Accepted for now; to revisit with account-scoped
+identity.
 
 ### Logging and redaction
 
@@ -250,7 +260,9 @@ proves it.
   exchange log or in L8 API responses.
 - Request bodies are stored as received. The body carries no credential,
   but on a subscription `metadata.user_id` may include an account UUID.
-  See [Open questions](#open-questions).
+  That UUID is **personal data held raw in the blob store** (it is not
+  hashed, because bodies are stored byte for byte). It is not used for
+  identity.
 
 ## Data and control flow
 
@@ -264,7 +276,7 @@ L0 Proxy::handle ─ Routes::resolve(path) ─ strip hop-by-hop + Host
   │ classify → Generation
   │ HeaderIdentifier::context(head, upstream, started_at)
   │   raw_credential → (Bearer, RawCredential<'_>)          (borrow, never stored)
-  │   scheme(Bearer, raw, VendorApi(Anthropic), oauth_beta) → OauthAccessToken
+  │   scheme(Bearer, raw, VendorApi(Anthropic), OauthCapability::of(head)) → OauthAccessToken
   │   KeyedHasher::credential(raw, started_at) → CredentialHash (current [, previous])
   │ forward unchanged ─────────────────────────────────▶ api.anthropic.com
   │ relay SSE frame by frame (pings, ratelimit headers) ◀─
@@ -281,101 +293,83 @@ Claude Code ──HTTPS──▶ platform.claude.com /v1/oauth/token   (refresh 
 
 ## Files
 
-Phase 2 touches only these files. All paths are relative to the repo
-root.
-
-| File | Role | Change |
+| File | Role | Key exports / tests |
 | --- | --- | --- |
-| `crates/ingress/src/identify.rs` | `HeaderIdentifier`, the scheme rule | add `oauth_capability(head)` and pass it to `scheme`; update the rule table in the module doc |
-| `crates/ingress/src/credential.rs` | `RawCredential`, `TokenShape` | unchanged (shape rule kept) |
-| `crates/ingress/src/tests/credential.rs` | scheme rule tests | add rows for the new rule: `Bearer` with an opaque token plus the OAuth beta gives `OauthAccessToken`; `x-api-key` plus the OAuth beta gives `ApiKey`; non-OAuth beta values do not trigger it; case and whitespace variants. Existing rows are unchanged |
-| `crates/ingress/src/tests/subscription.rs` (new) | socket test | a Claude Code subscription-shaped streamed exchange through the proxy against `FakeUpstream`: the upstream sees the head and body unchanged, the client sees `anthropic-ratelimit-unified-*` and pings unchanged, one `RawExchange` with `OauthAccessToken`, and no token bytes in it or in captured logs |
-| `crates/testkit/src/…` (corpus or harness builders) | fixtures | a subscription session builder: fake `sk-ant-oat01-TEST…` tokens, a token switch mid-session to simulate a refresh, and beta values with `oauth-2025-04-20` |
-| `crates/e2e/src/scenario/wire.rs` | e2e Claude Code wire | an `Auth::{ApiKey, Subscription}` choice on the session. Subscription sends `Authorization: Bearer` plus the OAuth beta and no `x-api-key` |
-| `crates/reconstruct/src/tests/consumer.rs` | L3 unit tests | refresh inside a session keeps one agent; two sessions on one token give two agents and no conflict |
-| `crates/gateway/src/…/tests` (Live composition) | end to end in process | a subscription session with a refresh: one agent, its conversation threaded across the refresh, and no fake-token substring in the blobs, bus envelopes, exchange log or L8 responses |
-| `spec/invariants/INV-X-*.toml` | invariants | see below |
-| `docs/features/ingress.md`, `docs/features/claude_code_oauth.md`, `docs/OVERVIEW.md`, `docs/features/deploy.md` | docs | the scheme rule, this doc's status, and the operator note: run Claude Code with only `ANTHROPIC_BASE_URL` set, since `ANTHROPIC_AUTH_TOKEN` or `ANTHROPIC_API_KEY` would replace the subscription |
+| `crates/ingress/src/identify.rs` | `HeaderIdentifier`, the scheme rule | `OauthCapability` (`of`, `Sent`, `NotSent`); `HeaderIdentifier::scheme(source, raw, kind, oauth)` |
+| `crates/ingress/src/credential.rs` | `RawCredential`, `TokenShape` | unchanged (the shape rule is kept) |
+| `crates/ingress/src/tests/subscription.rs` | L0 tests | `oauth_capability_marks_oauth` (table), `oauth_capability_marks_oauth_anywhere` (property: position, case, padding, token shape), `oauth_capability_reads_the_header_only`, `subscription_session_passes_through_and_is_captured` (sockets against `FakeUpstream` with the corpus's `subagent_oauth_streaming` case and two fake tokens: request and response unchanged, `anthropic-ratelimit-unified-*` relayed, `OauthAccessToken` digests that differ across the refresh, one session, no token text in the `RawExchange`) |
+| `crates/reconstruct/src/tests/refresh.rs` | L3 tests | `refresh_inside_session_keeps_agent` (same agent, same conversation, both digests attached as `RotatingCredential`), `sessions_sharing_a_token_are_separate_agents` |
+| `crates/gateway/tests/subscription.rs` | Real gateway (role `all`) over sockets, its own binary for the global log subscriber | `subscription_tokens_pass_through_and_never_persist`: two fake tokens through the proxy, the upstream sees them unchanged, the two `ConversationDelta`s name one agent, and no 12-byte window of either token's secret part is in any log line (trace level), file under the data directory (blobs, exchange log) or bus envelope of any subject |
+| `crates/e2e/src/scenario/wire.rs` | e2e Claude Code wire | `Credential::{ApiKey, Subscription}` on `SessionHeaders` (replaces `api_key`); a subscription sends `Authorization: Bearer` and `oauth-2025-04-20` in `anthropic-beta`, never `x-api-key` |
+| `crates/e2e/src/scenario/mod.rs` | e2e scenario | `Auth`, `SUBSCRIPTION_TOKENS`, `Scenario::wiki_relay_subscription` (A's token refreshed between `a1-write` and `a2-ack`) |
+| `crates/e2e/tests/smoke/subscription.rs` | e2e smoke | every credential is `OauthAccessToken` and the refresh changes A's digest but not its session; through `Live`, two agents, the channel edge with one transmission, and no token window in any surface answer (agents, agent details, edges, channels, transmissions, summaries, evidence) |
+| `spec/invariants/INV-17-…`, `INV-1156-…`, `INV-1157-…`, `INV-1158-…` | invariants | see below |
 
 ## Invariants and constraints
 
-Existing invariants this feature depends on (unchanged):
+Existing invariants this feature depends on:
 
 - INV-12 `ingress.credential.absent-from-raw-exchange`, INV-14
   `ingress.credential.every-scheme-hashed`, INV-15 hash depends only on
   the credential.
-- INV-17 `ingress.credential.scheme-follows-documented-rule`. Its
-  statement says Bearer tokens on a vendor API are `ApiKey`. Phase 2
-  extends the rule (see the questions below).
+- INV-17 `ingress.credential.scheme-follows-documented-rule`, amended:
+  Bearer tokens on a vendor API are `ApiKey` unless classified
+  `OauthAccessToken` by their shape or by the OAuth capability.
 - INV-27 no originated requests. INV-29 and INV-30 request and response
   unchanged.
 - INV-37 `ingress.routing.auth-hosts-never-intercepted`.
 - INV-162 `reconstruct.evidence.credential-follows-stability`.
 - INV-372 `surface.api.no-raw-credentials`.
 
-Proposed new invariants (`INV-X-<id>`, numbered by the coordinator):
+New invariants (all evidence implemented and run):
 
-- `ingress.credential.oauth-capability-marks-oauth`: on an Anthropic
-  upstream, a Bearer credential sent with an `anthropic-beta` value
-  starting `oauth-` is `OauthAccessToken`, whatever its shape. A key
-  header never is. Evidence: unit and property tests in
-  `crosstalk_ingress::tests::credential`.
-- `reconstruct.identity.refresh-keeps-session-agent`: two exchanges with
-  the same harness session id in the same scope, whose rotating
-  credentials differ, resolve to the same agent. Evidence: a unit test in
-  `crosstalk_reconstruct::tests::consumer`.
-- `gateway.credential.absent-end-to-end`: no byte sequence of a request's
-  bearer token (8 or more bytes) appears in any blob, bus envelope,
-  exchange-log record, log line or L8 response produced from that
-  exchange. Evidence: a Live composition test in `crosstalk_gateway`.
+- INV-1156 `ingress.credential.oauth-capability-marks-oauth`: on an
+  Anthropic upstream, a Bearer credential sent with an `anthropic-beta`
+  value starting `oauth-` is `OauthAccessToken`, whatever its shape. A key
+  header never is by this rule.
+- INV-1157 `reconstruct.identity.refresh-keeps-session-agent`: two
+  exchanges with the same harness session id in the same scope, whose
+  rotating credentials differ, resolve to the same agent. Two sessions
+  sharing one rotating credential are two agents without a conflict.
+- INV-1158 `ingress.credential.absent-end-to-end`: no 12-byte window of a
+  bearer token's secret part appears in any log line, stored blob,
+  exchange-log record, bus envelope or L8 answer produced from that
+  exchange. (The coordinator named it `gateway.…`, but `inv_check.py`
+  accepts only layer prefixes, so it carries the `ingress` prefix, the
+  layer that owns credential handling.)
 
 Constraints:
 
 - Test tokens are fake, built in code with an obviously synthetic body
-  (`sk-ant-oat01-TEST-…`). No test reads `~/.claude`, the environment's
-  real credentials, or the network.
+  (`sk-ant-oat01-TEST-…`, or `TEST-…` for an unknown shape). No test reads
+  `~/.claude`, the environment's real credentials, or the network beyond
+  loopback.
 - The scheme decision reads token shape and headers only, never token
   content beyond a prefix.
 - No new dependency.
 
-## Work (phase 2)
+## Operating it
 
-1. Tests first: scheme rows, the subscription socket test, the L3 refresh
-   test, and the Live end-to-end confidentiality and identity test.
-2. Implement `oauth_capability` and the `scheme` signature change.
-3. Add the e2e and testkit subscription session.
-4. Add the invariant TOMLs and update the docs. Run the crate-scoped
-   checks for ingress, reconstruct, testkit, e2e and gateway, then
-   `inv_check`.
+Run Claude Code with only `ANTHROPIC_BASE_URL` set
+(`ANTHROPIC_BASE_URL=http://gateway:8080/anthropic`), signed in with
+`/login`. Setting `ANTHROPIC_AUTH_TOKEN`, `ANTHROPIC_API_KEY` or
+`apiKeyHelper` replaces the subscription with that credential
+([authentication]). Token refresh keeps going to `platform.claude.com`
+directly, so that host must stay reachable from the harness.
 
-## Open questions
+## Follow-ups
 
-- **Amending INV-17.** The new rule changes INV-17's documented rule.
-  Should INV-17's statement be amended, or should the new invariant sit
-  beside it with INV-17 left as is?
-- **Spoofed session ids.** With no account, harness ids are scoped by the
-  upstream. Any client of the same gateway route that sends another
-  user's `x-claude-code-session-id` is attributed to that user's agent.
-  An API key prevents this, because harness ids are then scoped by the
-  stable credential. Session ids are random UUIDs, so this takes intent,
-  not accident. Should it be accepted and documented for subscription
-  traffic?
-- **Account from the body.** `metadata.user_id` in the body includes an
-  account UUID on a subscription (observed, not documented). Hashing it
-  into `ClientContext::account` would give cross-session identity and
-  stop session spoofing across accounts. But the spec's `ClientIdentifier`
-  reads the head only, the field is undocumented, and it is still a
-  client claim. Proposed as a follow-up spec decision, not part of this
-  work.
-- **Raw account id in stored bodies.** Request bodies are stored as
-  received, so that same account UUID is stored raw in the blob store. It
-  is not a credential and is out of scope here, but it is personal data
-  to flag.
-- **`claude.ai` in `AUTH_HOSTS`.** `InterceptAllowlist::AUTH_HOSTS`
+- **P8: sign-in hosts in `AUTH_HOSTS`.** `InterceptAllowlist::AUTH_HOSTS`
   lists `platform.claude.com` and `console.anthropic.com` but not
-  `claude.ai` or `claude.com`, the sign-in hosts. Should P8 add them?
-  That would be a spec change.
+  `claude.ai` or `claude.com`, the sign-in hosts. Add them when forward
+  proxy interception lands (a spec change, left out of this branch).
+- **Account-scoped identity.** `metadata.user_id` in the body includes an
+  account UUID on a subscription (observed, not documented). Using it
+  (hashed) as `ClientContext::account` would give identity across sessions
+  and close the session-spoofing limit, but the spec's `ClientIdentifier`
+  reads the head only and the field is a client claim. Revisit with the
+  spoofing limit.
 - **Terms of use.** Anthropic's docs describe a subscription through
-  `ANTHROPIC_BASE_URL` as a working path ([llm-gateway]), and they do not
+  `ANTHROPIC_BASE_URL` as a working path ([llm-gateway]) and do not
   endorse third-party gateways. Whether running crosstalk in front of
   other people's subscriptions is acceptable is the operator's call.

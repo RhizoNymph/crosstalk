@@ -1014,19 +1014,22 @@ Features Index:
     doc: docs/features/ingress.md
   claude_code_oauth:
     description: >
-      Design (phase 1, not implemented): capturing Claude Code on a Claude
-      Pro/Max subscription through ANTHROPIC_BASE_URL. The OAuth bearer
-      token and anthropic-beta's OAuth capability pass through unchanged;
-      the token is hashed on arrival with the KeyedHasher and never stored;
-      refresh goes to platform.claude.com and never through the gateway.
-      Proposes classifying a Bearer sent with an oauth- beta value as
-      OauthAccessToken whatever its shape, and proving that one agent per
-      harness session survives token refreshes and that no token byte
-      reaches any output.
+      Capturing Claude Code on a Claude Pro/Max subscription through
+      ANTHROPIC_BASE_URL. The OAuth bearer token and anthropic-beta's OAuth
+      capability pass through unchanged; the token is hashed on arrival
+      with the KeyedHasher and never stored; refresh goes to
+      platform.claude.com and never through the gateway. L0 classifies a
+      Bearer sent with an oauth- beta value as OauthAccessToken whatever
+      its shape (identify::OauthCapability); L3 keeps one agent per harness
+      session across token refreshes; tests prove no piece of a token
+      reaches a log, blob, exchange-log record, bus envelope or L8 answer.
+      Known limit: with no account, a client can claim another user's
+      session id on the same route.
     entry_points:
       - crates/ingress/src/identify.rs
       - crates/ingress/src/credential.rs
       - crates/reconstruct/src/evidence/scope.rs
+      - crates/e2e/src/scenario/mod.rs
     depends_on: [ingress, reconstruct, gateway, testkit, e2e_smoke]
     doc: docs/features/claude_code_oauth.md
   spec_primitives:

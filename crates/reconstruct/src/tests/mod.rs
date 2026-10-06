@@ -11,6 +11,7 @@ mod pg_agents;
 mod pg_props;
 mod pg_threads;
 mod placement;
+mod refresh;
 mod rig;
 mod seen;
 mod support;

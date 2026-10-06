@@ -20,7 +20,11 @@ be a layer depending on the gateway, which the rule refuses.
 
 - **The wiki relay scenario.** `Scenario::wiki_relay(start)` is fully
   deterministic: its times are fixed offsets from `start`, and its ids and
-  bodies are fixed.
+  bodies are fixed. `Scenario::wiki_relay_subscription(start)` is the same
+  relay on Claude Pro/Max logins (`Auth::Subscription`): fake OAuth access
+  tokens sent as `Authorization: Bearer` with the OAuth capability in
+  `anthropic-beta`, A's token refreshed between its two exchanges
+  ([claude_code_oauth](claude_code_oauth.md)).
 - **Capture through the production L0 and L1 code.** That means
   `Routes::resolve`, `HeaderIdentifier::context`,
   `AdapterDecoder::decode_now` and `AnthropicMessages::normalize`.
@@ -171,9 +175,9 @@ read (`eventually`, up to 10 s) until it shows what they expect.
 | ---- | ---- | ----------- |
 | `crates/e2e/Cargo.toml` | The crate. It depends on spec, api, canonical, flow, gateway, ingress, memory, provenance, surface and transport. | |
 | `crates/e2e/src/lib.rs` | The crate root. | re-exports `Capture`, `compose`, `Composition`, `feed`, `Fed`, `Scenario`, `WireExchange` |
-| `crates/e2e/src/scenario/mod.rs` | The wiki relay. | `Scenario`, `Scenario::wiki_relay`, `Scenario::ends_at`, `ScenarioAgent`, `WireExchange`, `SENTENCE`, `DEFAULT_START` |
+| `crates/e2e/src/scenario/mod.rs` | The wiki relay. | `Scenario`, `Scenario::wiki_relay`, `Scenario::wiki_relay_subscription`, `Scenario::ends_at`, `ScenarioAgent`, `WireExchange`, `Auth`, `SUBSCRIPTION_TOKENS`, `SENTENCE`, `DEFAULT_START` |
 | `crates/e2e/src/scenario/tools.rs` | The page and the `Write`/`Read` calls. | `WIKI_PAGE`, `write_call`, `read_call` |
-| `crates/e2e/src/scenario/wire.rs` | Claude Code request heads and bodies, and SSE responses. | `HttpRequest`, `HttpResponse`, `Block`, `Turn`, `SessionHeaders`, `request`, `response` |
+| `crates/e2e/src/scenario/wire.rs` | Claude Code request heads and bodies, and SSE responses. | `HttpRequest`, `HttpResponse`, `Block`, `Turn`, `SessionHeaders`, `Credential` (`ApiKey`, `Subscription`), `request`, `response` |
 | `crates/e2e/src/capture.rs` | L0 and L1 without a socket. | `Capture::{new, raw, normalized}`, `CaptureError`, `ROUTE` |
 | `crates/e2e/src/compose.rs` | The composition: a `Live` process. | `compose`, `compose_with`, `Composition` (`live`, `shutdown`), `ComposeError`, `E2ePipeline` |
 | `crates/e2e/src/feed.rs` | Ingests in time order. | `feed`, `Fed`, `FeedError` |
@@ -183,6 +187,7 @@ read (`eventually`, up to 10 s) until it shows what they expect.
 | `crates/e2e/tests/smoke/scenario.rs` | Determinism, time order, and the L0 identity. Also checks the history replay L3 threads by, the `Write` arguments carrying the sentence, and the read result and B's answer carrying it. | |
 | `crates/e2e/tests/smoke/extract.rs` | The scenario's `Write` and `Read` calls, with their results, through L5's `ToolExtractors` (crosstalk-flow, a dev-dependency) under the context the system prompt states: one delivered write and one read on the page's file locator. | |
 | `crates/e2e/tests/smoke/pipeline.rs` | Every body is stored, and every exchange is published in order, stamped at its end. | |
+| `crates/e2e/tests/smoke/subscription.rs` | The subscription relay: every credential `OauthAccessToken`, A's refresh changes its digest but not its session; through `Live`, two agents and the confirmed channel edge; no token window in any surface answer (INV-1157, INV-1158). | |
 | `crates/e2e/tests/smoke/surface.rs` | The surface answers for the scenario's window; two agents (L3); the A→B channel edge; the confirmed transmission; the evidence match; the channel created by the cross-agent transmission, listed and confirmed. | |
 | `crates/gateway/tests/architecture.rs` | `Composer::E2e`, and `e2e_composes_gateway_and_layers_and_no_layer_uses_it`. | |
 
