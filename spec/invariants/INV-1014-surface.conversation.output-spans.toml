@@ -18,5 +18,5 @@ unit = [
 integration = "crosstalk_provenance::integration::reads::pg_output_spans_keep_every_origin"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }
 integration = { agent = "false", human = "false" }

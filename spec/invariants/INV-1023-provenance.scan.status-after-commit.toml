@@ -14,5 +14,5 @@ unit = "crosstalk_provenance::tests::reads::scan_status_follows_the_commit"
 integration = "crosstalk_provenance::integration::reads::pg_scan_status_follows_the_commit"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }
 integration = { agent = "false", human = "false" }

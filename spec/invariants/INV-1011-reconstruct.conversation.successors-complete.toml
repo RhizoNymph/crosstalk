@@ -12,8 +12,8 @@ next.
 
 [evidence]
 unit = "crosstalk_reconstruct::tests::conversation_reads::successors_are_exactly_the_conversations_naming_it"
-integration = "crosstalk_reconstruct::tests::pg_conversation_reads::pg_successors_agree_with_memory"
+integration = "crosstalk_reconstruct::tests::pg_conversation_reads::pg_conversation_reads_agree_with_memory"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }
 integration = { agent = "false", human = "false" }

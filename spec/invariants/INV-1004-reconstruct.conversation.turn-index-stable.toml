@@ -13,5 +13,5 @@ unit = "crosstalk_reconstruct::tests::conversation_reads::rethreading_adds_no_tu
 integration = "crosstalk_reconstruct::tests::pg_conversation_reads::pg_rethreading_adds_no_turn"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }
 integration = { agent = "false", human = "false" }

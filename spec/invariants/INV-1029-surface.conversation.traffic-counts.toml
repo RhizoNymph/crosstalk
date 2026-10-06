@@ -14,4 +14,4 @@ of spans it carried.
 unit = "crosstalk_surface::tests::conversations::traffic_counts_each_transmission_once"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }

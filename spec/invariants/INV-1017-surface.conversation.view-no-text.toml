@@ -12,4 +12,4 @@ text would hand message content to callers not allowed to read it.
 unit = "crosstalk_surface::tests::conversations::view_reads_carry_no_text"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }

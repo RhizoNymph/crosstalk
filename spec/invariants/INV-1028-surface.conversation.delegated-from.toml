@@ -13,4 +13,4 @@ wrong link attributes a task to the wrong parent.
 unit = "crosstalk_surface::tests::conversations::delegated_from_is_the_earliest_delegation_read"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }

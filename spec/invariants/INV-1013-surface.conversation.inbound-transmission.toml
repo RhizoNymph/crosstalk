@@ -18,5 +18,5 @@ unit = [
 integration = "crosstalk_flow::store::tests::holding::pg_holding_finds_the_transmission_holding_each_match"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }
 integration = { agent = "false", human = "false" }

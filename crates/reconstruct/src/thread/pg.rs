@@ -14,7 +14,7 @@
 //!
 //! The same transaction records the call's turn and, for a new
 //! conversation, its traffic source and origin columns (migration
-//! `0004_conversation_reads`); [`reads`] serves the spec's
+//! `0004_conversation_reads`); its `reads` submodule serves the spec's
 //! `ConversationReads` from them.
 
 mod reads;

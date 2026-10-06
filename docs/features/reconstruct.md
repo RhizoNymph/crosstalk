@@ -270,3 +270,18 @@ stable per-corpus API key.
 - Evidence paths: `crosstalk_reconstruct::tests::<area>::<fn>`.
 - Not yet evidenced (still `agent = "false"`): the store-level `dst`
   invariants INV-141, 144, 161, 508, 540, 608, 612.
+
+## Conversation reads
+
+Both conversation stores implement the spec's `ConversationReads`
+([conversation_reads.md](conversation_reads.md)): each threading call that
+records an outcome also records one turn (exchange, first ordinal and
+entry count, agent, start, outcome kind, history length after it), a new
+conversation records its traffic source (`ThreadInput::source`), and a
+compaction's turn-0 entries in the predecessor's history are flagged
+`carried_over` by the plan. `TranscriptEntry` is the spec's type. Postgres:
+migration `0004_conversation_reads` (`conversation_turns`, conversation
+columns, `carried_over`, best-effort backfill with time 0). Files:
+`thread/reads.rs`, `thread/memory/reads.rs`, `thread/pg/reads.rs`; tests
+`tests/conversation_reads.rs`, `tests/pg_conversation_reads.rs`.
+INV-1001..1008, 1010, 1011, 1016, 1022.

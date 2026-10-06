@@ -13,4 +13,4 @@ mixing it with inputs would put readers on text the agent only received.
 unit = "crosstalk_surface::tests::conversations::output_is_the_response_or_partial"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }

@@ -13,4 +13,4 @@ whole window of turns or the marks L4 already made.
 unit = "crosstalk_surface::tests::conversations::a_dropped_body_is_reported_and_the_rest_returned"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }

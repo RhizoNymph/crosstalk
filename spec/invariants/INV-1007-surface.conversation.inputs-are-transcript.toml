@@ -18,5 +18,5 @@ unit = [
 integration = "crosstalk_reconstruct::tests::pg_conversation_reads::pg_turn_entries_are_the_exchanges_transcript_entries"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }
 integration = { agent = "false", human = "false" }
