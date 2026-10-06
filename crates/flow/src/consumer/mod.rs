@@ -66,7 +66,7 @@ use tokio::time::MissedTickBehavior;
 
 pub use self::error::StepError;
 pub use self::held::HeldWrites;
-pub use self::input::{Extracted, Observed, ReadResult, WriteCall};
+pub use self::input::{Extracted, FlowInputs, NotDurable, Observed, ReadResult, WriteCall};
 pub use self::publish::{PublishError, Publisher};
 pub use self::settings::{FlowConfig, InvalidFlowConfig, Settings};
 pub use self::shards::Shards;

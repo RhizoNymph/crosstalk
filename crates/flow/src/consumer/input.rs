@@ -12,6 +12,7 @@ use crosstalk_spec::derived::flow::resource::Locator;
 use crosstalk_spec::ids::{AccessId, AgentId, ExchangeId, SpanId};
 use crosstalk_spec::observed::message::{PartRef, ToolCallId, ToolName};
 use crosstalk_spec::support::Timestamp;
+use tokio::sync::mpsc::UnboundedSender;
 
 use crate::correlate::pairing::WriteOutcome;
 
@@ -70,4 +71,41 @@ pub enum Extracted {
         name: ToolName,
         at: Timestamp,
     },
+}
+
+/// Why the flow consumer did not confirm a batch of extracted inputs
+/// durable. Either way the caller keeps its own input (the delta) unacked
+/// and retries it: every input is idempotent at the consumer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+pub enum NotDurable {
+    #[error("the flow consumer has stopped")]
+    Stopped,
+    /// A step failed transiently (a store unavailable) before every input
+    /// of the batch was recorded.
+    #[error("the flow consumer could not record every input yet")]
+    Backlogged,
+}
+
+/// Where the extraction step hands its inputs: the flow consumer's side of
+/// the L4 seam. `deliver` returns `Ok` once the consumer holds the inputs
+/// as durably as it holds anything (recorded accesses, held writes and tool
+/// calls in its stores), so the caller may then commit its own progress
+/// and ack its delta (`docs/features/postgres_stores.md`, "L5: flow
+/// checkpoint and restore").
+pub trait FlowInputs: Send {
+    fn deliver(
+        &mut self,
+        inputs: Vec<Extracted>,
+    ) -> impl Future<Output = Result<(), NotDurable>> + Send;
+}
+
+/// A volatile consumer's inputs (memory mode): handed over in order and
+/// confirmed at once; durable only as long as the process lives.
+impl FlowInputs for UnboundedSender<Extracted> {
+    async fn deliver(&mut self, inputs: Vec<Extracted>) -> Result<(), NotDurable> {
+        for input in inputs {
+            self.send(input).map_err(|_| NotDurable::Stopped)?;
+        }
+        Ok(())
+    }
 }
