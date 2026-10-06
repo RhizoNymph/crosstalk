@@ -1397,15 +1397,19 @@ sessions per run):
 | `demo-swarm/headline` | channel / tool_result / exact recall | ≥ 0.95 | 1.000 (54 / 54) |
 | `demo-swarm/headline` | channel / tool_result / exact precision | ≥ 0.95 | 1.000 |
 | `demo-swarm/headline` | negative-control violations, reason `reread` | ≤ 0 | 0 (31 discarded predictions dismissed) |
-| `demo-swarm/boilerplate` | `fp_per_1k` | ≤ 130 | 89.1 (22 / 247), 20261006T021639Z |
+| `demo-swarm/boilerplate` | `fp_per_1k` | ≤ 105 | 68.5 (17 / 248), 20261006T212129Z (was ≤ 130 from 89.1 on 20261006T021639Z) |
 | `demo-swarm/boilerplate` | overall recall | ≥ 0.95 | 1.000 (50 / 50) |
-| `demo-swarm/boilerplate` | overall precision | ≥ 0.80 | 0.883 |
+| `demo-swarm/boilerplate` | overall precision | ≥ 0.88 | 0.927 (was ≥ 0.80 from 0.883) |
 
-The boilerplate run's 22 false positives are 15 unobserved/reader_output
-template sentences, accepted with `reader_output.min_chars = 64`, and 7
+The boilerplate bounds are recalibrated on 20261006T212129Z (integration/impl
+21a8bcf, after the L4 shadowed-fragments and verbatim-template fixes). Its 17
+false positives are 14 unobserved/reader_output template sentences, accepted
+with `reader_output.min_chars = 64`, 2 user_turn/normalized and 1
 channel/exact. One false positive moves the rate by about 4 per 1k, and
-Poisson noise on 22 is about ±19 per 1k, so the ceiling sits about two
-standard deviations above the measured rate. The first bench
+Poisson noise on 17 is about ±17 per 1k, so the ceiling (105) and the
+precision floor (0.88) sit about two standard deviations from the measured
+run. The earlier calibration run, 20261006T021639Z, had 22 false positives
+(89.1 per 1k, precision 0.883). The first bench
 (20261005T155320Z, before L4 match quality and unique sessions) scored
 precision 0.175 and is kept above for history only. Each agent's system
 prompt carries `[style:<scenario>]`,

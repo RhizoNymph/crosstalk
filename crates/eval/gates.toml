@@ -376,20 +376,22 @@ metric = "violations"
 reason = "reread"
 max = 0
 
-# Boilerplate 20261006T021639Z: agents write template-heavy text, so this
-# bench measures the false-positive rate on boilerplate. 247 exchanges, recall
-# 1.000 (50 / 50), precision 0.883, 22 false positives = 89.1 per 1k (15
-# unobserved/reader_output template sentences, accepted with
-# reader_output.min_chars = 64; 7 channel/exact). One false positive moves the
-# rate by about 4 per 1k and Poisson noise on 22 is about ±19 per 1k, so the
-# ceiling sits about two standard deviations above the measured rate.
+# Boilerplate 20261006T212129Z (integration/impl 21a8bcf, after the L4
+# shadowed-fragments and verbatim-template fixes): agents write template-heavy
+# text, so this bench measures the false-positive rate on boilerplate. 248
+# exchanges, recall 1.000 (50 / 50), precision 0.927, 17 false positives =
+# 68.5 per 1k (14 unobserved/reader_output template sentences, accepted with
+# reader_output.min_chars = 64; 2 user_turn/normalized; 1 channel/exact).
+# Poisson noise on 17 is about ±4 false positives, ±17 per 1k, so the ceiling
+# and the precision floor sit about two standard deviations from the measured
+# run. Previous calibration: 20261006T021639Z (89.1 per 1k, 0.883).
 
 [[gate]]
 name = "demo-swarm/boilerplate: false positives per 1k exchanges stay bounded"
 detector = "gateway-export"
 dataset = "demo-swarm/boilerplate"
 metric = "fp_per_1k"
-max = 130.0
+max = 105.0
 
 [[gate]]
 name = "demo-swarm/boilerplate: every wiki transmission is still found"
@@ -403,4 +405,4 @@ name = "demo-swarm/boilerplate: template text does not swamp detections"
 detector = "gateway-export"
 dataset = "demo-swarm/boilerplate"
 metric = "precision"
-min = 0.80
+min = 0.88
