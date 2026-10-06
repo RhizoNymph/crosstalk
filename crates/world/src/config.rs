@@ -36,6 +36,7 @@ use crosstalk_spec::support::{Blake3, Similarity};
 
 use crate::clock::{Anchor, BUCKET, MINUTE, WorldClock};
 use crate::error::WorldError;
+use crate::generate::wire::WireScope;
 use crate::mint::Mint;
 
 /// The researcher: every permission. The same id as the trusted operator in
@@ -101,6 +102,10 @@ pub struct WorldConfig {
     pub frame_retention: FrameRetention,
     pub bucket_width: BucketWidth,
     pub timing: CorrelationTiming,
+    /// Which transmissions the wire traffic carries
+    /// ([`World::with_wire`](crate::World::with_wire)); every one by
+    /// default.
+    pub wire: WireScope,
 }
 
 impl WorldConfig {
@@ -153,6 +158,7 @@ impl WorldConfig {
             ),
             bucket_width: BUCKET,
             timing: timing()?,
+            wire: WireScope::All,
         })
     }
 

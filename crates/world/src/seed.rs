@@ -15,6 +15,7 @@ use crate::embed::WorldEmbedder;
 use crate::error::WorldError;
 use crate::generate::drafts::{DraftOrigin, config_decision, drafts};
 use crate::generate::times::Times;
+use crate::generate::wire::{Wire, WireScope};
 use crate::generate::{self, agents::Planned};
 use crate::run::Runner;
 use crate::scenario::{ChannelKey, Scenario};
@@ -44,6 +45,13 @@ impl World {
             anchor,
             config: WorldConfig::new(seed, anchor)?,
         })
+    }
+
+    /// The same world, its wire traffic carrying only what `scope` holds
+    /// (the seed's writes are unchanged).
+    pub fn with_wire(mut self, scope: WireScope) -> Self {
+        self.config.wire = scope;
+        self
     }
 
     pub fn seed_value(&self) -> u64 {
@@ -82,6 +90,18 @@ impl World {
     /// order. The same seed, anchor and store implementation give the same
     /// world.
     pub async fn seed<S: WorldStores>(&self, stores: &mut S) -> Result<Scenario, WorldError> {
+        Ok(self.seed_with_wire(stores).await?.0)
+    }
+
+    /// [`World::seed`], also returning the world's wire traffic: the
+    /// exchanges behind its confirmed transmissions, as L1 captured them,
+    /// for a host that threads them (L3) and scans them (L4). Their bodies
+    /// are not written: the world's own are, by the seed; the wire's own
+    /// and the ones retention dropped come with the [`Wire`].
+    pub async fn seed_with_wire<S: WorldStores>(
+        &self,
+        stores: &mut S,
+    ) -> Result<(Scenario, Wire), WorldError> {
         let times = Times::of(self.anchor);
         let declared = declare(stores, &times).await?;
         let generated = generate::generate(self.seed, self.anchor, &self.config, &declared)?;
@@ -109,7 +129,7 @@ impl World {
         // Never stored: the scratch entry is a resource on no channel.
         channels.insert(ChannelKey::Scratch, generated.traffic.scratch);
         let cast = &generated.cast;
-        Ok(Scenario {
+        let scenario = Scenario {
             agents: cast.keys().map(|(key, id)| (key.to_owned(), id)).collect(),
             channels,
             merges: ledger.merges,
@@ -127,7 +147,8 @@ impl World {
                 .map(|agent| agent.id)
                 .collect(),
             unmapped_topic: Some(generated.topics.unmapped()?),
-        })
+        };
+        Ok((scenario, generated.wire))
     }
 }
 

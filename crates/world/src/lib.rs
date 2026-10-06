@@ -49,6 +49,7 @@ pub use clock::{Anchor, UI_ANCHOR, WorldClock};
 pub use config::WorldConfig;
 pub use embed::WorldEmbedder;
 pub use error::{StoreError, WorldError};
+pub use generate::wire::{Wire, WireExchange, WireScope};
 pub use scenario::{BodySide, ChannelKey, JobKey, MergeKey, RuleKey, Scenario};
 pub use seed::World;
 pub use stores::WorldStores;

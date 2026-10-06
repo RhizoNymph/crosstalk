@@ -356,9 +356,15 @@ by any test or tool that wants the real surface over the synthetic world:
   graphs' node facts hold every seeded event, then starts the in-process
   projection fitter when `WorldOptions::projection_fitting` asks.
   `WorldOptions` also takes the feed's `LiveConfig`, the `ExportLimits`
-  and operators added to the world's directory. It returns the
-  `SeededWorld`: the `InProcess`, the world's `Scenario` handles, the
-  access config.
+  and operators added to the world's directory, and
+  `WorldOptions::conversations`: whether the world's exchanges are
+  threaded and scanned into the conversation reads
+  (`WorldConversations::Recorded(WireScope)`, by default the last day's;
+  see [conversation_reads.md](conversation_reads.md), "The world
+  backend"). Both conformance harnesses set `Unrecorded`: the suite reads
+  no conversation. It returns the `SeededWorld`: the `WorldInProcess`
+  (`InProcess<MemoryBlobStore, WorldLayers>`), the world's `Scenario`
+  handles, what recording did (`Recorded`), the access config.
 - `serve_world(SeededWorld, tokens)` serves its surface with `HttpApi` on
   `127.0.0.1:0`, each static bearer token authenticating its operator;
   `HttpWorld::base_url` and `shutdown`.
@@ -431,7 +437,8 @@ The fixture passes all 65; it lists no expected failures.
 | `ui/src/backend/fixture/conformance/{mod,bind,find,suite}.rs` | The fixture's harness (test-only) | `FixtureHarness`, `SEED` |
 | `crates/conformance/src/routed.rs` | The forwarding backend | `Route`, `Routed` |
 | `crates/conformance/src/world/{mod,find}.rs` | The world binder and the surface's expected failures | `bind`, `WorldReads`, `SURFACE_FAILURES` |
-| `crates/api/src/world.rs` | The world server (feature `world`) | `seed_world`, `serve_world`, `WorldOptions`, `WorldTime`, `SeededWorld`, `HttpWorld`, `Seeding`, `SeedClock`, `WorldServeError` |
+| `crates/api/src/world/mod.rs` | The world server (feature `world`) | `seed_world`, `serve_world`, `WorldOptions`, `WorldTime`, `WorldConversations`, `SeededWorld`, `HttpWorld`, `Seeding`, `SeedClock`, `WorldServeError`, `WorldInProcess`, `WorldSurface`, `WorldMemoryStores` |
+| `crates/api/src/world/conversations.rs` | The world's conversations through L1, L3 and L4 | `WorldLayers`, `CaptureBlobs`, `record`, `Recorded`, `RecordError` |
 | `crates/api/tests/conformance.rs` | The in-process harness | `InProcessHarness` |
 | `crates/client/tests/conformance.rs` | The HTTP harness | `HttpHarness` |
 | `crates/gateway/tests/architecture.rs` | Registers `conformance` as TestSupport | `TestSupport::Conformance` |

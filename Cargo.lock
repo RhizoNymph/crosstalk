@@ -539,8 +539,11 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "bytes",
+ "crosstalk-canonical",
  "crosstalk-conformance",
  "crosstalk-memory",
+ "crosstalk-provenance",
+ "crosstalk-reconstruct",
  "crosstalk-spec",
  "crosstalk-surface",
  "crosstalk-testkit",

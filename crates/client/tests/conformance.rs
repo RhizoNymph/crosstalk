@@ -12,7 +12,7 @@ use std::collections::BTreeMap;
 
 use crosstalk_api::ProjectionFitting;
 use crosstalk_api::http::BearerToken as ServerToken;
-use crosstalk_api::world::{HttpWorld, WorldOptions, seed_world, serve_world};
+use crosstalk_api::world::{HttpWorld, WorldConversations, WorldOptions, seed_world, serve_world};
 use crosstalk_client::{BaseUrl, BearerToken, Blake3RowHasher, ClientConfig, HttpClient};
 use crosstalk_conformance::harness::{
     ExpectedFailure, Harness, Provision, ProvisionError, Provisioned, caller,
@@ -103,6 +103,9 @@ impl Harness for HttpHarness {
         };
         let mut options = WorldOptions::new(SEED, UI_ANCHOR).map_err(|e| failed(e.to_string()))?;
         // Projection jobs are fitted in process, deterministically.
+        // The suite reads no conversation: skip threading the world's
+        // exchanges (it would triple each provisioning).
+        options.conversations = WorldConversations::Unrecorded;
         options.projection_fitting = ProjectionFitting::Deterministic {
             poll: std::time::Duration::from_millis(20),
         };

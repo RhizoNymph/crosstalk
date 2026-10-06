@@ -8,8 +8,9 @@
 //! WorldBackend::start(seed)
 //!   crosstalk_api::world::seed_world(WorldOptions { seed, anchor: UI_ANCHOR, time: Live, .. })
 //!     World::new(seed, UI_ANCHOR)            config, clock, embedder
-//!     InProcess::start(options from the world's config)
-//!     World::seed(&mut Seeding(stores))      every write, in time order
+//!     InProcess::start_with_reads(options from the world's config, .., WorldLayers)
+//!     World::seed_with_wire(&mut Seeding(stores))  every write, in time order
+//!     conversations::record(wire)            the last day's exchanges through L3 and L4
 //!     clock: config time while seeding ─▶ the anchor plus real time once seeded
 //! ```
 //!
@@ -24,14 +25,13 @@
 
 use std::sync::Arc;
 
-use crosstalk_api::InProcess;
-use crosstalk_api::MemoryStores;
-use crosstalk_api::world::{SeedClock, WorldOptions, WorldServeError, WorldTime, seed_world};
-use crosstalk_surface::Surface;
+use crosstalk_api::world::{
+    SeedClock, WorldInProcess, WorldOptions, WorldServeError, WorldTime, seed_world,
+};
 use crosstalk_world::UI_ANCHOR;
 
 /// The surface the world backend serves.
-pub type WorldSurface = Surface<MemoryStores>;
+pub use crosstalk_api::world::WorldSurface;
 
 /// Why the world backend could not start.
 #[derive(Debug, thiserror::Error)]
@@ -66,7 +66,7 @@ impl WorldBackend {
     /// Seeds the world of `seed` into the in-process surface and starts
     /// its clock. Returns the backend and the `InProcess` that owns the
     /// relay and the live feed.
-    pub async fn start(seed: u64) -> Result<(Self, InProcess), WorldStartError> {
+    pub async fn start(seed: u64) -> Result<(Self, WorldInProcess), WorldStartError> {
         let seeded = seed_world(options(seed)?).await?;
         Ok((
             Self {

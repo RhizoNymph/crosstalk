@@ -464,13 +464,16 @@ Features Index:
       carried-over flag, a per-turn index, traffic source, successors),
       L4's ProvenanceReads (scan status, output spans of every origin,
       matches by reader exchange, a span's readers) and L5's
-      TransmissionStore::holding.
+      TransmissionStore::holding. The world backend (crosstalk_api::world)
+      serves them from the world's wire traffic run through L1, L3
+      threading and L4 provenance (WorldLayers, world::record).
     entry_points:
       - spec/types/interfaces/l8_surface/conversation.rs
       - spec/types/interfaces/l3_reconstruction/conversations.rs
       - spec/types/interfaces/l4_provenance/reads.rs
       - spec/types/interfaces/l1_canonical/exchanges.rs
-    depends_on: [type_spec, query_surface, reconstruct, provenance, flow_store, surface_service]
+      - crates/api/src/world/conversations.rs
+    depends_on: [type_spec, query_surface, reconstruct, provenance, flow_store, surface_service, world]
     doc: docs/features/conversation_reads.md
   query_surface:
     description: >
@@ -1547,7 +1550,7 @@ Features Index:
       - crates/conformance/src/scenario/mod.rs
       - crates/conformance/src/suite.rs
       - ui/src/backend/fixture/conformance/mod.rs
-      - crates/api/src/world.rs
+      - crates/api/src/world/mod.rs
       - crates/api/tests/conformance.rs
       - crates/client/tests/conformance.rs
     depends_on: [query_surface, read_models, export, channel_semantics, type_spec, world, http_api, surface_service]
@@ -1573,11 +1576,18 @@ Features Index:
       channel, an unconfirmed and a hidden channel). The feature doc lists the divergences from the UI fixture and
       the gap list: fixture reads no store or spec trait answers. Origin
       spans are recorded through L4's SpanIndex (WorldStores::Spans).
+      World::seed_with_wire also returns the wire traffic (generate/wire):
+      the exchanges behind every confirmed transmission as L1 captured
+      them, under the world's own exchange ids and bodies, in sessions
+      with pauses, compactions, forks, failed attempts and tool calls,
+      which crosstalk_api::world threads (L3) and scans (L4) into the
+      conversation reads.
     entry_points:
       - crates/world/src/lib.rs
       - crates/world/src/seed.rs
       - crates/world/src/stores.rs
       - crates/world/src/generate/mod.rs
+      - crates/world/src/generate/wire/mod.rs
       - crates/world/src/assemble/mod.rs
       - crates/world/src/run/mod.rs
       - crates/world/tests/support/mod.rs

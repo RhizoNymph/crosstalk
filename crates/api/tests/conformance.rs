@@ -4,9 +4,10 @@
 //! with each call. (`crosstalk-client`'s tests run the same suite over
 //! HTTP.)
 
-use crosstalk_api::MemoryStores;
 use crosstalk_api::ProjectionFitting;
-use crosstalk_api::world::{SeededWorld, WorldOptions, seed_world};
+use crosstalk_api::world::{
+    SeededWorld, WorldConversations, WorldOptions, WorldSurface, seed_world,
+};
 use crosstalk_conformance::harness::{
     ExpectedFailure, Harness, Provision, ProvisionError, Provisioned,
 };
@@ -15,7 +16,6 @@ use crosstalk_conformance::world::{SURFACE_FAILURES, WorldReads, bind};
 use crosstalk_spec::ids::OperatorId;
 use crosstalk_spec::interfaces::l8_surface::{Caller, PermissionSet, QueryApi};
 use crosstalk_spec::support::{TimeWindow, Timestamp};
-use crosstalk_surface::Surface;
 use crosstalk_surface::export::Blake3RowHasher;
 use crosstalk_world::clock::{BUCKET, DAY, UI_ANCHOR, minus, plus};
 use crosstalk_world::config::{OPERATOR_ONCALL, OPERATOR_RESEARCHER};
@@ -30,7 +30,7 @@ struct InProcessHarness;
 struct OneSurface(SeededWorld);
 
 impl Route for OneSurface {
-    type Target = Surface<MemoryStores>;
+    type Target = WorldSurface;
 
     fn route(&self, _caller: &Caller) -> &Self::Target {
         &self.0.in_process.surface
@@ -52,6 +52,9 @@ impl Harness for InProcessHarness {
         };
         let mut options = WorldOptions::new(SEED, UI_ANCHOR).map_err(|e| failed(e.to_string()))?;
         // Projection jobs are fitted in process, deterministically.
+        // The suite reads no conversation: skip threading the world's
+        // exchanges (it would triple each provisioning).
+        options.conversations = WorldConversations::Unrecorded;
         options.projection_fitting = ProjectionFitting::Deterministic {
             poll: std::time::Duration::from_millis(20),
         };

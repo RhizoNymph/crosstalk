@@ -6,8 +6,10 @@
 //! ```text
 //! seed_world(options)
 //!   World::new(seed, anchor)          config, clock, embedder
-//!   InProcess::start(options from the world's config)
-//!   World::seed(&mut Seeding(stores)) every write, in time order  → Scenario
+//!   InProcess::start_with_reads(options from the world's config, standalone backbone, WorldLayers)
+//!   World::seed_with_wire(&mut Seeding(stores))  every write, in time order → Scenario, Wire
+//!   conversations::record(wire)       each exchange through L1, L3 threading and L4 provenance
+//!                                     into WorldLayers (the conversation reads' stores)
 //!   InProcess::settle                 the node facts have applied every seeded event
 //!   InProcess::fit_projections        when options.projection_fitting asks for it
 //!   clock: config time while seeding ─▶ the anchor (Fixed) or the anchor plus real time (Live)
@@ -18,6 +20,13 @@
 //!
 //! The operator UI's world backend and the L8 conformance suite's harnesses
 //! (in process and over `crosstalk-client`) start the world this way.
+//!
+//! The conversation reads (`conversations`, `conversation_turns`,
+//! `span_points`, …) answer from [`WorldLayers`]: the world's wire traffic
+//! threaded and scanned by the same L3 and L4 code the live gateway runs
+//! (see [`record`]).
+
+mod conversations;
 
 use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::{Arc, OnceLock};
@@ -42,23 +51,33 @@ use crosstalk_spec::support::{Clock, Timestamp};
 use crosstalk_surface::SurfaceConfig;
 use crosstalk_transport::DeadLetters;
 use crosstalk_transport::blob::MemoryBlobStore;
-use crosstalk_world::clock::{MINUTE, minus};
-use crosstalk_world::{Anchor, World, WorldClock, WorldError, WorldStores};
+use crosstalk_world::clock::{DAY, MINUTE, minus};
+use crosstalk_world::{Anchor, WireScope, World, WorldClock, WorldError, WorldStores};
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
 use crate::http::{Auth, BearerToken, HttpApi, HttpConfig, ServeError, StaticTokens, bind, serve};
 use crate::in_process::{
-    Alerts, Edges, InProcess, InProcessError, InProcessOptions, MemoryEvidence, MemoryStores,
-    ProjectionFitting, Search,
+    Alerts, Backbone, ConversationStores, Edges, InProcess, InProcessError, InProcessOptions,
+    MemoryEvidence, MemoryStores, ProjectionFitting, Search,
 };
+
+pub use conversations::{CaptureBlobs, RecordError, Recorded, WorldLayers, record};
+
+/// The world's stores: the reference stores, the conversation reads over
+/// [`WorldLayers`].
+pub type WorldMemoryStores = MemoryStores<MemoryBlobStore, WorldLayers>;
+/// The in-process surface a seeded world runs.
+pub type WorldInProcess = InProcess<MemoryBlobStore, WorldLayers>;
+/// The surface over a seeded world's stores.
+pub type WorldSurface = crosstalk_surface::Surface<WorldMemoryStores>;
 
 /// The in-process surface's memory stores as the world's [`WorldStores`]:
 /// the seed writes through the spec's write traits on handles that share
 /// state with the surface.
-pub struct Seeding(pub MemoryStores);
+pub struct Seeding<R = WorldLayers>(pub MemoryStores<MemoryBlobStore, R>);
 
-impl WorldStores for Seeding {
+impl<R: ConversationStores> WorldStores for Seeding<R> {
     type Agents = MemoryAgents;
     type Spans = MemoryEvidence;
     type Channels = MemoryChannels<MemoryAgents>;
@@ -127,6 +146,19 @@ pub enum WorldTime {
     Live,
 }
 
+/// Whether the world's exchanges are threaded (L3) and scanned (L4) into
+/// the conversation reads when it is seeded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WorldConversations {
+    /// The wire traffic of the transmissions `WireScope` holds is recorded.
+    /// Recording costs about 2 ms an exchange in a release build (the
+    /// whole week is about 14,500 exchanges), several times that in a debug
+    /// one.
+    Recorded(WireScope),
+    /// Nothing is recorded: the conversation reads answer empty.
+    Unrecorded,
+}
+
 /// What to seed and how to serve it.
 #[derive(Debug, Clone)]
 pub struct WorldOptions {
@@ -144,13 +176,16 @@ pub struct WorldOptions {
     /// way: the fitter starts after seeding, so it then also fits the
     /// world's queued job.
     pub projection_fitting: ProjectionFitting,
+    /// Which of the world's exchanges the conversation reads hold.
+    pub conversations: WorldConversations,
 }
 
 impl WorldOptions {
     /// The world of `seed` at `anchor` on a fixed clock: a feed buffer of
     /// 256 with a 15-second heartbeat and ten minutes' retention, the
     /// default export limits, no extra operators, projection jobs left for
-    /// an external fitter.
+    /// an external fitter, and the conversations of the last day's
+    /// transmissions (and of those retention dropped a body of) recorded.
     pub fn new(seed: u64, anchor: Timestamp) -> Result<Self, WorldServeError> {
         let live = LiveConfig::new(
             std::num::NonZeroU32::new(256).unwrap_or(std::num::NonZeroU32::MIN),
@@ -166,6 +201,7 @@ impl WorldOptions {
             export_limits: ExportLimits::default(),
             operators: Vec::new(),
             projection_fitting: ProjectionFitting::External,
+            conversations: WorldConversations::Recorded(WireScope::Since(minus(anchor, DAY))),
         })
     }
 }
@@ -177,10 +213,18 @@ pub enum WorldServeError {
     World(#[from] WorldError),
     #[error("the in-process surface could not start: {0}")]
     Surface(#[from] InProcessError),
+    #[error("the world's conversations could not be recorded: {0}")]
+    Conversations(Box<RecordError>),
     #[error("the API could not listen: {0}")]
     Serve(#[from] ServeError),
     #[error("invalid option {what}: {reason}")]
     Option { what: &'static str, reason: String },
+}
+
+impl From<RecordError> for WorldServeError {
+    fn from(error: RecordError) -> Self {
+        Self::Conversations(Box::new(error))
+    }
 }
 
 impl WorldServeError {
@@ -235,8 +279,10 @@ impl Clock for SeedClock {
 /// what the world holds, and the access config its directory was loaded
 /// from.
 pub struct SeededWorld {
-    pub in_process: InProcess,
+    pub in_process: WorldInProcess,
     pub scenario: crosstalk_world::Scenario,
+    /// What threading the world's exchanges did.
+    pub recorded: Recorded,
     pub access: AccessConfig,
     pub clock: Arc<SeedClock>,
     pub frame_retention: crosstalk_spec::aggregates::projection::FrameRetention,
@@ -244,9 +290,15 @@ pub struct SeededWorld {
 
 /// Starts the in-process surface over empty memory stores configured from
 /// the world of `options.seed` at `options.anchor`, seeds the world into
-/// them and starts the clock.
+/// them, records its exchanges' conversations (L1, L3, L4) and starts the
+/// clock.
 pub async fn seed_world(options: WorldOptions) -> Result<SeededWorld, WorldServeError> {
-    let world = World::new(options.seed, options.anchor)?;
+    let scope = match options.conversations {
+        WorldConversations::Recorded(scope) => scope,
+        // Nothing is recorded; the wire is still generated, so keep it small.
+        WorldConversations::Unrecorded => WireScope::Since(Timestamp::from_micros(u64::MAX)),
+    };
+    let world = World::new(options.seed, options.anchor)?.with_wire(scope);
     let config = world.config();
     let clock = Arc::new(SeedClock::new(world.anchor(), options.time));
     let export_formats = ExportFormats::new(vec![ExportFormat::Jsonl])
@@ -284,8 +336,29 @@ pub async fn seed_world(options: WorldOptions) -> Result<SeededWorld, WorldServe
         // Started once seeded: the seed claims and settles its own jobs.
         projection_fitting: ProjectionFitting::External,
     };
-    let mut in_process = InProcess::start(in_process_options).await?;
-    let scenario = world.seed(&mut Seeding(in_process.stores.clone())).await?;
+    let layers = WorldLayers::new();
+    let mut in_process =
+        InProcess::start_with_reads(in_process_options, Backbone::standalone()?, layers.clone())
+            .await?;
+    let (scenario, wire) = world
+        .seed_with_wire(&mut Seeding(in_process.stores.clone()))
+        .await?;
+    // Threaded after the seed: clusters are read from the agent store as
+    // the seed left it (its merges applied).
+    let recorded = match options.conversations {
+        WorldConversations::Recorded(_) => {
+            conversations::record(
+                wire,
+                &in_process.stores.blobs,
+                &in_process.stores.agents,
+                &layers,
+                clock.clone(),
+                options.seed,
+            )
+            .await?
+        }
+        WorldConversations::Unrecorded => Recorded::default(),
+    };
     // The graphs' node facts follow the stores through the relay: a world
     // is read only once the relay has applied everything the seed wrote.
     in_process.settle().await?;
@@ -298,6 +371,7 @@ pub async fn seed_world(options: WorldOptions) -> Result<SeededWorld, WorldServe
     Ok(SeededWorld {
         in_process,
         scenario,
+        recorded,
         access,
         clock,
         frame_retention: config.frame_retention,

@@ -10,8 +10,14 @@ workspace = true
 
 [features]
 # A surface over the synthetic world for tests and demos: seeded memory
-# stores, in process or served over HTTP (`world`).
-world = ["dep:crosstalk-world"]
+# stores, in process or served over HTTP (`world`), with the world's
+# exchanges threaded (L3) and scanned (L4) into the conversation reads.
+world = [
+    "dep:crosstalk-world",
+    "dep:crosstalk-canonical",
+    "dep:crosstalk-reconstruct",
+    "dep:crosstalk-provenance",
+]
 
 [dependencies]
 crosstalk-spec = { path = "../../spec" }
@@ -19,6 +25,9 @@ crosstalk-memory = { path = "../memory" }
 crosstalk-surface = { path = "../surface" }
 crosstalk-transport = { path = "../transport" }
 crosstalk-world = { path = "../world", optional = true }
+crosstalk-canonical = { path = "../canonical", optional = true }
+crosstalk-reconstruct = { path = "../reconstruct", optional = true }
+crosstalk-provenance = { path = "../provenance", optional = true }
 axum = { workspace = true, features = ["http1", "tokio", "tracing"] }
 bytes.workspace = true
 form_urlencoded.workspace = true
@@ -38,4 +47,8 @@ tower = { workspace = true, features = ["util"] }
 
 [[test]]
 name = "conformance"
+required-features = ["world"]
+
+[[test]]
+name = "world_conversations"
 required-features = ["world"]

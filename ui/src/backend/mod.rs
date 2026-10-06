@@ -36,7 +36,7 @@ pub mod fixture;
 pub mod http;
 pub mod world;
 
-use crosstalk_api::InProcess;
+use crosstalk_api::world::WorldInProcess;
 use crosstalk_client::HttpClient;
 use crosstalk_spec::interfaces::l8_surface::QueryError;
 use tokio::task::JoinHandle;
@@ -65,7 +65,7 @@ pub enum Service {
     /// The fixture's replay ticker, publishing what each tick reveals.
     Replay(JoinHandle<()>),
     /// The in-process surface's relay task and live feed.
-    World(Box<InProcess>),
+    World(Box<WorldInProcess>),
     /// The http backend's identity refresher.
     Http(JoinHandle<()>),
 }
