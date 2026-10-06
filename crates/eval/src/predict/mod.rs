@@ -159,10 +159,12 @@ impl Prediction {
     }
 }
 
-/// A detector's agent ids, as corpus agents.
+/// A detector's agent ids, as corpus agents, and the detector's own
+/// attribution of the world's exchanges (which of its agents made each).
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct AgentMap {
     agents: BTreeMap<AgentId, AgentKey>,
+    exchanges: BTreeMap<ExchangeId, AgentId>,
 }
 
 /// Why a detector's attribution cannot be read as corpus agents.
@@ -182,11 +184,24 @@ impl AgentMap {
     /// The world's own agent ids: a detector that attributes exchanges by
     /// the corpus's ids (the reference matcher).
     pub fn of_world(world: &World) -> Self {
+        let ids: BTreeMap<&AgentKey, AgentId> = world
+            .agents()
+            .iter()
+            .map(|agent| (&agent.key, agent.id))
+            .collect();
         Self {
             agents: world
                 .agents()
                 .iter()
                 .map(|agent| (agent.id, agent.key.clone()))
+                .collect(),
+            exchanges: world
+                .exchanges()
+                .iter()
+                .filter_map(|exchange| {
+                    ids.get(exchange.agent())
+                        .map(|agent| (exchange.id(), *agent))
+                })
                 .collect(),
         }
     }
@@ -221,11 +236,21 @@ impl AgentMap {
                 }
             }
         }
-        Ok(Self { agents })
+        Ok(Self {
+            agents,
+            exchanges: attribution.clone(),
+        })
     }
 
     pub fn get(&self, id: AgentId) -> Option<&AgentKey> {
         self.agents.get(&id)
+    }
+
+    /// The detector's agent of each exchange it attributed: every world
+    /// exchange for [`AgentMap::of_world`], the detector's own placements
+    /// for [`AgentMap::from_attribution`].
+    pub fn attribution(&self) -> &BTreeMap<ExchangeId, AgentId> {
+        &self.exchanges
     }
 }
 

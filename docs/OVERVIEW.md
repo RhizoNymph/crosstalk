@@ -227,6 +227,13 @@ Overview:
       (bench.env), reads the export and evidence back through the same L8
       surface, and scores them as ct-eval swarm does, offline and
       deterministically.
+      The golden export (crosstalk_eval::golden) writes the same worlds,
+      labels and predictions in the bench's detector-neutral format
+      a2a-bench/1 (crate a2a-bench-format, a path dependency until the
+      bench repository has a tag): ct-eval export --format a2a-bench/1
+      writes an export directory, ct-eval run --predictions-out and ct-eval
+      swarm --export-out/--predictions-out write predictions naming its
+      manifest, and every file passes the format's own checks.
     e2e: >
       Crate crosstalk-e2e (a composer): the end-to-end smoke harness. A
       scripted two-agent Claude Code scenario as wire traffic, captured
@@ -1707,7 +1714,13 @@ Features Index:
       access-only recall, background) and regression gates per detector
       (reference or live), found through --gates, CT_EVAL_GATES, the bench
       image's installed file or the crate's own, else none. Every converter labels escaped text with the spec's
-      string codecs, never Normalized.
+      string codecs, never Normalized. The golden export writes any
+      selection's worlds, labels and predictions (reference, live or the
+      demo swarm's gateway export) in the bench format a2a-bench/1
+      (ct-eval export, run --predictions-out, swarm --export-out
+      --predictions-out, verify): controls no exchange carries are dropped
+      and counted in the manifest's per-world notes, and what the format
+      cannot express is refused.
     entry_points:
       - crates/eval/src/lib.rs
       - crates/eval/src/pipeline.rs
@@ -1726,6 +1739,8 @@ Features Index:
       - crates/eval/src/detect/live/gateway.rs
       - crates/eval/src/reference/classify.rs
       - crates/eval/src/report/gates.rs
+      - crates/eval/src/golden/mod.rs
+      - crates/eval/src/bin/ct-eval/golden.rs
     depends_on: [type_spec, gateway, transport, flow_extract, export, http_api, eval_gaps, sim, testkit, memory]
     doc: docs/features/eval.md
   e2e_smoke:
