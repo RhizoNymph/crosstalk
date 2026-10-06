@@ -209,10 +209,12 @@ where
                 MediumKey::Channel(channel),
             )));
         }
-        steps.push(Step::Publish(BusEvent::Detect(DetectEvent::AccessRecorded {
-            access: access.clone(),
-            channel,
-        })));
+        steps.push(Step::Publish(BusEvent::Detect(
+            DetectEvent::AccessRecorded {
+                access: access.clone(),
+                channel,
+            },
+        )));
         if outcome.is_none_or(WriteOutcome::pairs) {
             steps.push(Step::Correlate(access, channel));
         }

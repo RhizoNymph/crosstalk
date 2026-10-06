@@ -1,0 +1,21 @@
+[invariant]
+id = "flow.restore.refeed-in-recorded-medium"
+statement = "A flow consumer's restore re-feeds every access recorded after its checkpoint into the medium the access's resource resolved to when the consumer first recorded it (the resource's own medium, or the channel it was on then), with that medium's hand-off to the channel first, never into a channel the resource joined or was superseded into since; an access whose resolution was not stored is resolved again."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+A channel transmission's id is derived from the medium it opened in: a
+resource's before its channel was discovered. An access recorded before the
+discovery and re-fed after it would, resolved again, pair in the channel's
+medium and open the same transmission a second time under another id,
+leaving the stored one waiting forever. The consumer stores each access's
+resolution right after recording it, and the restore replays the access
+where it first went, so the restored correlator re-derives the ids the
+uninterrupted one used.
+"""
+
+[evidence]
+dst = "crosstalk_flow::dst::restore_from_checkpoint_decides_as_uninterrupted"
+
+[evidence-review]
+dst = { agent = "true", human = "false" }

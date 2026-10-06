@@ -316,9 +316,10 @@ impl FlowDurability for MemoryDurability {
         checkpoint: &Checkpoint,
         _taken_at: Timestamp,
     ) -> Result<(), DurabilityError> {
-        let count = u32::try_from(checkpoint.shards.len()).map_err(|_| DurabilityError::Corrupt {
-            reason: "more shards than a u32 counts".to_owned(),
-        })?;
+        let count =
+            u32::try_from(checkpoint.shards.len()).map_err(|_| DurabilityError::Corrupt {
+                reason: "more shards than a u32 counts".to_owned(),
+            })?;
         self.with(|state| {
             for shard in &checkpoint.shards {
                 if let Some(at) = shard.ticked_through {

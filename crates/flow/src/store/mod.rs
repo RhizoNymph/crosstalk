@@ -44,7 +44,7 @@ mod shards;
 mod transmissions;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 pub use codec::CodecError;
 pub use cursor::prune_cursors;

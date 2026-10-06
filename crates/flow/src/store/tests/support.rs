@@ -74,7 +74,8 @@ pub(crate) async fn reset(pool: &PgPool) -> Result<(), sqlx::Error> {
     sqlx::query(
         "TRUNCATE flow.channels, flow.resources, flow.accesses, flow.policy_decisions, \
          flow.channel_traffic, flow.transmissions, flow.verdicts, flow.outbox, flow.cursors, \
-         flow.shard_ticks RESTART IDENTITY CASCADE",
+         flow.shard_ticks, flow.held_writes, flow.tool_calls, flow.checkpoints \
+         RESTART IDENTITY CASCADE",
     )
     .execute(pool)
     .await?;

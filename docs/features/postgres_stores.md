@@ -385,6 +385,53 @@ only when `None`).
 
 ### L5: flow
 
+**Status (W4, `feat/pg-w4-flow`): done in `crates/flow`.** Deviations from
+the sketch below:
+
+- Migrations are `0003_restart.sql` (`0002` went to the transmission
+  matches) and `0004_extract_ledger.sql`.
+- Tool calls are durable too (`flow.tool_calls`, numbered from the same
+  sequence as accesses, renamed `recording`; rows a checkpoint covers are
+  deleted with it): a tool call lost with the process would leave a
+  `Direct(ToolResult)` transmission named `unknown`.
+- Each access stores the channel the consumer resolved it to
+  (`accesses.resolved`, `resolved_channel`), and a restore re-feeds it into
+  that medium. Re-resolving it would put an access recorded before a
+  discovery into the discovered channel's medium and open its transmission
+  again under another id (the restart DST found this).
+- `checkpoints` gains `shards` (the count it was taken with; another count
+  is incompatible) and calls the coverage `recorded_through`; held writes
+  stay in `held_writes`, not in the snapshot.
+- `extract_contexts` is keyed by (agent, conversation), as the gateway's
+  step keys contexts; `extract_pending` has an order column
+  (`extract_pending_order`).
+- Correlator fixes the DST needed: a medium handed to another shard
+  carries its accesses' exchange starts; a repeated `OpenChannel` still
+  hands its resource over; a repeated confirmation of a transmission stored
+  confirmed with other content extends it (`apply::reconfirm`). The six
+  bench replays (and the three run since) are byte-identical to the base
+  build.
+- Envelope ids: `AccessRecorded` per access, `TransmissionConfirmed` and
+  `TransmissionSuspected` per transmission, `ChannelCrossAccessed` per read
+  and event digest (`consumer::publish::envelope_id`), stamped at the
+  subject's millisecond; the envelope's `at` stays the clock's reading.
+
+W8 wires: `FlowConsumer::with_durability(settings, deps,
+PgFlowDurability::new(pool, retry))`, `restore()` before subscribing (an
+`IncompatibleSnapshot` keeps the pipeline not ready), then `run` (or its
+own loop calling `handle_event`, `answer`, `tick` and `checkpoint`, acking
+only after `checkpoint` returns `Ok`); the flow group's ack timeout above
+`flow.checkpoint_ms`; the store relays (`Relay::relay` until empty) before
+the group subscribes; the L4 stage on `ExtractionStep` with
+`PgExtractionLedger`, the consumer's `DurableInputs` as its `FlowInputs`
+(a delta is acked only after `delta` returned `Ok`; `NotDurable` retries
+it) and `expire(now, content_retention)` on its tick; span and message
+port adapters over `PgProvenanceStore` and the blob store; `crosstalk
+migrate` running flow's migrations and `--reset-correlator` calling
+`PgFlowDurability::reset_correlator`. The gateway's L5 stage dropped its
+entropy seed (`FlowDeps` has none); its L4 stage already runs the moved
+step over the memory ledger.
+
 The stores (`PgChannelRegistry`, `PgTransmissionStore`, `PgShardTicks`)
 exist. What is new is the consumer's durable state:
 
@@ -1362,7 +1409,7 @@ S (spec, first) ──┬─▶ W1 transport ─┐
 | W1 | `feat/pg-bus` | `crates/transport/{src/pg/**, src/spool/**, migrations/**, Cargo.toml}`, transport tests and dst made bus-generic; `crates/testkit/src/db_link.rs` | `PgBus`, `PgDeadLetters`, `group_stats`, `prune`, restart reset; **`SpoolingBus`** (segments, cursor, lock, states, drain, bounds, `oldest_at`, stats); `DbLink`; bus conformance over both buses; spool unit, DST and integration tests |
 | W2 | `feat/l3-restart` | `crates/reconstruct/**` | `ExchangePlacements` for `PgConversations`; outbox stamp + awaited bus sink; derived ids checked on redelivery; `0004_outbox_ids.sql`. **Implemented** (branch `feat/pg-w2-reconstruct`): the migration is `0005_outbox_ids.sql` (`0004` went to the conversation reads); `EventSink` gained `stamp`, and `agents::outbox::relay` stamps, publishes and deletes; `PgAgents::open_with_secret` and `with_cursor_secret` derive cursor keys (`crosstalk.cursor.v1.agents`, `crosstalk.cursor.v1.conversations`); tests `tests::pg_outbox`, `tests::pg_placement`, `tests::dst::redelivery_republishes_the_same_envelope_ids`, `tests::cursor_keys`. `AgentSeen` moved from the consumer to the agent store's outbox (staged by `create` from traffic and `attach_evidence`, memory reference changed to match), so a redelivery never loses it |
 | W3 | `feat/l4-pg-span-index` | `crates/provenance/**` | `SpanIndex` for `PgProvenanceStore`; `started_at` read; retention tests including token observations |
-| W4 | `feat/flow-checkpoint` | `crates/flow/**` (with `extract::step` moved in from the gateway, see below) | `0002_restart.sql`; outbox stamp + awaited sink; held writes; access sequence; checkpoint/restore; extraction ledger (memory + Pg); `Publisher` derived ids; restore DST |
+| W4 | `feat/flow-checkpoint` | `crates/flow/**` (with `extract::step` moved in from the gateway, see below) | `0002_restart.sql`; outbox stamp + awaited sink; held writes; access sequence; checkpoint/restore; extraction ledger (memory + Pg); `Publisher` derived ids; restore DST. **Implemented** on `feat/pg-w4-flow` (see [L5: flow](#l5-flow)): `0003_restart.sql`, `0004_extract_ledger.sql`; `FlowDurability` (`Volatile`, `MemoryDurability`, `PgFlowDurability`), `FlowConsumer::{with_durability, checkpoint, restore, handle_batch}`, deferred acks in `run`; `extract::step::ExtractionStep` with `MemoryExtractionLedger` and `PgExtractionLedger`, which the gateway's L4 stage already calls over the memory ledger; stamped outbox relay (`EventSink`, `BusSink`, `Relay<S>`); tests `dst::*`, `dst::checkpoint::*`, `integration::{outbox, checkpoint}::*`, `extract::step::tests::*` |
 | W5 | `feat/l6-pg-topics-projections` | `crates/analysis/**` | `PgTopicCatalog`, `PgProjectionStore`, outbox stamp; model tests vs memory. **Implemented** on `feat/pg-w5-analysis` (see [search_alerts](search_alerts.md), second half): also `crosstalk_analysis::classify::Classifier`, the idempotent classification step with derived envelope ids, for W8 to wire in place of the gateway's |
 | W6 | `feat/l7-restart` (as `feat/pg-w6-topology`) | `crates/topology/**` | outbox stamp; `BusAnnouncer` derived ids from the input; consumer restart tests. **Done:** `0002_outbox_ids.sql` (`envelope_id`, `at`); the relay stamps in a committed transaction (`OutboxIds`: clock + ULID generator) and then publishes stamped rows (`OutboxRelay::run(announcer, ids, poll)`); `Announce` takes a finished `Envelope`, and `consumer::handle` takes the delivered `&Envelope` and publishes `EdgeUpdated` as `EventId::derive(delivery, "edge-updated", 0)` at the delivery's `at`; relay crash-point, consumer restart and watermark-restart tests. The gateway's L7 stage got the two-line caller change |
 | W7 | `feat/surface-pg-stores` | `crates/surface/**` (`migrations/`, `src/pg/**`) | `PgAuditLog` (+ intents), `PgOperatorStore`, `PgSinkRegistry`; cursor key from secret; model tests vs `model::surface` |
@@ -1436,7 +1483,7 @@ marked):
 | `crates/testkit/src/db_link.rs` | a cuttable TCP relay to the test database | `DbLink` (`start`, `url`, `cut`, `restore`) |
 | `crates/reconstruct/migrations/0005_outbox_ids.sql`; `src/agents/outbox.rs`; `src/publish.rs`; `src/thread/pg.rs`; `src/ids.rs` (W2, implemented) | stable outbox ids; `ExchangePlacements`; cursor keys from the secret | `PgConversations: ExchangePlacements`, `EventSink::stamp`, `Stamp`, `PgAgents::open_with_secret`, `cursor_key` |
 | `crates/provenance/src/store/{mod,memory,pg,reads}.rs`, `src/engine.rs` (W3, done) | `SpanIndex` (in `reads.rs`), `started_at` | `PgProvenanceStore: SpanIndex`, `ProvenanceStore::started_at`, `Provenance::started_at` |
-| `crates/flow/migrations/0002_restart.sql`; `src/store/outbox.rs`; `src/consumer/{checkpoint,restore,held}.rs`; `src/extract/{step,ledger}.rs` | checkpoint, held writes, ledger, extraction step | `Checkpoint`, `restore`, `ExtractionLedger`, `PgExtractionLedger`, `MemoryExtractionLedger`, `ExtractionStep` |
+| `crates/flow/migrations/{0003_restart,0004_extract_ledger}.sql`; `src/store/{outbox,restart,ledger}.rs`; `src/consumer/{checkpoint,durability,restore,held,input,publish}.rs`; `src/correlate/snapshot.rs`; `src/extract/step/**` (W4, implemented) | checkpoint, held writes, ledger, extraction step | `Checkpoint`, `FlowConsumer::restore`, `FlowDurability`, `PgFlowDurability`, `ExtractionLedger`, `PgExtractionLedger`, `MemoryExtractionLedger`, `ExtractionStep`, `DurableInputs` |
 | `crates/analysis/migrations/0003_outbox_ids.sql`, `0004_topics.sql`, `0005_projections.sql`; `src/topics/**`, `src/projections/**` | L6 stores | `PgTopicCatalog`, `PgProjectionStore` |
 | `crates/topology/migrations/0002_outbox_ids.sql`; `src/outbox.rs` | stable ids | - |
 | `crates/surface/migrations/0001_surface.sql`; `src/pg/{audit,operators,sinks}.rs`; `src/cursor.rs` | L8 stores, key derivation | `PgAuditLog`, `PgOperatorStore`, `PgSinkRegistry`, `CursorKey::derive` |

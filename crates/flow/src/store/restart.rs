@@ -126,10 +126,11 @@ impl PgFlowDurability {
         settings: &Settings,
         now: Timestamp,
     ) -> Result<(), DurabilityError> {
-        let latest: (Option<i64>,) = sqlx::query_as("SELECT max(ticked_through) FROM flow.shard_ticks")
-            .fetch_one(&self.pool)
-            .await
-            .map_err(query_failed)?;
+        let latest: (Option<i64>,) =
+            sqlx::query_as("SELECT max(ticked_through) FROM flow.shard_ticks")
+                .fetch_one(&self.pool)
+                .await
+                .map_err(query_failed)?;
         let mut shards = Shards::new(settings.timing, settings.content_retention, settings.shards);
         if let Some(latest) = latest.0 {
             let at = timestamp("shard_ticks.ticked_through", latest).map_err(codec_failed)?;
@@ -137,9 +138,11 @@ impl PgFlowDurability {
             // they ran through, so the record never runs ahead of them.
             let _ = shards.tick(at);
         }
-        let checkpoint = shards.checkpoint().map_err(|error| DurabilityError::Corrupt {
-            reason: error.to_string(),
-        })?;
+        let checkpoint = shards
+            .checkpoint()
+            .map_err(|error| DurabilityError::Corrupt {
+                reason: error.to_string(),
+            })?;
         self.save(&checkpoint, now).await
     }
 }
@@ -310,18 +313,24 @@ impl FlowDurability for PgFlowDurability {
 
     async fn tool_called(&self, call: &ToolCalled) -> Result<(), DurabilityError> {
         let at = micros("tool_calls.at", call.at).map_err(codec_failed)?;
-        sqlx::query("INSERT INTO flow.tool_calls (agent, call_id, name, at) VALUES ($1, $2, $3, $4)")
-            .bind(id_text(call.agent))
-            .bind(&call.call.0)
-            .bind(&call.name.0)
-            .bind(at)
-            .execute(&self.pool)
-            .await
-            .map_err(query_failed)?;
+        sqlx::query(
+            "INSERT INTO flow.tool_calls (agent, call_id, name, at) VALUES ($1, $2, $3, $4)",
+        )
+        .bind(id_text(call.agent))
+        .bind(&call.call.0)
+        .bind(&call.name.0)
+        .bind(at)
+        .execute(&self.pool)
+        .await
+        .map_err(query_failed)?;
         Ok(())
     }
 
-    async fn save(&self, checkpoint: &Checkpoint, taken_at: Timestamp) -> Result<(), DurabilityError> {
+    async fn save(
+        &self,
+        checkpoint: &Checkpoint,
+        taken_at: Timestamp,
+    ) -> Result<(), DurabilityError> {
         let taken_at = micros("checkpoints.taken_at", taken_at).map_err(codec_failed)?;
         retry_serializable(&self.pool, &self.retry, |conn| {
             // The body may run again; each attempt owns its copy.
@@ -348,7 +357,9 @@ impl FlowDurability for PgFlowDurability {
         let checkpoint = stored_checkpoint(rows).map_err(codec_failed)?;
         let through = checkpoint
             .as_ref()
-            .map_or(Ok(0), |stored| seq("checkpoints.recorded_through", stored.recorded_through))
+            .map_or(Ok(0), |stored| {
+                seq("checkpoints.recorded_through", stored.recorded_through)
+            })
             .map_err(codec_failed)?;
         let held_rows: Vec<(i64, String)> = sqlx::query_as(
             "SELECT settles_at, write FROM flow.held_writes ORDER BY settles_at, access_id",
@@ -358,8 +369,10 @@ impl FlowDurability for PgFlowDurability {
         .map_err(query_failed)?;
         let mut held = Vec::with_capacity(held_rows.len());
         for (settles_at, text) in held_rows {
-            let write: Observed<WriteCall> = from_json("held_writes.write", &text).map_err(codec_failed)?;
-            let settles_at = timestamp("held_writes.settles_at", settles_at).map_err(codec_failed)?;
+            let write: Observed<WriteCall> =
+                from_json("held_writes.write", &text).map_err(codec_failed)?;
+            let settles_at =
+                timestamp("held_writes.settles_at", settles_at).map_err(codec_failed)?;
             held.push((write, settles_at));
         }
         let accesses: Vec<AccessRow> = sqlx::query_as(
@@ -401,7 +414,10 @@ impl FlowDurability for PgFlowDurability {
             ));
         }
         for row in &calls {
-            numbered.push((row.0, Recorded::ToolCall(tool_call(row).map_err(codec_failed)?)));
+            numbered.push((
+                row.0,
+                Recorded::ToolCall(tool_call(row).map_err(codec_failed)?),
+            ));
         }
         numbered.sort_by_key(|(number, _)| *number);
         Ok(Recovered {
@@ -411,4 +427,3 @@ impl FlowDurability for PgFlowDurability {
         })
     }
 }
-

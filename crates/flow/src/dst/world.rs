@@ -31,9 +31,7 @@ use crosstalk_spec::events::detect::DetectEvent;
 use crosstalk_spec::events::ingest::IngestEvent;
 use crosstalk_spec::events::{BusEvent, Envelope, Subject};
 use crosstalk_spec::ids::{AccessId, AgentId, ChannelId, EventId, SpanId, TransmissionId};
-use crosstalk_spec::interfaces::l2_transport::{
-    BusError, ConsumerGroup, EventBus, RetryPolicy,
-};
+use crosstalk_spec::interfaces::l2_transport::{BusError, ConsumerGroup, EventBus, RetryPolicy};
 use crosstalk_spec::interfaces::l3_reconstruction::lifecycle::{
     AgentLifecycle, AgentOrigin, NewAgent,
 };
@@ -60,7 +58,7 @@ pub(super) enum Item {
     /// Extracted inputs of one delta, handed over together.
     Batch(Vec<Extracted>),
     /// A bus delivery to the flow group.
-    Deliver(BusEvent),
+    Deliver(Box<BusEvent>),
     Tick(Timestamp),
     /// The consumer's periodic checkpoint, then the acks it covers.
     Checkpoint,
@@ -165,7 +163,7 @@ pub(super) fn scenario(seed: u64, checkpoints: bool) -> Plan {
                         let content = found_in(&mut scene, &fetch, writer, span);
                         let event = matched(&content);
                         delivered.push(event.clone());
-                        timed.push((later(&mut rng, t, 90), Item::Deliver(event)));
+                        timed.push((later(&mut rng, t, 90), Item::Deliver(Box::new(event))));
                     }
                 }
                 timed.push((t, Item::Batch(vec![Extracted::Read(fetch)])));
@@ -182,8 +180,8 @@ pub(super) fn scenario(seed: u64, checkpoints: bool) -> Plan {
                 captured.meta.id = exchange;
                 timed.push((
                     t,
-                    Item::Deliver(BusEvent::Ingest(IngestEvent::ExchangeCaptured(Box::new(
-                        captured,
+                    Item::Deliver(Box::new(BusEvent::Ingest(IngestEvent::ExchangeCaptured(
+                        Box::new(captured),
                     )))),
                 ));
                 let span = scene.span();
@@ -205,12 +203,12 @@ pub(super) fn scenario(seed: u64, checkpoints: bool) -> Plan {
                 let content = scene.found(from, to, exchange, span, carrier);
                 let event = matched(&content);
                 delivered.push(event.clone());
-                timed.push((later(&mut rng, t, 40), Item::Deliver(event)));
+                timed.push((later(&mut rng, t, 40), Item::Deliver(Box::new(event))));
             }
             _ => {
                 // A redelivery of an earlier delivery.
                 if let Some(index) = rng.index(delivered.len()) {
-                    timed.push((t, Item::Deliver(delivered[index].clone())));
+                    timed.push((t, Item::Deliver(Box::new(delivered[index].clone()))));
                 }
             }
         }
@@ -392,7 +390,11 @@ impl FlowDurability for Flaky {
         self.inner.tool_called(call).await
     }
 
-    async fn save(&self, checkpoint: &Checkpoint, taken_at: Timestamp) -> Result<(), DurabilityError> {
+    async fn save(
+        &self,
+        checkpoint: &Checkpoint,
+        taken_at: Timestamp,
+    ) -> Result<(), DurabilityError> {
         self.up()?;
         self.inner.save(checkpoint, taken_at).await
     }
@@ -459,6 +461,11 @@ impl World {
         }
     }
 
+    /// Take the store and bus down, or bring them back.
+    pub(super) fn set_outage(&self, down: bool) {
+        self.outage.set(down);
+    }
+
     /// A fresh consumer process over this world's stores, restored.
     pub(super) async fn start(&self) -> Consumer {
         let mut consumer = FlowConsumer::with_durability(
@@ -499,14 +506,12 @@ async fn decided(world: &World) -> Decided {
         }
     }
     for envelope in world.log.envelopes().values() {
-        match &envelope.event {
-            BusEvent::Detect(
-                DetectEvent::TransmissionConfirmed { transmission, .. }
-                | DetectEvent::TransmissionSuspected { transmission, .. },
-            ) => {
-                ids.insert(*transmission);
-            }
-            _ => {}
+        if let BusEvent::Detect(
+            DetectEvent::TransmissionConfirmed { transmission, .. }
+            | DetectEvent::TransmissionSuspected { transmission, .. },
+        ) = &envelope.event
+        {
+            ids.insert(*transmission);
         }
     }
     let mut transmissions = BTreeMap::new();
@@ -604,7 +609,7 @@ pub(super) async fn run(plan: &Plan, faults: &Faults) -> (World, Decided) {
             Item::Batch(inputs) => driver.batch(inputs.clone()).await,
             Item::Deliver(event) => {
                 driver.consumer.handle_event(event).await;
-                driver.unacked.push(event.clone());
+                driver.unacked.push((**event).clone());
             }
             Item::Tick(now) => driver.consumer.tick(*now).await,
             Item::Checkpoint => driver.checkpoint(&world).await,

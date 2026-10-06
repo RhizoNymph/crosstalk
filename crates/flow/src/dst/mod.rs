@@ -11,6 +11,7 @@
 //! - `transport.consumer.derived-envelope-ids` (INV-1202, flow's part): a
 //!   redelivered input republishes only envelope ids the bus already holds.
 
+mod checkpoint;
 mod world;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -90,7 +91,10 @@ async fn restore_from_checkpoint_decides_as_uninterrupted() {
         // republished.
         let log = restored_world.log.envelopes();
         {
-            let (want, got) = (transmission_events(&uninterrupted_log), transmission_events(&log));
+            let (want, got) = (
+                transmission_events(&uninterrupted_log),
+                transmission_events(&log),
+            );
             for (id, event) in &got {
                 if want.get(id) != Some(event) {
                     eprintln!("only restored: {event:?}");
@@ -146,15 +150,13 @@ async fn redelivery_republishes_the_same_envelope_ids() {
             let again = match item {
                 Item::Batch(inputs) => {
                     assert_eq!(consumer.handle_batch(inputs.clone()).await, Ok(()));
-                    let first: BTreeSet<EventId> =
-                        world.log.envelopes().keys().copied().collect();
+                    let first: BTreeSet<EventId> = world.log.envelopes().keys().copied().collect();
                     assert_eq!(consumer.handle_batch(inputs.clone()).await, Ok(()));
                     first
                 }
                 Item::Deliver(event) => {
                     consumer.handle_event(event).await;
-                    let first: BTreeSet<EventId> =
-                        world.log.envelopes().keys().copied().collect();
+                    let first: BTreeSet<EventId> = world.log.envelopes().keys().copied().collect();
                     consumer.handle_event(event).await;
                     first
                 }
@@ -176,4 +178,3 @@ async fn redelivery_republishes_the_same_envelope_ids() {
         }
     }
 }
-

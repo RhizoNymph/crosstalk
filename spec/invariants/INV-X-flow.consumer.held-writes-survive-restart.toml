@@ -1,0 +1,20 @@
+[invariant]
+id = "flow.consumer.held-writes-survive-restart"
+statement = "A write the flow consumer holds for its result, and a tool call it takes, are stored before the consumer confirms the batch carrying them durable; after a restart the write is held again until its result or settle time, and its stored hold is dropped only once its access is recorded."
+kind = "coordination"
+requires = ["unit", "integration"]
+rationale = """
+L4 acks a delta once the flow consumer confirms its extracted inputs are
+durable, and a held write has no other record: lost with the process, its
+access would never be recorded and its co-accesses never paired. Dropping
+the hold only after the access is recorded means a crash in between leaves
+the hold, which settles again into the access already stored.
+"""
+
+[evidence]
+unit = "crosstalk_flow::dst::checkpoint::held_writes_and_tool_calls_survive_a_restart"
+integration = "crosstalk_flow::integration::checkpoint::a_restored_consumer_settles_a_write_held_before_its_restart"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

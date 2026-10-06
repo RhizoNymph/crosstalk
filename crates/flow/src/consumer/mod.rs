@@ -70,9 +70,7 @@ use crosstalk_spec::events::detect::DetectEvent;
 use crosstalk_spec::events::ingest::IngestEvent;
 use crosstalk_spec::events::{BusEvent, Subject};
 use crosstalk_spec::ids::{AccessId, AgentId, ChannelId, ExchangeId, ResourceId};
-use crosstalk_spec::interfaces::l2_transport::{
-    ConsumerGroup, DeliveryId, EventBus, Subscription,
-};
+use crosstalk_spec::interfaces::l2_transport::{ConsumerGroup, DeliveryId, EventBus, Subscription};
 use crosstalk_spec::interfaces::l3_reconstruction::agents::AgentReads;
 use crosstalk_spec::interfaces::l5_flow::ChannelRegistry;
 use crosstalk_spec::interfaces::l5_flow::channels::ChannelTraffic;
@@ -381,7 +379,11 @@ where
     /// `Settings::max_unacked` wait). Batches waiting on their durability
     /// are answered once their steps ran. The consumer stays usable
     /// afterwards (its stores and shards can be read).
-    pub async fn run<S: Subscription, I: InputSource>(&mut self, mut subscription: S, mut inputs: I) {
+    pub async fn run<S: Subscription, I: InputSource>(
+        &mut self,
+        mut subscription: S,
+        mut inputs: I,
+    ) {
         let durable = self.durability.survives_restart();
         tracing::info!(
             group = GROUP,
@@ -430,7 +432,8 @@ where
             }
         }
         if durable {
-            self.checkpoint_and_ack(&mut subscription, &mut unacked).await;
+            self.checkpoint_and_ack(&mut subscription, &mut unacked)
+                .await;
         }
         tracing::info!(
             group = GROUP,

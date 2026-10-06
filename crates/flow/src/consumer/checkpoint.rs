@@ -91,9 +91,7 @@ pub enum FlowRestoreError {
     /// must not consume: the operator runs `crosstalk migrate
     /// --reset-correlator`, which loses the pairings pending at the
     /// checkpoint, knowingly (decision Q2).
-    #[error(
-        "incompatible correlator checkpoint ({0}); run `crosstalk migrate --reset-correlator`"
-    )]
+    #[error("incompatible correlator checkpoint ({0}); run `crosstalk migrate --reset-correlator`")]
     IncompatibleSnapshot(Incompatible),
     #[error("reading the checkpoint: {0}")]
     Store(#[from] DurabilityError),

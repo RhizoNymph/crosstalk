@@ -15,6 +15,7 @@ pub(crate) mod fixtures;
 mod channel;
 mod content_age;
 mod handoff;
+mod handoff_starts;
 mod pairing;
 mod props;
 mod rereads;
