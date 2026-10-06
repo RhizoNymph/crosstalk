@@ -29,7 +29,7 @@ use super::{caller, collect, day, first, fresh, researcher, week};
 use crate::url::scope::Scope;
 use crosstalk_spec::interfaces::l8_surface::QueryApi;
 
-fn scope(scope: &Scope) -> ExportScope {
+pub(super) fn scope(scope: &Scope) -> ExportScope {
     ExportScope {
         window: scope.window,
         filter: scope.topology_filter(),
@@ -55,7 +55,7 @@ async fn drain(export: Export<ExportRows>) -> (ExportHeader, Vec<ExportRow>, Exp
     }
 }
 
-async fn run(
+pub(super) async fn run(
     b: &FixtureBackend,
     c: &Caller,
     request: &ExportRequest,
@@ -64,7 +64,7 @@ async fn run(
 }
 
 /// The export verifies, and its header, rows and trailer agree.
-fn verified(header: &ExportHeader, rows: &[ExportRow], trailer: &ExportTrailer) {
+pub(super) fn verified(header: &ExportHeader, rows: &[ExportRow], trailer: &ExportTrailer) {
     assert_eq!(
         verify_export(header, rows, Some(trailer), RowDigest::new()),
         Ok(())

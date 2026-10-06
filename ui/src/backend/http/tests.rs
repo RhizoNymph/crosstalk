@@ -488,3 +488,57 @@ async fn a_lost_gateway_ends_data_live_as_unreachable() {
     drop(router);
     world.stop().await;
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_states_export_round_trips_over_http() {
+    // The fixture over HTTP: its rows cross the binding, and the client
+    // checks each against the header and the trailer as they arrive.
+    let world = FixtureApi::start().await;
+    let access = world.access(RESEARCHER_TOKEN).await.expect("access");
+    let router = world.router(RESEARCHER_TOKEN, access);
+    let (page, reply) = follow(&router, "/export").await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+    let target = format!(
+        "{page}&states=awaiting_content,suspected,confirmed,classified,aggregated,discarded"
+    );
+    let reply = send_to(
+        &router,
+        Request::builder()
+            .method("POST")
+            .uri(&target)
+            .header("content-type", "application/x-www-form-urlencoded")
+            .body(Body::from("dataset=transmissions&format=jsonl"))
+            .expect("request"),
+    )
+    .await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+    let lines: Vec<serde_json::Value> = reply
+        .body
+        .lines()
+        .map(|line| serde_json::from_str(line).expect("a JSON line"))
+        .collect();
+    let (header, trailer) = (&lines[0], &lines[lines.len() - 1]);
+    assert_eq!(
+        header["selection"]["states"].as_array().map(Vec::len),
+        Some(6)
+    );
+    assert_eq!(trailer["end"]["status"], "complete", "{trailer}");
+    let rows = &lines[1..lines.len() - 1];
+    assert_eq!(header["rows"].as_u64(), u64::try_from(rows.len()).ok());
+    let confirmed = ["confirmed", "classified", "aggregated"];
+    for row in rows {
+        let state = row["state"].as_str().expect("state");
+        assert_eq!(
+            row["confirmed"].as_bool(),
+            Some(confirmed.contains(&state)),
+            "{row}"
+        );
+    }
+    assert!(
+        rows.iter().any(|row| row["confirmed"] == false),
+        "unconfirmed rows crossed the binding"
+    );
+    assert!(rows.iter().any(|row| row["confirmed"] == true));
+    drop(router);
+    world.stop().await;
+}

@@ -3,7 +3,9 @@
 //! `{start, end}`).
 //!
 //! Every row object starts with `"type": "row"` and the dataset's code;
-//! content columns are `null` when the request did not include content.
+//! content columns are `null` when the request did not include content. A
+//! transmission row of an export whose states include an unconfirmed one
+//! also carries `confirmed` ([`Columns`]).
 
 use crosstalk_spec::aggregates::edge::RouteKind;
 use crosstalk_spec::aggregates::quality::{MatchClass, QualityMatch};
@@ -19,6 +21,7 @@ use crosstalk_spec::interfaces::l8_surface::summary::{TopicUnder, TransmissionSt
 use crosstalk_spec::support::{Blake3, TimeWindow, Timestamp};
 use serde_json::{Value, json};
 
+use crate::pages::export::states;
 use crate::url::route::{encode as route_text, encode_kind};
 use crate::url::ulid::UlidId;
 use crate::url::view_state::format_time;
@@ -139,7 +142,16 @@ fn label(content: Option<&LabelContent>) -> Value {
     content.map_or(Value::Null, |content| json!(content.topic_label))
 }
 
-fn transmission(row: &TransmissionRow) -> Value {
+/// Columns a row carries beyond its dataset's own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Columns {
+    /// `confirmed` on every transmission row: whether its state is one of
+    /// `ExportStates::CONFIRMED`. Written when the export's states include
+    /// an unconfirmed one; a default export's rows are unchanged.
+    pub confirmed: bool,
+}
+
+fn transmission(row: &TransmissionRow, columns: Columns) -> Value {
     let summary = row.summary();
     let delivery = row.delivery();
     let content = row.content().map_or(Value::Null, |content| {
@@ -148,7 +160,7 @@ fn transmission(row: &TransmissionRow) -> Value {
             "matches": content.matches.iter().map(match_text).collect::<Vec<_>>(),
         })
     });
-    json!({
+    let mut fields = json!({
         "id": id(summary.id),
         "from": delivery.map(|delivery| id(delivery.from)),
         "to": id(summary.to),
@@ -162,7 +174,16 @@ fn transmission(row: &TransmissionRow) -> Value {
         "verdict": verdict(summary.state.verdict()),
         "strongest": row.strongest().map(class),
         "content": content,
-    })
+    });
+    if columns.confirmed
+        && let Value::Object(fields) = &mut fields
+    {
+        fields.insert(
+            "confirmed".to_owned(),
+            Value::Bool(states::is_confirmed(summary.state.kind())),
+        );
+    }
+    fields
 }
 
 fn edge(row: &EdgeRow) -> Value {
@@ -246,9 +267,9 @@ fn verdict_row(row: &VerdictRow) -> Value {
 }
 
 /// The row's line: `{"type": "row", "dataset": <code>, …its fields}`.
-pub fn row(row: &ExportRow) -> Value {
+pub fn row(row: &ExportRow, columns: Columns) -> Value {
     let mut fields = match row {
-        ExportRow::Transmission(row) => transmission(row),
+        ExportRow::Transmission(row) => transmission(row, columns),
         ExportRow::Edge(row) => edge(row),
         ExportRow::Access(row) => access(row),
         ExportRow::Topic(row) => topic(row),
