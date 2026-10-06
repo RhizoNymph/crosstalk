@@ -58,7 +58,8 @@ Overview:
     (testkit). crosstalk-transport has the in-process bus (MpscBus) with
     consumer groups, retries, dead letters and envelope dedup, the
     durable Postgres bus (PgBus, pg_bus) and the on-disk publish spool in
-    front of it (SpoolingBus, publish_spool), not yet wired into serve,
+    front of it (SpoolingBus, publish_spool), which serve uses whenever a
+    store section is configured (postgres_mode),
     and the content-addressed blob store (FsBlobStore, MemoryBlobStore)
     (transport). crosstalk-canonical has the Anthropic Messages
     normalizer (L1): pure functions from a RawExchange to a
@@ -890,7 +891,10 @@ Features Index:
       see pg_bus and publish_spool; W4, flow, implemented: checkpoints with
       deferred acks, held writes, access recording order, the extraction
       step and its ledger in crosstalk-flow, stamped outbox, see
-      flow_correlator, flow_store and flow_extract): detections that survive
+      flow_correlator, flow_store and flow_extract; W8, the composition,
+      implemented: PgStores, Live over a LiveStoreSet, recovery, the
+      pipeline lock, PgFrontierSource, migrate for every layer, the spool
+      section, readiness and health, see postgres_mode): detections that survive
       a gateway restart. Surveys what is persisted today (serve runs Live
       on memory stores and MpscBus; the L3 to L7 Postgres stores exist but
       are unwired, and crosstalk migrate runs no layer migrations) and
@@ -917,6 +921,43 @@ Features Index:
       - crates/store/src/migrate.rs
     depends_on: [store, gateway, transport, reconstruct, provenance, flow_store, flow_correlator, search_alerts, topology_store, surface_service, conformance]
     doc: docs/features/postgres_stores.md
+  postgres_mode:
+    description: >
+      serve on the Postgres stores (P7.3 workstream W8). crosstalk-api's
+      PgStores bundles every layer's Postgres store over one pool
+      (SurfaceStores; PgEvidence reads spans from L4 and accesses and
+      resources from L5's tables; cursor keys derived from the deployment
+      secret; ids from OS entropy, or seeded in tests) and InProcess hosts
+      any HostedStores bundle. crosstalk-gateway's Live is generic over a
+      LiveStoreSet (MemorySet unchanged, PgSet): Live::start_pg recovers
+      (held deliveries back, every outbox relayed, L5 restored from its
+      checkpoint, node facts rebuilt, interrupted actions recorded), then
+      subscribes every group and opens the spool's gate, so captures made
+      before (or while the database was down) drain in order under their
+      ids. Postgres stages: L3 over PgAgents and PgConversations, L4 with
+      the extraction step on PgExtractionLedger and DurableInputs, the
+      durable flow consumer acking after checkpoints, crosstalk-analysis's
+      Classifier, L7 with PgFrontierSource (shard ticks, groups' pending
+      and dead letters, the spool's oldest record); subscriptions are
+      pumped so a stage's select never cancels a take. serve in Postgres
+      mode starts the proxy and capture at once over the spool, then waits
+      for the database, migrations at head and the pipeline advisory lock;
+      /readyz reports migrations, pipeline_lock, capture (spooling,
+      draining, dropping: spool full, spool corrupt), pipeline and recovery,
+      ready while the database is down; /healthz adds bus, recovery and
+      spool sections; spool_full is a capture outcome. crosstalk migrate
+      runs every layer and --reset-correlator; crosstalk spool
+      --discard-corrupt. Memory mode's replays are byte-identical.
+    entry_points:
+      - crates/api/src/pg/mod.rs
+      - crates/gateway/src/live/pg/mod.rs
+      - crates/gateway/src/live/frontier.rs
+      - crates/gateway/src/gateway/postgres.rs
+      - crates/gateway/src/store/migrations.rs
+      - crates/gateway/src/spool.rs
+      - crates/gateway/src/ops/mod.rs
+    depends_on: [postgres_stores, gateway, pg_bus, publish_spool, store, reconstruct, provenance, flow_store, flow_correlator, flow_extract, search_alerts, topology_store, surface_service]
+    doc: docs/features/postgres_mode.md
   sim:
     description: >
       crosstalk-sim, the deterministic simulation kit for every dst
@@ -1253,8 +1294,9 @@ Features Index:
     description: >
       crosstalk-gateway, the crosstalk binary (P3, milestone M1), on the
       deployment contract (docs/features/deploy.md): serve --role
-      all|proxy|pipeline|api|analysis, migrate (extensions; no layer
-      migrations yet), healthcheck (a hyper GET for the distroless image)
+      all|proxy|pipeline|api|analysis, migrate (extensions, then every
+      layer's migrations, transport first; --reset-correlator), spool
+      --discard-corrupt, healthcheck (a hyper GET for the distroless image)
       and inspect (lists logged exchanges and decodes one with its bodies).
       One JSON config refusing unknown fields (ingress's config unchanged,
       api, ops, store, blobs, embeddings, and optional bus, pipeline and
@@ -1306,7 +1348,11 @@ Features Index:
       Live::stores and Live::layers expose TransmissionStore::list and
       ExchangePlacements::placement for eval. Live advances the L7
       watermark on each tick when the layer groups are empty (the spec's
-      Watermark::settled rule) and reports per-stage counts. serve runs a
+      Watermark::settled rule) and reports per-stage counts. With a store
+      section serve runs in Postgres mode instead (postgres_mode: PgStores,
+      PgBus behind the publish spool, recovery, the pipeline lock,
+      PgFrontierSource; Live is generic over a LiveStoreSet, MemorySet or
+      PgSet). Without one, serve runs a
       Live process in every role but analysis (memory stores, wall clock,
       periodic ticks every flow.tick_ms), feeds it from the proxy, and in
       roles all and api mounts crosstalk-api's HttpApi on api.listen (bearer
@@ -1316,7 +1362,8 @@ Features Index:
       /healthz has a live section (stage counts, watermark_micros).
     entry_points:
       - crates/gateway/src/main.rs
-      - crates/gateway/src/gateway.rs
+      - crates/gateway/src/gateway/mod.rs
+      - crates/gateway/src/gateway/postgres.rs
       - crates/gateway/src/pipeline/mod.rs
       - crates/gateway/src/pipeline/ingest.rs
       - crates/gateway/src/live/mod.rs

@@ -11,7 +11,7 @@ through an outage.
 """
 
 [evidence]
-integration = "crosstalk_e2e::spool::proxy_forwards_through_outage_and_full_spool"
+integration = "crosstalk_gateway::postgres_down::proxy_forwards_through_outage_and_full_spool"
 
 [evidence-review]
-integration = { agent = "false", human = "false" }
+integration = { agent = "true", human = "false" }

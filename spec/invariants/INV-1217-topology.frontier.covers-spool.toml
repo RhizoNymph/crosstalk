@@ -14,4 +14,4 @@ late (LateContribution) after the drain.
 dst = "crosstalk_gateway::dst::frontier_covers_spooled_envelopes"
 
 [evidence-review]
-dst = { agent = "false", human = "false" }
+dst = { agent = "true", human = "false" }

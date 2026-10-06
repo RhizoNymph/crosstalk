@@ -52,8 +52,12 @@ use crosstalk_spec::aggregates::series::BucketWidth;
 use crosstalk_spec::aggregates::topic::EmbeddingModel;
 use crosstalk_spec::derived::flow::timing::CorrelationTiming;
 use crosstalk_spec::events::BusEvent;
-use crosstalk_spec::ids::{ConfigHash, SeededRandom};
+use crosstalk_spec::ids::{ConfigHash, KeyedHasher, SeededRandom};
 use crosstalk_spec::interfaces::l2_transport::BlobStore;
+use crosstalk_spec::interfaces::l3_reconstruction::AgentDirectory;
+use crosstalk_spec::interfaces::l3_reconstruction::agents::AgentReads;
+use crosstalk_spec::interfaces::l5_flow::channels::ChannelReads;
+use crosstalk_spec::interfaces::l5_flow::{ChannelDirectory, ChannelRegistry};
 use crosstalk_spec::interfaces::l6_analysis::lifecycle::TopicLifecycleError;
 use crosstalk_spec::interfaces::l8_surface::Caller;
 use crosstalk_spec::interfaces::l8_surface::live::FeedEpoch;
@@ -64,7 +68,7 @@ use crosstalk_spec::support::{Blake3, Clock, Similarity};
 use crosstalk_surface::export::{SpecExportSource, StoredTransmissions};
 use crosstalk_surface::live::{FeedClosed, FeedHandle, FeedWriter};
 use crosstalk_surface::nodes::{NodeCache, NodeFeedError, NodeFeeder};
-use crosstalk_surface::{Surface, SurfaceConfig};
+use crosstalk_surface::{Surface, SurfaceConfig, SurfaceStores};
 use crosstalk_transport::blob::MemoryBlobStore;
 use crosstalk_transport::{BusConfig, MpscBus, StartError};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
@@ -154,14 +158,77 @@ impl Backbone<MemoryBlobStore> {
     }
 }
 
-/// The surface over the reference stores, and handles on both.
-pub struct InProcess<B = MemoryBlobStore, R = Unrecorded> {
+/// A store bundle an in-process surface can host: the surface's stores,
+/// plus what the node facts are fed from. Implemented by the reference
+/// stores ([`MemoryStores`]) and the Postgres bundle
+/// ([`crate::pg::PgStores`]).
+pub trait HostedStores: SurfaceStores + Clone {
+    /// The agent reads the node facts are rebuilt and refreshed from.
+    type NodeAgents: AgentReads + AgentDirectory + Clone + Send + Sync + 'static;
+    /// The channel reads the node facts are rebuilt and refreshed from.
+    type NodeChannels: ChannelReads
+        + ChannelRegistry
+        + ChannelDirectory
+        + Clone
+        + Send
+        + Sync
+        + 'static;
+
+    /// The node facts the edge store's graphs read.
+    fn node_cache(&self) -> &NodeCache;
+
+    /// A feeder keeping [`HostedStores::node_cache`] current.
+    fn node_feeder(&self) -> NodeFeeder<Self::NodeAgents, Self::NodeChannels>;
+
+    /// A handle on the operator store sharing its state, to load the
+    /// access config through (`OperatorStore::load` takes `&mut self`).
+    fn operator_handle(&self) -> Self::Operators;
+}
+
+impl<B, R> HostedStores for MemoryStores<B, R>
+where
+    B: BlobStore + Clone + Send + Sync + 'static,
+    R: ConversationStores,
+{
+    type NodeAgents = MemoryAgents;
+    type NodeChannels = MemoryChannels<MemoryAgents>;
+
+    fn node_cache(&self) -> &NodeCache {
+        &self.nodes
+    }
+
+    fn node_feeder(&self) -> NodeFeeder<MemoryAgents, MemoryChannels<MemoryAgents>> {
+        NodeFeeder::new(
+            self.nodes.clone(),
+            self.agents.clone(),
+            self.channels.clone(),
+        )
+    }
+
+    fn operator_handle(&self) -> InMemoryOperatorStore {
+        self.operators.clone()
+    }
+}
+
+/// How a hosted surface's cursor key is chosen.
+#[derive(Clone, Copy)]
+pub enum CursorSecret<'a> {
+    /// Drawn from the surface's seeded generator: cursors die with the
+    /// process (memory mode).
+    Drawn,
+    /// Derived from the deployment secret, so cursors issued before a
+    /// restart resolve after it (`surface.cursor.survives-restart`).
+    Derived(&'a KeyedHasher),
+}
+
+/// The surface over a store bundle, and handles on both.
+pub struct InProcess<S: HostedStores = MemoryStores> {
     /// The stores: seed the world through the spec's write traits on them.
-    pub stores: MemoryStores<B, R>,
+    pub stores: S,
     /// The surface: `QueryApi`, `OperatorActions` and `LiveFeed`.
-    pub surface: Arc<Surface<MemoryStores<B, R>>>,
+    pub surface: Arc<Surface<S>>,
     /// Keeps the graphs' node facts current; the relay feeds it.
-    pub nodes: NodeFeeder<MemoryAgents, MemoryChannels<MemoryAgents>>,
+    pub nodes: NodeFeeder<S::NodeAgents, S::NodeChannels>,
     relay: JoinHandle<()>,
     /// The in-process projection fitter, once started.
     fitter: Option<JoinHandle<()>>,
@@ -171,14 +238,14 @@ pub struct InProcess<B = MemoryBlobStore, R = Unrecorded> {
     settle: UnboundedSender<oneshot::Sender<()>>,
 }
 
-impl InProcess<MemoryBlobStore> {
+impl InProcess<MemoryStores> {
     /// [`InProcess::start_with`] over a [`Backbone::standalone`].
     pub async fn start(options: InProcessOptions) -> Result<Self, InProcessError> {
         Self::start_with(options, Backbone::standalone()?).await
     }
 }
 
-impl<B> InProcess<B, Unrecorded>
+impl<B> InProcess<MemoryStores<B, Unrecorded>>
 where
     B: BlobStore + Clone + Send + Sync + 'static,
 {
@@ -191,7 +258,7 @@ where
     }
 }
 
-impl<B, R> InProcess<B, R>
+impl<B, R> InProcess<MemoryStores<B, R>>
 where
     B: BlobStore + Clone + Send + Sync + 'static,
     R: ConversationStores,
@@ -308,43 +375,16 @@ where
             nodes,
             reads,
         };
-        let feed = FeedWriter::spawn(options.surface.live, FeedEpoch(started.as_micros()));
-        let feeder = NodeFeeder::new(
-            stores.nodes.clone(),
-            stores.agents.clone(),
-            stores.channels.clone(),
-        );
-        let hash = ConfigHash::from_digest(Blake3::of(b"in-process access config"));
-        let mut operator_store = stores.operators.clone();
-        let changes = operator_store
-            .load(&options.access, hash, started)
-            .await
-            .map_err(InProcessError::Operators)?;
-        feed.config_loaded(&changes)
-            .await
-            .map_err(InProcessError::Feed)?;
-        feeder.rebuild().await.map_err(InProcessError::Nodes)?;
-        let (settle, settles) = unbounded_channel();
-        let relay = tokio::spawn(relay(published, settles, feeder.clone(), feed.clone()));
-        let clock = Arc::clone(&options.clock);
-        let surface = Arc::new(Surface::new(
-            stores.clone(),
-            options.clock,
-            options.surface,
-            SeededRandom::new(options.seed),
-            feed,
-        ));
-        tracing::info!(operators = changes.len(), "in-process surface started");
-        let mut started = Self {
+        let fitting = options.projection_fitting;
+        let mut started = Self::host(
             stores,
-            surface,
-            nodes: feeder,
-            relay,
-            fitter: None,
-            clock,
-            settle,
-        };
-        started.fit_projections(options.projection_fitting);
+            options,
+            published,
+            CursorSecret::Drawn,
+            "in-process access config",
+        )
+        .await?;
+        started.fit_projections(fitting);
         Ok(started)
     }
 
@@ -373,6 +413,64 @@ where
         );
         self.fitter = Some(fitter.spawn(poll));
     }
+}
+
+impl<S: HostedStores> InProcess<S> {
+    /// Host a surface over `stores`, already built: load `options.access`
+    /// into the operator store (its config entries hashed from
+    /// `access_label`), rebuild the node facts, start the live feed (a new
+    /// epoch at the clock's reading) and the relay from `published`, and
+    /// build the surface with its cursor key from `cursors`. Needs a tokio
+    /// runtime. The options' store settings (retention, buckets, sinks,
+    /// projection fitting) are the caller's to have applied to `stores`.
+    pub async fn host(
+        stores: S,
+        options: InProcessOptions,
+        published: UnboundedReceiver<BusEvent>,
+        cursors: CursorSecret<'_>,
+        access_label: &str,
+    ) -> Result<Self, InProcessError> {
+        let started = options.clock.now();
+        let feed = FeedWriter::spawn(options.surface.live, FeedEpoch(started.as_micros()));
+        let feeder = stores.node_feeder();
+        let hash = ConfigHash::from_digest(Blake3::of(access_label.as_bytes()));
+        let mut operator_store = stores.operator_handle();
+        let changes = operator_store
+            .load(&options.access, hash, started)
+            .await
+            .map_err(InProcessError::Operators)?;
+        feed.config_loaded(&changes)
+            .await
+            .map_err(InProcessError::Feed)?;
+        feeder.rebuild().await.map_err(InProcessError::Nodes)?;
+        let (settle, settles) = unbounded_channel();
+        let relay = tokio::spawn(relay(published, settles, feeder.clone(), feed.clone()));
+        let clock = Arc::clone(&options.clock);
+        let random = SeededRandom::new(options.seed);
+        let surface = Arc::new(match cursors {
+            CursorSecret::Drawn => {
+                Surface::new(stores.clone(), options.clock, options.surface, random, feed)
+            }
+            CursorSecret::Derived(secret) => Surface::with_secret(
+                stores.clone(),
+                options.clock,
+                options.surface,
+                random,
+                feed,
+                secret,
+            ),
+        });
+        tracing::info!(operators = changes.len(), "in-process surface started");
+        Ok(Self {
+            stores,
+            surface,
+            nodes: feeder,
+            relay,
+            fitter: None,
+            clock,
+            settle,
+        })
+    }
 
     /// Wait until the relay has applied every event queued for it before
     /// this call: the node facts and the live feed then reflect every
@@ -389,7 +487,7 @@ where
 
     /// The caller of one request, from the loaded access config.
     pub async fn caller(&self, identity: RequestIdentity) -> Result<Caller, CallerError> {
-        self.stores.operators.caller(identity).await
+        self.stores.operators().caller(identity).await
     }
 
     /// Stop the relay, the projection fitter and the live feed; open
@@ -411,12 +509,15 @@ where
 /// a backlog, such as a seeded world's, costs one pass. A settle request is
 /// answered only when no event is queued (`biased`: events first), so
 /// everything queued before it has been applied.
-async fn relay(
+async fn relay<A, C>(
     mut published: UnboundedReceiver<BusEvent>,
     mut settles: UnboundedReceiver<oneshot::Sender<()>>,
-    nodes: NodeFeeder<MemoryAgents, MemoryChannels<MemoryAgents>>,
+    nodes: NodeFeeder<A, C>,
     feed: FeedHandle,
-) {
+) where
+    A: AgentReads + AgentDirectory + Send + Sync,
+    C: ChannelReads + ChannelRegistry + ChannelDirectory + Send + Sync,
+{
     loop {
         tokio::select! {
             biased;

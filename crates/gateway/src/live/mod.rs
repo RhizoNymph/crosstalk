@@ -29,10 +29,14 @@ mod classify;
 mod clock;
 mod defaults;
 mod evidence;
+pub mod frontier;
 pub mod layers;
+pub mod pg;
+pub mod recovery;
 mod relay;
 mod settle;
 mod stage;
+pub mod store_set;
 pub mod wiring;
 
 #[cfg(test)]
@@ -74,6 +78,7 @@ pub use self::stage::{
     Activity, Command, Control, DERIVED_SUBJECTS, LayerStores, LiveStores, Publisher, RunFuture,
     Slot, SlotTaken, Stage, StageContext, StageError, Stages, settle_delivery,
 };
+pub use self::store_set::{LiveStoreSet, MemoryQuiet, MemorySet, Quiet};
 use crate::capture::CaptureStage;
 use crate::log::ExchangeLog;
 use crate::log::consumer::{self as log_consumer, LogStats};
@@ -149,6 +154,25 @@ pub enum LiveError {
     Subscribe { slot: Slot, error: BusError },
     #[error("the exchange log did not subscribe: {0:?}")]
     LogSubscribe(BusError),
+    #[error("the postgres stores did not open: {0}")]
+    Stores(#[from] crosstalk_api::PgStoresError),
+    #[error("recovery step {step} failed: {reason}")]
+    Recovery { step: &'static str, reason: String },
+    #[error("the flow consumer was not restored: {0}")]
+    Restore(#[from] crosstalk_flow::consumer::FlowRestoreError),
+    #[error(
+        "the bus's ack timeout ({ack_timeout_ms} ms) must exceed the flow checkpoint interval ({checkpoint_ms} ms)"
+    )]
+    AckTimeout {
+        ack_timeout_ms: u64,
+        checkpoint_ms: u64,
+    },
+    #[error("flow.checkpoint_unacked ({unacked}) exceeds the bus's group capacity ({capacity})")]
+    UnackedAboveCapacity { unacked: usize, capacity: usize },
+    #[error("{0} correlator shards are more than the shard ticks can number")]
+    TooManyShards(usize),
+    #[error("a postgres-mode process captures through its own pipeline, not the live process")]
+    CaptureOutsidePipeline,
 }
 
 /// How a live process drained on shutdown.
@@ -183,16 +207,20 @@ pub struct LiveReport {
     pub watermark_micros: u64,
 }
 
-/// A running live process.
-pub struct Live {
-    pipeline: Arc<LivePipeline>,
-    backend: InProcess<LiveBlobs, LayerStores>,
-    context: StageContext,
+/// A running live process over the store set `S`: the memory set unless
+/// said otherwise (see [`store_set`]).
+pub struct Live<S: LiveStoreSet = MemorySet> {
+    pipeline: Arc<Pipeline<LiveBlobs, S::Bus>>,
+    backend: InProcess<S::Stores>,
+    context: StageContext<S>,
     clock: LiveClock,
     activity: Activity,
     stages: Vec<Running>,
-    outbox: JoinHandle<()>,
-    flushes: mpsc::UnboundedSender<relay::Flush>,
+    /// What a settle and a shutdown read the bus and the outboxes through.
+    quiet: S::Quiet,
+    /// Tasks that publish what the stores staged (the memory outbox
+    /// forwarder; L7's outbox relay), aborted last.
+    publishers: Vec<JoinHandle<()>>,
     ticker: Option<JoinHandle<()>>,
     capture: Option<JoinHandle<()>>,
     exchange_log: Option<JoinHandle<()>>,
@@ -203,7 +231,7 @@ pub struct Live {
     stage_tasks: Tasks,
 }
 
-impl Live {
+impl Live<MemorySet> {
     /// Start everything; see the module docs for the order. Needs a tokio
     /// runtime.
     pub async fn start(config: LiveConfig) -> Result<Self, LiveError> {
@@ -326,6 +354,10 @@ impl Live {
             flush_requests,
             activity.clone(),
         ));
+        let quiet = MemoryQuiet {
+            bus: bus.clone(),
+            flushes,
+        };
         let ticker = match ticking {
             Ticking::Periodic => Some(tokio::spawn(settle::tick_periodically(
                 settle::commands_of(&stages),
@@ -350,8 +382,8 @@ impl Live {
             clock,
             activity,
             stages,
-            outbox,
-            flushes,
+            quiet,
+            publishers: vec![outbox],
             ticker,
             capture,
             exchange_log,
@@ -360,7 +392,9 @@ impl Live {
             stage_tasks,
         })
     }
+}
 
+impl<S: LiveStoreSet> Live<S> {
     /// The process's long-running side tasks (`exchange_log`, `capture`)
     /// and their running flags. A clone shares the flags.
     pub fn tasks(&self) -> &Tasks {
@@ -409,29 +443,30 @@ impl Live {
 
     /// Where exchanges enter: `pipeline().ingest(exchange, at)` or
     /// `pipeline().ingester()` for another task.
-    pub fn pipeline(&self) -> &Arc<LivePipeline> {
+    pub fn pipeline(&self) -> &Arc<Pipeline<LiveBlobs, S::Bus>> {
         &self.pipeline
     }
 
     /// The surface the UI reads: `QueryApi`, `OperatorActions`, `LiveFeed`.
-    pub fn surface(&self) -> &Arc<Surface<LiveStores>> {
+    pub fn surface(&self) -> &Arc<Surface<S::Stores>> {
         &self.backend.surface
     }
 
     /// The stores every stage and the surface share: read them through the
     /// spec's traits (`TransmissionStore::list` on `transmissions`, ...).
-    pub fn stores(&self) -> &LiveStores {
+    pub fn stores(&self) -> &S::Stores {
         &self.backend.stores
     }
 
     /// The layer stores only the stages read: L3's conversations
-    /// (`ExchangePlacements::placement`) and L4's provenance records.
-    pub fn layers(&self) -> &LayerStores {
+    /// (`ExchangePlacements::placement`) and L4's provenance records in
+    /// memory; the pool, the inner bus and the spool on Postgres.
+    pub fn layers(&self) -> &S::Layers {
         &self.context.layers
     }
 
     /// The stores, publisher and clock the stages were built from.
-    pub fn context(&self) -> &StageContext {
+    pub fn context(&self) -> &StageContext<S> {
         &self.context
     }
 
@@ -450,6 +485,31 @@ impl Live {
         self.backend.caller(identity).await
     }
 
+    /// Stop as a killed process would: every task aborted at once, nothing
+    /// drained, acked or checkpointed, the bus's background tasks stopped
+    /// without touching its state (a Postgres bus leaves held deliveries
+    /// held, for the next start's `recover_held`). For restart tests; the
+    /// spool, which outlives the process in a deployment, is the caller's
+    /// to close.
+    pub async fn kill(self) {
+        let mut tasks: Vec<JoinHandle<()>> = Vec::new();
+        tasks.extend(self.ticker);
+        tasks.extend(self.capture);
+        tasks.extend(self.exchange_log);
+        tasks.extend(self.stages.into_iter().map(|running| running.task));
+        tasks.extend(self.publishers);
+        for task in &tasks {
+            task.abort();
+        }
+        for task in tasks {
+            // An aborted task's join reports the cancellation.
+            let _ = task.await;
+        }
+        self.quiet.stop().await;
+        drop(self.backend);
+        tracing::warn!("live process killed");
+    }
+
     /// Drain and stop by `deadline`: the capture stage handles what is
     /// queued (the caller has dropped every capture sender), every slot's
     /// group empties, the bus stops, the stages end, the surface's relay
@@ -462,9 +522,29 @@ impl Live {
             Some(task) => join_by("capture stage", task, deadline).await,
             None => true,
         };
-        let bus = self.backend.stores.bus.clone();
         let slots: Vec<Slot> = self.stages.iter().map(|running| running.slot).collect();
-        let drained = match tokio::time::timeout_at(deadline, settle::idle(&bus, &slots)).await {
+        let commands = settle::commands_of(&self.stages);
+        let quiet = &self.quiet;
+        let idle = async {
+            loop {
+                if S::DEFERRED_ACKS {
+                    // A drain is what acks: the durable flow consumer
+                    // checkpoints and acks what it holds.
+                    for (_, sender) in &commands {
+                        let (done, answer) = tokio::sync::oneshot::channel();
+                        if sender.send(Command::Drain { done }).is_ok() {
+                            let _ = answer.await;
+                        }
+                    }
+                }
+                match quiet.busy(&slots).await {
+                    Ok(true) => tokio::time::sleep(POLL).await,
+                    Ok(false) => return Ok(()),
+                    Err(error) => return Err(error),
+                }
+            }
+        };
+        let drained = match tokio::time::timeout_at(deadline, idle).await {
             Ok(Ok(())) => true,
             Ok(Err(error)) => {
                 tracing::warn!(error = %error, "reading the stages' groups failed");
@@ -478,19 +558,21 @@ impl Live {
         let log = match self.exchange_log.is_some() {
             true => {
                 let group = log_consumer::group();
-                let empty = settle::group_idle(&bus, &group);
-                matches!(tokio::time::timeout_at(deadline, empty).await, Ok(Ok(())))
+                let empty = self.quiet.wait_group_empty(&group);
+                matches!(tokio::time::timeout_at(deadline, empty).await, Ok(true))
             }
             false => true,
         };
-        bus.shutdown().await;
+        self.quiet.stop().await;
         for running in self.stages {
             join_by(running.slot.name(), running.task, deadline).await;
         }
         if let Some(task) = self.exchange_log {
             join_by("exchange log consumer", task, deadline).await;
         }
-        self.outbox.abort();
+        for task in &self.publishers {
+            task.abort();
+        }
         self.backend.shutdown().await;
         tracing::info!(capture, stages = drained, log, "live process stopped");
         LiveDrained {

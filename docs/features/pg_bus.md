@@ -5,7 +5,7 @@ consumer groups, deliveries and dead letters live in the `transport`
 schema, so work in flight between consumers survives a restart. Roadmap
 P7.3, workstream W1 of [Postgres stores](postgres_stores.md) (decision
 Q1). The gateway uses it, behind the [publish spool](publish_spool.md),
-whenever a `store` is configured (wiring is W8).
+whenever a `store` is configured (wired by W8: [postgres_mode](postgres_mode.md)).
 
 ## Scope
 

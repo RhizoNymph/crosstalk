@@ -24,8 +24,8 @@ use crosstalk_spec::support::Timestamp;
 use crosstalk_transport::MpscBus;
 use tokio::sync::{mpsc, oneshot};
 
-use super::relay::Flush;
 use super::stage::{Command, Slot};
+use super::store_set::{LiveStoreSet, Quiet};
 use super::{Live, LiveClock, POLL, Running};
 
 /// More passes than this and the process is not converging: a stage keeps
@@ -73,9 +73,12 @@ pub enum SettleError {
     Depth { slot: Slot, error: BusError },
     #[error("still busy after {passes} passes")]
     NotQuiet { passes: u32 },
+    /// The Postgres bus or a store's outbox could not be read.
+    #[error("reading what is in flight failed: {reason}")]
+    InFlight { reason: String },
 }
 
-impl Live {
+impl<S: LiveStoreSet> Live<S> {
     /// Move the clock to `until` (a manual clock, and only forwards), then
     /// run passes until one changes nothing: every consumer group idle and
     /// the bus empty, then every stage's tick at the clock's time (the
@@ -98,22 +101,23 @@ impl Live {
         Err(SettleError::NotQuiet { passes: MAX_PASSES })
     }
 
-    /// Wait until nothing is queued anywhere, twice in a row.
+    /// Wait until nothing is queued anywhere, twice in a row. With
+    /// deferred acks (the durable flow consumer) the stages are drained
+    /// before the groups are read, since a drain is what acks.
     async fn quiet(
         &self,
         slots: &[Slot],
         commands: &[(Slot, mpsc::UnboundedSender<Command>)],
     ) -> Result<(), SettleError> {
-        let bus = &self.backend.stores.bus;
         let mut quiet = 0;
         let mut backoff = Backoff::default();
         while quiet < 2 {
-            idle_with(bus, slots, &mut backoff).await?;
-            let (done, flushed) = oneshot::channel();
-            self.flushes
-                .send(Flush(done))
-                .map_err(|_| SettleError::OutboxStopped)?;
-            let forwarded = flushed.await.map_err(|_| SettleError::OutboxStopped)?;
+            if !S::DEFERRED_ACKS {
+                while self.quiet.busy(slots).await? {
+                    backoff.wait().await;
+                }
+            }
+            let forwarded = self.quiet.flush().await?;
             let mut drained = 0;
             for (slot, sender) in commands {
                 let (done, answer) = oneshot::channel();
@@ -123,7 +127,7 @@ impl Live {
                 drained += answer.await.map_err(|_| SettleError::StageStopped(*slot))?;
             }
             quiet = match forwarded + drained {
-                0 if busy(bus, slots).await? => 0,
+                0 if self.quiet.busy(slots).await? => 0,
                 0 => quiet + 1,
                 _ => 0,
             };
@@ -175,7 +179,7 @@ pub(super) async fn tick_periodically(
 }
 
 /// Whether any of `slots`' groups holds a delivery.
-async fn busy(bus: &MpscBus, slots: &[Slot]) -> Result<bool, SettleError> {
+pub(super) async fn busy(bus: &MpscBus, slots: &[Slot]) -> Result<bool, SettleError> {
     for slot in slots {
         match bus.depth(&slot.group()).await {
             Ok(Some(depth))
@@ -204,21 +208,4 @@ pub(super) async fn group_idle(
             _ => return Ok(()),
         }
     }
-}
-
-/// Wait until every one of `slots`' groups is empty.
-pub(super) async fn idle(bus: &MpscBus, slots: &[Slot]) -> Result<(), SettleError> {
-    idle_with(bus, slots, &mut Backoff::default()).await
-}
-
-/// [`idle`], waiting through `backoff`.
-async fn idle_with(
-    bus: &MpscBus,
-    slots: &[Slot],
-    backoff: &mut Backoff,
-) -> Result<(), SettleError> {
-    while busy(bus, slots).await? {
-        backoff.wait().await;
-    }
-    Ok(())
 }

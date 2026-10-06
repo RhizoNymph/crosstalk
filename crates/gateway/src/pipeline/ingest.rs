@@ -62,6 +62,11 @@ pub enum IngestError {
     /// The blobs are stored, but the bus refused the envelope.
     #[error("the bus refused ExchangeCaptured: {0:?}")]
     NotPublished(BusError),
+    /// The blobs are stored, but the publish spool is full (the database
+    /// is down and the spool reached `spool.max_bytes`): counted
+    /// `spool_full`, the one loss the design allows.
+    #[error("the publish spool is full ({bytes} bytes); ExchangeCaptured not published")]
+    SpoolFull { bytes: u64 },
 }
 
 /// Why an event was not published by [`Ingester::publish`].
@@ -253,6 +258,11 @@ where
                     "exchange captured"
                 );
                 Ok(id)
+            }
+            Err(BusError::SpoolFull { bytes }) => {
+                inner.stats.bump(Counter::SpoolFull);
+                tracing::error!(exchange = %exchange_id, bytes, "publish spool full; ExchangeCaptured not published");
+                Err(IngestError::SpoolFull { bytes })
             }
             Err(error) => {
                 inner.stats.bump(Counter::PublishFailed);

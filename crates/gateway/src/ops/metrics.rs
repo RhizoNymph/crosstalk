@@ -1,6 +1,13 @@
 //! `GET /metrics`: the capture counters in the Prometheus text exposition
 //! format (version 0.0.4). Written by hand: a few counters do not need a
 //! metrics library. Full observability comes later.
+//!
+//! In Postgres mode (a report with a `spool` section) the publish spool's
+//! series follow: `crosstalk_spool_state{state}` (one series is 1),
+//! `crosstalk_spool_bytes`, `crosstalk_spool_records`,
+//! `crosstalk_spool_oldest_age_seconds`, `crosstalk_spool_appended_total`,
+//! `crosstalk_spool_drained_total`, `crosstalk_spool_rejected_total{reason}`
+//! and `crosstalk_spool_truncated_bytes_total`.
 
 use std::fmt::Write as _;
 
@@ -24,6 +31,10 @@ pub fn render(report: &HealthReport, failures: &FailureCounts) -> String {
         draining,
     );
     let capture = &report.capture;
+    let spool_full = report
+        .spool
+        .as_ref()
+        .map_or(0, |spool| spool.capture_spool_full);
     counter(
         &mut out,
         "crosstalk_capture_exchanges_total",
@@ -44,6 +55,7 @@ pub fn render(report: &HealthReport, failures: &FailureCounts) -> String {
                 capture.response_too_large,
             ),
             (&[("reason", "ids_exhausted")], capture.ids_exhausted),
+            (&[("reason", "spool_full")], spool_full),
         ],
     );
     let pipeline = &report.pipeline;
@@ -67,6 +79,7 @@ pub fn render(report: &HealthReport, failures: &FailureCounts) -> String {
     );
     samples.push((&[("outcome", "store_failed")], pipeline.store_failed));
     samples.push((&[("outcome", "publish_failed")], pipeline.publish_failed));
+    samples.push((&[("outcome", "spool_full")], spool_full));
     counter(
         &mut out,
         "crosstalk_pipeline_exchanges_total",
@@ -90,7 +103,68 @@ pub fn render(report: &HealthReport, failures: &FailureCounts) -> String {
             (&[("outcome", "write_failed")], log.write_failed),
         ],
     );
+    if let Some(spool) = &report.spool {
+        spool_series(&mut out, spool);
+    }
     out
+}
+
+/// The publish spool's series.
+fn spool_series(out: &mut String, spool: &super::SpoolReport) {
+    let _ = writeln!(
+        out,
+        "# HELP crosstalk_spool_state Where publishes go: 1 for the spool's current state."
+    );
+    let _ = writeln!(out, "# TYPE crosstalk_spool_state gauge");
+    for state in ["direct", "spooling", "draining", "corrupt"] {
+        let value = u64::from(spool.state == state);
+        let _ = writeln!(out, "crosstalk_spool_state{{state=\"{state}\"}} {value}");
+    }
+    gauge(
+        out,
+        "crosstalk_spool_bytes",
+        "Bytes the spool's segment files hold.",
+        spool.bytes,
+    );
+    gauge(
+        out,
+        "crosstalk_spool_records",
+        "Records not yet sent to the bus.",
+        spool.records,
+    );
+    gauge(
+        out,
+        "crosstalk_spool_oldest_age_seconds",
+        "Age of the oldest unsent record, by the clock.",
+        spool.oldest_age_seconds,
+    );
+    counter(
+        out,
+        "crosstalk_spool_appended_total",
+        "Records appended since the spool opened.",
+        &[(&[], spool.appended)],
+    );
+    counter(
+        out,
+        "crosstalk_spool_drained_total",
+        "Records sent to the bus since the spool opened.",
+        &[(&[], spool.drained)],
+    );
+    counter(
+        out,
+        "crosstalk_spool_rejected_total",
+        "Appends refused, by reason.",
+        &[
+            (&[("reason", "full")], spool.rejected_full),
+            (&[("reason", "io")], spool.rejected_io),
+        ],
+    );
+    counter(
+        out,
+        "crosstalk_spool_truncated_bytes_total",
+        "Bytes of torn appends truncated when the spool opened.",
+        &[(&[], spool.truncated_bytes)],
+    );
 }
 
 fn gauge(out: &mut String, name: &str, help: &str, value: u64) {

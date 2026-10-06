@@ -35,8 +35,14 @@ follow the deployment contract in `docs/features/deploy.md` (branch
   [Live](#live-the-whole-detection-path-in-one-process)).
 - Graceful shutdown on SIGINT and SIGTERM.
 - JSON logs on stdout.
-- `migrate`: connects to Postgres and ensures the extensions
-  (`crosstalk-store`); no layer has migrations yet.
+- `migrate`: connects to Postgres, ensures the extensions
+  (`crosstalk-store`) and runs every layer's migrations (`--reset-correlator`
+  also resets L5's checkpoint); `spool --discard-corrupt` for the publish
+  spool.
+- Postgres mode: with a `store` section `serve` runs on the Postgres
+  stores, `PgBus` behind the publish spool, with recovery at start and the
+  pipeline lock; see [postgres_mode.md](postgres_mode.md). Without one,
+  everything below holds as written (memory mode, decision Q7).
 - End-to-end tests over real sockets, simulation tests of the capture
   stage and of `ingest`, and a manual check with a real Claude Code session
   (`scripts/try-claude-code.sh`).
@@ -67,7 +73,8 @@ follow the deployment contract in `docs/features/deploy.md` (branch
 
 ```text
 crosstalk serve --role <all|proxy|pipeline|api|analysis> --config <path>
-crosstalk migrate --config <path>
+crosstalk migrate --config <path> [--reset-correlator]
+crosstalk spool --config <path> --discard-corrupt
 crosstalk healthcheck --url <url>
 crosstalk inspect --config <path> [<exchange-id>]
 crosstalk help
@@ -76,7 +83,8 @@ crosstalk help
 | Command | Behaviour | Exit |
 | --- | --- | --- |
 | `serve` | Starts the role's tasks; runs until SIGINT or SIGTERM, then shuts down gracefully | 0 after a shutdown; 1 on a bad config, a missing secret, an unbindable listener or an unopenable data directory; 2 on bad arguments |
-| `migrate` | Needs a `store` section and `DATABASE_URL`. Connects, ensures `vector` and `pg_trgm`, then runs each layer's migrations (none exist yet). Idempotent | 0, or 1 with the reason (no `store`, `DATABASE_URL` missing or malformed, server unreachable, extension refused) |
+| `migrate` | Needs a `store` section and `DATABASE_URL`. Connects, ensures `vector` and `pg_trgm`, then runs every layer's migrations in its own schema (`transport`, `canonical`, `reconstruct`, `provenance`, `flow`, `analysis`, `topology`, `surface`). Idempotent. `--reset-correlator` then replaces L5's checkpoint with empty shards (after an `IncompatibleSnapshot`; the pairings pending at the checkpoint are lost, decision Q2) | 0, or 1 with the reason (no `store`, `DATABASE_URL` missing or malformed, server unreachable, extension refused, a migration failed) |
+| `spool` | `--discard-corrupt` (required): with the gateway stopped (the spool's `LOCK`), drops the corrupt record that stopped the publish spool's drain and everything after it in its segment; prints what it removed | 0, or 1 (locked, unreadable) |
 | `healthcheck` | GETs an `http://` URL with hyper (the runtime image has no curl), 5 s limit | 0 on a 2xx, 1 otherwise |
 | `inspect` | Without an id, one line per logged exchange (id, start, model, transport, outcome, request message count). With an id, the envelope and every message it names, each body read from the blob store, checked as a canonical encoding and printed as JSON | 0, or 1 (unknown id, unreadable log or store) |
 
@@ -91,7 +99,8 @@ against the config file's directory.
 | `ingress` | yes | `crosstalk_ingress::config::IngressConfig`, unchanged: `listen`, `routes` (name, prefix, upstream id, kind, base URL), `secrets` (`current` `{version, env}` and an optional `previous` `{version, env, overlap_ends}`, an older version whose digests are also computed for exchanges that start before `overlap_ends`, an RFC 3339 timestamp at microsecond precision), `limits`, `capture.channel_capacity` |
 | `api` | no | `{"listen": SocketAddr, "token": {"env": ..}, "operator": {"name": ..}}`: the HTTP API (roles `all`, `api`); the token signs in as `operator` (default `{"name": "admin"}`, every permission) |
 | `ops` | yes | `{"listen": SocketAddr}` |
-| `store` | no | `{"pool": crosstalk_store::PoolSettings}`; the URL is `DATABASE_URL` |
+| `store` | no | `{"pool": crosstalk_store::PoolSettings, "bus": PgBusConfig}`; the URL is `DATABASE_URL`. With it, `serve` runs in Postgres mode ([postgres_mode.md](postgres_mode.md)); `pool.max_connections` at least 3; `bus` (each key defaulted, `_micros`): `group_capacity` 1024, `ack_timeout_micros` 30 s (must exceed `flow.checkpoint_ms`), `poll_micros` 250 ms, `publish_timeout_micros` 5 s, `retention_micros` 7 days |
+| `spool` | no | `{"dir": "spool", "max_bytes": 1073741824, "segment_bytes": 67108864, "drain_batch": 256, "probe_ms": 1000}`, each key defaulted: the publish spool (Postgres mode); `dir` relative to the data directory or absolute inside it; `segment_bytes` no larger than `max_bytes` |
 | `blobs` | yes | `{"root": path}` for `FsBlobStore::open`; its parent is the data directory |
 | `embeddings` | no | `{"base_url": http(s) URL, "model": non-empty, "api_key": {"env": ..}}`; checked, unused |
 | `bus` | no | transport's `BusConfig` (defaults) |
@@ -130,7 +139,7 @@ start (exit 1).
 | Variable | Read by |
 | --- | --- |
 | `CROSSTALK_SECRET_V1` (whatever `ingress.secrets.current.env` names, and `previous.env` during a rotation) | `serve` (roles running the proxy): 64 hex digits keying credential and account digests; surrounding whitespace such as a trailing newline is ignored |
-| `DATABASE_URL` | `migrate`; `serve` when `store` is configured (missing or malformed is a start error; unreachable only makes `/readyz` fail) |
+| `DATABASE_URL` | `migrate`; `serve` when `store` is configured (missing or malformed is a start error; an unreachable database leaves a capturing role ready, degraded, while capture spools) |
 | `CROSSTALK_API_TOKEN` (whatever `api.token.env` names) | `serve` (roles `all` and `api` with an `api` section): the operator bearer token, at least 16 `b64token` characters; missing or malformed is a start error |
 | `CROSSTALK_EMBEDDINGS_API_KEY` | nothing yet (its section is checked, not used) |
 | `RUST_LOG` | the log filter (default `info`; `inspect` defaults to `warn`) |
@@ -150,9 +159,13 @@ the tasks below; `live` is ready while every layer stage runs.
 | `api` | `live`, `api`, ops: the HTTP API over a live process that nothing feeds yet |
 | `analysis` | ops only; the startup log names what is not built |
 
-The bus and the stores are in-process until the cross-node bus (P9) and
-the Postgres stores are wired, so processes of different roles do not
-reach each other; only `all` is useful today.
+In memory mode the bus and the stores are in-process, so processes of
+different roles do not reach each other; only `all` is useful. In
+Postgres mode each role still runs alone (split roles are P9): `all`,
+`proxy` and `pipeline` run the pipeline (and take the pipeline lock);
+`api` hosts the surface over the stores without one. The `/readyz` and
+`/healthz` additions of Postgres mode are in
+[postgres_mode.md](postgres_mode.md#readiness-health-metrics).
 
 ## Listeners
 
@@ -320,8 +333,13 @@ let id: EventId = pipeline.ingest(normalized, at).await?;   // Result<EventId, I
      already stored (it remembers the last 2^20 hashes) is neither encoded
      nor put again, since a conversation's request repeats its whole
      history; only for a blob store that never drops a body. `Live` uses
-     it (its memory and filesystem stores never do); `Deps::stores`
-     defaults to `Bodies::PutEvery`, every body of every exchange;
+     it in both modes, and so does Postgres mode's capture pipeline: the
+     memory and filesystem blob stores never drop a body (the spec's
+     `BlobStore` has no delete, nothing prunes `blobs.root`), and the
+     remembered hashes are only a cache, lost on a restart, after which a
+     body is put once more. A blob store that deletes (a future Postgres or
+     object-store one with retention) must use `Bodies::PutEvery`;
+     `Deps::stores` defaults to it, every body of every exchange;
   2. under the id lock, mint the envelope's `EventId` at `at` (when `at`
      is in or before the last id's millisecond, the last id plus one) and
      publish `ExchangeCaptured` in an envelope stamped `at`; no id left is
@@ -586,14 +604,20 @@ gracefully.
 
 | File | Role | Key exports |
 | --- | --- | --- |
-| `crates/gateway/Cargo.toml` | Manifest: spec, api, canonical, flow, ingress, memory, provenance, reconstruct, store, surface, topology, transport; blake3, bytes, http-body-util, hyper (client, http1, server), hyper-util, serde, serde_json, thiserror, tokio, tracing, tracing-subscriber (env-filter, fmt, json, std); dev: sim, testkit, tempfile | — |
+| `crates/gateway/Cargo.toml` | Manifest: spec, analysis, api, canonical, flow, ingress, memory, provenance, reconstruct, store, surface, topology, transport; axum (http1, tokio), blake3, bytes, http-body-util, hyper (client, http1, server), hyper-util, serde, serde_json, thiserror, tokio, tower (util), tracing, tracing-subscriber (env-filter, fmt, json, std); dev: sim, testkit, tempfile | — |
 | `config.example.json`, `.env.example` | The localhost config and the environment | — |
 | `src/main.rs` | The binary: parse, log, run, wait for SIGINT/SIGTERM, shut down | `main` |
 | `src/lib.rs` | Crate doc and modules | — |
 | `src/cli.rs` | The command line | `Command` (`parse`), `UsageError`, `USAGE` |
 | `src/config/mod.rs`, `sections.rs` | The config and its checked values | `GatewayConfig` (`from_json`, `load`, `data_dir`, `exchange_log_path`, `flow`), `ApiConfig`, `ApiOperator` (`ID`), `FlowConfig` (re-exported from crosstalk-flow), `OpsConfig`, `StoreSection`, `BlobsConfig`, `EmbeddingsConfig`, `PipelineConfig`, `ShutdownConfig`, `EnvRef`, `EnvVarName`, `HttpUrl`, `NonEmpty`, `ConfigError`, `exchange_log_path` |
 | `src/role.rs` | Roles and their tasks | `Role` (`runs_proxy`, `runs_pipeline`, `runs_live`, `runs_api`, `not_built`), `UnknownRole` |
-| `src/gateway.rs` | Role wiring around a `Live` process: the proxy, API and ops listeners, start and shutdown | `start`, `start_on`, `Running` (`proxy_addr`, `api_addr`, `ops_addr`, `bus`, `blobs`, `live`, `health`, `readiness`, `shutdown`), `StartError`, `ShutdownReport` |
+| `src/gateway/mod.rs` | Role wiring around a `Live` process: the proxy, API and ops listeners, start and shutdown; Postgres mode when `store` is configured | `start`, `start_on`, `Running` (`proxy_addr`, `api_addr`, `ops_addr`, `bus`, `blobs`, `live`, `postgres`, `health`, `health_full`, `readiness`, `shutdown`), `StartError`, `ShutdownReport` |
+| `src/gateway/postgres.rs`, `late.rs` | Postgres mode's start: capture side, pipeline and API tasks; the API router set once the surface exists | see [postgres_mode.md](postgres_mode.md) |
+| `src/spool.rs` | The gated bus behind the publish spool; `crosstalk spool --discard-corrupt` | `Gate`, `Gated`, `LiveBus`, `discard_corrupt` |
+| `src/live/store_set.rs`, `pg/`, `frontier.rs`, `recovery.rs` | `Live` over a `LiveStoreSet`; the Postgres set, stages and recovery; the frontier; the recovery status | see [postgres_mode.md](postgres_mode.md) |
+| `src/store/migrations.rs`, `lock.rs` | Every layer's migrations and the head check; the pipeline lock | `LAYERS`, `migrate_all`, `check_heads`, `reset_correlator`; `PipelineLock` |
+| `src/dst.rs`, `src/integration/` | `crosstalk_gateway::dst::*` (frontier over the spool, classifier redelivery) and `crosstalk_gateway::integration::*` (Postgres) | — |
+| `tests/postgres_down.rs` | `crosstalk_gateway::postgres_down::*`: Postgres mode with the database down (forwarding, spooling, a full spool, readiness) | — |
 | `src/pipeline/mod.rs` | The library entry point: build, stages, shutdown | `Pipeline`, `Settings`, `Deps`, `BuildError`, `Drained`; re-exports `Bodies`, `Ingester`, `IngestError`, `PipelineStats`, `PipelineCounts`, `PutRetry` |
 | `src/pipeline/ingest.rs` | Ingest at L1: store (retried), mint, publish | `Ingester` (`ingest`, `now`, `blobs`, `bus`, `stats`, `retry`), `IngestError` |
 | `src/pipeline/stats.rs` | Counters and put retry; refusals held as a `FailureStats` by reason and protocol | `PipelineStats` (`snapshot`, `normalize_failures`), `PipelineCounts`, `PutRetry` |
@@ -615,7 +639,7 @@ gracefully.
 | `src/live/defaults.rs` | `LiveConfig::new`: the surface's defaults | `DEFAULT_BUCKET`, `DefaultsError` |
 | `src/live/tests.rs` | `crosstalk_gateway::live::tests::*` | — |
 | `src/tasks.rs` | Per-task running flags, and probes for a group of tasks | `Tasks` (`spawn`, `probe`, `states`) |
-| `src/store.rs` | `migrate` and the background connection `/readyz` checks | `migrate`, `MigrateError`, `store_config`, `StoreProbe`, `StoreCheck` |
+| `src/store/mod.rs` | `migrate` and the background connection `/readyz` checks; the lazy pool | `migrate`, `MigrateOptions`, `MigrateError`, `store_config`, `lazy_pool`, `StoreProbe`, `StoreCheck` |
 | `src/healthcheck.rs` | The healthcheck client | `check`, `CheckError`, `TIMEOUT` |
 | `src/inspect.rs` | Reading back the log and bodies | `list`, `show`, `InspectError` |
 | `src/logging.rs` | JSON log setup | `init`, `try_init`, `Sink` |
@@ -704,9 +728,9 @@ store; the cluster stores (JetStream, Postgres or object storage) are P9.
 
 ## Gaps found
 
-- **`Live`'s frontier is coarse.** With no frontier source over the
-  memory stores, `oldest_pending` is taken as `None` whenever the layer
-  groups are empty; exchanges in flight at the proxy are not counted
+- **`Live`'s frontier is coarse in memory mode.** With no frontier source
+  over the memory stores, `oldest_pending` is taken as `None` whenever the
+  layer groups are empty (Postgres mode reads `PgFrontierSource`); exchanges in flight at the proxy are not counted
   (their times are later than `now - settle_after` for any request
   shorter than the settle bound).
 - **The transmissions export has no content columns in memory**, and

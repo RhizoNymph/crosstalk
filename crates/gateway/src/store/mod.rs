@@ -1,17 +1,31 @@
-//! Postgres for the gateway: `crosstalk migrate`, and the connection that
-//! `/readyz` checks under `crosstalk serve`.
+//! Postgres for the gateway: `crosstalk migrate`, the connection `/readyz`
+//! checks under `crosstalk serve`, the migration head check and the
+//! pipeline lock.
 //!
-//! No layer stores anything in Postgres yet (the capture slice persists to
-//! the blob store and the exchange log), so `serve` never needs the
-//! database to forward or capture. With a `store` section it resolves
-//! `DATABASE_URL` at start (a missing or malformed URL is a config error),
-//! then connects in the background, retrying, and `/readyz` reports the
-//! database reachable only once a pooled connection answers.
+//! With a `store` section `serve` resolves `DATABASE_URL` at start (a
+//! missing or malformed URL is a config error), then connects in the
+//! background, retrying, and `/readyz` reports the database reachable only
+//! once a pooled connection answers. Forwarding and capture never wait for
+//! it: capture spools while the database is down (`crate::spool`).
+//!
+//! - [`migrate`] (`crosstalk migrate`) runs every layer's migrations,
+//!   `transport` first ([`migrations`]); `--reset-correlator` then resets
+//!   L5's checkpoint (decision Q2).
+//! - [`migrations::check_heads`]: `serve` never migrates; it refuses to
+//!   consume against a database whose applied migrations are behind the
+//!   binary's.
+//! - [`lock::PipelineLock`]: one pipeline process per database.
 
 use std::ffi::OsString;
 use std::time::Duration;
 
-use crosstalk_store::{DbFailure, Layer, Store, StoreConfig, StoreError, classify};
+pub mod lock;
+pub mod migrations;
+
+use crosstalk_spec::support::Clock;
+use crosstalk_store::sqlx::PgPool;
+use crosstalk_store::sqlx::postgres::PgPoolOptions;
+use crosstalk_store::{DbFailure, Store, StoreConfig, StoreError, classify};
 use tokio::sync::watch;
 
 use crate::config::{GatewayConfig, StoreSection};
@@ -111,6 +125,18 @@ impl StoreProbe {
     }
 }
 
+/// A pool over `config` that opens connections on demand: building it
+/// touches no database, so a process can start (and spool) while Postgres
+/// is down.
+pub fn lazy_pool(config: &StoreConfig) -> PgPool {
+    let settings = config.pool();
+    PgPoolOptions::new()
+        .max_connections(settings.max_connections().get())
+        .min_connections(settings.min_connections())
+        .acquire_timeout(settings.acquire_timeout())
+        .connect_lazy_with(config.url().connect_options().clone())
+}
+
 /// Why `crosstalk migrate` failed.
 #[derive(Debug, thiserror::Error)]
 pub enum MigrateError {
@@ -120,29 +146,39 @@ pub enum MigrateError {
     Config(#[from] crosstalk_store::ConfigError),
     #[error(transparent)]
     Store(#[from] StoreError),
+    #[error("the flow config: {0}")]
+    Flow(#[from] crosstalk_flow::consumer::InvalidFlowConfig),
+    #[error("resetting the correlator: {0}")]
+    Reset(#[from] crosstalk_flow::consumer::DurabilityError),
+}
+
+/// What `crosstalk migrate` does besides migrating.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct MigrateOptions {
+    /// Replace L5's stored checkpoint with empty shards (after an
+    /// `IncompatibleSnapshot`): the pairings pending at the checkpoint are
+    /// lost, knowingly (decision Q2).
+    pub reset_correlator: bool,
 }
 
 /// Run every layer's migrations against the configured database, after
-/// ensuring the required extensions. Idempotent.
+/// ensuring the required extensions, then what `options` asks. Idempotent.
 pub async fn migrate(
     config: &GatewayConfig,
     lookup: impl Fn(&str) -> Option<String>,
+    options: MigrateOptions,
+    clock: &dyn Clock,
 ) -> Result<(), MigrateError> {
     let section = config.store.ok_or(MigrateError::NoStoreSection)?;
     let store = Store::connect(&store_config(section, lookup)?).await?;
-    let result = migrate_all(&store).await;
+    let result = async {
+        migrations::migrate_all(&store).await?;
+        if options.reset_correlator {
+            migrations::reset_correlator(store.pool(), config.flow, clock.now()).await?;
+        }
+        Ok(())
+    }
+    .await;
     store.close().await;
     result
-}
-
-async fn migrate_all(store: &Store) -> Result<(), MigrateError> {
-    for installed in store.ensure_extensions().await? {
-        tracing::info!(extension = %installed.extension, version = %installed.version, "extension ready");
-    }
-    // No layer crate embeds migrations yet; each one's `migrations/`
-    // directory is run here (`Store::migrate`) as it gains one.
-    for layer in Layer::ALL {
-        tracing::info!(layer = %layer, migrations = 0, "layer migrations at head");
-    }
-    Ok(())
 }

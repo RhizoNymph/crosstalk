@@ -23,6 +23,17 @@
 //! (in-flight exchanges drain), the API listener, the live process (the
 //! capture channel drains, every group drains, the bus stops, the log is
 //! synced), then the ops listener.
+//!
+//! With a `store` section (every role but `analysis`) the process runs in
+//! Postgres mode instead ([`postgres`]): the bus is `PgBus` behind the
+//! publish spool, the stores are the Postgres bundle, and the pipeline
+//! starts once the database answers, its migrations are at head and the
+//! pipeline lock is held, after the recovery sequence. Forwarding and
+//! capture start at once either way. Without one, memory mode is kept
+//! (decision Q7).
+
+pub mod late;
+pub mod postgres;
 
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
@@ -46,13 +57,15 @@ use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
-use crate::config::{ApiConfig, ApiOperator, ConfigError, GatewayConfig};
+use crate::capture::CaptureStage;
+use crate::config::{ApiConfig, ApiOperator, ConfigError, GatewayConfig, StoreSection};
 use crate::live::{
-    BlobConfig, DefaultsError, Live, LiveBlobs, LiveClock, LiveConfig, LiveError, Ticking,
+    BlobConfig, DefaultsError, Live, LiveBlobs, LiveClock, LiveConfig, LiveError, StagesRunning,
+    Ticking,
 };
 use crate::log::consumer::LogStats;
 use crate::log::{ExchangeLog, LogError};
-use crate::ops::{HealthReport, Ops, Phase, Readiness};
+use crate::ops::{HealthReport, Ops, PgOps, Phase, Readiness};
 use crate::pipeline::{PipelineStats, Settings};
 use crate::role::Role;
 use crate::server::{self, DrainReport, ServeOptions};
@@ -94,6 +107,22 @@ pub enum StartError {
     },
     #[error("the operator directory was not loaded")]
     NoDirectory,
+    #[error("postgres mode needs a store section")]
+    NoStore,
+    #[error(
+        "store.pool.max_connections is {configured}; a pipeline process needs at least {needed}"
+    )]
+    PoolTooSmall { configured: u32, needed: u32 },
+    #[error("loading the deployment secret: {0}")]
+    Secrets(#[from] crosstalk_ingress::credential::SecretError),
+    #[error("starting the postgres bus: {0:?}")]
+    Bus(crosstalk_transport::StartError),
+    #[error("the spool section: {0}")]
+    SpoolSection(#[from] crate::config::InvalidSpoolSection),
+    #[error("opening the publish spool: {0}")]
+    Spool(crosstalk_transport::SpoolError),
+    #[error("building the capture pipeline: {0}")]
+    Pipeline(#[from] crate::pipeline::BuildError),
 }
 
 /// How the shutdown went.
@@ -131,6 +160,8 @@ pub struct Running {
     ops_addr: SocketAddr,
     blobs: FsBlobStore,
     live: Option<Live>,
+    /// The Postgres side, in Postgres mode.
+    postgres: Option<postgres::PgRunning>,
     ops: Ops,
     phase: watch::Sender<Phase>,
     proxy: Option<ProxyTasks>,
@@ -174,6 +205,9 @@ pub async fn start_on(
     lookup: impl Fn(&str) -> Option<String>,
     clock: LiveClock,
 ) -> Result<Running, StartError> {
+    if config.store.is_some() && role.runs_live() {
+        return start_postgres(config, role, lookup, clock).await;
+    }
     let data_dir = config.data_dir()?.to_owned();
     let store_config = config
         .store
@@ -321,6 +355,7 @@ pub async fn start_on(
         live: live.as_ref().map(Live::reporter),
         tasks,
         store: store_probe,
+        postgres: None,
     };
     let (stop_ops, ops_stopped) = watch::channel(false);
     let ops_handler = ops.clone();
@@ -348,6 +383,245 @@ pub async fn start_on(
         ops_addr,
         blobs,
         live,
+        postgres: None,
+        ops,
+        phase,
+        proxy,
+        api,
+        stop_ops,
+        ops_server,
+        store,
+        drain,
+        flush: config.shutdown.flush_timeout(),
+    })
+}
+
+/// [`start_on`] with a `store` section: see [`postgres`].
+async fn start_postgres(
+    config: &GatewayConfig,
+    role: Role,
+    lookup: impl Fn(&str) -> Option<String>,
+    clock: LiveClock,
+) -> Result<Running, StartError> {
+    let data_dir = config.data_dir()?.to_owned();
+    let section = config.store.ok_or(StartError::NoStore)?;
+    let store_config = store_config(section, &lookup)?;
+    let configured = store_config.pool().max_connections().get();
+    if configured < StoreSection::MIN_CONNECTIONS {
+        return Err(StartError::PoolTooSmall {
+            configured,
+            needed: StoreSection::MIN_CONNECTIONS,
+        });
+    }
+    let blobs = FsBlobStore::open(&config.blobs.root).await?;
+    let secret = Arc::new(crosstalk_ingress::credential::load_secrets(
+        &config.ingress.secrets,
+        &lookup,
+    )?);
+    let reader = clock.reader();
+    let proxy = match role.runs_proxy() {
+        true => {
+            let (sender, captured) = mpsc::channel(config.ingress.capture.channel_capacity.get());
+            let proxy = anthropic_proxy(
+                &config.ingress,
+                &lookup,
+                CaptureSender::new(sender),
+                Arc::clone(&reader),
+            )?;
+            let listener = bind("proxy", config.ingress.listen).await?;
+            Some((proxy, captured, listener))
+        }
+        false => None,
+    };
+    let api = match (role.runs_api(), &config.api) {
+        (true, Some(api)) => {
+            let token = api_token(api, &lookup)?;
+            let listener = bind("api", api.listen).await?;
+            Some((token, listener))
+        }
+        (true, None) => {
+            tracing::warn!(role = %role, "no api section: the HTTP API is not served");
+            None
+        }
+        (false, _) => None,
+    };
+    let ops_listener = bind("ops", config.ops.listen).await?;
+    let ops_addr = local_addr("ops", &ops_listener)?;
+
+    let pool = crate::store::lazy_pool(&store_config);
+    let side = postgres::capture_side(config, role, pool, &blobs, &reader).await?;
+    let status = postgres::initial_status();
+    let late = postgres::Late::default();
+    let mut tasks = Tasks::new();
+    let (proxy, captured) = match proxy {
+        Some((proxy, captured, listener)) => {
+            let addr = local_addr("proxy", &listener)?;
+            (Some((proxy, listener, addr)), Some(captured))
+        }
+        None => (None, None),
+    };
+    let capture = match (captured, &side.pipeline) {
+        (Some(captured), Some(pipeline)) => Some(tasks.spawn(
+            "capture",
+            CaptureStage::new(pipeline.ingester()).run(captured),
+        )),
+        _ => None,
+    };
+    if role != Role::Api {
+        let log_tasks = Arc::clone(&late.log_tasks);
+        if role.runs_pipeline() {
+            tasks.probe("exchange_log", move || {
+                log_tasks
+                    .get()
+                    .is_none_or(|tasks| tasks.states().iter().all(|(_, running)| *running))
+            });
+        }
+        let stages = Arc::clone(&late.stages);
+        tasks.probe("live", move || stages.get().is_none_or(StagesRunning::all));
+    }
+    let (phase, phase_watch) = watch::channel(Phase::Ok);
+    let drain = config.shutdown.drain_timeout();
+    let mut capture_stats = None;
+    let proxy = match proxy {
+        Some((proxy, listener, addr)) => {
+            capture_stats = Some(proxy.stats());
+            let (stop, stopped) = watch::channel(false);
+            let server = tasks.spawn(
+                "proxy",
+                server::serve(
+                    listener,
+                    move |request| {
+                        let proxy = proxy.clone();
+                        async move { proxy.handle(request).await }
+                    },
+                    stopped,
+                    ServeOptions {
+                        name: "proxy",
+                        drain,
+                        date_header: false,
+                    },
+                ),
+            );
+            Some(ProxyTasks { addr, stop, server })
+        }
+        None => None,
+    };
+    let binding = api.as_ref().map(|(token, _)| postgres::ApiBinding {
+        tokens: StaticTokens::new([(token.clone(), ApiOperator::ID)]),
+        clock: Arc::clone(&reader),
+    });
+    let api = match api {
+        Some((_, listener)) => {
+            let addr = local_addr("api", &listener)?;
+            let router = late.router.router();
+            let (stop, mut stopped) = watch::channel(false);
+            let shutdown = async move {
+                // Fails only when the sender is gone: stop then too.
+                let _ = stopped.wait_for(|stop| *stop).await;
+            };
+            let server = tasks.spawn("api", async move {
+                if let Err(error) = crosstalk_api::http::serve(listener, router, shutdown).await {
+                    tracing::error!(error = %error, "the api listener failed");
+                }
+            });
+            Some(ApiTasks { addr, stop, server })
+        }
+        None => None,
+    };
+    let (store_probe, store) = {
+        let (probe, connect) = StoreProbe::connect(store_config.clone());
+        (probe, Some(tokio::spawn(connect)))
+    };
+    let pipeline = match (&side.spool, &side.pipeline) {
+        (Some(spool), Some(pipeline)) => Some(postgres::spawn_pipeline(postgres::PipelineStart {
+            config: config.clone(),
+            role,
+            clock: clock.clone(),
+            blobs: blobs.clone(),
+            pool: side.pool.clone(),
+            url: store_config.url().clone(),
+            bus: side.bus.clone(),
+            spool: spool.clone(),
+            gate: side.gate.clone(),
+            pipeline: Arc::clone(pipeline),
+            secret: Arc::clone(&secret),
+            status: status.clone(),
+            late: late.clone(),
+            api: binding.clone(),
+        })),
+        _ => None,
+    };
+    let api_surface = match (role, binding) {
+        (Role::Api, Some(binding)) => Some(postgres::spawn_api(postgres::ApiStart {
+            config: config.clone(),
+            clock: Arc::clone(&reader),
+            blobs: blobs.clone(),
+            pool: side.pool.clone(),
+            bus: side.bus.clone(),
+            secret: Arc::clone(&secret),
+            status: status.clone(),
+            late: late.clone(),
+            api: binding,
+        })),
+        _ => None,
+    };
+    let ops = Ops {
+        role,
+        phase: phase_watch,
+        capture: capture_stats,
+        pipeline: side.pipeline.as_ref().map_or_else(
+            || Arc::new(PipelineStats::new()),
+            |pipeline| Arc::clone(pipeline.stats()),
+        ),
+        log: Arc::new(LogStats::new()),
+        live: None,
+        tasks,
+        store: store_probe,
+        postgres: Some(PgOps {
+            status: status.reader(),
+            bus: side.bus.clone(),
+            spool: side.spool.clone(),
+            live: Arc::clone(&late.reporter),
+            clock: Arc::clone(&reader),
+        }),
+    };
+    let (stop_ops, ops_stopped) = watch::channel(false);
+    let ops_handler = ops.clone();
+    let ops_server = tokio::spawn(server::serve(
+        ops_listener,
+        move |request| ops_handler.clone().handle(request),
+        ops_stopped,
+        ServeOptions {
+            name: "ops",
+            drain: Duration::from_secs(1),
+            date_header: true,
+        },
+    ));
+    announce(
+        config,
+        role,
+        proxy.as_ref().map(|tasks| tasks.addr),
+        api.as_ref().map(|tasks| tasks.addr),
+        ops_addr,
+        &data_dir,
+    );
+    Ok(Running {
+        role,
+        data_dir,
+        ops_addr,
+        blobs,
+        live: None,
+        postgres: Some(postgres::PgRunning {
+            pool: side.pool,
+            bus: side.bus,
+            spool: side.spool,
+            capture,
+            capture_pipeline: side.pipeline,
+            pipeline,
+            api: api_surface,
+            status,
+            late,
+        }),
         ops,
         phase,
         proxy,
@@ -376,7 +650,7 @@ fn api_token(
 /// Who may use the surface: with an API, the one operator its token signs
 /// in as, holding every permission; without one, trusted mode (in-process
 /// readers only).
-fn access(operator: Option<&ApiOperator>) -> AccessConfig {
+pub(crate) fn access(operator: Option<&ApiOperator>) -> AccessConfig {
     match operator {
         Some(operator) => AccessConfig::Authenticated(vec![OperatorConfig {
             id: ApiOperator::ID,
@@ -486,9 +760,21 @@ impl Running {
         self.live.as_ref()
     }
 
-    /// What `GET /healthz` would answer now.
+    /// What `GET /healthz` would answer now, without the bus's backlog
+    /// (which needs the database: [`Running::health_full`]).
     pub fn health(&self) -> HealthReport {
         self.ops.health()
+    }
+
+    /// What `GET /healthz` answers now.
+    pub async fn health_full(&self) -> HealthReport {
+        self.ops.health_full().await
+    }
+
+    /// The Postgres side, in Postgres mode: the pool, the bus, the spool,
+    /// the pipeline's status.
+    pub fn postgres(&self) -> Option<&postgres::PgRunning> {
+        self.postgres.as_ref()
     }
 
     /// What `GET /readyz` would answer now.
@@ -528,6 +814,12 @@ impl Running {
         // From here on, one deadline for the live process.
         if let Some(live) = self.live {
             let drained = live.shutdown(Instant::now() + self.flush).await;
+            report.capture_drained = drained.capture;
+            report.log_drained = drained.log;
+            report.stages_drained = drained.stages;
+        }
+        if let Some(postgres) = self.postgres {
+            let drained = postgres.shutdown(Instant::now() + self.flush).await;
             report.capture_drained = drained.capture;
             report.log_drained = drained.log;
             report.stages_drained = drained.stages;

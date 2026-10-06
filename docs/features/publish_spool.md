@@ -8,7 +8,7 @@ Decision Q5 of [Postgres stores](postgres_stores.md) (its "The publish
 spool" section is the design), workstream W1. `serve` wraps
 [`PgBus`](pg_bus.md) in it whenever a database is configured (wiring,
 config section, metrics and the `crosstalk spool --discard-corrupt`
-subcommand are W8).
+subcommand: W8, [postgres_mode](postgres_mode.md)).
 
 ## Scope
 
