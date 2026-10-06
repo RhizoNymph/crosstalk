@@ -23,7 +23,7 @@ use sqlx::PgConnection;
 
 use super::codec::{count, id_text, json, micros};
 use super::outbox::{self, Rows};
-use super::table::{Diff, Table, changed};
+use super::table::{Diff, Table, changed, seen};
 use super::{PgAgents, load, resolve};
 use crate::error::{StorageFailure, StoreReason, TxFailure, tx};
 use crate::ids::IdSource;
@@ -386,7 +386,11 @@ where
                     Some(parent) => stored_canonical(conn, parent).await.map_err(tx)?,
                     None => None,
                 };
-                Ok(changed(std::iter::once(agent.id).chain(parent)))
+                let mut events = changed(std::iter::once(agent.id).chain(parent));
+                if matches!(agent.origin, AgentOrigin::Traffic { .. }) {
+                    events.extend(seen(agent.id, agent.evidence.iter()));
+                }
+                Ok(events)
             })
         })
         .await
@@ -466,7 +470,9 @@ where
                 insert_evidence(conn, agent, from as usize, std::slice::from_ref(&*evidence))
                     .await
                     .map_err(tx)?;
-                Ok(changed([agent]))
+                let mut events = changed([agent]);
+                events.extend(seen(agent, [&*evidence]));
+                Ok(events)
             })
         })
         .await

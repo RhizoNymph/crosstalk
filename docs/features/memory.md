@@ -144,6 +144,9 @@ activity store in the same transaction. `advance` accepts only
 `Registered` to `Provisional` (recording activity) and `Provisional` to
 `Established`; `attach_evidence` refuses evidence the record holds. Each
 publishes `Changed::Agent` (and, for a creation, the canonical parent's).
+A `create` from traffic then publishes `AgentSeen` for each item of its
+evidence, in order, and an `attach_evidence` for the item it attached:
+the announcement is staged with the write, as `PgAgents` stages it.
 
 **L4 (`provenance`).** `IndexState` holds postings (`Fingerprint →
 {(SpanId, offset)}`) and one observation per scanned text (its time and

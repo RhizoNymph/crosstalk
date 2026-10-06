@@ -10,13 +10,15 @@
 //! 3. Record its activity and, when it carries one, its harness claim
 //!    against the attributed agent.
 //! 4. Thread it (`Threader::thread`) under the attributed agent.
-//! 5. Publish `AgentSeen` for each item of evidence newly attributed, then
-//!    the `ConversationDelta`, each in an envelope whose id is a function
-//!    of the exchange ([`crate::ids::derived_event_id`]), so a redelivery
-//!    publishes the same envelopes again and consumers deduplicate them
-//!    (`reconstruct.delta.single-envelope-per-exchange`). The stores
-//!    publish their own events (`AgentMerged`, `Changed`) through their
-//!    sinks.
+//! 5. Publish the `ConversationDelta` in an envelope whose id is a
+//!    function of the exchange ([`crate::ids::derived_event_id`]), so a
+//!    redelivery publishes the same envelope again and consumers
+//!    deduplicate it (`reconstruct.delta.single-envelope-per-exchange`).
+//!    The agent store publishes its own events through its outbox:
+//!    `AgentMerged`, `Changed` and `AgentSeen`, the last staged in the
+//!    transaction of the `create` or `attach_evidence` that attributed the
+//!    evidence, so a delivery that stops after that write and is
+//!    redelivered (finding the evidence held) loses no announcement.
 //!
 //! [`run`] drives a subscription: a handled delivery is acked; a failed
 //! one is nacked and redelivered after a backoff, then dead-lettered when
@@ -225,7 +227,7 @@ pub struct ConsumerParts<A, T, B, D, X, E> {
     pub deriver: D,
     /// Where new agents' ids come from, minted at each exchange's start.
     pub agent_ids: X,
-    /// Where `ConversationDelta` and `AgentSeen` are published.
+    /// Where `ConversationDelta` is published.
     pub bus: Arc<E>,
 }
 
@@ -330,19 +332,7 @@ where
             ClaimStore::record(&mut self.agents, agent, claim, meta.started_at).await?;
         }
         let outcome = self.threader.thread(exchange, agent).await?;
-        for item in seen {
-            let salt = crate::agents::codec::json(&(agent, &item))
-                .map_err(|error| ConsumeError::Messages(error.to_string()))?;
-            self.publish(Envelope {
-                id: derived_event_id(meta.id, "agent-seen", salt.as_bytes()),
-                at,
-                event: BusEvent::Ingest(IngestEvent::AgentSeen {
-                    agent,
-                    evidence: item,
-                }),
-            })
-            .await?;
-        }
+        tracing::debug!(exchange = %meta.id.ulid_text(), agent = %agent.ulid_text(), newly_attributed = seen.len(), "evidence attributed; announced by the agent store");
         self.publish(Envelope {
             id: derived_event_id(meta.id, "conversation-delta", &[]),
             at,

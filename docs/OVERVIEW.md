@@ -1295,8 +1295,8 @@ Features Index:
       ordinal, a per-agent seen-message set within a configured retention
       that keeps history replayed from another conversation out of a
       delta's new inputs, INV-1100); and the reconstruct consumer (ExchangeCaptured in;
-      AgentSeen and ConversationDelta out under envelope ids derived from
-      the exchange). Replays AI Village's Claude Code stream and lmcache's
+      ConversationDelta out under an envelope id derived from the
+      exchange; AgentSeen staged by the agent store's create or attach). Replays AI Village's Claude Code stream and lmcache's
       interleaved re-runs as ignored fixture tests.
     entry_points:
       - crates/reconstruct/src/lib.rs

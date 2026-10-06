@@ -36,7 +36,9 @@ crate: it depends on `crosstalk-spec` and `crosstalk-store` only;
   stores), so list cursors survive a restart (decision Q4 of
   [postgres_stores](postgres_stores.md)).
 - The L3 bus consumer (`consumer`): `ExchangeCaptured` in; attribution,
-  claims and activity, threading; `AgentSeen` and `ConversationDelta` out.
+  claims and activity, threading; `ConversationDelta` out. `AgentSeen` is
+  the agent store's: staged in the outbox by the `create` (from traffic)
+  or `attach_evidence` that attributes the evidence.
 
 ## Non-scope
 
@@ -65,8 +67,10 @@ ExchangeCaptured(exchange) ── consumer::ReconstructConsumer::handle
                     lowest id, then Known; weak evidence or a refused merge (veto): Review (no delta)
   4. ActivityStore::record, ClaimStore::record (the harness claim, never evidence)
   5. Threader::thread(exchange, attributed agent)
-  6. publish AgentSeen per new item, then ConversationDelta, under envelope ids derived from the
-     exchange id (ids::derived_event_id): a redelivery republishes the same envelopes
+  6. publish ConversationDelta under an envelope id derived from the exchange id
+     (ids::derived_event_id): a redelivery republishes the same envelope. AgentSeen per newly
+     attributed item was staged by step 3's create / attach_evidence in its own transaction
+     and leaves through the store's outbox relay
 run(subscription, consumer): ack on success, nack (200 ms) on failure → bus retries / dead letters
 ```
 
@@ -263,8 +267,10 @@ stable per-corpus API key.
 - `tests::dst`: `crosstalk-sim` schedules of duplicate and reordered
   deliveries, a secret rotation, and concurrent threaders; and
   `redelivery_republishes_the_same_envelope_ids` (INV-1202): publishes
-  failing at seeded points, the delivery redelivered until handled, every
-  id carrying one event and every id one an uninterrupted run publishes.
+  failing at seeded points, the delivery redelivered until handled; the
+  same deliveries with every publish landing give exactly the same bus log
+  (each id with its one event) and exactly the same store events,
+  `AgentSeen` included.
 - `tests::cursor_keys`: cursor keys stable per secret and label; a
   conversation list cursor resolves on a store handle keyed from the same
   secret and is refused under another.
@@ -307,12 +313,9 @@ stable per-corpus API key.
   row before its first publish, and only after the staging transaction
   committed (INV-1211). Envelopes the consumer publishes have ids derived
   from the exchange (INV-1202).
-- Known gap: an `AgentSeen` whose publish fails after its evidence was
-  attached is not republished on redelivery (the redelivery finds the
-  evidence held and announces nothing). The redelivery DST checks ids, not
-  this completeness. Closing it needs the announcement staged with the
-  attach (a store outbox event), which changes the reference store's
-  events.
+- `AgentSeen` commits with the write that attributes the evidence
+  (`create` from traffic, `attach_evidence`, in memory and on Postgres),
+  so a failed publish followed by a redelivery loses no announcement.
 - Not yet evidenced (still `agent = "false"`): the store-level `dst`
   invariants INV-141, 144, 161, 508, 540, 608, 612; INV-1211 and
   INV-1202 (their reconstruct tests exist; the Postgres test has not run
