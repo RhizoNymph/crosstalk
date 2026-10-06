@@ -30,6 +30,7 @@ use crosstalk_transport::blob::MemoryBlobStore;
 use crosstalk_transport::{BusConfig, MpscBus, StartError};
 
 use crate::corpus::World;
+use crate::detect::Timed;
 use crate::pipeline::{DetectError, Detection, DetectionStatus, Detector};
 
 /// The consumer group the eval reads `ExchangeCaptured` back through.
@@ -113,18 +114,32 @@ pub async fn ingest_world<B, E>(
     pipeline: &Pipeline<B, E>,
     captured: &mut E::Subscription,
     world: &World,
+    before_ingest: impl AsyncFnMut(Timestamp),
+) -> Result<Vec<Captured>, PipelineError>
+where
+    B: BlobStore + Send + Sync + 'static,
+    E: EventBus + Send + Sync + 'static,
+{
+    ingest_exchanges(pipeline, captured, &Timed::of_world(world), before_ingest).await
+}
+
+/// [`ingest_world`] over exchanges in time order, without a corpus world.
+pub async fn ingest_exchanges<B, E>(
+    pipeline: &Pipeline<B, E>,
+    captured: &mut E::Subscription,
+    exchanges: &[Timed<'_>],
     mut before_ingest: impl AsyncFnMut(Timestamp),
 ) -> Result<Vec<Captured>, PipelineError>
 where
     B: BlobStore + Send + Sync + 'static,
     E: EventBus + Send + Sync + 'static,
 {
-    let mut out = Vec::with_capacity(world.exchanges().len());
-    for exchange in world.exchanges() {
-        let (id, at) = (exchange.id(), exchange.at());
+    let mut out = Vec::with_capacity(exchanges.len());
+    for timed in exchanges {
+        let (id, at) = (timed.exchange.exchange.meta.id, timed.at);
         before_ingest(at).await;
         let event = pipeline
-            .ingest(exchange.normalized().clone(), at)
+            .ingest(timed.exchange.clone(), at)
             .await
             .map_err(|source| PipelineError::Ingest {
                 exchange: id,
@@ -182,11 +197,17 @@ impl PipelineDetector {
         Ok(Self { runtime, seed })
     }
 
-    async fn run(seed: u64, world: &World) -> Result<Vec<Captured>, PipelineError> {
-        let start = world
-            .exchanges()
+    /// Ingests `exchanges` (one world's, in time order) on a fresh bus and
+    /// blob store; returns how many were read back.
+    pub fn ingest(&mut self, exchanges: &[Timed<'_>]) -> Result<u64, PipelineError> {
+        let captured = self.runtime.block_on(Self::run(self.seed, exchanges))?;
+        Ok(captured.len() as u64)
+    }
+
+    async fn run(seed: u64, exchanges: &[Timed<'_>]) -> Result<Vec<Captured>, PipelineError> {
+        let start = exchanges
             .first()
-            .map_or(Timestamp::from_micros(0), |exchange| exchange.at());
+            .map_or(Timestamp::from_micros(0), |timed| timed.at);
         let clock = Arc::new(CorpusClock::new(start));
         let bus = MpscBus::start(BusConfig::default()).map_err(PipelineError::Bus)?;
         let pipeline = Pipeline::build(
@@ -196,7 +217,8 @@ impl PipelineDetector {
         )
         .await?;
         let mut captured = subscribe(pipeline.bus()).await?;
-        let result = ingest_world(&pipeline, &mut captured, world, async |at| clock.set(at)).await;
+        let result =
+            ingest_exchanges(&pipeline, &mut captured, exchanges, async |at| clock.set(at)).await;
         let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         pipeline.shutdown(deadline).await;
         result
@@ -209,16 +231,14 @@ impl Detector for PipelineDetector {
     }
 
     fn detect(&mut self, world: &World) -> Result<Detection, DetectError> {
-        let captured = self.runtime.block_on(Self::run(self.seed, world))?;
+        let ingested = self.ingest(&Timed::of_world(world))?;
         tracing::debug!(
             world = %world.key(),
-            ingested = captured.len(),
+            ingested,
             "pipeline ingested world; no detector consumers yet"
         );
         Ok(Detection {
-            status: DetectionStatus::NoConsumers {
-                ingested: captured.len() as u64,
-            },
+            status: DetectionStatus::NoConsumers { ingested },
             ..Detection::default()
         })
     }
