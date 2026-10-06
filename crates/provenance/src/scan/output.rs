@@ -430,6 +430,24 @@ impl Scanner {
         let Some(record) = session.live.get(source).cloned() else {
             return Ok(None);
         };
+        // A coincidence, not a copy (`provenance.span.coincident-template-originated`):
+        // another agent's stretch holding no token rare for its source's
+        // holders is the writer's own template text, kept originated so
+        // that a verbatim copy of the writer's page still matches it.
+        if record.span.agent != session.reader
+            && self.reader_output().rare_token() == RareToken::Required
+            && !self
+                .holds_rare_token(session, part, source, (start, end))
+                .await?
+        {
+            tracing::debug!(exchange = ?session.exchange, source = ?source, start, end, "coincident template stretch kept originated");
+            return Ok(Some(Piece {
+                start,
+                end,
+                origin: Origin::Originated,
+                found: None,
+            }));
+        }
         let mut found = None;
         if record.span.agent != session.reader
             && self
