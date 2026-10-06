@@ -18,6 +18,13 @@
 //! | a channel's resources | [`ResourceUseList`] | `ResourceId` |
 //! | transmissions by id, and by query (`TransmissionStore::list`) | [`TransmissionList`] | `TransmissionId` |
 //! | a channel's transmissions | [`ChannelTransmissionList`] | (`Transmission::opened_at`, `TransmissionId`) |
+//! | conversations | [`ConversationList`] | `ConversationId` |
+//! | readers of one span | [`SpanReaderList`] | (the reader exchange's `started_at`, the match's id) |
+//! | stored exchanges (`ExchangeReads::list`) | [`ExchangeList`] | (`ExchangeMeta::started_at`, `ExchangeId`) |
+//!
+//! A conversation's turns are not a cursor list: they are addressed by
+//! their dense, immutable index (`TurnWindow`), so a turn link is citeable
+//! (`crate::interfaces::l3_reconstruction::conversations`).
 //!
 //! A search hit's score is a fixed function of the query, the embedding
 //! model and the transmission (no rank fusion and no corpus statistics), so
@@ -97,6 +104,12 @@ list_marker! {
     TransmissionList;
     /// `QueryApi::channel_transmissions`.
     ChannelTransmissionList;
+    /// `QueryApi::conversations` and `ConversationReads::list`.
+    ConversationList;
+    /// `QueryApi::span_readers` and `ProvenanceReads::readers`.
+    SpanReaderList;
+    /// `ExchangeReads::list`.
+    ExchangeList;
 }
 
 /// How many items a page may hold: `1..=PageSize::MAX`.

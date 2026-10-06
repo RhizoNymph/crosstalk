@@ -1,0 +1,17 @@
+[invariant]
+id = "reconstruct.conversation.turn-index-stable"
+statement = "Once an exchange is threaded as turn i of a conversation, every later read names the same exchange at turn i, later threading only appends turns, and threading the same exchange again adds no turn."
+kind = "coordination"
+requires = ["unit", "integration"]
+rationale = """
+A citeable turn link must open the same turn for everyone and forever; a
+redelivered ExchangeCaptured must not shift later turns.
+"""
+
+[evidence]
+unit = "crosstalk_reconstruct::tests::conversation_reads::rethreading_adds_no_turn_and_turns_only_append"
+integration = "crosstalk_reconstruct::tests::pg_conversation_reads::pg_rethreading_adds_no_turn"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

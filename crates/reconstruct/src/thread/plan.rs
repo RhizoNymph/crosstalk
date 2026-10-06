@@ -146,6 +146,9 @@ pub(crate) struct NewEntry {
     /// message.
     pub(crate) history: Option<(u32, ChainHash)>,
     pub(crate) output: bool,
+    /// A compaction's first request: the message's hash is in the
+    /// predecessor's stored history (`reconstruct.conversation.carried-over`).
+    pub(crate) carried_over: bool,
 }
 
 /// The conversation a write lands in.
@@ -223,6 +226,7 @@ fn append(
     segment: &[Entry],
     lead_system: Option<MessageHash>,
     output: Option<MessageHash>,
+    carried: &HashSet<MessageHash>,
 ) -> Result<Appended, TxFailure> {
     let mut entries = Vec::with_capacity(segment.len() + 2);
     if let Some(system) = lead_system {
@@ -233,6 +237,7 @@ fn append(
             },
             history: None,
             output: false,
+            carried_over: false,
         });
     }
     let mut len = base_len;
@@ -251,6 +256,7 @@ fn append(
             entry: *entry,
             history: position,
             output: false,
+            carried_over: position.is_some() && carried.contains(&entry.message),
         });
     }
     if let Some(output) = output {
@@ -262,6 +268,7 @@ fn append(
             },
             history: Some((len32(len)?, chain)),
             output: true,
+            carried_over: false,
         });
         len += 1;
     }
@@ -319,15 +326,17 @@ async fn unseen<R: ThreadReads>(
         .collect())
 }
 
-/// A new conversation holding `history`'s messages from the start.
+/// A new conversation holding `history`'s messages from the start, the
+/// ones in `carried` flagged carried over.
 fn fresh(
     input: &ThreadInput,
     history: &History,
     origin: ConversationOrigin,
     new_inputs: Vec<MessageHash>,
+    carried: &HashSet<MessageHash>,
 ) -> Result<Write, TxFailure> {
     let conversation = input.conversation;
-    let appended = append(history, 0, &history.entries, None, input.output)?;
+    let appended = append(history, 0, &history.entries, None, input.output, carried)?;
     let delta = delta(input, conversation, new_inputs, history.system);
     let outcome = match origin {
         ConversationOrigin::Root => ThreadOutcome::Starts {
@@ -403,6 +412,7 @@ pub(crate) async fn plan<R: ThreadReads>(
                     &history,
                     ConversationOrigin::Root,
                     new_inputs,
+                    &HashSet::new(),
                 )?)));
             }
         },
@@ -417,7 +427,14 @@ pub(crate) async fn plan<R: ThreadReads>(
         let new_system = history
             .system
             .filter(|system| Some(*system) != extension.last_system);
-        let appended = append(&history, k, tail, lead(new_system, tail), input.output)?;
+        let appended = append(
+            &history,
+            k,
+            tail,
+            lead(new_system, tail),
+            input.output,
+            &HashSet::new(),
+        )?;
         let conversation = extension.conversation;
         let added = non_system.get(k..).unwrap_or(&[]);
         let new_inputs = unseen(reads, input, conversation, added.to_vec()).await?;
@@ -452,6 +469,7 @@ pub(crate) async fn plan<R: ThreadReads>(
             &history,
             ConversationOrigin::Compaction { predecessor },
             new_inputs,
+            &carried,
         )?)));
     }
 
@@ -469,6 +487,7 @@ pub(crate) async fn plan<R: ThreadReads>(
             tail,
             lead(history.system, tail),
             input.output,
+            &HashSet::new(),
         )?;
         let conversation = input.conversation;
         let new_inputs = unseen(
@@ -509,6 +528,7 @@ pub(crate) async fn plan<R: ThreadReads>(
         &history,
         ConversationOrigin::Root,
         new_inputs,
+        &HashSet::new(),
     )?)))
 }
 

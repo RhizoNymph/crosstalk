@@ -205,6 +205,156 @@
     "permission": "view"
   },
   {
+    "calls": "QueryApi::conversations",
+    "method": "GET",
+    "path": "/conversations",
+    "args": [
+      {
+        "name": "filter",
+        "place": "query",
+        "optional": false
+      },
+      {
+        "name": "page",
+        "place": "query",
+        "optional": false
+      }
+    ],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "view"
+  },
+  {
+    "calls": "QueryApi::conversation",
+    "method": "GET",
+    "path": "/conversations/{id}",
+    "args": [
+      {
+        "name": "id",
+        "place": "path",
+        "optional": false
+      }
+    ],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "view"
+  },
+  {
+    "calls": "QueryApi::conversation_turns",
+    "method": "GET",
+    "path": "/conversations/{id}/turns",
+    "args": [
+      {
+        "name": "id",
+        "place": "path",
+        "optional": false
+      },
+      {
+        "name": "window",
+        "place": "query",
+        "optional": false
+      }
+    ],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "view"
+  },
+  {
+    "calls": "QueryApi::span_readers",
+    "method": "GET",
+    "path": "/spans/{id}/readers",
+    "args": [
+      {
+        "name": "id",
+        "place": "path",
+        "optional": false
+      },
+      {
+        "name": "page",
+        "place": "query",
+        "optional": false
+      }
+    ],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "view"
+  },
+  {
+    "calls": "QueryApi::exchange_turns",
+    "method": "POST",
+    "path": "/query/exchange-turns",
+    "args": [
+      {
+        "name": "body",
+        "place": "body",
+        "optional": false
+      }
+    ],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "view"
+  },
+  {
+    "calls": "QueryApi::span_points",
+    "method": "POST",
+    "path": "/query/span-points",
+    "args": [
+      {
+        "name": "body",
+        "place": "body",
+        "optional": false
+      }
+    ],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "view"
+  },
+  {
+    "calls": "QueryApi::conversation_text",
+    "method": "GET",
+    "path": "/conversations/{id}/text",
+    "args": [
+      {
+        "name": "id",
+        "place": "path",
+        "optional": false
+      },
+      {
+        "name": "window",
+        "place": "query",
+        "optional": false
+      },
+      {
+        "name": "limit",
+        "place": "query",
+        "optional": false
+      }
+    ],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "content"
+  },
+  {
+    "calls": "QueryApi::part_text",
+    "method": "POST",
+    "path": "/query/part-text",
+    "args": [
+      {
+        "name": "part",
+        "place": "body_field",
+        "optional": false
+      },
+      {
+        "name": "slice",
+        "place": "body_field",
+        "optional": false
+      }
+    ],
+    "status": 200,
+    "content_type": "application/json",
+    "permission": "content"
+  },
+  {
     "calls": "QueryApi::alert_rules",
     "method": "GET",
     "path": "/alert-rules",

@@ -18,6 +18,7 @@ pub mod memory;
 pub mod messages;
 pub mod pg;
 pub(crate) mod plan;
+pub mod reads;
 pub mod store;
 
 use std::sync::Arc;
@@ -188,6 +189,7 @@ where
             response,
             summary,
             conversation,
+            source: client.ingress.source(),
         })
     }
 }

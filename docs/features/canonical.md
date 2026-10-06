@@ -311,3 +311,12 @@ Open:
   the block's canonical JSON; the marker is dropped from it so that echo
   stability and request concatenation hold for messages with unknown
   blocks.
+
+## Exchange store
+
+`exchanges/`: the spec's `ExchangeStore`/`ExchangeReads`
+(`MemoryExchanges`, `PgExchanges` in schema `canonical`, migration
+`0001_exchanges`): each exchange record without bodies, first put kept,
+listed newest first by (`started_at`, id). The crate now depends on
+`crosstalk-store`. See [conversation_reads.md](conversation_reads.md);
+INV-1024.

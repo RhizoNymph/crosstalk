@@ -11,7 +11,9 @@
 //! a path with an empty segment or a trailing `/` matches none.
 
 use crate::aggregates::topic::TopicModelVersion;
-use crate::ids::{AgentId, AlertId, AlertRuleId, ChannelId, ProjectionId, TransmissionId};
+use crate::ids::{
+    AgentId, AlertId, AlertRuleId, ChannelId, ConversationId, ProjectionId, SpanId, TransmissionId,
+};
 use crate::wire::{DecodeError, DecodeErrorKind, WireRequest, decode_request};
 
 use super::Method;
@@ -179,7 +181,9 @@ id_path_arg!(
     AlertId,
     AlertRuleId,
     ChannelId,
+    ConversationId,
     ProjectionId,
+    SpanId,
     TransmissionId,
 );
 

@@ -1,0 +1,18 @@
+[invariant]
+id = "provenance.scan.status-after-commit"
+statement = "ProvenanceReads::scan_status reports an exchange Scanned or Indexed only after every span of its output and every match read in it are committed, in the same write; before that its output_spans and matches_read_in hold none of them."
+kind = "coordination"
+requires = ["unit", "integration"]
+rationale = """
+The view marks a turn complete from its scan status; a status that ran
+ahead of the records would show a turn as having no provenance when it
+is still being scanned.
+"""
+
+[evidence]
+unit = "crosstalk_provenance::tests::reads::scan_status_follows_the_commit"
+integration = "crosstalk_provenance::integration::reads::pg_scan_status_follows_the_commit"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

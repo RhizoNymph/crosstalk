@@ -1,0 +1,17 @@
+[invariant]
+id = "surface.conversation.traffic-counts"
+statement = "ConversationTraffic::received counts the distinct stored transmissions holding a content match read in one of the conversation's turns, and sent those holding a match whose origin span is in one of its turns' outputs, each transmission once."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+The head's in and out counts summarise the conversation's traffic;
+counting a transmission once per match would inflate them by the number
+of spans it carried.
+"""
+
+[evidence]
+unit = "crosstalk_surface::tests::conversations::traffic_counts_each_transmission_once"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

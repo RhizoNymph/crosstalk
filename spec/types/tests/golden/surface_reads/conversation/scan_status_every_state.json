@@ -1,0 +1,24 @@
+[
+  {
+    "type": "pending"
+  },
+  {
+    "type": "scanned",
+    "data": {
+      "at": "2026-10-04T09:31:09.900000Z"
+    }
+  },
+  {
+    "type": "indexed",
+    "data": {
+      "at": "2026-10-04T09:31:10.000000Z"
+    }
+  },
+  {
+    "type": "failed",
+    "data": {
+      "at": "2026-10-04T09:31:10.000000Z",
+      "failure": "body_undecodable"
+    }
+  }
+]

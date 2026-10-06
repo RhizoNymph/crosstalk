@@ -704,3 +704,10 @@ store; the cluster stores (JetStream, Postgres or object storage) are P9.
 - **No cross-node bus yet.** `proxy` and `pipeline` as separate processes
   cannot talk (P9).
 - **Readiness of migrations is vacuous** until a layer has migrations.
+
+## Conversation reads in the live process
+
+`LayerStores` (L1 exchanges, L3 conversations, L4 records) is the
+surface's `ConversationStores` (`InProcess::start_with_reads`); the L3
+stage puts each `ExchangeCaptured` exchange into the exchange store before
+threading it. See [conversation_reads.md](conversation_reads.md).

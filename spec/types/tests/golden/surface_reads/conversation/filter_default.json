@@ -1,0 +1,7 @@
+{
+  "agent": null,
+  "origins": [],
+  "replay": {
+    "type": "include"
+  }
+}

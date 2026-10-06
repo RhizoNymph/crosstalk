@@ -5,6 +5,7 @@
 
 mod engine;
 mod index;
+mod reads;
 
 use std::time::Duration;
 

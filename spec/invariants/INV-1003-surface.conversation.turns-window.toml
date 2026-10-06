@@ -1,0 +1,22 @@
+[invariant]
+id = "surface.conversation.turns-window"
+statement = "conversation_turns returns the turns with indexes exactly from .. min(from + size, total), ascending and contiguous, with total the turns threaded when read; a window starting at or past total is an empty page carrying total, not an error."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+Turn links are citeable by index (turn=37 opens the window holding turn
+37), so the window must be a pure function of the index range and the
+turn count.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_reconstruct::tests::conversation_reads::turn_windows_are_clipped_to_the_turns_there_are",
+    "crosstalk_surface::tests::conversations::turns_window_is_the_index_range",
+]
+integration = "crosstalk_reconstruct::tests::pg_conversation_reads::pg_conversation_reads_agree_with_memory"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

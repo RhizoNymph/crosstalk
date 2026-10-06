@@ -434,3 +434,12 @@ tests (`tests::props::*`, `props`) and simulations (`dst::{live, actions,
 reads}`, `crosstalk_sim::sim_test!`) are the evidence of the surface
 invariants; `crates/api/src/tests.rs` runs the in-process surface end to
 end.
+
+## Conversation reads
+
+`SurfaceStores` gains `Exchanges`, `Conversations` and `Provenance`;
+`query/conversations/` serves `conversations`, `conversation`,
+`conversation_turns`, `span_readers`, `exchange_turns`, `span_points`,
+`conversation_text` and `part_text`. Tests run over
+`tests/conversation_fakes.rs`. See
+[conversation_reads.md](conversation_reads.md).

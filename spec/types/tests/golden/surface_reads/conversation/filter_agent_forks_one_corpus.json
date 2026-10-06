@@ -1,0 +1,13 @@
+{
+  "agent": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+  "origins": [
+    "fork",
+    "compaction"
+  ],
+  "replay": {
+    "type": "only",
+    "data": {
+      "corpus": "salt-nlp"
+    }
+  }
+}

@@ -1,0 +1,42 @@
+[invariant]
+id = "provenance.match.shadowed-fragment-dropped"
+statement = "With SpreadRule::shadowed Dropped (the default), in one decode layer of a read, a candidate ContentMatch on a span of agent X is dropped whole when: no span of X holds a merged hit run of SpreadRule::distinctive_chars normalized characters or more in the layer; every merged hit run of the candidate lies within the extent (first to last byte of its counted runs) of another agent W one of whose originated spans holds a counted run of distinctive_chars or more, and whose counted runs cover more bytes of the layer than all of X's runs; and no whole token (fingerprint::token) of the candidate's runs is seen in at most SpreadRule::rare_bound(h) texts, h being the span's originations, copies and matched reads. Counted runs are those the reader's nearer source (provenance.match.own-output-replay, provenance.match.forward-direct-read) leaves. A candidate of an agent with a long run in the layer, a run outside every such extent, and a run holding a rare token are never dropped by this rule."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+On the node0 bench (run 20261006T021639Z, boilerplate, staging 8090af0)
+7 Channel / ToolResult / Exact false matches of 32 to 46 bytes are short
+template fragments ("notes on cache invalidation stil", " interact with
+purge queue under", "is to pair freeze age with freeze age, which t") read
+in a wiki page that another writer wrote. Writers of one page fill one
+topic's sentence templates with its slot words, so they share such runs.
+When the page writer's output repeats a run of an earlier span, output
+resolution relays it to that span (provenance.span.originated-absent-from-inputs;
+no ReaderOutput match is made, provenance.match.reader-output-strict), so
+the page writer's own spans leave a hole there, and the k-gram straddling
+the relay's end is posted under nobody. A reader of the page then matches
+whoever else holds the run: the earlier writer through the relay, or a
+later writer that wrote the same run itself and so originated it. Only two
+or three agents hold each run, so the spread rule never makes it
+boilerplate (provenance.match.skeleton-dropped), and the holders were not
+given its tokens (provenance.match.inherited-fragment-dropped). The run lies
+inside the page writer's text in the read: the read is that writer's page.
+The page writer is the agent with a long counted run and the most counted
+coverage; requiring both, and judging presence on counted hits only, keeps
+a coincident long sentence of another agent, or text the reader already
+had, from shadowing the page's own writer. A short secret pasted into
+someone else's page holds a rare token and still matches its writer, as a
+short distinctive broadcast does (provenance.match.cross-agent-spread).
+Tradeoff: a page writer whose own runs are sparse (its template k-grams
+above the index cutoff) can have a short common-word fragment inside the
+extent of a coincident holder with more coverage dropped; on the bench run
+this removed 6 of the labelled writer's 12 matches on one page
+(incident-review-3), each reader keeping its other run, recall unchanged.
+"""
+
+[evidence]
+unit = ["crosstalk_provenance::tests::bench_channel_template::an_older_writers_template_run_inside_the_page_read_is_not_matched", "crosstalk_provenance::tests::bench_channel_template::a_later_writers_template_run_inside_the_page_read_is_not_matched", "crosstalk_provenance::tests::bench_channel_template::a_later_writers_template_run_matches_when_shadowed_fragments_are_kept", "crosstalk_provenance::tests::bench_channel_template::an_older_writers_repeated_template_sentence_is_not_matched", "crosstalk_provenance::tests::bench_channel_template::shadowed_fragments_can_be_kept", "crosstalk_provenance::tests::bench_channel_template::a_template_run_no_present_writer_explains_still_matches", "crosstalk_provenance::tests::bench_channel_template::a_secret_inside_a_long_page_still_matches_its_writer", "crosstalk_provenance::tests::bench_channel_template::shadowed_switch_decodes", "crosstalk_provenance::tests::match_quality::short_distinctive_broadcast_matches_the_first_writer"]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

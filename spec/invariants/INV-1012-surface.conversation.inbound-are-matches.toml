@@ -1,0 +1,19 @@
+[invariant]
+id = "surface.conversation.inbound-are-matches"
+statement = "A turn's Inbound marks are exactly the content matches whose reader_exchange is the turn's exchange, each once, on the message and part its read_at names (an output part for ReaderOutput) with range read_at.range, ordered by range start."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+The view must neither invent nor drop a match: the operator follows each
+mark to its origin and its transmission.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_surface::tests::conversations::inbound_marks_are_the_matches_read_in_the_turn",
+    "crosstalk_provenance::tests::reads::matches_read_in_lists_every_match_of_the_reader_exchange",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

@@ -1,0 +1,20 @@
+[invariant]
+id = "canonical.exchange.store-read"
+statement = "ExchangeReads::exchanges returns each stored exchange as ExchangeStore::put first stored it (a later put of the same id changes nothing), absent ids left out; ExchangeReads::list returns the exchanges the query's window admits by (started_at, ExchangeId) descending, a keyset traversal returning each exactly once."
+kind = "domain"
+property = "model-based"
+requires = ["unit", "integration"]
+rationale = """
+Turn headers (protocol, model, continuation, outcome, claims, ingress)
+come from the stored exchange; an exchange record that changed after
+capture or a list that skipped one would misreport what crossed the
+proxy.
+"""
+
+[evidence]
+unit = "crosstalk_canonical::exchanges::tests::exchange_store_keeps_the_first_put_and_lists_newest_first"
+integration = "crosstalk_canonical::exchanges::tests::pg_exchange_store_agrees_with_memory"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

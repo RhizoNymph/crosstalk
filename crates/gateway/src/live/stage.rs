@@ -30,7 +30,8 @@ use std::pin::Pin;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use crosstalk_api::MemoryStores;
+use crosstalk_api::{ConversationStores, MemoryStores};
+use crosstalk_canonical::exchanges::MemoryExchanges;
 use crosstalk_flow::consumer::Settings as FlowSettings;
 use crosstalk_provenance::store::MemoryProvenanceStore;
 use crosstalk_reconstruct::thread::{MemoryConversations, ThreadConfig};
@@ -47,12 +48,14 @@ use super::blobs::LiveBlobs;
 use crate::pipeline::{Ingester, PublishError};
 
 /// The stores a live process shares between its stages and its surface.
-pub type LiveStores = MemoryStores<LiveBlobs>;
+pub type LiveStores = MemoryStores<LiveBlobs, LayerStores>;
 
-/// The layer stores the surface does not read: L3's conversations and
-/// L4's spans, matches and scan records. Clones share the stores.
+/// The layer stores the stages write and the surface's conversation reads
+/// read: L1's exchange records, L3's conversations and L4's spans, matches
+/// and scan records. Clones share the stores.
 #[derive(Debug, Clone, Default)]
 pub struct LayerStores {
+    pub exchanges: MemoryExchanges,
     pub conversations: MemoryConversations,
     pub provenance: MemoryProvenanceStore,
 }
@@ -61,9 +64,26 @@ impl LayerStores {
     /// Empty stores, the conversations kept with `threading`.
     pub fn new(threading: ThreadConfig) -> Self {
         Self {
+            exchanges: MemoryExchanges::new(),
             conversations: MemoryConversations::with_config(threading),
             provenance: MemoryProvenanceStore::default(),
         }
+    }
+}
+
+impl ConversationStores for LayerStores {
+    type Exchanges = MemoryExchanges;
+    type Conversations = MemoryConversations;
+    type Provenance = MemoryProvenanceStore;
+
+    fn exchanges(&self) -> &MemoryExchanges {
+        &self.exchanges
+    }
+    fn conversations(&self) -> &MemoryConversations {
+        &self.conversations
+    }
+    fn provenance(&self) -> &MemoryProvenanceStore {
+        &self.provenance
     }
 }
 

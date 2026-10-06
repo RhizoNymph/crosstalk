@@ -57,14 +57,18 @@ pub enum Permission {
     /// lineage): ids, counts, times and similarities, no message content
     /// and no topic labels or terms. Also verdict logs, detection quality,
     /// transmission rows by id (state, parties, route, times, byte counts,
-    /// topic ids, verdict), the overview's counts, and exports without
-    /// content columns.
+    /// topic ids, verdict), the overview's counts, exports without
+    /// content columns, and conversations (rows, heads, turns with their
+    /// structure and provenance marks, span readers, and where exchanges
+    /// and spans sit: roles, part kinds, byte lengths and ranges, tool
+    /// names and call ids, models and harness claims, no message text).
     View,
     /// Transmission content (the stored record and the evidence page's
     /// excerpts of message text), search, topics (their labels and terms
     /// come from message text), projections (fitting them, their jobs and
-    /// their points) and exports that include content or read a
-    /// projection.
+    /// their points), exports that include content or read a
+    /// projection, and conversation text (a window's part text and one
+    /// part's slice, tool arguments included).
     Content,
     /// Identity and policy: channel policy and promotion, agent merges,
     /// unmerges and renames, alert rules and their sinks (what the gateway

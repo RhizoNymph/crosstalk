@@ -28,6 +28,10 @@
 //! authors through the same batch read. The record outlives eviction:
 //! spans are never deleted, only their fingerprints.
 //!
+//! **Reads.** Scan status, output spans of every origin with their state,
+//! matches by reader exchange and readers of a span are
+//! [`reads::ProvenanceReads`], an extension of [`SpanIndex`].
+//!
 //! Implementations:
 //! - `Segmenter`: `NovelRunSegmenter`.
 //! - `Decoder`: `UnicodeNormalizer`, `Base64Decoder`, `HexDecoder`,
@@ -37,6 +41,8 @@
 //!   `ShardedMemIndex` (one store implements both).
 //! - `SemanticMatcher`: `EmbeddingSimilarityMatcher`, an optional second
 //!   stage for paraphrase that produces `MatchKind::Semantic`.
+
+pub mod reads;
 
 use std::collections::BTreeMap;
 
