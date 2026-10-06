@@ -1239,7 +1239,10 @@ Features Index:
       under stricter length and rare-token rules, boilerplate Common),
       drops short matches that are template skeletons or that the origin
       was given token for token in its own request, and
-      picks carrier, kind, read range and matched bytes; the index holds
+      picks carrier, kind, read range and matched bytes, leaving out hits
+      the reader's nearer source explains (its own earlier output in the
+      request, and with forwarding on its own direct read of a forward's
+      source); the index holds
       originated spans and, with forwarding on (off by default), forwarded
       ones (relayed from the agent's own input, indexed under the
       forwarder, state left Relayed), with the
@@ -1260,6 +1263,7 @@ Features Index:
       - crates/provenance/src/engine.rs
       - crates/provenance/src/consumer.rs
       - crates/provenance/src/scan/mod.rs
+      - crates/provenance/src/scan/nearer.rs
       - crates/provenance/src/segment/mod.rs
       - crates/provenance/src/decode/mod.rs
       - crates/provenance/src/fingerprint/mod.rs
@@ -1476,7 +1480,8 @@ Features Index:
     description: >
       crosstalk-eval and the ct-eval CLI (a composer): dataset converters
       (SALT-NLP, AgentDojo, tau2-bench, AI Village, collusion-wiki (synthesised
-      http_request reads and writes of public wiki pages) and swarm-traces (a
+      http_request reads and writes of public wiki pages; a reader's second
+      read of lines it already received is a reread control, INV-1122) and swarm-traces (a
       decode-chain corpus reported by chain, count and length only))
       streaming worlds of checked
       spec NormalizedExchanges on a deterministic virtual clock (datasets
@@ -1485,14 +1490,18 @@ Features Index:
       growing conversation), with typed,
       JSONL-serialisable ground truth (expected transmissions, out of reach
       when undecodable or read from a medium the sender never wrote
-      (INV-963), negative controls, exemptions, agent clusters, with tiers); predictions converted from
+      (INV-963), access-only expectations that only suspected or discarded
+      evidence finds (a co-access whose write carries no spans, such as a
+      git push), negative controls, exemptions, agent clusters, with
+      tiers); predictions converted from
       spec Transmissions (one per ContentMatch, and one per CoAccess of a
       suspected or discarded transmission) through a read seam over the
       spec's SpanIndex, AccessStore and channel reads; one documented
       alignment rule and a scorer with TP/FP/FN by dataset, route, carrier
       kind, match or access class and tier, negative-control violations
       and a DetectionQuality bridge keyed by QualityMatch; a Detector seam
-      with the naive reference matcher (escape-aware matching classed as
+      with the naive reference matcher (channel rereads of a span already
+      reported to the reader dropped; escape-aware matching classed as
       Exact, Normalized or Decoded([JsonString | YamlString]) through one
       classifier, with hits only two string levels explain out of reach
       and unreported, decoding, opaque-blob exclusion, a boilerplate cutoff
@@ -1543,12 +1552,11 @@ Features Index:
       time order, and read back only through QueryApi (agents by session,
       the A to B channel edge, the confirmed transmission, its evidence,
       and the channel the cross-agent transmission created, dated by its
-      opening, listed and confirmed). The composition is shaped like
-      crosstalk_gateway::live::Live and is wired today from InProcess plus
-      a pipeline over its blob store and bus; the assertions needing L3 to
-      L7 are ignored until Live composes them. The scenario and readers are
-      a library, so a UI demo can feed the same traffic into a running
-      Live.
+      opening, listed and confirmed). The composition is a
+      crosstalk_gateway::live::Live process with every layer consuming the
+      bus, and every assertion runs against it: the first end-to-end proof
+      of detection. The scenario and readers are a library, so a UI demo
+      can feed the same traffic into a running Live.
     entry_points:
       - crates/e2e/src/lib.rs
       - crates/e2e/src/scenario/mod.rs
@@ -1698,21 +1706,26 @@ Features Index:
       (default 2026-07-13..17): every standard agent, one world per village
       day, requests rebuilt from responses (system prompt from goals and
       memory, session history, chat since the previous call), structural
-      chat labels, heuristic repository-channel labels from bash accesses
-      on canonical repository URLs, GUI edits counted. Bash accesses follow
-      the agreed L5 HttpTool contract: curl, wget and gh/glab api keep
-      their equivalent http_request {method, url, body} call, git and the
-      forge CLIs' issue commands are marked Bash-only, every resource is a
-      canonical URL (L5's url_locator off the forges, the repository's web
-      URL on them), and each write carries the spec's WriteOutcome
-      (rejected writes never pair). Its streaming table passes, resource
-      normalizer and bash access tagger are reusable.
+      chat labels, heuristic channel labels from bash accesses, GUI edits
+      counted. Every bash command goes through crosstalk-flow's
+      ToolExtractors as the bash call the agent made, so each access's
+      locator (Locator::Repository for git push/pull/clone, the
+      repository's File for a clone's or a raw URL's file, the issue or
+      merge request page, else L5's URL locator), op and WriteOutcome are
+      the gateway's; the converter adds the shell's true state (the
+      persistent working directory, ~, clones learnt from a push's or
+      pull's printed remote) and keeps shared resources only. A pair whose
+      write is a git push (no spans) is an access-only expectation on the
+      repository; a pair whose writer's typed text reaches the reader's
+      output through one file, thread or page is a content label. Its
+      streaming table passes, resource lookup and bash access tagger are
+      reusable.
     entry_points:
       - crates/eval/src/datasets/ai_village/mod.rs
       - crates/eval/src/datasets/ai_village/tables.rs
       - crates/eval/src/datasets/ai_village/resource.rs
       - crates/eval/src/datasets/ai_village/access/mod.rs
-      - crates/eval/src/datasets/ai_village/access/http.rs
+      - crates/eval/src/datasets/ai_village/window/repo.rs
     depends_on: [eval, flow_extract]
     doc: docs/features/eval_ai_village.md
 ```

@@ -40,7 +40,10 @@ impl Unlabelled {
             .iter()
             .filter_map(|e| match e {
                 Expectation::Transmission(t) => Some(t),
-                _ => None,
+                Expectation::AccessOnly(t) => Some(t.transmission()),
+                Expectation::NoTransmission(_)
+                | Expectation::AgentCluster(_)
+                | Expectation::Unjudged(_) => None,
             })
             .collect();
         for prediction in predictions {

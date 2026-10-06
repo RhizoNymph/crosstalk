@@ -1,20 +1,29 @@
-//! Repository and web channels: who wrote and read which resource, and the
-//! cross-agent pairs that become heuristic labels.
+//! Repository and web channels: who wrote and read which shared resource,
+//! and the cross-agent pairs that become heuristic labels.
 //!
-//! Every bash turn in the window is tagged ([`super::super::access`]) in
-//! time order, each agent with its own [`Shell`]. A **pair** is a read whose
-//! latest earlier write to the same canonical resource came from another
-//! agent. A pair becomes a label (Heuristic tier, `Channel` route on the
-//! resource, `ToolResult` carrier) when the read's output holds a line of
-//! the write's payload (at least [`MIN_LINE`] bytes and [`MIN_WORD_CHARS`]
-//! letters or digits); the label sits at that line, at the reader's next
-//! call in the same session (the first whose request carries the output).
-//! Other pairs are co-accesses only: the spec would hold them as suspected,
-//! and the eval has no label kind for them, so they are counted.
+//! Every bash turn in the window goes through L5's extractor
+//! ([`super::super::access`]) in time order, each agent with its own
+//! [`Shell`]. A **pair** is a read whose latest earlier write to the same
+//! resource (the same extractor locator) came from another agent. What a
+//! pair becomes depends on what the write carried:
 //!
-//! A `Rejected` write (the spec's `WriteOutcome`) is recorded and counted
-//! but never pairs, and does not hide an earlier write; `Unknown` writes
-//! pair like `Delivered` ones.
+//! - **Content** (`Payload::Authored`): a label (Heuristic, `Channel` on
+//!   the resource, `ToolResult` carrier) when the read's output holds a
+//!   line of the write's authored text (at least [`MIN_LINE`] bytes and
+//!   [`MIN_WORD_CHARS`] letters or digits), at that line: a file written
+//!   in a clone and read from another clone or a raw URL of the same
+//!   repository file, an issue comment read back. Without such a line it
+//!   is a co-access only, counted.
+//! - **Access only** (`Payload::Unseen`, a `git push`): the gateway
+//!   records the write without spans, so co-access alone links it, and the
+//!   spec keeps that Suspected. The pair is an access-only label on the
+//!   repository, over the read's whole output.
+//!
+//! Either label sits at the reader's next call in the same session (the
+//! first whose request carries the output). A `Rejected` write (the
+//! spec's `WriteOutcome`) is recorded and counted but never pairs, and
+//! does not hide an earlier write; `Unknown` writes pair like `Delivered`
+//! ones.
 
 use std::collections::{BTreeMap, HashMap};
 
@@ -23,7 +32,7 @@ use serde::{Deserialize, Serialize};
 
 use crosstalk_spec::derived::flow::access::WriteOutcome;
 
-use super::super::access::{Access, Op, Shell};
+use super::super::access::{Access, Op, Payload, Shell};
 use super::super::time::Day;
 use crate::truth::kinds::locator_key;
 
@@ -41,11 +50,21 @@ pub struct AccessRecord {
     pub access: Access,
 }
 
+/// What links a pair: content the writer typed, or the co-access alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Link {
+    /// The write carried authored text a reader can get back.
+    Content,
+    /// The write's content is not in its call (`git push`).
+    AccessOnly,
+}
+
 /// A read and the other agent's write it may have read.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Pair {
     pub write: usize,
     pub read: usize,
+    pub link: Link,
 }
 
 /// Counts over the access log.
@@ -56,16 +75,17 @@ pub struct AccessStats {
     pub delivered_writes: u64,
     pub rejected_writes: u64,
     pub unknown_writes: u64,
-    /// Accesses with an `http_request` equivalent (L5's `HttpTool` would
-    /// see them).
-    pub http_visible: u64,
-    /// Accesses only a Bash extractor could see (git, forge CLI issue and
-    /// review commands).
-    pub bash_only: u64,
-    pub by_verb: BTreeMap<String, u64>,
+    /// Writes whose content is not in the call (`git push`).
+    pub unseen_writes: u64,
+    /// Accesses by `<read|write> <resource kind>`.
+    pub by_kind: BTreeMap<String, u64>,
     pub resources: u64,
     pub pairs: u64,
+    /// Pairs whose write is a `git push`: access-only.
+    pub pairs_access_only: u64,
     pub pairs_cross_day: u64,
+    /// Bash commands the extractor refused.
+    pub unextracted_commands: u64,
 }
 
 /// Every access in the window, in time order, and the cross-agent pairs.
@@ -113,23 +133,17 @@ impl AccessLog {
         for (index, record) in self.records.iter().enumerate() {
             let key = locator_key(&record.access.resource);
             resources.insert(key.clone());
-            *self
-                .stats
-                .by_verb
-                .entry(record.access.verb.clone())
-                .or_default() += 1;
-            if record.access.http_visible() {
-                self.stats.http_visible += 1;
-            } else {
-                self.stats.bash_only += 1;
-            }
-            match record.access.op {
-                Op::Write(outcome) => {
+            *self.stats.by_kind.entry(record.access.label()).or_default() += 1;
+            match &record.access.op {
+                Op::Write { outcome, payload } => {
                     self.stats.writes += 1;
                     match outcome {
                         WriteOutcome::Delivered => self.stats.delivered_writes += 1,
                         WriteOutcome::Rejected => self.stats.rejected_writes += 1,
                         WriteOutcome::Unknown => self.stats.unknown_writes += 1,
+                    }
+                    if *payload == Payload::Unseen {
+                        self.stats.unseen_writes += 1;
                     }
                     if outcome.pairs() {
                         latest_write.insert(key, index);
@@ -140,16 +154,31 @@ impl AccessLog {
                     if let Some(&write) = latest_write.get(&key)
                         && self.records[write].agent != record.agent
                     {
+                        let link = match &self.records[write].access.op {
+                            Op::Write {
+                                payload: Payload::Unseen,
+                                ..
+                            } => Link::AccessOnly,
+                            _ => Link::Content,
+                        };
                         self.stats.pairs += 1;
+                        if link == Link::AccessOnly {
+                            self.stats.pairs_access_only += 1;
+                        }
                         if self.records[write].day != record.day {
                             self.stats.pairs_cross_day += 1;
                         }
-                        self.pairs.push(Pair { write, read: index });
+                        self.pairs.push(Pair {
+                            write,
+                            read: index,
+                            link,
+                        });
                     }
                 }
             }
         }
         self.stats.resources = resources.len() as u64;
+        self.stats.unextracted_commands = self.shells.values().map(Shell::unextracted).sum();
     }
 }
 
@@ -157,9 +186,13 @@ fn word_chars(text: &str) -> usize {
     text.chars().filter(|c| c.is_alphanumeric()).count()
 }
 
-/// The longest payload line (long and wordy enough) found verbatim in
-/// `output`, with its byte range there.
-pub fn payload_line(payload: &[String], output: &str) -> Option<(String, usize, usize)> {
+/// The longest line of `payload` (long and wordy enough) found verbatim in
+/// `output`, with its byte range there. Only an `Authored` payload has
+/// lines.
+pub fn payload_line(payload: &Payload, output: &str) -> Option<(String, usize, usize)> {
+    let Payload::Authored(payload) = payload else {
+        return None;
+    };
     let mut best: Option<(String, usize, usize)> = None;
     for value in payload {
         for line in value.lines() {

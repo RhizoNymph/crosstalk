@@ -25,6 +25,16 @@
 //!   neither a false positive nor a negative-control violation
 //!   ([`Outcome::Dismissed`]). Its transmission has no verdict.
 //!
+//! - An access-only label ([`Expectation::AccessOnly`], INV-963: content
+//!   on a resource its sender never wrote stays suspected) is counted in
+//!   the `suspected` class row of its route, carrier and tier, and only a
+//!   suspected or discarded prediction finds it. A content prediction
+//!   aligned with it is still correct (right pair, right place) but does
+//!   not find it. So it never weighs on content recall; its recall is the
+//!   access-only recall.
+//!
+//! [`Expectation::AccessOnly`]: crate::truth::Expectation::AccessOnly
+//!
 //! Unlike the spec's `DetectionQuality`, which only sees transmissions the
 //! detector opened, the scorer sees total misses: a label no prediction
 //! aligns with is `missed`. [`quality`] builds `DetectionQuality` from the
@@ -40,7 +50,7 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-pub use judge::{Judge, Outcome};
+pub use judge::{Expects, Judge, Outcome, Positive};
 pub use sources::SourceCount;
 
 use crate::corpus::World;
@@ -70,9 +80,10 @@ pub struct RowKey {
 pub struct Counts {
     /// Positive labels.
     pub expected: u64,
-    /// Labels some content prediction aligned with.
+    /// Labels some content prediction aligned with (for an access-only
+    /// label, some suspected or discarded prediction).
     pub found: u64,
-    /// Labels no content prediction aligned with.
+    /// Labels not found.
     pub missed: u64,
     /// Missed labels that a suspected or discarded prediction aligned with.
     pub suspected: u64,
@@ -350,14 +361,17 @@ impl Scorer {
             let tier = match outcome {
                 Outcome::Correct { tier, .. } => {
                     // Every label it aligns with is found (or suspected),
-                    // not only the first, which decides its row.
-                    let marks = if prediction.class.is_content() {
-                        &mut found
-                    } else {
-                        &mut suspected
-                    };
+                    // not only the first, which decides its row. Content
+                    // finds a content label; access evidence finds an
+                    // access-only label and marks a content one suspected.
                     for at in judge.aligned(prediction) {
-                        marks[at] = true;
+                        match (judge.positives()[at].expects, prediction.class.is_content()) {
+                            (Expects::Content, true) | (Expects::Access, false) => {
+                                found[at] = true;
+                            }
+                            (Expects::Content, false) => suspected[at] = true,
+                            (Expects::Access, true) => {}
+                        }
                     }
                     Some(tier)
                 }
@@ -424,15 +438,20 @@ impl Scorer {
                 (false, false) => counts.unlabeled += 1,
             }
         }
-        for ((expected, found), suspected) in judge.positives().iter().zip(found).zip(suspected) {
+        for ((positive, found), suspected) in judge.positives().iter().zip(found).zip(suspected) {
+            let expected = positive.expected;
             let label = expected.label();
+            let class = match positive.expects {
+                Expects::Content => EvidenceClass::from(label.needs.class()),
+                Expects::Access => EvidenceClass::Suspected,
+            };
             let counts = self
                 .rows
                 .entry(RowKey {
                     dataset: dataset.clone(),
                     route: label.route.kind(),
                     carrier: label.carrier,
-                    class: EvidenceClass::from(label.needs.class()),
+                    class,
                     tier: Some(label.tier),
                 })
                 .or_default();
@@ -446,7 +465,7 @@ impl Scorer {
                 }
                 if self.misses.len() < self.example_cap {
                     self.misses.push(Miss {
-                        expectation: (*expected).clone(),
+                        expectation: expected.clone(),
                     });
                 }
             }

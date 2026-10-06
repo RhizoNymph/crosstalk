@@ -464,7 +464,7 @@ fn repository_pairs_become_channel_labels_or_co_accesses() {
         RouteExpectation::Channel { resource } => {
             assert_eq!(
                 locator_key(resource),
-                "https://github.com/ai-village-agents/tracker"
+                "https://github.com/ai-village-agents/tracker/issues/5"
             );
         }
         other => panic!("{other:?}"),
@@ -478,7 +478,25 @@ fn repository_pairs_become_channel_labels_or_co_accesses() {
         panic!("not a window");
     };
     assert_eq!(stats.repo_labels, 1);
-    assert_eq!(stats.repo_co_access, 1);
+    // Bob's pull after Alice's push: the push carries no content, so the
+    // pair is an access-only label on the repository.
+    assert_eq!(stats.repo_access_only_labels, 1);
+    let pull = worlds[0]
+        .truth()
+        .iter()
+        .find_map(|e| match e {
+            Expectation::AccessOnly(t) => Some(t.label()),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no access-only label"));
+    match &pull.route {
+        RouteExpectation::Channel { resource } => assert_eq!(
+            locator_key(resource),
+            "repo://github.com/ai-village-agents/tracker"
+        ),
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(stats.repo_co_access, 0);
     assert_eq!(stats.repo_cross_day, 1);
     assert_eq!(stats.access.pairs, 3);
     assert_eq!(stats.access.writes, 2);
@@ -511,6 +529,8 @@ fn the_reference_matcher_finds_the_chat() {
     }
     assert_eq!(chat, (3, 3));
     // The reference routes a bash result as Direct, so a channel label is
-    // not aligned: the eval's reference cannot see bash channels.
-    assert_eq!(repo, (1, 0));
+    // not aligned: the eval's reference cannot see bash channels. The
+    // access-only label (Bob's pull of Alice's push) needs a co-access,
+    // which the reference never reports.
+    assert_eq!(repo, (2, 0));
 }
