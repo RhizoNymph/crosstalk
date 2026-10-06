@@ -32,8 +32,23 @@ pub async fn store<B: BlobStore>(
     blobs: &B,
     normalized: &NormalizedExchange,
 ) -> Result<(), StoreError> {
+    store_unless(blobs, normalized, |_| false).await
+}
+
+/// [`store`], leaving out the message bodies `stored` says are already in
+/// `blobs` (for a caller that knows the store keeps what it was given, so
+/// a conversation's history is not encoded and put again on every
+/// exchange). Media blobs are always put.
+pub async fn store_unless<B: BlobStore>(
+    blobs: &B,
+    normalized: &NormalizedExchange,
+    stored: impl Fn(MessageHash) -> bool,
+) -> Result<(), StoreError> {
     let exchange = normalized.exchange.meta.id;
     for message in &normalized.messages {
+        if stored(message.hash) {
+            continue;
+        }
         put(blobs, message.hash, &encoding::encode(&message.body)).await?;
     }
     for media in &normalized.media {

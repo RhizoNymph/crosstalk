@@ -77,7 +77,7 @@ pub use self::stage::{
 use crate::capture::CaptureStage;
 use crate::log::ExchangeLog;
 use crate::log::consumer::{self as log_consumer, LogStats};
-use crate::pipeline::{BuildError, Deps, Pipeline, Settings};
+use crate::pipeline::{Bodies, BuildError, Deps, Pipeline, Settings};
 use crate::tasks::Tasks;
 
 /// The pipeline a live process ingests through.
@@ -242,7 +242,11 @@ impl Live {
         .await?;
         let built = Pipeline::build(
             pipeline,
-            Deps::stores(blobs, bus.clone(), SeededRandom::new(seed)),
+            Deps {
+                // Live's blob stores (memory, filesystem) never drop a body.
+                bodies: Bodies::SkipStored,
+                ..Deps::stores(blobs, bus.clone(), SeededRandom::new(seed))
+            },
             Arc::clone(&reader),
         )
         .await?;

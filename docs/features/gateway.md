@@ -295,7 +295,7 @@ clock.
 ```rust
 let pipeline = Pipeline::build(
     Settings { put_retry, consumer_retry },   // or Settings::from_config(&config), Settings::default()
-    Deps { blobs, bus, id_entropy, capture: Some(receiver), exchange_log: Some(log) },
+    Deps { blobs, bus, id_entropy, capture: Some(receiver), exchange_log: Some(log), bodies: Bodies::PutEvery },
     clock,                                    // Arc<dyn Clock>: SystemClock, or crosstalk-sim's SimClock
 ).await?;                                     // Result<Pipeline<B, E>, pipeline::BuildError>
 let id: EventId = pipeline.ingest(normalized, at).await?;   // Result<EventId, IngestError>
@@ -312,10 +312,16 @@ let id: EventId = pipeline.ingest(normalized, at).await?;   // Result<EventId, I
 - **Ingest.** `Pipeline::ingest(NormalizedExchange, at)` (or the cloneable
   `Ingester` from `pipeline.ingester()`, for other tasks):
   1. store every message body and media blob with
-     `crosstalk_canonical::store`, retrying the whole put set up to
+     `crosstalk_canonical::store_unless`, retrying the whole put set up to
      `put_retry.attempts` times, `put_retry.backoff` apart (puts are
      idempotent); when every attempt fails, publish nothing and return
-     `IngestError::NotStored { attempts, source }`;
+     `IngestError::NotStored { attempts, source }`. Under
+     `Deps::bodies = Bodies::SkipStored` a message body this ingester
+     already stored (it remembers the last 2^20 hashes) is neither encoded
+     nor put again, since a conversation's request repeats its whole
+     history; only for a blob store that never drops a body. `Live` uses
+     it (its memory and filesystem stores never do); `Deps::stores`
+     defaults to `Bodies::PutEvery`, every body of every exchange;
   2. under the id lock, mint the envelope's `EventId` at `at` (when `at`
      is in or before the last id's millisecond, the last id plus one) and
      publish `ExchangeCaptured` in an envelope stamped `at`; no id left is
@@ -341,7 +347,7 @@ let id: EventId = pipeline.ingest(normalized, at).await?;   // Result<EventId, I
 | --- | --- |
 | `Pipeline<B, E>` | `build`, `ingest`, `ingester`, `blobs`, `bus`, `stats`, `log_stats`, `tasks`, `join_capture`, `join_consumers`; `shutdown` when `E = MpscBus` |
 | `Settings` | `put_retry: PutRetry`, `consumer_retry: RetryPolicy`; `from_config(&GatewayConfig)`, `Default` (3 attempts, 100 ms; the bus's default policy) |
-| `Deps<B, E>` | `blobs`, `bus`, `id_entropy: SeededRandom`, `capture: Option<mpsc::Receiver<RawExchange>>`, `exchange_log: Option<ExchangeLog>`; `Deps::stores` |
+| `Deps<B, E>` | `blobs`, `bus`, `id_entropy: SeededRandom`, `capture: Option<mpsc::Receiver<RawExchange>>`, `exchange_log: Option<ExchangeLog>`, `bodies: Bodies` (`PutEvery`, `SkipStored`); `Deps::stores` |
 | `Ingester<B, E>` | cloneable handle: `ingest`, `now`, `blobs`, `bus`, `stats`, `retry` |
 | `IngestError` | `NotStored { attempts, source: StoreError }`, `IdsExhausted { at }`, `NotPublished(BusError)` |
 | `BuildError` | `Subscribe(BusError)` |
@@ -411,7 +417,8 @@ Surface<LiveStores>: crosstalk-api's InProcess::start_with over the same stores,
 - **Start.** Open the blob store, start the bus, build the surface with
   `InProcess::start_with(options, Backbone { bus, blobs, outbox, events })`
   (the stores publish into the outbox; the relay reads `events`, fed by
-  the surface relay stage), build the pipeline, fill every slot
+  the surface relay stage), build the pipeline (`Bodies::SkipStored`: a
+  body already stored is not put again), fill every slot
   (`wiring::wire_all`), subscribe every slot's group, and only then spawn
   the stages, the outbox forwarder, the ticker (`Ticking::Periodic`) and
   the capture stage.
@@ -577,7 +584,7 @@ gracefully.
 | `src/config/mod.rs`, `sections.rs` | The config and its checked values | `GatewayConfig` (`from_json`, `load`, `data_dir`, `exchange_log_path`, `flow`), `ApiConfig`, `ApiOperator` (`ID`), `FlowConfig` (re-exported from crosstalk-flow), `OpsConfig`, `StoreSection`, `BlobsConfig`, `EmbeddingsConfig`, `PipelineConfig`, `ShutdownConfig`, `EnvRef`, `EnvVarName`, `HttpUrl`, `NonEmpty`, `ConfigError`, `exchange_log_path` |
 | `src/role.rs` | Roles and their tasks | `Role` (`runs_proxy`, `runs_pipeline`, `runs_live`, `runs_api`, `not_built`), `UnknownRole` |
 | `src/gateway.rs` | Role wiring around a `Live` process: the proxy, API and ops listeners, start and shutdown | `start`, `start_on`, `Running` (`proxy_addr`, `api_addr`, `ops_addr`, `bus`, `blobs`, `live`, `health`, `readiness`, `shutdown`), `StartError`, `ShutdownReport` |
-| `src/pipeline/mod.rs` | The library entry point: build, stages, shutdown | `Pipeline`, `Settings`, `Deps`, `BuildError`, `Drained`; re-exports `Ingester`, `IngestError`, `PipelineStats`, `PipelineCounts`, `PutRetry` |
+| `src/pipeline/mod.rs` | The library entry point: build, stages, shutdown | `Pipeline`, `Settings`, `Deps`, `BuildError`, `Drained`; re-exports `Bodies`, `Ingester`, `IngestError`, `PipelineStats`, `PipelineCounts`, `PutRetry` |
 | `src/pipeline/ingest.rs` | Ingest at L1: store (retried), mint, publish | `Ingester` (`ingest`, `now`, `blobs`, `bus`, `stats`, `retry`), `IngestError` |
 | `src/pipeline/stats.rs` | Counters and put retry; refusals held as a `FailureStats` by reason and protocol | `PipelineStats` (`snapshot`, `normalize_failures`), `PipelineCounts`, `PutRetry` |
 | `src/capture.rs` | The capture stage: L1 normalization (refusals counted by reason and protocol, their request shape logged at debug), then `Ingester::ingest` | `CaptureStage` (`new`, `run`, `capture`), `CaptureError`, `Refusal` (`failure`) |
