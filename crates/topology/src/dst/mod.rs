@@ -4,6 +4,8 @@
 //! is generic over `EdgeStore`, so these pin its delivery handling and its
 //! cadence; the store's behaviour is the model test's.
 
+mod restart;
+
 use std::collections::BTreeMap;
 use std::num::NonZeroU64;
 use std::sync::{Arc, Mutex};
@@ -25,10 +27,10 @@ use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::aggregates::watermark::{PipelineFrontier, Watermark, Watermarked};
 use crosstalk_spec::derived::flow::transmission::{Classification, Route};
 use crosstalk_spec::derived::flow::verdict::{Observed, Verdict, VerdictRevision};
-use crosstalk_spec::events::BusEvent;
 use crosstalk_spec::events::insight::{ClassificationCause, InsightEvent};
-use crosstalk_spec::ids::{AgentId, SeededRandom, TransmissionId};
-use crosstalk_spec::interfaces::l2_transport::{EventBus, RetryPolicy};
+use crosstalk_spec::events::{BusEvent, Envelope};
+use crosstalk_spec::ids::{AgentId, EventId, SeededRandom, TransmissionId, UlidGenerator};
+use crosstalk_spec::interfaces::l2_transport::{BusError, EventBus, RetryPolicy};
 use crosstalk_spec::interfaces::l7_topology::{
     AccessContribution, Activation, EdgeContribution, EdgeError, EdgeQueryError, EdgeStore,
 };
@@ -38,7 +40,7 @@ use crosstalk_transport::{BusConfig, MpscBus};
 use tokio::time::Instant;
 
 use crate::consumer::{ConsumerSettings, SUBJECTS, group, run};
-use crate::outbox::{Announce, AnnounceError, BusAnnouncer};
+use crate::outbox::Announce;
 
 type Reference = InMemoryEdgeStore<
     Env<crosstalk_memory::analysis::catalog::InMemoryTopicCatalog, StaticDirectory, StaticNodes>,
@@ -193,16 +195,24 @@ impl EdgeStore for Probe {
     }
 }
 
+/// The envelopes the consumer's announcer was handed, failed or not.
+type Sent = Arc<Mutex<Vec<Envelope>>>;
+
 /// The consumer's announcer: logs each `EdgeUpdated`, failing the first
 /// `failures` of them (the process dies before the publish lands).
 struct Announcer {
     log: Log,
+    sent: Sent,
     failures: Mutex<u32>,
 }
 
 impl Announce for Announcer {
-    async fn announce(&self, event: BusEvent) -> Result<(), AnnounceError> {
-        let BusEvent::Insight(InsightEvent::EdgeUpdated(key)) = event else {
+    async fn announce(&self, envelope: Envelope) -> Result<(), BusError> {
+        self.sent
+            .lock()
+            .expect("not poisoned")
+            .push(envelope.clone());
+        let BusEvent::Insight(InsightEvent::EdgeUpdated(key)) = envelope.event else {
             return Ok(());
         };
         let fail = {
@@ -213,7 +223,7 @@ impl Announce for Announcer {
         };
         if fail {
             record(&self.log, Step::PublishFailed(key));
-            return Err(AnnounceError::IdsExhausted);
+            return Err(BusError::Disconnected);
         }
         record(&self.log, Step::Published(key));
         Ok(())
@@ -233,9 +243,12 @@ impl Clock for PausedClock {
 /// A running consumer over a fresh bus and reference store.
 struct Sim {
     bus: MpscBus,
-    publisher: BusAnnouncer<MpscBus>,
+    /// Mints the ids of the envelopes the test publishes.
+    ids: tokio::sync::Mutex<UlidGenerator<SeededRandom>>,
+    clock: Arc<dyn Clock>,
     store: Reference,
     log: Log,
+    sent: Sent,
 }
 
 /// 10 ms buckets; `settle_after` 20 µs (the watermark is not under test
@@ -272,8 +285,10 @@ async fn start(failures: u32) -> Sim {
         log: Arc::clone(&log),
         started,
     };
+    let sent: Sent = Arc::default();
     let announcer = Announcer {
         log: Arc::clone(&log),
+        sent: Arc::clone(&sent),
         failures: Mutex::new(failures),
     };
     let frontier = ManualFrontier::new(PipelineFrontier {
@@ -284,12 +299,14 @@ async fn start(failures: u32) -> Sim {
         ConsumerSettings::for_bucket_width(NonZeroU64::new(WIDTH_MICROS).expect("non-zero"));
     tokio::spawn(run(subscription, probe, frontier, announcer, settings));
     let clock: Arc<dyn Clock> = Arc::new(PausedClock(started));
-    let publisher = BusAnnouncer::new(bus.clone(), clock, SeededRandom::new(7));
+    let ids = tokio::sync::Mutex::new(UlidGenerator::new(Arc::clone(&clock), SeededRandom::new(7)));
     Sim {
         bus,
-        publisher,
+        ids,
+        clock,
         store,
         log,
+        sent,
     }
 }
 
@@ -311,8 +328,22 @@ fn classified(n: u64, from: u64, to: u64) -> BusEvent {
 }
 
 impl Sim {
-    async fn publish(&self, event: BusEvent) {
-        self.publisher.announce(event).await.expect("published");
+    /// Publish `event` under a fresh id; returns its envelope.
+    async fn publish(&self, event: BusEvent) -> Envelope {
+        let at = self.clock.now();
+        let id: EventId = self.ids.lock().await.mint_at(at).expect("an id");
+        let envelope = Envelope { id, at, event };
+        self.bus.publish(envelope.clone()).await.expect("published");
+        envelope
+    }
+
+    /// Publish `envelope` again, as a bus redelivers.
+    async fn republish(&self, envelope: &Envelope) {
+        self.bus.publish(envelope.clone()).await.expect("published");
+    }
+
+    fn sent(&self) -> Vec<Envelope> {
+        self.sent.lock().expect("not poisoned").clone()
     }
 
     /// Let every delivery, retry and backoff run out.
@@ -450,4 +481,55 @@ async fn watermark_recomputed_every_bucket() {
             pair[1] - pair[0]
         );
     }
+}
+
+/// transport.consumer.derived-envelope-ids: the `EdgeUpdated` a delivery
+/// causes has an id derived from the delivery's envelope, so its first
+/// attempt (whose publish failed), its redelivery after a nack and a
+/// duplicate delivery of the same envelope all publish one envelope, id
+/// and time included; another delivery gets another id.
+#[tokio::test(start_paused = true)]
+async fn redelivery_republishes_the_same_envelope_ids() {
+    let sim = start(1).await;
+    let first = sim.publish(classified(1, 1, 2)).await;
+    sim.settle().await;
+    // The bus delivers the same envelope again, as it may after a crash
+    // between the publish and the ack.
+    sim.republish(&first).await;
+    sim.settle().await;
+    let second = sim.publish(classified(2, 1, 2)).await;
+    sim.settle().await;
+    assert!(sim.group_is_empty().await);
+
+    let sent = sim.sent();
+    assert_eq!(sent.len(), 4, "failed, redelivered, duplicate, second");
+    let derived = EventId::derive(first.id, crate::consumer::EDGE_UPDATED, 0);
+    for envelope in &sent[..3] {
+        assert_eq!(envelope.id, derived);
+        assert_eq!(envelope.at, first.at);
+        assert_eq!(envelope, &sent[0]);
+    }
+    assert_eq!(
+        sent[3].id,
+        EventId::derive(second.id, crate::consumer::EDGE_UPDATED, 0)
+    );
+    assert_ne!(sent[3].id, derived);
+    assert_eq!(
+        sent[0],
+        crate::consumer::edge_updated(
+            &first,
+            match &sent[0].event {
+                BusEvent::Insight(InsightEvent::EdgeUpdated(key)) => key.clone(),
+                other => panic!("not an EdgeUpdated: {other:?}"),
+            }
+        )
+    );
+}
+
+/// topology.watermark.monotone: seeded advances with restarts over
+/// Postgres ([`restart`]); a restarted store reads the persisted watermark
+/// and nothing lowers it.
+#[tokio::test(flavor = "multi_thread")]
+async fn watermark_never_decreases_across_restarts() {
+    restart::seeded_restarts_never_lower_the_watermark().await;
 }
