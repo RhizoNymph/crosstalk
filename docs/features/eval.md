@@ -2226,8 +2226,9 @@ each run); ids are this run's (seed 0).
 `gates.toml` gates the live detector (`detector = "live"`) a little below
 the numbers of [Rescore after L4 match quality](#rescore-after-l4-match-quality)
 on SALT, AgentDojo's direct rows, τ², swarm-traces, AI Village,
-collusion-wiki (channel recall 0.65, precision 0.99: both `--demo` and
-`--max-agents 100` pass; not tuned on the whole export), swe-splice
+collusion-wiki (channel recall 0.95, precision 0.99: `--demo` 0.985 and
+`--max-agents 100` 0.960 once wiki rereads are reread controls, both
+pass; 0.65 before that; not tuned on the whole export), swe-splice
 (channel recall 0.97, precision 0.99), and the open-swe and lmcache
 backgrounds (`fp_per_1k` at most 30 and 150). All of them apply to the
 shipped configuration only (forwarding off); one gate, the SALT
