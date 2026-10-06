@@ -128,8 +128,9 @@ Overview:
       Crates crosstalk-provenance and crosstalk-flow. L4 provenance (span extraction, novelty classification, fingerprint
       index, content matching over part text only, strict decoding,
       escape-folded normalization, boilerplate rules: template skeletons,
-      fragments the origin was given by its own upstream, and unobserved
-      copies without a rare token are not matched) and L5 flow detection (resource
+      fragments the origin was given by its own upstream, short
+      common-word fragments inside another present writer's text, and
+      unobserved copies without a rare token are not matched) and L5 flow detection (resource
       extraction with write outcomes, channel registry with promotion and
       supersession, in which a channel exists only once a transmission
       between different agents goes through it, write/read correlation
@@ -1241,8 +1242,10 @@ Features Index:
       runs for whole values of 24 to 46 characters), resolves originated
       text against the index (hidden relays become ReaderOutput matches
       under stricter length and rare-token rules, boilerplate Common),
-      drops short matches that are template skeletons or that the origin
-      was given token for token in its own request, and
+      drops short matches that are template skeletons, that the origin
+      was given token for token in its own request, or that lie, with no
+      rare token, inside the text of another writer present in the read,
+      and
       picks carrier, kind, read range and matched bytes, leaving out hits
       the reader's nearer source explains (its own earlier output in the
       request, and with forwarding on its own direct read of a forward's
@@ -1268,6 +1271,7 @@ Features Index:
       - crates/provenance/src/consumer.rs
       - crates/provenance/src/scan/mod.rs
       - crates/provenance/src/scan/nearer.rs
+      - crates/provenance/src/scan/shadowed.rs
       - crates/provenance/src/segment/mod.rs
       - crates/provenance/src/decode/mod.rs
       - crates/provenance/src/fingerprint/mod.rs

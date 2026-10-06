@@ -28,7 +28,10 @@
 //! skeleton (`provenance.match.skeleton-dropped`), or when each of its runs
 //! repeats, token for token, a part its origin span's agent was given in
 //! its own request (`provenance.match.inherited-fragment-dropped`,
-//! `inherited`).
+//! `inherited`), or when its agent has no long run in the layer and each
+//! of its runs, holding no rare token, lies inside the text of another
+//! agent present in the read (`provenance.match.shadowed-fragment-dropped`,
+//! `shadowed`).
 
 use std::collections::BTreeMap;
 use std::num::NonZeroU32;
@@ -40,10 +43,12 @@ use crosstalk_spec::interfaces::l4_provenance::{FingerprintIndex, SemanticMatche
 use crosstalk_spec::observed::message::{AssistantPart, Message, MessageBody, PartRef};
 use crosstalk_spec::support::ByteRange;
 
-use super::hits::{covered, extents_by_span, merge, spread_boilerplate};
+use super::hits::{covered, extents_by_span, long_runs, merge, spread_boilerplate};
 use super::kind::{is_exact, match_kind};
 use super::messages::MessageSource;
+use super::shadowed::{Shadows, holders};
 use super::{ScanError, Scanner, Session};
+use crate::config::ShadowedFragments;
 use crate::decode::Step;
 use crate::fingerprint::{short, token};
 use crate::segment::{PartKind, TextPart, text_parts, view};
@@ -144,16 +149,39 @@ impl Scanner {
     /// contiguous run of at least `SpreadRule::distinctive_chars` normalized
     /// characters: such a match is never dropped as a skeleton.
     pub(crate) fn distinctive(&self, layer: &str, extents: &[(u32, u32)]) -> bool {
-        merge(extents.to_vec()).iter().any(|(start, end)| {
-            let slice = layer
-                .get(
-                    usize::try_from(*start).unwrap_or(usize::MAX)
-                        ..usize::try_from(*end).unwrap_or(usize::MAX),
-                )
-                .unwrap_or_default();
-            crate::text::normalize::trimmed_len(&normalize(slice))
-                >= self.spread().distinctive_chars()
-        })
+        !long_runs(layer, extents, self.spread().distinctive_chars()).is_empty()
+    }
+
+    /// Whether one of the whole tokens of `extents` (layer offsets) in
+    /// `layer` is seen in at most `SpreadRule::rare_bound` texts for
+    /// `span`'s holders (`provenance.match.shadowed-fragment-dropped`).
+    async fn holds_rare_token_in<I, S, M, L>(
+        &self,
+        session: &mut Session<'_, I, S, M, L>,
+        layer: &str,
+        span: SpanId,
+        extents: &[(u32, u32)],
+    ) -> Result<bool, ScanError>
+    where
+        I: FingerprintIndex + Sync,
+        S: ProvenanceStore + Sync,
+        M: SemanticMatcher + Sync,
+        L: MessageSource + Sync,
+    {
+        let bound = self.spread().rare_bound(holders(&session.live, span));
+        for (start, end) in merge(extents.to_vec()) {
+            let tokens = token::whole_tokens_in(
+                layer,
+                usize::try_from(start).unwrap_or(usize::MAX),
+                usize::try_from(end).unwrap_or(usize::MAX),
+            );
+            for token in tokens {
+                if session.token_frequency(token).await? <= bound {
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
     }
 
     /// The fingerprints among `widespread` (held by enough agents, with
@@ -260,12 +288,38 @@ impl Scanner {
             // judged on all its hits: what the reader already had does not
             // change what the origin shares with the read.
             let mut counted = extents_by_span(&counted, &kgrams, keep);
-            for (span, all) in extents_by_span(&hits, &kgrams, keep) {
+            let every = extents_by_span(&hits, &kgrams, keep);
+            // Shadowed fragments (`provenance.match.shadowed-fragment-dropped`):
+            // a short match inside the text of another agent present in
+            // the read.
+            let shadows = match self.spread().shadowed() {
+                ShadowedFragments::Dropped => Some(Shadows::new(
+                    layer.text.text(),
+                    &every,
+                    &counted,
+                    live,
+                    self.spread().distinctive_chars(),
+                )),
+                ShadowedFragments::Kept => None,
+            };
+            for (span, all) in every {
                 let Some(extents) = counted.remove(&span) else {
                     continue;
                 };
-                if boilerplate.contains_key(&span) && !self.distinctive(layer.text.text(), &all) {
+                let short = !self.distinctive(layer.text.text(), &all);
+                if short && boilerplate.contains_key(&span) {
                     tracing::debug!(exchange = ?session.exchange, span = ?span, "skeleton match dropped");
+                    continue;
+                }
+                if short
+                    && let Some(by) = shadows
+                        .as_ref()
+                        .and_then(|shadows| shadows.shadower(span, &all))
+                    && !self
+                        .holds_rare_token_in(session, layer.text.text(), span, &all)
+                        .await?
+                {
+                    tracing::debug!(exchange = ?session.exchange, span = ?span, by = ?by, runs = ?merge(all.clone()), "shadowed fragment dropped");
                     continue;
                 }
                 if self
