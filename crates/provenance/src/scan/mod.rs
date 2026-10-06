@@ -39,6 +39,7 @@ mod nearer;
 mod output;
 mod postings;
 mod reads;
+mod shadowed;
 
 use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};

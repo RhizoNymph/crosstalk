@@ -4,6 +4,7 @@
 
 mod agentdojo;
 mod bench_boilerplate;
+mod bench_channel_template;
 mod config;
 mod decode;
 mod fingerprint;

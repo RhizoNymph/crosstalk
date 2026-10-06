@@ -16,7 +16,8 @@
 //!  "short_spans": {"min_chars": 24, "max_chars": 46},
 //!  "reader_output": {"min_chars": 64, "rare_token": true},
 //!  "spread": {"agents": 4, "distinctive_chars": 64, "distinctive_ratio": 2,
-//!             "tokens_per_text": 512, "drop_inherited": true},
+//!             "tokens_per_text": 512, "drop_inherited": true,
+//!             "drop_shadowed": true},
 //!  "forwarding": false}
 //! ```
 
@@ -223,6 +224,19 @@ pub enum InheritedFragments {
     Kept,
 }
 
+/// Whether a short, common-word match lying inside the text of another
+/// agent present in the same read is dropped
+/// (`provenance.match.shadowed-fragment-dropped`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ShadowedFragments {
+    /// Dropped: the read is the present agent's text; writers filling one
+    /// template with one topic's words share such fragments.
+    #[default]
+    Dropped,
+    /// Matched like any other short fragment.
+    Kept,
+}
+
 /// The cross-agent spread rule (`provenance.match.cross-agent-spread`)
 /// and skeleton matches (`provenance.match.skeleton-dropped`).
 ///
@@ -244,7 +258,12 @@ pub enum InheritedFragments {
 /// `inherited` [`InheritedFragments::Dropped`] (the default), a match of
 /// short runs each of which repeats, token for token, one part its origin
 /// agent was given in its own request is dropped too, whatever the spread
-/// (`provenance.match.inherited-fragment-dropped`).
+/// (`provenance.match.inherited-fragment-dropped`). With `shadowed`
+/// [`ShadowedFragments::Dropped`] (the default), a match of an agent with no
+/// run of `distinctive_chars` in the layer, whose runs all lie inside the
+/// extent of another agent with such a run on an originated span and more
+/// coverage, and hold no rare token, is dropped too
+/// (`provenance.match.shadowed-fragment-dropped`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SpreadRule {
     agents: NonZeroU32,
@@ -252,6 +271,7 @@ pub struct SpreadRule {
     distinctive_ratio: u32,
     tokens_per_text: u32,
     inherited: InheritedFragments,
+    shadowed: ShadowedFragments,
 }
 
 impl SpreadRule {
@@ -273,6 +293,7 @@ impl SpreadRule {
             distinctive_ratio,
             tokens_per_text,
             inherited: InheritedFragments::default(),
+            shadowed: ShadowedFragments::default(),
         })
     }
 
@@ -286,6 +307,19 @@ impl SpreadRule {
     /// given is dropped (`provenance.match.inherited-fragment-dropped`).
     pub fn inherited(&self) -> InheritedFragments {
         self.inherited
+    }
+
+    /// This rule with shadowed fragments dropped or kept.
+    pub fn with_shadowed(mut self, shadowed: ShadowedFragments) -> Self {
+        self.shadowed = shadowed;
+        self
+    }
+
+    /// Whether a short, common-word match inside another present agent's
+    /// text in the same read is dropped
+    /// (`provenance.match.shadowed-fragment-dropped`).
+    pub fn shadowed(&self) -> ShadowedFragments {
+        self.shadowed
     }
 
     /// How many distinct originating agents make a non-distinctive fragment
@@ -327,6 +361,7 @@ impl Default for SpreadRule {
             distinctive_ratio: 2,
             tokens_per_text: 512,
             inherited: InheritedFragments::default(),
+            shadowed: ShadowedFragments::default(),
         }
     }
 }
@@ -831,6 +866,8 @@ struct RawSpread {
     tokens_per_text: u32,
     #[serde(default = "default_true")]
     drop_inherited: bool,
+    #[serde(default = "default_true")]
+    drop_shadowed: bool,
 }
 
 fn default_true() -> bool {
@@ -861,6 +898,7 @@ impl Default for RawSpread {
             distinctive_ratio: default_ratio(),
             tokens_per_text: default_tokens(),
             drop_inherited: true,
+            drop_shadowed: true,
         }
     }
 }
@@ -966,6 +1004,11 @@ impl TryFrom<RawConfig> for ProvenanceConfig {
             InheritedFragments::Dropped
         } else {
             InheritedFragments::Kept
+        })
+        .with_shadowed(if raw.spread.drop_shadowed {
+            ShadowedFragments::Dropped
+        } else {
+            ShadowedFragments::Kept
         });
         Self::new(
             winnow,
