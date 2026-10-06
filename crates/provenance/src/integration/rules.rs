@@ -280,11 +280,14 @@ where
             "backfill lag",
             "lock time",
         ),
+        // Mirrors `match_quality::template_skeleton_with_other_slot_words_is_not_matched`:
+        // the fourth fill is "versioned keys" so the read shares only the
+        // skeleton (`provenance.span.coincident-template-originated`).
         (
             "cache invalidation",
             "ttl jitter",
             "purge queue",
-            "purge queue",
+            "versioned keys",
         ),
         ("queue sharding", "rebalancing", "hot keys", "ordering"),
     ];
