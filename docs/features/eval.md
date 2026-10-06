@@ -495,6 +495,13 @@ originated spans toward the frequency, while L4 also counts scanned inputs.
 It has no retention window, because a world is one replay. How 16 and 50
 compare on each corpus is under "Boilerplate cutoff: 16 and 50" below.
 
+**Rereads.** A channel hit on a span the matcher already reported to the
+same reader through the same channel, in an earlier exchange, is dropped
+(`Matcher::first_reads`): the reader received that span at its first read
+(INV-1122), as the datasets' `Reread` controls say. Hits on one span in one
+exchange all count; direct routes are never rereads. Without this the
+reference violated every wiki reread control.
+
 **Escapes.** Matching folds (`reference/fold.rs`) JSON and YAML string
 escapes at any nesting depth:
 - `\n`, `\t`, `\r`, `\b`, `\f` become whitespace;
@@ -1417,6 +1424,21 @@ reads precede edits and a sender's edit precedes any reader's read of it.
   page's public `Locator::Url`. `Exact`, or `Decoded([JsonString])` when the
   surviving text holds a character JSON escapes (it sits escaped inside the
   writer's tool arguments; `MatchNeed::through_json_string`).
+- **Reread** (`NegativeControl`, reason `Reread`): a run of lines from a
+  revision whose lines the same reader already read on the same page, in an
+  earlier read, at the later read's location. The transmission is at the
+  first read: L5 keys a content-confirmed delivery on (sender span, reader,
+  medium) and a reread only refreshes it
+  (`flow.correlator.reread-refreshes-delivery`, INV-1122), the same rule the
+  swarm truth's `reread` rows follow. Several runs of one revision in one
+  read are all transmissions (`Received` in `build.rs`; the revision counts
+  as received once that read's labels are emitted). Before this, every
+  reread was labelled a transmission: on `--demo` 63 of the live
+  detector's 65 misses were such rereads, all in
+  `dse/BridgeLAProd1782007689` but one, and 62 of them `Decoded([JsonString])`
+  only because a run of two or more lines holds a newline
+  (`MatchNeed::through_json_string`); no first read was missed for a
+  decode reason.
 - **Relay** (`ReaderOutput` carrier): when a reader's own edit re-inserts an
   earlier author's line verbatim (and the line needs no JSON escaping, so it
   sits byte-identical in the write's canonical arguments). The reference
@@ -1535,6 +1557,7 @@ locator would carry the tool name and split the resource.
 | `src/datasets/wiki/build.rs` | the two passes: exchanges (one growing conversation per agent, `Turns`), then channel and relay labels |
 | `src/datasets/wiki/tally.rs` | channel-discovery inputs per `page_family` (`FamilyTally`, `FamilyStats`) |
 | `tests/wiki.rs`, `tests/fixtures/wiki/` | synthetic fixtures and tests (the harness shape: `each_agent_is_one_growing_conversation`, `a_call_is_answered_in_the_next_request`, `calls_are_seconds_apart`) |
+| `tests/wiki_rereads.rs` | rereads, on an export shaped on `dse/BridgeLAProd1782007689` with its real texts: a second read of the same lines is a `Reread` control, split runs of one revision in one read are all transmissions, and the live detector and the reference find every first read and violate no reread |
 
 ## swarm-traces
 
@@ -2049,6 +2072,37 @@ each run); ids are this run's (seed 0).
    recovers 3. Not traced to the span: the page is append-only and each
    writer re-saves every earlier line, so where L4 cuts originated from
    relayed text in the POST body is the first thing to check.
+   **Resolved (fix/l4-decoded-json-misses): a labelling issue, not L4.**
+   63 of the 65 misses (b0bd046) were rereads: the reader had read the
+   same sender revision's lines on the same page at an earlier edit, and
+   every one of those first reads was found (132 of 134 first reads found,
+   0 of 63 rereads). L4 matched the rereads too; L5 folds a reread into
+   the first read's delivery by design (INV-1122), so the reread's only
+   prediction is the discarded co-access. The converter now labels a
+   reread as a `Reread` control (see [Labels](#labels-heuristic-tier-channel-route)).
+   The two remaining misses are first reads of lines a later writer
+   re-saved with more mojibake (the export double-encodes non-ASCII on
+   every save), so the label names the re-saver while the words are the
+   original author's (each line ends "-- <author>"); not traced further.
+   L5 logged 66 "reread refreshes a delivery" decisions on that run
+   (`RUST_LOG=crosstalk_flow::correlate=debug`), e.g. transmission
+   `01KDVDNK3K…` (Jun24's first read) refreshed by `01KDVDP3JH…`, the
+   first example above.
+
+   Live, release builds, seed 0, one at a time, integration 2adbed4
+   against this branch merged onto it (2026-10-05):
+
+   | run | 2adbed4 recall / precision | with reread controls |
+   | --- | --- | --- |
+   | wiki `--demo` | 0.670 (132/197) / 1.000 | 0.985 (132/134) / 1.000, 63 `reread` controls, 0 violations |
+   | wiki `--max-agents 100` | 0.950 (96/101) / 1.000 | 0.960 (96/100) / 1.000, 1 control, 0 violations |
+   | SALT `--limit 53` | 0.854 / 0.840 | unchanged |
+   | swarm-traces | 1.000 / 1.000 | unchanged |
+   | AgentDojo (`extract/agentdojo.json`) | 1.000 / 0.971 | unchanged |
+   | replay 20261005T184212Z (headline) | 1.000 / 1.000 | unchanged |
+   | replay 20261005T184633Z (boilerplate) | 1.000 / 0.893 | unchanged |
+
+   The wiki gate (channel recall 0.65) is left as it is.
 6. **τ² (sample): 209 misses, 23 of 50 sampled under 50 bytes.** Agent
    preambles such as "I'll proceed with canceling your reservation now."
    (49 bytes, reader `01JX0DG6QMVREVX8DB248DH5TQ`), none a repeat of an

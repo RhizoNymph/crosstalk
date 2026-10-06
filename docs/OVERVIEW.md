@@ -1468,7 +1468,8 @@ Features Index:
     description: >
       crosstalk-eval and the ct-eval CLI (a composer): dataset converters
       (SALT-NLP, AgentDojo, tau2-bench, AI Village, collusion-wiki (synthesised
-      http_request reads and writes of public wiki pages) and swarm-traces (a
+      http_request reads and writes of public wiki pages; a reader's second
+      read of lines it already received is a reread control, INV-1122) and swarm-traces (a
       decode-chain corpus reported by chain, count and length only))
       streaming worlds of checked
       spec NormalizedExchanges on a deterministic virtual clock (datasets
@@ -1484,7 +1485,8 @@ Features Index:
       alignment rule and a scorer with TP/FP/FN by dataset, route, carrier
       kind, match or access class and tier, negative-control violations
       and a DetectionQuality bridge keyed by QualityMatch; a Detector seam
-      with the naive reference matcher (escape-aware matching classed as
+      with the naive reference matcher (channel rereads of a span already
+      reported to the reader dropped; escape-aware matching classed as
       Exact, Normalized or Decoded([JsonString | YamlString]) through one
       classifier, with hits only two string levels explain out of reach
       and unreported, decoding, opaque-blob exclusion, a boilerplate cutoff

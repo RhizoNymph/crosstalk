@@ -623,6 +623,15 @@ feeder reads through it. `PgProvenanceStore` does not yet.
   channel names): the rule reads them as the victim's own relay, the
   converter as a delivery. Bench replays: headline 1.000 / 1.000 and
   boilerplate 0.893 (133 correct, 16 false), both unchanged.
+- **wiki `--demo` "decoded" misses were not a decode-path bug.** At
+  b0bd046 the live detector missed 63 `Decoded([JsonString])` wiki labels
+  (`dse/BridgeLAProd1782007689`). Every one was a reread: the reader had
+  read the same revision's lines on that page at an earlier edit, and
+  that first read was found. L5 folds a reread into the first delivery
+  (INV-1122). The labels are `Decoded([JsonString])` only because a run of
+  several lines holds a newline, which the writer's `POST` arguments
+  escape; the tool-argument view already undoes that. The eval now labels
+  rereads as controls (eval.md, collusion-wiki labels). No L4 change.
 - **Bench run 20261005T184633Z** (boilerplate scenario, run live on
   staging 02103e9 = c3cd7f2): 41 false matches, 17 `UserTurn` and 24
   `ReaderOutput`. `ct-eval replay` of the same run:
