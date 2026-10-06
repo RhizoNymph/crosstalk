@@ -1,5 +1,6 @@
-//! L2 transport for crosstalk: the in-process event bus with consumer groups,
-//! retries and dead letters, and the blob store.
+//! L2 transport for crosstalk: the in-process and Postgres event buses with
+//! consumer groups, retries and dead letters, the publish spool, and the blob
+//! store.
 //!
 //! Implements [`crosstalk_spec::interfaces::l2_transport`]:
 //!
@@ -12,10 +13,18 @@
 //! - [`Dedup`] wraps any subscription with envelope-level deduplication over
 //!   a [`HandledIds`] record ([`MemoryHandledIds`] on this bus).
 //! - [`BusConfig`] sizes the bus and gives the default [`RetryPolicy`].
+//! - [`PgBus`] (the [`pg`] module) is the durable single-node bus: the log,
+//!   groups, deliveries and dead letters in the `transport` schema, with
+//!   [`PgSubscription`], [`PgDeadLetters`], [`PgBus::recover_held`],
+//!   [`PgBus::group_stats`] and [`PgBus::prune`].
+//! - [`SpoolingBus`] (the [`spool`] module) fronts a bus with an fsynced
+//!   on-disk spool for what it cannot take while its database is down, and
+//!   drains it in order under the same ids ([`DrainTarget`]).
 //! - [`blob`] is the content-addressed [`BlobStore`]: [`blob::FsBlobStore`]
 //!   on the filesystem and [`blob::MemoryBlobStore`] in memory.
 //!
-//! Roadmap: P2.1 (L2 transport: in-process bus) and P2.2 (blob store). A layer
+//! Roadmap: P2.1 (L2 transport: in-process bus), P2.2 (blob store) and P7.3
+//! (durable bus and publish spool). A layer
 //! crate and infrastructure: other layer crates may use it only as a
 //! dev-dependency.
 //!
@@ -34,11 +43,23 @@ mod rng;
 pub use bus::{DeadLetters, GroupDepth, MemoryHandledIds, MpscBus, MpscSubscription, StartError};
 pub use config::{BusConfig, DeliveryOrder, InvalidBusConfig, NonZeroDuration};
 pub use dedup::{Dedup, HandledIds};
+pub use pg::{
+    GroupStats, InvalidPgBusConfig, PgBus, PgBusConfig, PgDeadLetters, PgSubscription, Recovered,
+};
+pub use spool::{
+    DrainTarget, InvalidSpoolConfig, SpoolConfig, SpoolError, SpoolState, SpoolStats, SpoolingBus,
+};
 
 pub mod blob;
+pub mod pg;
+pub mod spool;
 
 #[cfg(test)]
+mod conformance;
+#[cfg(test)]
 mod dst;
+#[cfg(test)]
+mod integration;
 #[cfg(test)]
 mod testing;
 #[cfg(test)]

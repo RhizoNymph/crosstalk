@@ -14,4 +14,4 @@ frontier's view of the oldest pending input honest.
 dst = "crosstalk_transport::dst::spool_backlog_is_never_overtaken"
 
 [evidence-review]
-dst = { agent = "false", human = "false" }
+dst = { agent = "true", human = "false" }

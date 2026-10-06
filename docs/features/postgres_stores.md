@@ -7,8 +7,10 @@ agents, conversations, spans, matches, channels, transmissions, verdicts,
 edges, the watermark, alerts and the audit, and the API shows every
 detection committed before the crash.
 
-**Status: design reviewed; workstream S (the spec changes) landed; W1 to
-W9 not implemented yet.** The user reviewed it (PR #103) and settled
+**Status: design reviewed; workstream S (the spec changes) landed; W1
+(transport) implemented on `feat/pg-w1-transport`: `PgBus` and the spool
+([pg_bus.md](pg_bus.md), [publish_spool.md](publish_spool.md)), `DbLink`
+in the testkit; the rest not implemented yet.** The user reviewed it (PR #103) and settled
 every open question; see [Decisions](#decisions). The spec surface the
 workstreams build against is in [Spec changes](#spec-changes-landed-workstream-s),
 with the final names and invariant numbers (INV-1200 to INV-1221).

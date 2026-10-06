@@ -187,6 +187,28 @@ impl EventBus for MpscBus {
     }
 }
 
+/// `MpscBus` as a spool's inner bus: it never disconnects while running,
+/// and a batch is its envelopes published one after another. It is not
+/// idempotent on envelope ids, so a spool drain repeated after a crash can
+/// deliver twice (consumers keep the [`Dedup`](crate::Dedup) wrapper); the
+/// spool runs over it in tests, and in production over `PgBus`.
+impl crate::spool::DrainTarget for MpscBus {
+    async fn probe(&self) -> Result<(), BusError> {
+        if self.commands.is_closed() {
+            Err(BusError::Disconnected)
+        } else {
+            Ok(())
+        }
+    }
+
+    async fn publish_batch(&self, envelopes: Vec<Envelope>) -> Result<(), BusError> {
+        for envelope in envelopes {
+            self.publish(envelope).await?;
+        }
+        Ok(())
+    }
+}
+
 /// The [`DeadLetterStore`] of an [`MpscBus`]: letters live in the bus task,
 /// so a replay re-enqueues the envelope and removes the letter in one step.
 #[derive(Debug, Clone)]
