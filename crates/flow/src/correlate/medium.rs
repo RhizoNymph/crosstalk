@@ -10,12 +10,13 @@ use crosstalk_spec::derived::flow::transmission::Confirmed;
 use crosstalk_spec::derived::provenance::matching::ContentMatch;
 use crosstalk_spec::ids::{AccessId, AgentId, ExchangeId, MessageHash, SpanId, TransmissionId};
 use crosstalk_spec::support::Timestamp;
+use serde::{Deserialize, Serialize};
 
 use super::pairing;
 
 /// A channel transmission's identity within its medium: the reader
 /// exchange and the sender (the writer). Its route is the medium's.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(crate) struct Ident {
     pub(crate) exchange: ExchangeId,
     pub(crate) sender: AgentId,
@@ -32,7 +33,7 @@ impl Ident {
 
 /// A content match's identity, for deduplication and a stable order:
 /// what was found, by whom, where.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(crate) struct MatchKey {
     origin: SpanId,
     reader: AgentId,
@@ -63,7 +64,7 @@ impl MatchKey {
 }
 
 /// Where a channel transmission is.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) enum Phase {
     Awaiting { closes_at: Timestamp },
     Suspected { since: Timestamp },
@@ -71,11 +72,12 @@ pub(crate) enum Phase {
 }
 
 /// An open channel transmission.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct Channeled {
     pub(crate) to: AgentId,
     pub(crate) opened_at: Timestamp,
     /// Every co-access backing it, by (write, read).
+    #[serde(with = "super::snapshot::pairs")]
     pub(crate) co_access: BTreeMap<(AccessId, AccessId), CoAccess>,
     pub(crate) phase: Phase,
 }
@@ -88,7 +90,7 @@ impl Channeled {
 }
 
 /// A tool-result match carried by one of the medium's reads.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub(crate) struct Held {
     pub(crate) content: ContentMatch,
     /// The carrying read's time: its reader exchange's start.
@@ -98,7 +100,7 @@ pub(crate) struct Held {
 /// A span delivered to a reader on this medium: what a reread repeats
 /// (`flow.correlator.reread-refreshes-delivery`). A span has one origin
 /// agent, so the sender is implied.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub(crate) struct Delivery {
     origin: SpanId,
     reader: AgentId,
@@ -115,24 +117,30 @@ impl Delivery {
 
 /// The channel transmission that first delivered a span to a reader, and
 /// the last read (that or a reread) that carried it.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Delivered {
     pub(crate) transmission: TransmissionId,
     pub(crate) last: Timestamp,
 }
 
 /// One medium's evidence.
-#[derive(Debug, Clone, Default, PartialEq)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct Medium {
+    #[serde(with = "super::snapshot::pairs")]
     pub(crate) writes: BTreeMap<AccessId, Access>,
+    #[serde(with = "super::snapshot::pairs")]
     pub(crate) reads: BTreeMap<AccessId, Access>,
+    #[serde(with = "super::snapshot::pairs")]
     pub(crate) open: BTreeMap<(Ident, TransmissionId), Channeled>,
     /// Per identity: how many of its transmissions were discarded, and
     /// when the last one was.
+    #[serde(with = "super::snapshot::pairs")]
     pub(crate) retired: BTreeMap<Ident, (u32, Timestamp)>,
+    #[serde(with = "super::snapshot::pairs")]
     pub(crate) held: BTreeMap<MatchKey, Held>,
     /// Every span a confirmed transmission delivered to a reader here,
     /// kept for the content retention after its last read.
+    #[serde(with = "super::snapshot::pairs")]
     pub(crate) delivered: BTreeMap<Delivery, Delivered>,
 }
 

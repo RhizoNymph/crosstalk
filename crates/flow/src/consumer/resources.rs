@@ -21,6 +21,7 @@ use crosstalk_spec::interfaces::l5_flow::transmissions::TransmissionStore;
 use crosstalk_spec::interfaces::l5_flow::{ChannelLookup, ChannelRegistry};
 use crosstalk_spec::support::Timestamp;
 
+use super::durability::FlowDurability;
 use super::input::{Observed, ReadResult, WriteCall};
 use super::{FlowConsumer, Step, StepError, decisions};
 use crate::correlate::pairing::{self, WriteOutcome};
@@ -39,12 +40,13 @@ pub(crate) fn resource_id(locator: &Locator, at: Timestamp) -> ResourceId {
     ResourceId::from_ulid(Derive::new("crosstalk.flow.resource").bytes(&bytes).at(at))
 }
 
-impl<R, T, A, B> FlowConsumer<R, T, A, B>
+impl<R, T, A, B, D> FlowConsumer<R, T, A, B, D>
 where
     R: ChannelRegistry + ChannelTraffic + Send + Sync,
     T: TransmissionStore + Send + Sync,
     A: AgentReads + Send + Sync,
     B: EventBus + Send + Sync,
+    D: FlowDurability,
 {
     pub(super) async fn record_read(
         &mut self,
@@ -67,7 +69,7 @@ where
 
     /// Store the resource, record the access, announce it, and hand it to
     /// the correlator unless it is a write that does not pair.
-    async fn record(
+    pub(super) async fn record(
         &mut self,
         observed: Observed<()>,
         op: AccessOp,
@@ -100,6 +102,9 @@ where
             }
             Err(error) => return Err(error.into()),
         }
+        self.durability
+            .access_recorded(&access, &observed.locator)
+            .await?;
         steps.push(Step::Publish(BusEvent::Detect(
             DetectEvent::AccessRecorded {
                 access: access.clone(),

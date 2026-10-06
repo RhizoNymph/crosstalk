@@ -15,7 +15,7 @@ use crosstalk_spec::derived::flow::transmission::Transmission;
 use crosstalk_spec::derived::provenance::matching::ContentMatch;
 use crosstalk_spec::events::detect::DetectEvent;
 use crosstalk_spec::events::{BusEvent, Envelope, Subject};
-use crosstalk_spec::ids::{AgentId, ChannelId, SeededRandom, SpanId};
+use crosstalk_spec::ids::{AgentId, ChannelId, SpanId};
 use crosstalk_spec::interfaces::l2_transport::{
     BusError, ConsumerGroup, Delivery, DeliveryId, EventBus, RetryPolicy, Subscription,
 };
@@ -133,6 +133,8 @@ pub(crate) fn settings(shards: usize) -> Settings {
         content_retention: crate::correlate::ContentRetention::default_for(timing()),
         shards: NonZeroUsize::new(shards).unwrap_or(NonZeroUsize::MIN),
         tick_every: Duration::from_secs(1),
+        checkpoint_every: Duration::from_secs(10),
+        max_unacked: NonZeroUsize::new(64).unwrap_or(NonZeroUsize::MIN),
     }
 }
 
@@ -154,7 +156,6 @@ where
             agents: stores.agents.clone(),
             bus,
             clock,
-            entropy: SeededRandom::new(7),
         },
     )
 }

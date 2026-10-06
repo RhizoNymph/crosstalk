@@ -54,6 +54,7 @@ use crosstalk_spec::ids::{AccessId, AgentId, ChannelId, ExchangeId, MessageHash,
 use crosstalk_spec::interfaces::l5_flow::{Correlator, TransmissionUpdate};
 use crosstalk_spec::observed::message::{ToolCallId, ToolName};
 use crosstalk_spec::support::{NonEmpty, Timestamp};
+use serde::{Deserialize, Serialize};
 
 use super::decide::{pair, settle};
 use super::ids;
@@ -63,6 +64,7 @@ use super::medium::{Held, MatchKey, Medium, Phase};
 use super::pairing::{self, WriteOutcome};
 use super::retention::ContentRetention;
 use super::route::{self, Carriage, RouteChoice, RouteKey};
+use super::snapshot::pairs;
 
 /// The tool name a `Direct(ToolResult)` transmission carries when the
 /// call's name never reached the correlator.
@@ -81,7 +83,7 @@ pub struct Decided {
 
 /// A read's tool result part, by reader and exchange: what a tool-result
 /// match is carried by.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct ReadPart {
     reader: AgentId,
     exchange: ExchangeId,
@@ -116,7 +118,7 @@ impl ReadPart {
 }
 
 /// A transmission opened confirmed: its identity.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 struct DirectIdent {
     exchange: ExchangeId,
     sender: AgentId,
@@ -125,14 +127,16 @@ struct DirectIdent {
 
 /// A transmission opened confirmed: collecting until its window closes,
 /// then open.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct DirectTx {
     to: AgentId,
     /// The reader exchange's start.
     at: Timestamp,
     closes_at: Timestamp,
+    #[serde(with = "super::snapshot::non_channel")]
     route: NonChannelRoute,
     id: Option<TransmissionId>,
+    #[serde(with = "pairs")]
     matches: BTreeMap<MatchKey, ContentMatch>,
 }
 
@@ -142,9 +146,35 @@ pub struct MediumEvidence {
     medium: Medium,
 }
 
+/// What one shard holds, as a checkpoint stores it: every field of a
+/// [`WindowedCorrelator`] but its configuration. Maps are written as lists
+/// of pairs (their keys are not strings), in key order.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CorrelatorState {
+    #[serde(with = "pairs")]
+    media: BTreeMap<MediumKey, Medium>,
+    #[serde(with = "pairs")]
+    reads: BTreeMap<ReadPart, (MediumKey, Timestamp)>,
+    #[serde(with = "pairs")]
+    uncarried: BTreeMap<MatchKey, ContentMatch>,
+    #[serde(with = "super::snapshot::timeless")]
+    timeless: BTreeMap<MatchKey, (ContentMatch, NonChannelRoute)>,
+    #[serde(with = "pairs")]
+    direct: BTreeMap<DirectIdent, DirectTx>,
+    #[serde(with = "pairs")]
+    exchanges: BTreeMap<ExchangeId, Timestamp>,
+    #[serde(with = "pairs")]
+    tools: BTreeMap<(AgentId, String), (ToolName, Timestamp)>,
+    kin: Kinship,
+    #[serde(with = "pairs")]
+    seen_accesses: BTreeMap<AccessId, Timestamp>,
+    seen_matches: BTreeSet<MatchKey>,
+    last_tick: Option<Timestamp>,
+}
+
 /// The correlator of one shard. Feed it accesses, content matches,
 /// exchange starts, agent kinship and ticks; it does no I/O.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct WindowedCorrelator {
     timing: CorrelationTiming,
     retention: ContentRetention,
@@ -193,6 +223,61 @@ impl WindowedCorrelator {
 
     pub fn timing(&self) -> CorrelationTiming {
         self.timing
+    }
+
+    /// Everything this shard holds, for a checkpoint: what
+    /// [`WindowedCorrelator::from_state`] restores exactly.
+    pub fn state(&self) -> CorrelatorState {
+        CorrelatorState {
+            media: self.media.clone(),
+            reads: self.reads.clone(),
+            uncarried: self.uncarried.clone(),
+            timeless: self.timeless.clone(),
+            direct: self.direct.clone(),
+            exchanges: self.exchanges.clone(),
+            tools: self.tools.clone(),
+            kin: self.kin.clone(),
+            seen_accesses: self.seen_accesses.clone(),
+            seen_matches: self.seen_matches.clone(),
+            last_tick: self.last_tick,
+        }
+    }
+
+    /// The shard a checkpoint's `state` was taken from, under `timing` and
+    /// `retention` (configuration, not state).
+    pub fn from_state(
+        timing: CorrelationTiming,
+        retention: ContentRetention,
+        state: CorrelatorState,
+    ) -> Self {
+        let CorrelatorState {
+            media,
+            reads,
+            uncarried,
+            timeless,
+            direct,
+            exchanges,
+            tools,
+            kin,
+            seen_accesses,
+            seen_matches,
+            last_tick,
+        } = state;
+        Self {
+            timing,
+            retention,
+            media,
+            reads,
+            uncarried,
+            timeless,
+            direct,
+            exchanges,
+            tools,
+            kin,
+            seen_accesses,
+            seen_matches,
+            last_tick,
+        }
     }
 
     pub fn retention(&self) -> ContentRetention {

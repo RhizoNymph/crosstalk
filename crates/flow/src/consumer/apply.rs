@@ -32,6 +32,7 @@ use crosstalk_spec::interfaces::l5_flow::{
 };
 use crosstalk_spec::support::{NonEmpty, Timestamp};
 
+use super::durability::FlowDurability;
 use super::{FlowConsumer, Step, StepError, decisions};
 use crate::correlate::lifecycle::{self, Stage, UpdateKind};
 use crate::correlate::{Decided, Derive, MediumKey};
@@ -62,12 +63,13 @@ fn record(transmission: &Transmission) -> Option<Step> {
     matches!(transmission.route, Route::Channel(_)).then(|| Step::Record(transmission.clone()))
 }
 
-impl<R, T, A, B> FlowConsumer<R, T, A, B>
+impl<R, T, A, B, D> FlowConsumer<R, T, A, B, D>
 where
     R: ChannelRegistry + ChannelTraffic + Send + Sync,
     T: TransmissionStore + Send + Sync,
     A: AgentReads + Send + Sync,
     B: EventBus + Send + Sync,
+    D: FlowDurability,
 {
     pub(super) async fn decide(&mut self, decided: Decided) -> Result<Vec<Step>, StepError> {
         let opened_at = decided.opened_at;

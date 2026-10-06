@@ -12,12 +12,14 @@ use crosstalk_spec::derived::flow::resource::Locator;
 use crosstalk_spec::ids::{AccessId, AgentId, ExchangeId, SpanId};
 use crosstalk_spec::observed::message::{PartRef, ToolCallId, ToolName};
 use crosstalk_spec::support::Timestamp;
-use tokio::sync::mpsc::UnboundedSender;
+use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc::{self, UnboundedSender};
+use tokio::sync::oneshot;
 
 use crate::correlate::pairing::WriteOutcome;
 
 /// One extracted access before its locator is resolved to a resource.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Observed<Op> {
     /// Minted by the extraction step, once per access.
     pub id: AccessId,
@@ -32,14 +34,14 @@ pub struct Observed<Op> {
 }
 
 /// A write: the tool call part and the spans its arguments hold.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct WriteCall {
     pub call: PartRef,
     pub spans: Vec<SpanId>,
 }
 
 /// A read: the tool result part that returned the resource's content.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReadResult {
     pub result: PartRef,
 }
@@ -71,6 +73,16 @@ pub enum Extracted {
         name: ToolName,
         at: Timestamp,
     },
+}
+
+/// A tool call an agent made, as the consumer records it (see
+/// [`Extracted::ToolCall`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ToolCalled {
+    pub agent: AgentId,
+    pub call: ToolCallId,
+    pub name: ToolName,
+    pub at: Timestamp,
 }
 
 /// Why the flow consumer did not confirm a batch of extracted inputs
@@ -107,5 +119,69 @@ impl FlowInputs for UnboundedSender<Extracted> {
             self.send(input).map_err(|_| NotDurable::Stopped)?;
         }
         Ok(())
+    }
+}
+
+/// One delivery of extracted inputs to a running consumer, with where its
+/// answer goes: `None` for inputs nobody waits on (a volatile hand-over).
+#[derive(Debug)]
+pub struct ExtractedBatch {
+    pub inputs: Vec<Extracted>,
+    pub reply: Option<oneshot::Sender<Result<(), NotDurable>>>,
+}
+
+/// Where a running consumer takes its extracted inputs from
+/// ([`FlowConsumer::run`](super::FlowConsumer::run)).
+pub trait InputSource: Send {
+    /// The next batch; `None` once the source closed.
+    fn recv(&mut self) -> impl Future<Output = Option<ExtractedBatch>> + Send;
+}
+
+/// One input at a time, answered by nobody (memory mode).
+impl InputSource for mpsc::Receiver<Extracted> {
+    async fn recv(&mut self) -> Option<ExtractedBatch> {
+        mpsc::Receiver::recv(self)
+            .await
+            .map(|input| ExtractedBatch {
+                inputs: vec![input],
+                reply: None,
+            })
+    }
+}
+
+/// Batches whose sender waits for their durability ([`DurableInputs`]).
+impl InputSource for mpsc::Receiver<ExtractedBatch> {
+    async fn recv(&mut self) -> Option<ExtractedBatch> {
+        mpsc::Receiver::recv(self).await
+    }
+}
+
+/// The extraction step's handle on a durable consumer: each `deliver`
+/// waits until the consumer recorded the batch (or could not).
+#[derive(Debug, Clone)]
+pub struct DurableInputs {
+    sender: mpsc::Sender<ExtractedBatch>,
+}
+
+impl DurableInputs {
+    /// A handle and the receiver the consumer runs on, holding at most
+    /// `capacity` batches in flight.
+    pub fn channel(capacity: usize) -> (Self, mpsc::Receiver<ExtractedBatch>) {
+        let (sender, receiver) = mpsc::channel(capacity.max(1));
+        (Self { sender }, receiver)
+    }
+}
+
+impl FlowInputs for DurableInputs {
+    async fn deliver(&mut self, inputs: Vec<Extracted>) -> Result<(), NotDurable> {
+        let (reply, answer) = oneshot::channel();
+        self.sender
+            .send(ExtractedBatch {
+                inputs,
+                reply: Some(reply),
+            })
+            .await
+            .map_err(|_| NotDurable::Stopped)?;
+        answer.await.map_err(|_| NotDurable::Stopped)?
     }
 }
