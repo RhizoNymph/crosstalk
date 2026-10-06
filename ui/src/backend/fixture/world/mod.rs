@@ -16,13 +16,14 @@ pub mod blobs;
 pub mod catalog;
 mod channels;
 mod config;
+pub mod conversations;
 mod drafts;
 mod evidence;
 mod history;
 mod letters;
 mod retention;
 mod rules;
-mod states;
+pub(crate) mod states;
 pub mod topics;
 mod traffic;
 
@@ -234,6 +235,10 @@ pub struct World {
     /// written without one takes.
     pub rule_config: AlertRuleConfig,
     pub scenario: Scenario,
+    /// The conversations behind the traffic (the conversation view's
+    /// data). Shared like `blobs`; a replay's copy holds the turns started
+    /// by its cutoff.
+    pub conversations: std::sync::Arc<conversations::Conversations>,
 }
 
 impl World {
@@ -288,6 +293,7 @@ impl World {
             sinks: self.sinks.clone(),
             rule_config: self.rule_config,
             scenario: self.scenario.clone(),
+            conversations: std::sync::Arc::new(self.conversations.at(cutoff)),
         };
         world.last_activity = last_activity(&world);
         world
@@ -334,10 +340,12 @@ pub fn generate(seed: u64) -> Result<(World, State), GenError> {
             lone_resource: traffic.lone,
             dropped,
         },
+        conversations: std::sync::Arc::default(),
     };
     world.access_transmissions = link_accesses(&world.transmissions);
     world.last_activity = last_activity(&world);
     world.claims = agents::claims(&cast, &world.last_activity);
+    world.conversations = std::sync::Arc::new(conversations::build(&world)?);
     world.sinks = rules::sinks(&mut state.mint);
     alerts::populate(&world, &mut state, &plan)?;
     config::record(&world, &mut state, &plan, operator_changes)?;

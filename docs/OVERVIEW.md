@@ -435,7 +435,7 @@ Features Index:
     depends_on: [ui, query_surface, type_spec]
     doc: docs/features/follow_mode.md
   conversation_view:
-    status: design
+    status: implemented
     description: >
       Operator page for one agent's conversation, turn by turn: inputs of
       any role in request order and outputs, with provenance marks (text
@@ -446,7 +446,9 @@ Features Index:
       with View, text with Content; turns paged by citeable index windows.
       Reads through the L8 conversation reads (conversation_reads,
       INV-1000..1029).
-    entry_points: []
+    entry_points:
+      - ui/src/pages/conversation/mod.rs
+      - ui/src/backend/fixture/world/conversations/mod.rs
     depends_on: [ui, query_surface, type_spec, conversation_reads]
     doc: docs/features/conversation_view.md
   conversation_reads:

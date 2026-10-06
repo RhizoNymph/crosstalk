@@ -5,6 +5,7 @@ pub mod alerts;
 pub mod audit;
 pub mod channels;
 pub mod common;
+pub mod conversation;
 pub mod explore;
 pub mod export;
 pub mod gateway;

@@ -420,7 +420,6 @@ and the present's fields as `present` (`now`) and so on. Name lookups
 (`agent_names`, `channel_names`) are one call per `IdBatch` of the ids a
 page shows (`pages::common::lookup::id_batches`).
 
-The agent conversation view (`/agents/{id}/conversations`, `/conversations/{id}`) is in design: see [conversation_view.md](conversation_view.md).
 
 ### Overview (`/`)
 
@@ -745,6 +744,26 @@ before anything is sent or audited).
   `InvalidInput(SelfMerge)`; an unmerge reverts one record
   (`Conflict(MergeAlreadyReverted)` the second time); renaming a merged
   agent is `Conflict(AgentMerged)`.
+
+### Conversations (`/agents/{id}/conversations`, `/conversations/{id}`, `/exchanges/{id}`, `/spans/{id}`)
+
+One agent's conversations, newest first (origin and traffic-source chips,
+the `origin` and `replay` keys; replayed corpora are labelled), and one
+conversation turn by turn in windows of twenty (`turn`): its head (origin,
+successors, the delegation that spawned it, traffic, claims shown as
+claims), each turn's inputs of any role in request order and its output,
+with provenance marks (text another agent originated, read here, with its
+transmission; spans this agent originated or forwarded and who read them
+later; relayed spans), compaction, fork and unseen-history boundaries, and
+a pending scan said as such. Text only with `Content`; structure and byte
+ranges with View. `hl` highlights a span and lists its readers (`rcursor`).
+`/exchanges/{id}` and `/spans/{id}` redirect to the turn. Entry links: the
+agent header, the topology drawer's agent panel and each evidence match.
+See [conversation_view.md](conversation_view.md).
+
+- Calls: `agent`, `conversations`, `conversation`, `conversation_turns`,
+  `conversation_text` (Content), `span_points`, `span_readers`,
+  `exchange_turns`, `agent_names`, `channel_names`.
 
 ### Alerts (`/alerts`, `/alerts/{id}`, `/alerts/rules`, `/alerts/rules/new`, `/alerts/rules/{id}`)
 
@@ -1172,6 +1191,8 @@ check a fixture export as they check the gateway's.
 | `ui/src/pages/export/` | `/export`: `mod` (`GET` page, the states form and the export form, formats the backend does not write disabled; `POST` route: validate, `export`, download; a refusal rewritten to the page as `Rejected` with the input kept), `states` (the URL's `states=`: `from_query`, `canonical`, `code`, `label`, `is_confirmed`; the states form's keys), `request` (form and states → the spec's `ExportRequest`, `DatasetChoice`, formats), `jsonl` (`Download`: the JSON Lines body and its headers; `header_line`, `trailer_line`; `rows`: one object per `ExportRow`), `quality` (`quality_lines`, precision, table). |
 | `ui/src/pages/channels/` | `list` (`/channels`; the four tabs, `ListRow` with its listing and traffic note, and `Activity`, a row's counts or why it has none), `query` (`Tab` and its listings; list keys and toggles onto the spec's `ChannelFilter`/`OriginFilter`), `model` (shape, title, origin, detection and listing in words, decisions), `detail` (`/channels/{id}` GET and POST `set-policy` and `set-verdict`), `suspected` (the suspected transmissions section and its verdict buttons, paged by `tcursor`), `sections` (paged resources, alerts, policy history), `policy` (set-policy form and parser), `promote/` (`patterns`: candidates from the seed and coverage; `mod`: GET and POST `/channels/{id}/promote`; `screen`: the page). |
 | `ui/src/pages/agents/` | `list` (`/agents` with state and claim chips; rows from spec `AgentRow`s over the view's window, parents named in one `agent_names` call per batch, `last_seen_text`), `query` (`state`, `claims` keys into `AgentFilter::{states, claimed}`), `detail` (`/agents/{id}` GET and POST `rename`, `clear-label`, `unmerge`; the page from the `AgentCluster`, the alias banner from `AgentLookup::Redirected`), `actions` (form parsers; `AgentLabel` errors worded by `label_error`; `merge_action`: `OperatorAction::merge_agents` for the caller, one id twice `InvalidInput(SelfMerge)` via `ActionError::from(SelfMerge)`), `evidence` (evidence rows, shared and conflicting evidence), `tree` (bounded sub-agent tree, one `agents` call per level), `sections` (alias rows with their prior state; merge rows say what an unmerge restores, and a reverted one what its `Reversal` pointed back), `merge` (`/agents/{id}/merge` GET and POST; comparing with an id of the same cluster is `Conflict(MergeIntoSelf)`), `tests` (router tests: the alias banner, the reverted merge's veto, unmerging once, refused renames and merges). |
+| `ui/src/pages/conversation/` | the conversation view ([conversation_view.md](conversation_view.md)): `mod` (`/conversations/{id}`), `list` (`/agents/{id}/conversations`), `locate` (`/exchanges/{id}`, `/spans/{id}` redirects), `query` (page keys, windows), `view` (spec read models to the view model), `model`, `sections`, tests. |
+| `ui/src/backend/fixture/world/conversations/`, `backend/fixture/queries/conversations/` | the fixture's conversations threaded from its traffic, and its conversation reads. |
 | `ui/src/pages/alerts/` | `inbox` (`/alerts` GET and POST `acknowledge`, `resolve`; `parse_action` shared with the alert page), `detail` (`/alerts/{id}` GET and POST: rule, subject, state, triage forms, audit history as `audit::entry` views, `Audit` checked first), `model` (alert rows from spec `Alert`s), `rules/` (`mod`: `/alerts/rules` GET and POST `set-enabled`, sinks for `Govern` only; `model`: rule rows (status and staleness apart, `StaleReason` in words, `watched_topics`, `semantic_query`) and sink rows; `form`: watched-topic and semantic forms, parsed into the spec's `RuleName` (inline `InvalidText` errors) and `UserRule`; `edit`: `/alerts/rules/new` (`?topic=<id>` preselects a topic of the current version) and `/alerts/rules/{id}` GET and POST). |
 | `ui/src/pages/audit/` | `page` (`/audit`, `Audit` first; `AuditRow`: subject cells with page and filter links, `OutcomeCell`), `entry` (`entry_view`: a spec `AuditEntry` as `EntryView` (actor from `AuditEntry::by`, `subjects()`, `OutcomeView`: applied with `Created` subjects, unchanged, rejected in words, forbidden), shared with the alert page), `query` (`op`: an operator or `config` into `AuditFilter::by`; `subject`; `span`), `describe` (operator actions, config changes and export events in words, and notes), `subject` (codes for every spec `AuditSubject`, `tv.<n>` for topic versions, and links). |
 | `ui/src/pages/pipeline/` | `/pipeline` GET (`group` key: `parse_group`) and POST `replay` (back to the same group). |

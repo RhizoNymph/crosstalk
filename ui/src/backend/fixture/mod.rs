@@ -49,6 +49,9 @@ use store::State;
 use world::World;
 
 #[cfg(test)]
+pub use world::conversations::Cases;
+
+#[cfg(test)]
 pub use world::ChannelKey;
 pub use world::GenError;
 
@@ -188,6 +191,36 @@ impl FixtureBackend {
     #[cfg(test)]
     pub fn scenario(&self) -> &world::Scenario {
         &self.world.scenario
+    }
+
+    /// The world's conversations, for tests.
+    #[cfg(test)]
+    pub fn conversation_records(&self) -> &world::conversations::Conversations {
+        &self.world.conversations
+    }
+
+    /// Every content match of a confirmed transmission, oldest transmission
+    /// first, for tests.
+    #[cfg(test)]
+    pub fn confirmed_matches(
+        &self,
+    ) -> Vec<(
+        TransmissionId,
+        crosstalk_spec::derived::provenance::matching::ContentMatch,
+    )> {
+        self.world
+            .transmissions
+            .iter()
+            .filter_map(|t| {
+                t.transmission.state.confirmed().map(|c| {
+                    (
+                        t.transmission.id,
+                        c.content().iter().cloned().collect::<Vec<_>>(),
+                    )
+                })
+            })
+            .flat_map(|(id, matches)| matches.into_iter().map(move |m| (id, m)))
+            .collect()
     }
 
     /// Every transmission id the world holds, newest id first, for tests

@@ -9,6 +9,7 @@
 pub mod agents;
 pub mod alerts;
 pub mod channels;
+pub mod conversations;
 pub mod evidence;
 pub mod graph;
 pub mod linked;

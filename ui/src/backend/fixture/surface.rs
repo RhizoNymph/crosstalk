@@ -401,91 +401,89 @@ impl QueryApi for FixtureBackend {
         self.read(|ctx| queries::agents::one(ctx, id, window)).await
     }
 
-    // The fixture world records no conversations yet (phase B of the
-    // conversation view seeds them): every conversation read is empty,
-    // after the read's permission check.
-
     async fn conversations(
         &self,
         caller: &Caller,
-        _filter: &ConversationFilter,
+        filter: &ConversationFilter,
         page: &PageRequest<ConversationList>,
     ) -> Result<Page<ConversationRow, ConversationList>> {
         require(caller, Permission::View)?;
-        if page.after.is_some() {
-            return Err(QueryError::InvalidCursor);
-        }
-        Page::last(page.size, Vec::new()).map_err(|error| QueryError::Store {
-            reason: format!("{error:?}"),
-        })
+        self.read(|ctx| queries::conversations::list(ctx, filter, page))
+            .await
     }
 
     async fn conversation(
         &self,
         caller: &Caller,
-        _id: ConversationId,
+        id: ConversationId,
     ) -> Result<Option<ConversationHead>> {
         require(caller, Permission::View)?;
-        Ok(None)
+        self.read(|ctx| queries::conversations::head(ctx, id)).await
     }
 
     async fn conversation_turns(
         &self,
         caller: &Caller,
-        _id: ConversationId,
-        _window: &TurnWindow,
+        id: ConversationId,
+        window: &TurnWindow,
     ) -> Result<Option<TurnPage>> {
         require(caller, Permission::View)?;
-        Ok(None)
+        self.read(|ctx| queries::conversations::turns::window(ctx, id, window))
+            .await
     }
 
     async fn span_readers(
         &self,
         caller: &Caller,
-        _span: SpanId,
-        _page: &PageRequest<SpanReaderList>,
+        span: SpanId,
+        page: &PageRequest<SpanReaderList>,
     ) -> Result<Option<Page<Reader, SpanReaderList>>> {
         require(caller, Permission::View)?;
-        Ok(None)
+        self.read(|ctx| queries::conversations::readers(ctx, span, page))
+            .await
     }
 
     async fn exchange_turns(
         &self,
         caller: &Caller,
-        _ids: &IdBatch<ExchangeId>,
+        ids: &IdBatch<ExchangeId>,
     ) -> Result<BTreeMap<ExchangeId, ExchangePlacement>> {
         require(caller, Permission::View)?;
-        Ok(BTreeMap::new())
+        self.read(|ctx| Ok(queries::conversations::exchange_turns(ctx, ids)))
+            .await
     }
 
     async fn span_points(
         &self,
         caller: &Caller,
-        _ids: &IdBatch<SpanId>,
+        ids: &IdBatch<SpanId>,
     ) -> Result<BTreeMap<SpanId, SpanPoint>> {
         require(caller, Permission::View)?;
-        Ok(BTreeMap::new())
+        self.read(|ctx| Ok(queries::conversations::span_points(ctx, ids)))
+            .await
     }
 
     async fn conversation_text(
         &self,
         caller: &Caller,
-        _id: ConversationId,
-        _window: &TurnWindow,
-        _limit: TextLimit,
+        id: ConversationId,
+        window: &TurnWindow,
+        limit: TextLimit,
     ) -> Result<Option<ConversationText>> {
         require(caller, Permission::Content)?;
-        Ok(None)
+        self.read(|ctx| queries::conversations::text::window(ctx, id, window, limit))
+            .await
     }
 
     async fn part_text(
         &self,
         caller: &Caller,
-        _part: PartRef,
-        _slice: TextSlice,
+        part: PartRef,
+        slice: TextSlice,
     ) -> Result<Option<PartText>> {
         require(caller, Permission::Content)?;
-        Ok(None)
+        self.read(|ctx| queries::conversations::text::part(ctx, part, slice))
+            .await
     }
 
     async fn agent_names(
