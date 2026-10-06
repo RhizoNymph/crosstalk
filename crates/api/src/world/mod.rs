@@ -68,7 +68,7 @@ pub use conversations::{CaptureBlobs, RecordError, Recorded, WorldLayers, record
 /// [`WorldLayers`].
 pub type WorldMemoryStores = MemoryStores<MemoryBlobStore, WorldLayers>;
 /// The in-process surface a seeded world runs.
-pub type WorldInProcess = InProcess<MemoryBlobStore, WorldLayers>;
+pub type WorldInProcess = InProcess<WorldMemoryStores>;
 /// The surface over a seeded world's stores.
 pub type WorldSurface = crosstalk_surface::Surface<WorldMemoryStores>;
 
