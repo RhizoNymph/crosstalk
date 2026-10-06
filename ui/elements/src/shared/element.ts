@@ -9,10 +9,17 @@
  *   `e.target.value` survives).
  * - Loading, error and empty states are shown in the element, never as a
  *   blank canvas. Subclasses free WebGL contexts in `unmount`.
+ * - Moving the element (out of the document and back within one task, as
+ *   a live refresh does with `data-live-keep` elements) keeps everything:
+ *   teardown waits for a microtask and is skipped if it came back.
+ * - A subclass that names its window keys (`slideKeys`) and can merge
+ *   (`slide`) takes a `data-src` change in those keys alone as a slide of
+ *   a followed window: no reload, no loading veil (`slide.ts`).
  */
 
 import { describeLoadError, type LoadError } from './fetch.ts';
 import type { Result } from './result.ts';
+import { isSlide } from './slide.ts';
 import { readTheme, type Theme, watchColorScheme } from './theme.ts';
 
 const BASE_CSS = `
@@ -101,6 +108,8 @@ export abstract class PayloadElement<T> extends HTMLElement {
   #unwatch: (() => void) | null = null;
   #value = '';
   #theme: Theme | null = null;
+  /** Out of the document, with teardown pending for a microtask. */
+  #moving = false;
 
   constructor(styles: string) {
     super();
@@ -146,14 +155,30 @@ export abstract class PayloadElement<T> extends HTMLElement {
   }
 
   connectedCallback(): void {
+    if (this.#moving) {
+      // Back within the task that took it out: nothing was torn down.
+      this.#moving = false;
+      return;
+    }
     this.#unwatch = watchColorScheme(() => {
       this.#theme = this.#readTheme();
       this.themeChanged();
     });
     void this.#reload();
+    this.attached();
   }
 
   disconnectedCallback(): void {
+    this.#moving = true;
+    queueMicrotask(() => {
+      if (!this.#moving) return;
+      this.#moving = false;
+      this.#teardown();
+    });
+  }
+
+  #teardown(): void {
+    this.detached();
     this.#controller?.abort();
     this.#controller = null;
     this.#unwatch?.();
@@ -164,11 +189,37 @@ export abstract class PayloadElement<T> extends HTMLElement {
   attributeChangedCallback(name: string, previous: string | null, next: string | null): void {
     if (!this.isConnected || previous === next) return;
     if (name === 'data-src') {
+      if (previous !== null && next !== null && isSlide(previous, next, this.slideKeys)) {
+        // A slide supersedes a load still in flight for the old window.
+        if (this.slide()) {
+          this.#controller?.abort();
+          this.#controller = null;
+          return;
+        }
+      }
       void this.#reload();
     } else {
       this.inputChanged(name);
     }
   }
+
+  /** The `data-src` keys a slide of the window may change; none by default. */
+  protected readonly slideKeys: readonly string[] = [];
+
+  /**
+   * `data-src` slid (only `slideKeys` changed): refetch it and merge.
+   * Returns `false` when there is nothing drawn to merge into, and the
+   * element then reloads as for any other change.
+   */
+  protected slide(): boolean {
+    return false;
+  }
+
+  /** The element was connected (not just moved): start what `detached` stops. */
+  protected attached(): void {}
+
+  /** The element left the document for good: stop what `attached` started. */
+  protected detached(): void {}
 
   /** Fetches and validates the payload at `url`. */
   protected abstract load(url: string, signal: AbortSignal): Promise<Result<T, LoadError>>;

@@ -4,7 +4,9 @@
 //! route cannot, since the element asked for exactly that URL and a
 //! redirect would silently change what it shows. Here every required key
 //! must be present, and the values are validated by the same
-//! [`ViewState::parse`] with the same defaults as `pages::view`.
+//! [`ViewState::parse`] with the same defaults as `pages::view`. A data
+//! route never follows: `follow` is refused, so every request below a page
+//! names the window the page resolved, and is reproducible.
 
 use std::num::NonZeroU32;
 
@@ -26,6 +28,8 @@ pub enum StrictViewStateError {
     Missing(Vec<&'static str>),
     #[error("from, to: the window is not on bucket boundaries")]
     Unaligned,
+    #[error("follow: data routes take the page's resolved from and to")]
+    Follow,
     #[error(transparent)]
     Invalid(#[from] ViewStateError),
 }
@@ -35,6 +39,9 @@ pub fn parse_strict(
     raw: &RawViewState,
     defaults: Defaults,
 ) -> Result<ViewState, StrictViewStateError> {
+    if raw.follow.is_some() {
+        return Err(StrictViewStateError::Follow);
+    }
     let missing: Vec<&'static str> = [
         ("from", raw.from.is_none()),
         ("to", raw.to.is_none()),
@@ -107,6 +114,7 @@ mod tests {
                 Timestamp::from_micros(2_000_000),
             )
             .expect("window"),
+            follow_end: Timestamp::from_micros(2_000_000),
             topic_version: TopicModelVersion(1),
             bucket: crosstalk_spec::aggregates::series::BucketWidth::from_micros(
                 std::num::NonZeroU64::new(300_000_000).expect("five minutes"),
@@ -175,6 +183,28 @@ mod tests {
         assert_eq!(
             parse_strict(&raw, defaults()),
             Err(StrictViewStateError::Unaligned)
+        );
+    }
+
+    #[test]
+    fn follow_is_refused_with_or_without_a_window() {
+        let with_window = RawViewState {
+            follow: Some("1d".to_owned()),
+            ..complete()
+        };
+        assert_eq!(
+            parse_strict(&with_window, defaults()),
+            Err(StrictViewStateError::Follow)
+        );
+        let alone = RawViewState {
+            from: None,
+            to: None,
+            follow: Some("1d".to_owned()),
+            ..complete()
+        };
+        assert_eq!(
+            parse_strict(&alone, defaults()),
+            Err(StrictViewStateError::Follow)
         );
     }
 

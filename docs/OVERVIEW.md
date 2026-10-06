@@ -408,28 +408,34 @@ Features Index:
     depends_on: []
     doc: docs/features/type_spec.md
   follow_mode:
-    status: design
+    status: slim subset built; the rest designed and deferred
     description: >
-      Keeping UI views live as a gateway produces data. A follow=<span>
-      page key resolves on every render to the window ending at the
-      present (rounded up to a bucket) and is pinned into today's citeable
-      from/to URLs for everything below the page; the provisional tail
-      after the watermark is marked. Pages refresh by a server re-render
-      that Topcoat merges into the DOM, triggered by a tracked signal that
-      <ct-live> sets (replacing the dev-hook region swap), so the WebGL
-      elements keep their nodes and update in place (topology keeps node
-      positions and places new nodes with fixed-node ForceAtlas2; the time
-      brush stays anchored right). Includes the spec gap list (the present,
-      the bucket width, a coalesced traffic event, channel events for
-      traffic-driven listing changes, data revisions, projection
-      extensions), the fixture's controllable clock and deterministic
-      trickle, the testing strategy and a parallel implementation plan.
+      Keeping UI views live as a gateway produces data. Built: a
+      follow=<span> page key (presets 1h, 6h, 1d, 7d; exclusive with
+      from/to) that resolves on every render to [align_up(now) − span,
+      align_up(now)) from the request's present, with the URL never
+      rewritten; / and /topology follow the last day by default and show a
+      follow bar ("Following the last 1 d · Pin", or "Follow" when pinned)
+      and a "provisional after" header label; every other page redirects a
+      followed URL to its pinned window, and data routes and shards refuse
+      follow. A followed page refreshes through <ct-live> on its watch
+      tokens, watermark events and a 30 s timer, paused while the tab is
+      hidden; the region swap keeps the topology's graph and brush
+      (data-live-keep), which take a window-only data-src change as a slide
+      and merge in place. Deferred: head/traffic events, data-rev,
+      fixed-node ForceAtlas2 re-layout, topic-version announcements, follow
+      on explore and lists, the fixture's manual clock and trickle, the spec
+      gap list, and replacing the dev-hook region swap with signal-driven
+      re-renders.
     entry_points:
+      - ui/src/url/follow.rs
       - ui/src/url/view_state.rs
       - ui/src/pages/view.rs
-      - ui/src/components/live.rs
-      - ui/src/data/live.rs
-      - ui/elements/src/live/element.ts
+      - ui/src/components/follow.rs
+      - ui/src/data/query.rs
+      - ui/elements/src/live/follow.ts
+      - ui/elements/src/live/refresh.ts
+      - ui/elements/src/shared/slide.ts
       - ui/elements/src/shared/element.ts
       - ui/elements/src/topology/element.ts
     depends_on: [ui, query_surface, type_spec]
@@ -1537,7 +1543,9 @@ Features Index:
       the gateway's URL). The UI declares no traits of its own: the
       clock, bucket width, export formats and rule version come from
       QueryApi::present (app::present, once per request), and where a
-      default view ends from AppBackend::view_end.
+      default view ends from AppBackend::view_end. The overview and the
+      topology follow the present by default (follow=1d, see follow_mode);
+      every other page shows a pinned window.
       Built from the workspace root into deploy/ui.Dockerfile and
       deploy/ui.demo.Dockerfile with its Topcoat asset bundle.
     entry_points:
