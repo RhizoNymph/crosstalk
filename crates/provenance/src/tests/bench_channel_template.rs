@@ -130,7 +130,12 @@ pub(super) async fn put_page(
 }
 
 /// The origin agents of `reader`'s matches on reading `page` at `seconds`.
-pub(super) async fn read_page(world: &mut World, reader: AgentId, page: &str, seconds: u64) -> Vec<AgentId> {
+pub(super) async fn read_page(
+    world: &mut World,
+    reader: AgentId,
+    page: &str,
+    seconds: u64,
+) -> Vec<AgentId> {
     let read = world
         .run(Turn::new(reader, at(seconds)).input(tool_result("toolu_r", page)))
         .await;

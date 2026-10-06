@@ -160,9 +160,13 @@ watermark.
   2b. **The spread rule and skeleton matches** (INV-1094, INV-1150,
      `SpreadRule`). For each hit fingerprint, the originating agents are
      the agents of its live postings' spans and of their copies in other
-     outputs (spans relayed from them, `ProvenanceStore::relays`), at any
-     time within retention; its holders are those originations and
-     copies. A fingerprint held by at least `spread.agents` (4) distinct
+     outputs (spans relayed from them, and spans recorded as coinciding
+     with them, `ProvenanceStore::relays`), at any time within retention;
+     for a hit on a coinciding span, also, one hop, the originations and
+     copies of the spans it coincides with
+     (`ProvenanceStore::coincident_sources`; sources of sources are not
+     followed). Its holders, for the rarity bound, are the hit spans' own
+     originations and copies. A fingerprint held by at least `spread.agents` (4) distinct
      agents is boilerplate for short runs unless it is distinctive: one of
      the whole tokens its k-gram covers in the read (`fingerprint::token`:
      a normalized alphanumeric run of 4 or more characters, or holding a
@@ -334,8 +338,19 @@ watermark.
     copies and matched reads (`Propagated` hits). Two agents filling one
     sentence template with the same words write 64 characters or more
     alike (24 bench false matches, rarest tokens seen in 7 to 74 texts).
-    Otherwise the stretch is still `Relayed(Span(s))` and no match is
-    made. Other carriers keep no length floor. A broadcast (one writer,
+    Otherwise no match is made, and the stretch is `Relayed(Span(s))`
+    when it holds a rare token (an unobserved copy) or the rare token is
+    not required. **Coincident template stretches**
+    (`provenance.span.coincident-template-originated`): a stretch on
+    another agent's span with no rare token is a coincidence, not a copy.
+    It stays the writer's `Originated` text, and the commit records a
+    `Coincidence` (its span, each other agent's hit span inside it) in
+    `span_coincidences` (migration 0003), so the spread rule still counts
+    it as a copy. A stretch that also matches the writer's own earlier
+    span stays relayed to it. On the bench (run 20261006T062146Z) whole
+    pages of template sentences were relayed piece by piece to earlier
+    fills; their writers had almost nothing indexed and 3 verbatim reads
+    matched nobody. Other carriers keep no length floor. A broadcast (one writer,
     many later copies) keeps matching that writer however many copies
     there are: the spread rule never applies, and each copy and read
     raises the bound. **Tradeoff (flagged for decision):** an unobserved
@@ -618,6 +633,7 @@ feeder reads through it. `PgProvenanceStore` answers the same through
 | `src/pg.rs` | Shared Postgres conversions | — |
 | `migrations/0001_provenance.sql` | The schema | — |
 | `migrations/0002_forwarded_spans.sql` | A forwarded span's indexing columns; spans by relay source (the spread rule's copies) | — |
+| `migrations/0003_span_coincidences.sql` | Coincident template stretches: (span, source), by source (the spread rule's copies) | — |
 | `src/tests/` | Unit tests, scenarios, fixtures, AgentDojo | evidence `crosstalk_provenance::tests::*` |
 | `src/props/` | Property tests and the scenario generator | evidence `crosstalk_provenance::props::*` |
 | `src/dst.rs` | Simulations of the consumer | evidence `crosstalk_provenance::dst::*` |
@@ -710,6 +726,29 @@ feeder reads through it. `PgProvenanceStore` answers the same through
   channel names): the rule reads them as the victim's own relay, the
   converter as a delivery. Bench replays: headline 1.000 / 1.000 and
   boilerplate 0.893 (133 correct, 16 false), both unchanged.
+- **Bench run 20261006T062146Z** (boilerplate, staging 690d124): 3
+  missed labels (recall 0.939), each a whole wiki page of template
+  sentences read verbatim; 8090af0 replays alike. Fixed by coincident
+  template stretches (above), measured release `ct-eval replay` and live
+  runs (base = integration/impl a69a524; tuned on 062146Z only):
+
+  | run | before | after |
+  | --- | --- | --- |
+  | 062146Z (tuning) | 0.939 (46/49), precision 0.854 (123 / 21) | 1.000 (49/49), 0.875 (182 / 26) |
+  | 184212Z headline (held out) | 1.000 / 1.000 | 1.000 / 1.000 |
+  | 020835Z headline (held out) | 1.000 / 1.000 | 1.000 / 1.000 |
+  | 061545Z headline (held out) | 1.000 / 1.000 | 1.000 / 1.000 |
+  | 184633Z boilerplate (held out) | 1.000, 0.893 (133 / 16) | 1.000, 0.909 (169 / 17) |
+  | 021639Z boilerplate (held out) | 1.000, 0.914 (160 / 15) | 1.000, 0.940 (252 / 16) |
+  | SALT `--limit 53`, live, forwarding off | 0.854 / 0.955, 164 false | 0.855 / 0.956, 164 false |
+  | swarm-traces, live | 1.000 / 1.000 | 1.000 / 1.000 |
+
+  One more `ReaderOutput` false match on each held-out boilerplate run (a
+  73- and a 91-character coincident sentence); no new channel false match
+  on held-out runs. **Tradeoff:** a slot-filled fragment only one writer
+  wrote (`template_skeleton_with_other_slot_words_is_not_matched`'s
+  "n, purge queue matters more than") is now indexed under it and matched
+  where read; before it straddled a relay's end and was posted under nobody.
 - **Bench run 20261006T021639Z** (boilerplate, staging 8090af0, 135
   negative controls): 7 `Channel` / `ToolResult` / `Exact` false matches
   of 32 to 46 bytes besides the 15 `ReaderOutput` ones. Each is a short

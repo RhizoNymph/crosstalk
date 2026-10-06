@@ -617,7 +617,9 @@ fn reader_output_match_absent_from_inputs() {
 
 /// `provenance.span.originated-absent-from-inputs`: an originated span
 /// shares no fingerprint with the exchange's inputs, raw or decoded, nor
-/// with any span indexed before it.
+/// with any span indexed before it, except another agent's span it is
+/// recorded to coincide with (a coincident template stretch,
+/// `provenance.span.coincident-template-originated`).
 #[test]
 fn originated_span_not_fingerprint_matchable_in_inputs() {
     scenario_property(|outcome| {
@@ -635,6 +637,13 @@ fn originated_span_not_fingerprint_matchable_in_inputs() {
                 );
             }
             for earlier in outcome.indexed_before(record.span.exchange) {
+                if earlier.span.agent != record.span.agent
+                    && outcome
+                        .coincidences
+                        .contains(&(record.span.id, earlier.span.id))
+                {
+                    continue;
+                }
                 let theirs = outcome.span_fingerprints(&earlier.span);
                 assert!(
                     fingerprints.is_disjoint(&theirs),

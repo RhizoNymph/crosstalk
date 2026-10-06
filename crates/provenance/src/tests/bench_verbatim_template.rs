@@ -26,14 +26,14 @@ use crate::store::ProvenanceStore;
 
 /// agent-001's cache-invalidation-2 (sender exchange
 /// 01M47Y2ZWYGDBG1S7JCJB12H5P), read by agent-014.
-const CACHE_2: &str = "If we change stale reads, expect 589 follow-up tickets around purge \
+pub(crate) const CACHE_2: &str = "If we change stale reads, expect 589 follow-up tickets around purge \
      queue. One option is to pair versioned keys with TTL, which the on-call notes already \
      supports. The data from the second experiment contradicts the earlier claim about stale \
      reads. The on-call notes suggests that write-through accounts for about 32% of the problem.";
 
 /// agent-013's rate-limiting-0 (01M47Y2KJ4A9NKYHH99WAVCJGG), read by
 /// agent-003.
-const RATE_0: &str = "The data from the staging cluster contradicts the earlier claim about \
+pub(crate) const RATE_0: &str = "The data from the staging cluster contradicts the earlier claim about \
      per-tenant quota. We measured per-tenant quota on the staging cluster and saw roughly 45 \
      events per minute. I would keep per-tenant quota as is and revisit 429 responses after the \
      next release. One option is to pair burst budget with leaky bucket, which the open \
@@ -44,7 +44,7 @@ const RATE_0: &str = "The data from the staging cluster contradicts the earlier 
 
 /// agent-009's cache-invalidation-10 (01M47Y30CHHHWE4DF1PBMKNQN1), read by
 /// agent-001.
-const CACHE_10: &str = "Our notes on cache invalidation still say purge queue is fine; that is \
+pub(crate) const CACHE_10: &str = "Our notes on cache invalidation still say purge queue is fine; that is \
      no longer true. For cache invalidation, TTL matters more than versioned keys at our current \
      scale. For cache invalidation, stale reads matters more than write-through at our current \
      scale. For cache invalidation, TTL matters more than purge queue at our current scale. Our \
@@ -57,7 +57,7 @@ const CACHE_10: &str = "Our notes on cache invalidation still say purge queue is
 /// one keeps its first two thirds, the other its last two thirds, so every
 /// byte of the page lies in a run of 47 characters or more that an
 /// earlier span holds, as the bench's template fills do.
-fn earlier_fills(page: &str) -> Vec<String> {
+pub(crate) fn earlier_fills(page: &str) -> Vec<String> {
     page.split_inclusive(". ")
         .map(str::trim)
         .flat_map(|sentence| {
@@ -112,7 +112,10 @@ async fn verbatim_read(world: &mut World, page: &str) -> (AgentId, Vec<AgentId>,
 async fn a_verbatim_template_page_matches_its_writer_cache_2() {
     let mut world = World::new(real());
     let (writer, origins, originated) = verbatim_read(&mut world, CACHE_2).await;
-    assert!(originated as usize >= CACHE_2.len() / 2, "originated {originated} bytes");
+    assert!(
+        originated as usize >= CACHE_2.len() / 2,
+        "originated {originated} bytes"
+    );
     assert!(origins.contains(&writer), "the page's writer: {origins:?}");
 }
 

@@ -4,7 +4,7 @@ use std::collections::BTreeSet;
 
 use crosstalk_spec::derived::provenance::fingerprint::Fingerprint;
 use crosstalk_spec::derived::provenance::span::{Span, SpanState};
-use crosstalk_spec::ids::{AgentId, MessageHash};
+use crosstalk_spec::ids::{AgentId, MessageHash, SpanId};
 use crosstalk_spec::observed::message::{AssistantPart, Message, Text};
 use crosstalk_testkit::build::message::{
     assistant, message, system_text, tool_call, tool_result, user_text,
@@ -30,6 +30,8 @@ pub struct Outcome {
     pub turns: Vec<RunTurn>,
     pub spans: Vec<SpanRecord>,
     pub matches: Vec<StoredMatch>,
+    /// Every recorded coincident template stretch (span, earlier source).
+    pub coincidences: BTreeSet<(SpanId, SpanId)>,
     pub winnowing: Winnowing,
     pub pipeline: DecodePipeline,
     pub world: World,
@@ -97,10 +99,17 @@ pub async fn run(plans: &[TurnPlan]) -> Outcome {
     }
     let spans = world.store.all_spans();
     let matches = world.store.all_matches();
+    let coincidences = world
+        .store
+        .all_coincidences()
+        .into_iter()
+        .map(|coincidence| (coincidence.span, coincidence.source))
+        .collect();
     Outcome {
         turns,
         spans,
         matches,
+        coincidences,
         winnowing: Winnowing::new(config.winnow()),
         pipeline: DecodePipeline::new(config.decode()),
         world,

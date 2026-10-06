@@ -1,0 +1,34 @@
+[invariant]
+id = "provenance.span.coincident-template-originated"
+statement = "With ReaderOutputRules::rare_token Required, an output stretch of the writer W that matches an indexed span S of another agent, and holds no whole token seen in at most SpreadRule::rare_bound(h) texts (h being S's originations, copies and matched reads), is classified Originated, not Relayed(Span(S)), and no ReaderOutput match is made; the commit records a Coincidence (the stretch's span, S) for S and for every other agent's hit span inside the stretch, ProvenanceStore::relays lists the stretch's span among each such source's copies, and ProvenanceStore::coincident_sources returns them. A stretch that also matches an earlier span of W itself stays Relayed to that span. Memory and Postgres stores record and read coincidences alike."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+On the node0 bench (run 20261006T062146Z, boilerplate, staging 690d124;
+8090af0 replays it alike) 3 labelled wiki reads were missed: each page was
+4 to 8 template sentences, and every sentence shared a run of 32
+characters or more with some earlier agent's fill of the same template.
+Output resolution relayed each run to that earlier span. No ReaderOutput
+match was made (no rare token), but the runs stayed Relayed(Span), so the
+writer had 24 of 333 bytes indexed on cache-invalidation-2. The reader then
+matched only short runs of the earlier holders, which the skeleton and
+related rules drop, and nobody matched the writer. A stretch holding no
+rare token is the same judgement the ReaderOutput rules make: a
+coincidence, not a copy. Keeping it the writer's own lets a verbatim copy
+of the page match its writer; recording the coincidence keeps the spread
+rule's holder count (provenance.match.cross-agent-spread), which counted
+the relayed copy before. A short secret copied unobserved holds a rare
+token and stays relayed to its first writer. Tradeoff: a slot-filled
+fragment only the writer wrote (its slot words rare in the world) is now
+indexed under it and matched where read, where before it was posted under
+nobody because it straddled a relay's end.
+"""
+
+[evidence]
+unit = ["crosstalk_provenance::tests::bench_verbatim_template::a_verbatim_template_page_matches_its_writer_cache_2", "crosstalk_provenance::tests::bench_verbatim_template::a_verbatim_template_page_matches_its_writer_rate_0", "crosstalk_provenance::tests::bench_verbatim_template::a_verbatim_template_page_matches_its_writer_cache_10", "crosstalk_provenance::tests::bench_verbatim_template::earlier_template_holders_are_not_matched_by_the_pages_reader", "crosstalk_provenance::tests::bench_verbatim_template::coincident_stretches_are_relayed_when_no_rare_token_is_required", "crosstalk_provenance::tests::match_quality::short_distinctive_broadcast_matches_the_first_writer"]
+integration = "crosstalk_provenance::integration::rules::pg_coincident_templates_agree_with_memory"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

@@ -1385,7 +1385,9 @@ Features Index:
       prompt and the output (k-grams, plus exact hashes of short token
       runs for whole values of 24 to 46 characters), resolves originated
       text against the index (hidden relays become ReaderOutput matches
-      under stricter length and rare-token rules, boilerplate Common),
+      under stricter length and rare-token rules, boilerplate Common, and
+      a stretch on another agent's span with no rare token stays the
+      writer's own, recorded as a coincidence the spread rule still counts),
       drops short matches that are template skeletons, that the origin
       was given token for token in its own request, or that lie, with no
       rare token, inside the text of another writer present in the read,

@@ -45,7 +45,7 @@ use crate::config::RareToken;
 use crate::fingerprint::token;
 use crate::segment::{Coverage, TextPart, run_bytes, runs, text_parts, view};
 use crate::span::span_id;
-use crate::store::ProvenanceStore;
+use crate::store::{Coincidence, ProvenanceStore};
 use crate::text::normalize::trimmed_len;
 use crate::text::{normalize, trim_range};
 
@@ -57,6 +57,18 @@ struct Piece {
     origin: Origin,
     /// A `ReaderOutput` match over the piece.
     found: Option<ContentMatch>,
+    /// For an `Originated` piece that is a coincident template stretch, the
+    /// earlier spans of other agents it coincides with (`Coincidence`):
+    /// every hit span inside it. Empty otherwise.
+    coincides: Vec<SpanId>,
+}
+
+/// A stretch of an output part relayed from a hit span: its bytes, the hit
+/// fingerprints in it that name its source, and every hit span inside it.
+struct Stretch<'a> {
+    range: (u32, u32),
+    support: &'a [Fingerprint],
+    inside: &'a [SpanId],
 }
 
 fn slice(text: &str, start: u32, end: u32) -> Option<&str> {
@@ -64,13 +76,14 @@ fn slice(text: &str, start: u32, end: u32) -> Option<&str> {
 }
 
 impl Scanner {
-    /// The output's spans, classified, and its `ReaderOutput` matches.
+    /// The output's spans, classified, its `ReaderOutput` matches, and its
+    /// coincident template stretches.
     pub(crate) async fn output_spans<I, S, M, L>(
         &self,
         session: &mut Session<'_, I, S, M, L>,
         output: &Message,
         loaded: &Loaded,
-    ) -> Result<(Vec<Span>, Vec<ContentMatch>), ScanError>
+    ) -> Result<(Vec<Span>, Vec<ContentMatch>, Vec<Coincidence>), ScanError>
     where
         I: FingerprintIndex + Sync,
         S: ProvenanceStore + Sync,
@@ -103,6 +116,7 @@ impl Scanner {
                         end: draft.location.range.end(),
                         origin,
                         found: None,
+                        coincides: Vec::new(),
                     },
                 )),
             }
@@ -110,6 +124,7 @@ impl Scanner {
         pieces.sort_by_key(|(part, piece)| (part.index, piece.start));
         let mut spans = Vec::with_capacity(pieces.len());
         let mut matches = Vec::new();
+        let mut coincidences = Vec::new();
         for (part, piece) in pieces {
             let Ok(range) = ByteRange::new(piece.start, piece.end) else {
                 continue;
@@ -120,8 +135,13 @@ impl Scanner {
                 .map_err(|refused| {
                     ScanError::Store(crate::store::ProvenanceStoreError::Transition(refused))
                 })?;
+            let id = span_id(session.exchange, &location);
+            coincidences.extend(piece.coincides.iter().map(|source| Coincidence {
+                span: id,
+                source: *source,
+            }));
             spans.push(Span {
-                id: span_id(session.exchange, &location),
+                id,
                 location,
                 agent: session.reader,
                 exchange: session.exchange,
@@ -129,7 +149,7 @@ impl Scanner {
             });
             matches.extend(piece.found);
         }
-        Ok((spans, matches))
+        Ok((spans, matches, coincidences))
     }
 
     async fn resolve<I, S, M, L>(
@@ -178,6 +198,7 @@ impl Scanner {
                     end,
                     origin,
                     found: None,
+                    coincides: Vec::new(),
                 });
                 continue;
             }
@@ -202,14 +223,28 @@ impl Scanner {
                     })
                     .map(|hit| hit.fingerprint)
                     .collect();
+                // Every hit span inside the run: the spans a coincident
+                // stretch coincides with.
+                let inside: Vec<SpanId> = by_span
+                    .iter()
+                    .filter(|(_, extents)| {
+                        extents
+                            .iter()
+                            .any(|(from, to)| *from < run_end && *to > run_start)
+                    })
+                    .map(|(span, _)| *span)
+                    .collect();
                 let piece = self
                     .relayed_piece(
                         session,
                         part,
                         draft.location.part,
                         source,
-                        (start + run_start, start + run_end),
-                        &support,
+                        Stretch {
+                            range: (start + run_start, start + run_end),
+                            support: &support,
+                            inside: &inside,
+                        },
                     )
                     .await?;
                 pieces.extend(piece);
@@ -418,8 +453,7 @@ impl Scanner {
         part: &TextPart<'_>,
         part_ref: PartRef,
         source: SpanId,
-        (start, end): (u32, u32),
-        support: &[Fingerprint],
+        stretch: Stretch<'_>,
     ) -> Result<Option<Piece>, ScanError>
     where
         I: FingerprintIndex + Sync,
@@ -427,6 +461,11 @@ impl Scanner {
         M: SemanticMatcher + Sync,
         L: MessageSource + Sync,
     {
+        let Stretch {
+            range: (start, end),
+            support,
+            inside,
+        } = stretch;
         let Some(record) = session.live.get(source).cloned() else {
             return Ok(None);
         };
@@ -440,12 +479,41 @@ impl Scanner {
                 .holds_rare_token(session, part, source, (start, end))
                 .await?
         {
+            // The writer's own earlier span holding the stretch is the
+            // nearer explanation: the stretch repeats the writer's own text.
+            if let Some(own) = inside.iter().copied().find(|span| {
+                session
+                    .live
+                    .get(*span)
+                    .is_some_and(|record| record.span.agent == session.reader)
+            }) {
+                return Ok(Some(Piece {
+                    start,
+                    end,
+                    origin: Origin::Relayed(RelaySource::Span(own)),
+                    found: None,
+                    coincides: Vec::new(),
+                }));
+            }
             tracing::debug!(exchange = ?session.exchange, source = ?source, start, end, "coincident template stretch kept originated");
             return Ok(Some(Piece {
                 start,
                 end,
                 origin: Origin::Originated,
                 found: None,
+                coincides: inside
+                    .iter()
+                    .copied()
+                    .filter(|span| {
+                        session
+                            .live
+                            .get(*span)
+                            .is_some_and(|record| record.span.agent != session.reader)
+                    })
+                    .chain(std::iter::once(source))
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .into_iter()
+                    .collect(),
             }));
         }
         let mut found = None;
@@ -486,6 +554,7 @@ impl Scanner {
             end,
             origin: Origin::Relayed(RelaySource::Span(source)),
             found,
+            coincides: Vec::new(),
         }))
     }
 }
