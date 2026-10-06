@@ -2070,12 +2070,17 @@ Reading it:
   k = 24", which a log re-encoded on the way often is; live finds 0.485.
   The reference's precision falls from 0.664 to 0.583 here only because
   its 2,638 correct predictions of forwarding labels moved to their row.
-- **SALT, forwarding on** finds 0.967 of the forwarding row, and raises
-  overall recall to 0.920 (more originated deliveries match once the
+- **SALT, forwarding on** finds 0.967 of the forwarding row at c3cd7f2, and
+  raises overall recall to 0.920 (more originated deliveries match once the
   forwarded runs around them are indexed), but precision falls to 0.144:
   44,529 `direct / tool_result / decoded` false positives, each peer's own
   `inspect_database` / `get_log` read matching a forward of the same
-  schema or log.
+  schema or log. **Superseded:** the reader's nearer source (INV-1154,
+  `provenance.match.forward-direct-read`) no longer matches a forward on
+  content the reader had already read itself. With forwarding on, the
+  forwarding row is now 0.885, overall recall 0.894 and precision 0.882
+  (7f8a2fb, the a2a-transmission-bench parity baseline). The forwarding-on
+  gate is set just below, at 0.86.
 - **Forwarding elsewhere.** No effect on AgentDojo, swarm-traces or
   cipher; τ² gains 0.004 recall for 9.6 more FP / 1k; wiki gains 3
   (`--demo`) and 2 (`--max-agents 100`) labels; splice and the SWE
@@ -2114,7 +2119,7 @@ construction gate at 0.92; AgentDojo keyed-tool precision (all classes)
 new at 0.94; swarm-traces decoded recall 0.95 → 0.98; wiki channel recall
 0.58 → 0.65; swe-splice channel recall 0.90 → 0.97; open-swe and lmcache
 `fp_per_1k` ceilings new at 30 and 150. τ² stays as it was (a sample
-here). Forwarding on: one gate, SALT forwarding-row recall at least 0.94
+here). Forwarding on: one gate, SALT forwarding-row recall at least 0.86 (was 0.94 before INV-1154)
 (`forwarding = "on"`, `Gates::for_run`); the headline gates do not apply
 to that configuration, and the forwarding row is not gated with
 forwarding off (it is a known miss there).
@@ -2242,7 +2247,7 @@ pass; 0.65 before that; not tuned on the whole export), swe-splice
 (channel recall 0.97, precision 0.99), and the open-swe and lmcache
 backgrounds (`fp_per_1k` at most 30 and 150). All of them apply to the
 shipped configuration only (forwarding off); one gate, the SALT
-forwarding row's recall (at least 0.94), applies only to `--forwarding
+forwarding row's recall (at least 0.86 since INV-1154), applies only to `--forwarding
 on` runs. Left ungated on purpose:
 
 - **cipher**: 0.245, dominated by payloads under L4's shingle inside a
