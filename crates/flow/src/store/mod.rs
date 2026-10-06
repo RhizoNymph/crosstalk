@@ -9,6 +9,8 @@
 //! - [`PgTransmissionStore`] implements `TransmissionStore` and
 //!   `TransmissionVerdicts` over the stored transmissions and their verdict
 //!   logs.
+//! - [`PgExtractionLedger`] implements the extraction step's ledger
+//!   (`crate::extract::step::ExtractionLedger`).
 //! - [`PgShardTicks`] keeps the correlator shards' tick checkpoints, and
 //!   [`ShardKey`] is the shard key the registry's directory decides.
 //!
@@ -30,6 +32,7 @@ mod cursor;
 mod directory;
 mod error;
 mod ids;
+mod ledger;
 pub mod outbox;
 mod registry;
 mod shards;
@@ -43,6 +46,7 @@ pub use cursor::prune_cursors;
 pub use directory::{ShardIndex, ShardKey};
 pub use error::FlowStoreError;
 pub use ids::{ChannelIdSource, IdSourceError, UlidChannelIds};
+pub use ledger::PgExtractionLedger;
 pub use outbox::{EventSink, Relay};
 pub use registry::PgChannelRegistry;
 pub use shards::PgShardTicks;

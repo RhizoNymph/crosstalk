@@ -18,7 +18,8 @@ use crate::extract::resource::{AbsolutePath, Place, RepoBindings, RepoId};
 use super::lex::Word;
 
 /// Where a shell is and what it knows.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(try_from = "StoredShell")]
 pub struct ShellState {
     /// The working directory; `None` when it is unknown.
     cwd: Option<Place>,
@@ -27,6 +28,40 @@ pub struct ShellState {
     /// The home directory, once the output showed it.
     home: Option<AbsolutePath>,
     repos: RepoBindings,
+}
+
+/// A [`ShellState`] as stored, checked on the way back in.
+#[derive(serde::Deserialize)]
+struct StoredShell {
+    cwd: Option<Place>,
+    previous: Option<Place>,
+    home: Option<AbsolutePath>,
+    repos: RepoBindings,
+}
+
+/// Why a stored shell state was refused: it knows its home and still
+/// holds a home-relative place.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("a shell state that knows its home holds a home-relative place")]
+pub struct StoredShellError;
+
+impl TryFrom<StoredShell> for ShellState {
+    type Error = StoredShellError;
+
+    fn try_from(stored: StoredShell) -> Result<Self, Self::Error> {
+        let home_relative = matches!(stored.cwd, Some(Place::Home(_)))
+            || matches!(stored.previous, Some(Place::Home(_)))
+            || stored.repos.has_home_relative();
+        if stored.home.is_some() && home_relative {
+            return Err(StoredShellError);
+        }
+        Ok(Self {
+            cwd: stored.cwd,
+            previous: stored.previous,
+            home: stored.home,
+            repos: stored.repos,
+        })
+    }
 }
 
 /// What a `cd` was asked for.

@@ -14,8 +14,40 @@ use super::repo::RepoBindings;
 /// An absolute POSIX path with `.`, `..`, repeated and trailing `/`
 /// resolved. Only [`AbsolutePath::parse`] and [`AbsolutePath::join`] make
 /// one, so every value is canonical: two equal paths name one file.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
+#[serde(try_from = "String", into = "String")]
 pub struct AbsolutePath(String);
+
+/// Why stored text is not an [`AbsolutePath`]: only a canonical path (one
+/// [`AbsolutePath::parse`] leaves unchanged) is read back.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum StoredPathError {
+    #[error(transparent)]
+    Invalid(#[from] PathError),
+    #[error("{0:?} is not a canonical path")]
+    NotCanonical(String),
+}
+
+impl TryFrom<String> for AbsolutePath {
+    type Error = StoredPathError;
+
+    fn try_from(text: String) -> Result<Self, Self::Error> {
+        let path = Self::parse(&text)?;
+        if path.0 == text {
+            Ok(path)
+        } else {
+            Err(StoredPathError::NotCanonical(text))
+        }
+    }
+}
+
+impl From<AbsolutePath> for String {
+    fn from(path: AbsolutePath) -> Self {
+        path.0
+    }
+}
 
 /// Why text is not a path a locator can be made from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -152,7 +184,10 @@ fn check(text: &str) -> Result<(), PathError> {
 /// (`~/repo` is `Home("/repo")`, `~` is `Home("/")`). A shell state that
 /// knows its home holds no `Home` place
 /// ([`crate::extract::bash::state::ShellState`]).
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
 pub enum Place {
     Absolute(AbsolutePath),
     Home(AbsolutePath),
