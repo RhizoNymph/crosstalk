@@ -117,6 +117,35 @@ impl Scanner {
         }
     }
 
+    /// The distinct tokens of a span's text (its view), capped at
+    /// `SpreadRule::tokens_per_text`: what the span observes for token
+    /// rarity (`provenance.match.cross-agent-spread`).
+    pub(crate) fn span_tokens(
+        &self,
+        parts: &[TextPart<'_>],
+        span: &Span,
+    ) -> Vec<crosstalk_spec::derived::provenance::fingerprint::Fingerprint> {
+        let Some(part) = parts
+            .iter()
+            .find(|part| part.index == span.location.part.index)
+        else {
+            return Vec::new();
+        };
+        let range = span.location.range;
+        let Some(text) = part
+            .text
+            .get(usize_of(range.start())..usize_of(range.end()))
+        else {
+            return Vec::new();
+        };
+        crate::fingerprint::token::observed(
+            view(text, part.kind).text(),
+            self.spread().tokens_per_text(),
+        )
+        .into_iter()
+        .collect()
+    }
+
     /// The short-span hash of an originated span that is a whole short
     /// value, its extent relative to the span's start.
     pub(crate) fn span_short(&self, parts: &[TextPart<'_>], span: &Span) -> Option<KGram> {

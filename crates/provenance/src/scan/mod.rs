@@ -32,6 +32,7 @@
 
 pub mod cache;
 pub mod hits;
+mod inherited;
 pub mod kind;
 pub mod messages;
 mod output;
@@ -45,12 +46,12 @@ use crosstalk_spec::derived::provenance::fingerprint::{Fingerprint, PositionedFi
 use crosstalk_spec::derived::provenance::matching::ContentMatch;
 use crosstalk_spec::derived::provenance::span::{OriginatedSpan, Span, SpanState};
 use crosstalk_spec::events::ingest::ConversationDelta;
-use crosstalk_spec::ids::{MessageHash, SpanId};
+use crosstalk_spec::ids::{ExchangeId, MessageHash, SpanId};
 use crosstalk_spec::interfaces::l4_provenance::{FingerprintIndex, IndexError, SemanticMatcher};
 use crosstalk_spec::observed::message::Message;
 use crosstalk_spec::support::{Similarity, Timestamp};
 
-use self::cache::KGramCache;
+use self::cache::{KGramCache, TokenCache};
 use self::hits::LiveSpans;
 use self::messages::{LoadError, MessageSource};
 use crate::config::{IndexSettings, ProvenanceConfig, ReaderOutputRules, ShortSpans, SpreadRule};
@@ -143,6 +144,9 @@ pub struct Scanner {
     /// Input messages' k-grams. Locked only for a lookup or an insert, never
     /// across an await.
     cache: Mutex<KGramCache>,
+    /// The token sequences each request message gives its reader
+    /// (`provenance.match.inherited-fragment-dropped`). Locked like `cache`.
+    pub(crate) given: Mutex<TokenCache>,
 }
 
 /// State one scan accumulates: live span records fetched so far, origin
@@ -156,6 +160,11 @@ pub(crate) struct Session<'a, I, S, M, L> {
     pub live: LiveSpans,
     pub fetched: BTreeSet<SpanId>,
     pub bodies: HashMap<MessageHash, Option<Message>>,
+    /// Token frequencies read so far.
+    pub tokens: HashMap<Fingerprint, u64>,
+    /// What each origin exchange was given, read so far (`None` when its
+    /// request is no longer recorded).
+    pub given: HashMap<ExchangeId, Option<Arc<inherited::Given>>>,
 }
 
 impl<I, S, M, L> Session<'_, I, S, M, L>
@@ -217,6 +226,22 @@ where
         Ok(texts)
     }
 
+    /// How many live texts hold `token` (`fingerprint::token`), read once
+    /// per scan.
+    pub async fn token_frequency(&mut self, token: Fingerprint) -> Result<u64, ScanError> {
+        if let Some(frequency) = self.tokens.get(&token) {
+            return Ok(*frequency);
+        }
+        let frequency = self
+            .env
+            .index
+            .frequency(token, self.now)
+            .await
+            .map_err(ScanError::Index)?;
+        self.tokens.insert(token, frequency);
+        Ok(frequency)
+    }
+
     /// Look up `kgrams` (owned shards only) and fetch the hit spans.
     pub async fn lookup(
         &mut self,
@@ -251,6 +276,7 @@ impl Scanner {
             forwarding: config.forwarding(),
             spread: config.spread(),
             cache: Mutex::new(KGramCache::new(cache::DEFAULT_BUDGET)),
+            given: Mutex::new(TokenCache::new(cache::DEFAULT_BUDGET)),
         }
     }
 
@@ -343,6 +369,8 @@ impl Scanner {
             live: LiveSpans::default(),
             fetched: BTreeSet::new(),
             bodies: HashMap::new(),
+            tokens: HashMap::new(),
+            given: HashMap::new(),
         };
         let mut found: Vec<ContentMatch> = Vec::new();
         for (message, scanned_as) in loaded.listed() {
@@ -446,6 +474,10 @@ impl Scanner {
                 if let Some(short) = short {
                     work.observations.push(vec![short.fingerprint]);
                 }
+                let tokens = self.span_tokens(&parts, span);
+                if !tokens.is_empty() {
+                    work.observations.push(tokens);
+                }
                 let forwarded = self.forwarding && span.state.is_forwarded();
                 if span.state != SpanState::Originated && !forwarded {
                     continue;
@@ -477,6 +509,13 @@ impl Scanner {
                     let short = self.part_short(&part.text, part.kind);
                     if !short.is_empty() {
                         work.observations.push(short.into_iter().collect());
+                    }
+                    let tokens = crate::fingerprint::token::observed(
+                        view(&part.text, part.kind).text(),
+                        self.spread().tokens_per_text(),
+                    );
+                    if !tokens.is_empty() {
+                        work.observations.push(tokens.into_iter().collect());
                     }
                 }
             }

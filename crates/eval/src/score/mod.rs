@@ -20,6 +20,10 @@
 //!   detector saw the access pattern but never confirmed it. Selectors and
 //!   the overall summary read content rows unless they name an access
 //!   class.
+//! - A discarded prediction that aligns with no label is `dismissed`: the
+//!   detector decided the co-access was not a transmission, so it is
+//!   neither a false positive nor a negative-control violation
+//!   ([`Outcome::Dismissed`]). Its transmission has no verdict.
 //!
 //! Unlike the spec's `DetectionQuality`, which only sees transmissions the
 //! detector opened, the scorer sees total misses: a label no prediction
@@ -80,6 +84,10 @@ pub struct Counts {
     pub false_positive: u64,
     /// Predictions with no label under partial coverage.
     pub unjudged: u64,
+    /// Discarded predictions that aligned with no label: co-access the
+    /// detector itself rejected. Not in precision.
+    #[serde(default)]
+    pub dismissed: u64,
 }
 
 impl Counts {
@@ -103,6 +111,7 @@ impl Counts {
         self.correct += other.correct;
         self.false_positive += other.false_positive;
         self.unjudged += other.unjudged;
+        self.dismissed += other.dismissed;
     }
 }
 
@@ -353,7 +362,7 @@ impl Scorer {
                     Some(tier)
                 }
                 Outcome::False { tier, .. } => Some(tier),
-                Outcome::Unjudged => None,
+                Outcome::Unjudged | Outcome::Dismissed => None,
             };
             let counts = self
                 .rows
@@ -397,6 +406,7 @@ impl Scorer {
                     }
                 }
                 Outcome::Unjudged => counts.unjudged += 1,
+                Outcome::Dismissed => counts.dismissed += 1,
             }
         }
         for (route, quality, verdicts) in by_transmission.into_values() {

@@ -198,6 +198,18 @@ copied elsewhere and re-scored with `ct-eval swarm --truth truth.jsonl
 volume, so each copy holds everything so far (blobs are content-addressed
 and small); the importer only reads the run's sessions.
 
+### Replaying a run offline
+
+`ct-eval replay --run <dir>` re-runs a saved run through the same `Live`
+composition in memory, with the run's `evidence_window_ms` and
+`suspected_ttl_ms` from `bench.env`, and scores it like step 8 (see
+eval.md, "Replay"). It needs the run's exchange log and blobs: either a
+copy beside the run (`exchange-log.jsonl`, `blobs/`) or `--exchanges` and
+`--blobs` pointing at the data volume. Only exchanges captured since the
+truth header's `started_at_unix_ms` are replayed, which is this run's
+traffic since step 4's restart. The replay of a run reproduces its
+`score.txt` when built from the commit the gateway ran.
+
 ### Why the data volume is mounted, not copied
 
 The `bench` service mounts the `data` volume read-only at
@@ -255,6 +267,7 @@ the upstream URL) to differ:
 | `deploy/demo.Dockerfile` | Builds `crosstalk-demo` and `ct-eval` in one cargo invocation; ships `ct-eval` at `/usr/local/bin/ct-eval` and `crates/eval/gates.toml` at `/usr/local/share/crosstalk-eval/gates.toml`. The `.dockerignore` already admits `crates/` and `spec/` and excludes only `deploy`, `target`, VCS and editor files, which the build does not need |
 | `.gitignore` | `/deploy/bench/` |
 | `crates/eval/src/bin/ct-eval/swarm.rs` | `ct-eval swarm` and `swarm-fetch`, used unchanged |
+| `crates/eval/src/bin/ct-eval/replay.rs` | `ct-eval replay`: a saved run re-scored offline through `Live` (not run by the bench) |
 
 `ct-eval`'s default gates path is compiled in from `CARGO_MANIFEST_DIR`
 (`/src/crates/eval/gates.toml` in the build stage), which the runtime image

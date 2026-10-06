@@ -22,6 +22,13 @@
 //! `matched_bytes` counts the covered bytes, at most the origin span's
 //! length for an exact match (`provenance.match.bytes-within-span`). Hits
 //! on the reader's own spans are skipped (`provenance.match.self-hit-skipped`).
+//!
+//! A candidate made only of short runs (each under
+//! `SpreadRule::distinctive_chars`) is dropped whole when it is a template
+//! skeleton (`provenance.match.skeleton-dropped`), or when each of its runs
+//! repeats, token for token, a part its origin span's agent was given in
+//! its own request (`provenance.match.inherited-fragment-dropped`,
+//! `inherited`).
 
 use std::collections::BTreeMap;
 use std::num::NonZeroU32;
@@ -38,7 +45,7 @@ use super::kind::{is_exact, match_kind};
 use super::messages::MessageSource;
 use super::{ScanError, Scanner, Session};
 use crate::decode::Step;
-use crate::fingerprint::short;
+use crate::fingerprint::{short, token};
 use crate::segment::{PartKind, TextPart, text_parts, view};
 use crate::store::ProvenanceStore;
 use crate::text::normalize;
@@ -134,9 +141,9 @@ impl Scanner {
     }
 
     /// Whether a span's hit extents in a layer (layer byte offsets) hold a
-    /// run of at least `SpreadRule::distinctive_chars` normalized
-    /// characters: such a run is never suppressed by the spread rule.
-    fn distinctive(&self, layer: &str, extents: &[(u32, u32)]) -> bool {
+    /// contiguous run of at least `SpreadRule::distinctive_chars` normalized
+    /// characters: such a match is never dropped as a skeleton.
+    pub(crate) fn distinctive(&self, layer: &str, extents: &[(u32, u32)]) -> bool {
         merge(extents.to_vec()).iter().any(|(start, end)| {
             let slice = layer
                 .get(
@@ -147,6 +154,55 @@ impl Scanner {
             crate::text::normalize::trimmed_len(&normalize(slice))
                 >= self.spread().distinctive_chars()
         })
+    }
+
+    /// The fingerprints among `widespread` (held by enough agents, with
+    /// their holder counts) that are not distinctive: none of the whole
+    /// tokens their k-gram covers in `layer` is seen in at most
+    /// `SpreadRule::rare_bound(holders)` texts
+    /// (`provenance.match.cross-agent-spread`).
+    async fn not_distinctive<I, S, M, L>(
+        &self,
+        session: &mut Session<'_, I, S, M, L>,
+        layer: &str,
+        kgrams: &[crate::fingerprint::KGram],
+        widespread: BTreeMap<crosstalk_spec::derived::provenance::fingerprint::Fingerprint, usize>,
+    ) -> Result<
+        std::collections::BTreeSet<crosstalk_spec::derived::provenance::fingerprint::Fingerprint>,
+        ScanError,
+    >
+    where
+        I: FingerprintIndex + Sync,
+        S: ProvenanceStore + Sync,
+        M: SemanticMatcher + Sync,
+        L: MessageSource + Sync,
+    {
+        let mut boilerplate = std::collections::BTreeSet::new();
+        for (fingerprint, holders) in widespread {
+            let bound = self.spread().rare_bound(holders);
+            let tokens: Vec<_> = kgrams
+                .iter()
+                .filter(|kgram| kgram.fingerprint == fingerprint)
+                .flat_map(|kgram| {
+                    token::whole_tokens_in(
+                        layer,
+                        usize::try_from(kgram.start).unwrap_or(usize::MAX),
+                        usize::try_from(kgram.end).unwrap_or(usize::MAX),
+                    )
+                })
+                .collect();
+            let mut distinctive = false;
+            for token in tokens {
+                if session.token_frequency(token).await? <= bound {
+                    distinctive = true;
+                    break;
+                }
+            }
+            if !distinctive {
+                boilerplate.insert(fingerprint);
+            }
+        }
+        Ok(boilerplate)
     }
 
     async fn read_part<I, S, M, L>(
@@ -174,36 +230,43 @@ impl Scanner {
             ));
             let kgrams = self.owned(queries);
             let hits = session.lookup(&kgrams).await?;
+            // Skeleton matches (`provenance.match.skeleton-dropped`): a
+            // match with no distinctive run that holds a boilerplate run
+            // (`provenance.match.cross-agent-spread`) is dropped whole.
+            let widespread = spread_boilerplate(&hits, &session.live, self.spread());
+            let spread = self
+                .not_distinctive(session, layer.text.text(), &kgrams, widespread)
+                .await?;
             let reader = session.reader;
             let live = &session.live;
             let keep = |span| {
                 live.get(span)
                     .is_some_and(|record: &crate::store::SpanRecord| record.span.agent != reader)
             };
-            let by_span = extents_by_span(&hits, &kgrams, keep);
-            // The spread rule: hits on boilerplate fragments count only
-            // inside a distinctive run (`provenance.match.cross-agent-spread`).
-            let spread = spread_boilerplate(&hits, live, self.spread());
-            let narrow = if spread.is_empty() {
-                None
+            let boilerplate = if spread.is_empty() {
+                BTreeMap::new()
             } else {
-                let kept: Vec<_> = hits
+                let template: Vec<_> = hits
                     .iter()
-                    .filter(|hit| !spread.contains(&hit.fingerprint))
+                    .filter(|hit| spread.contains(&hit.fingerprint))
                     .cloned()
                     .collect();
-                Some(extents_by_span(&kept, &kgrams, keep))
+                extents_by_span(&template, &kgrams, keep)
             };
+            let by_span = extents_by_span(&hits, &kgrams, keep);
             for (span, extents) in by_span {
-                let extents = match &narrow {
-                    Some(narrow) if !self.distinctive(layer.text.text(), &extents) => {
-                        match narrow.get(&span) {
-                            Some(kept) => kept.clone(),
-                            None => continue,
-                        }
-                    }
-                    _ => extents,
-                };
+                if boilerplate.contains_key(&span) && !self.distinctive(layer.text.text(), &extents)
+                {
+                    tracing::debug!(exchange = ?session.exchange, span = ?span, "skeleton match dropped");
+                    continue;
+                }
+                if self
+                    .inherited_fragment(session, layer.text.text(), span, &extents)
+                    .await?
+                {
+                    tracing::debug!(exchange = ?session.exchange, span = ?span, "inherited fragment dropped");
+                    continue;
+                }
                 let merged = merge(
                     extents
                         .into_iter()

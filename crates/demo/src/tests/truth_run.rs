@@ -188,8 +188,11 @@ async fn swarm(claude_code_shape: bool, seed: u64) -> Run {
 async fn swarm_with(claude_code_shape: bool, seed: u64, mix: TaskMix) -> Run {
     let recorder = Recorder::start().await;
     let pages = wiki().await;
+    // Unique per call: tests may run the same (shape, seed) concurrently.
+    static CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let call = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let truth = std::env::temp_dir().join(format!(
-        "crosstalk-demo-truth-v2-{}-{claude_code_shape}-{seed}.jsonl",
+        "crosstalk-demo-truth-v2-{}-{claude_code_shape}-{seed}-{call}.jsonl",
         std::process::id()
     ));
     let base = |addr: SocketAddr| format!("http://{addr}").parse::<BaseUrl>().expect("url");
@@ -551,4 +554,31 @@ async fn every_row_kind_appears() {
         .map(str::to_owned)
         .collect();
     assert_eq!(all, expected);
+}
+
+/// Two runs with the same seed, as every bench run is, must not share a
+/// session or a key: a long-lived gateway would thread the second run into
+/// the first one's conversations, and the scorer's session joins would mix
+/// runs. Their behaviour still comes from the seed alone.
+#[tokio::test]
+async fn runs_with_one_seed_share_no_session_or_key() {
+    let first = swarm(false, 42).await;
+    let second = swarm(false, 42).await;
+    assert_ne!(first.report.run, second.report.run);
+    let sessions = |run: &Run| -> BTreeSet<String> { run.sessions.keys().cloned().collect() };
+    let (a, b) = (sessions(&first), sessions(&second));
+    assert!(!a.is_empty() && !b.is_empty());
+    assert!(
+        a.is_disjoint(&b),
+        "sessions repeat across runs: {:?}",
+        a.intersection(&b).collect::<Vec<_>>()
+    );
+    let run_a = first.report.run.clone();
+    let run_b = second.report.run.clone();
+    for group in 0..3 {
+        assert_ne!(
+            crate::swarm::agent::api_key(42, &run_a, group),
+            crate::swarm::agent::api_key(42, &run_b, group)
+        );
+    }
 }
