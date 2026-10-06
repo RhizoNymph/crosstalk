@@ -15,15 +15,15 @@ use crosstalk_spec::interfaces::l8_surface::conversation::turn::{
 use crosstalk_spec::interfaces::l8_surface::summary::TransmissionStateKind;
 use crosstalk_spec::observed::message::PartRef;
 
+use super::Cv;
 use super::point;
-use crate::backend::fixture::queries::Ctx;
 use crate::backend::fixture::queries::page::{Key, newest_first};
 use crate::backend::fixture::world::TxRecord;
 use crate::backend::fixture::world::conversations::MatchRef;
 use crate::backend::fixture::world::states;
 
 /// The match `at` names and its transmission, when the world holds them.
-pub fn content<'w>(ctx: &Ctx<'w>, at: MatchRef) -> Option<(&'w TxRecord, &'w ContentMatch)> {
+pub fn content<'w>(ctx: &Cv<'_, 'w>, at: MatchRef) -> Option<(&'w TxRecord, &'w ContentMatch)> {
     let tx = ctx.world.tx(at.transmission)?;
     let confirmed = states::confirmed(&tx.transmission.state)?;
     let content = confirmed.content().iter().nth(usize::from(at.index))?;
@@ -31,7 +31,7 @@ pub fn content<'w>(ctx: &Ctx<'w>, at: MatchRef) -> Option<(&'w TxRecord, &'w Con
 }
 
 /// The transmission holding a match, its route resolved.
-pub fn mark(ctx: &Ctx, tx: &TxRecord) -> TransmissionMark {
+pub fn mark(ctx: &Cv, tx: &TxRecord) -> TransmissionMark {
     TransmissionMark {
         id: tx.transmission.id,
         route: ctx.route(&tx.transmission.route),
@@ -40,8 +40,8 @@ pub fn mark(ctx: &Ctx, tx: &TxRecord) -> TransmissionMark {
 }
 
 /// Where a recorded span sits, its author resolved now.
-pub fn span_point(ctx: &Ctx, span: SpanId) -> Option<SpanPoint> {
-    let record = ctx.world.conversations.span(span)?;
+pub fn span_point(ctx: &Cv, span: SpanId) -> Option<SpanPoint> {
+    let record = ctx.conversations.span(span)?;
     Some(SpanPoint {
         span,
         agent: ctx.agent(record.author),
@@ -53,20 +53,18 @@ pub fn span_point(ctx: &Ctx, span: SpanId) -> Option<SpanPoint> {
 
 /// When a reader read: its turn's start, or the transmission's opening.
 fn read_time(
-    ctx: &Ctx,
+    ctx: &Cv,
     tx: &TxRecord,
     content: &ContentMatch,
 ) -> crosstalk_spec::support::Timestamp {
-    ctx.world
-        .conversations
+    ctx.conversations
         .turn(content.reader_exchange())
         .map_or(tx.transmission.opened_at, |turn| turn.started_at)
 }
 
 /// Every reader of `span`, each keyed newest reader exchange first.
-pub fn readers(ctx: &Ctx, span: SpanId) -> Vec<(Key, Reader)> {
+pub fn readers(ctx: &Cv, span: SpanId) -> Vec<(Key, Reader)> {
     let mut out: Vec<(Key, Reader)> = ctx
-        .world
         .conversations
         .readers_of(span)
         .iter()
@@ -90,7 +88,7 @@ pub fn readers(ctx: &Ctx, span: SpanId) -> Vec<(Key, Reader)> {
 }
 
 /// The first [`ReadBy::INLINE`] readers of `span` and how many there are.
-pub fn read_by(ctx: &Ctx, span: SpanId) -> ReadBy {
+pub fn read_by(ctx: &Cv, span: SpanId) -> ReadBy {
     let all = readers(ctx, span);
     let total = u32::try_from(all.len()).unwrap_or(u32::MAX);
     let first: Vec<Reader> = all
@@ -102,9 +100,8 @@ pub fn read_by(ctx: &Ctx, span: SpanId) -> ReadBy {
 }
 
 /// The matches read in `exchange` at `part`, by range start.
-pub fn inbound(ctx: &Ctx, exchange: ExchangeId, part: PartRef) -> Vec<Inbound> {
+pub fn inbound(ctx: &Cv, exchange: ExchangeId, part: PartRef) -> Vec<Inbound> {
     let mut out: Vec<Inbound> = ctx
-        .world
         .conversations
         .reads_in(exchange)
         .iter()
@@ -129,8 +126,8 @@ pub fn inbound(ctx: &Ctx, exchange: ExchangeId, part: PartRef) -> Vec<Inbound> {
 }
 
 /// The spans cut from `exchange`'s output at `part`, by range start.
-pub fn output_spans(ctx: &Ctx, exchange: ExchangeId, part: PartRef) -> Vec<OutputSpan> {
-    let conversations = &ctx.world.conversations;
+pub fn output_spans(ctx: &Cv, exchange: ExchangeId, part: PartRef) -> Vec<OutputSpan> {
+    let conversations = &ctx.conversations;
     let mut out: Vec<OutputSpan> = conversations
         .spans_of(exchange)
         .filter(|(_, record)| record.location.part == part)

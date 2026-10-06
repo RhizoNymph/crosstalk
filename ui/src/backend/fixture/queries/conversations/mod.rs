@@ -1,5 +1,5 @@
 //! The conversation reads over the fixture's conversations
-//! (`World::conversations`): the list, a head, turn windows ([`turns`]),
+//! (built on the first conversation read, [`Cv`]): the list, a head, turn windows ([`turns`]),
 //! text ([`text`]), a span's readers and the batch locates, as the spec's
 //! `QueryApi` defines them (`docs/features/conversation_reads.md`,
 //! INV-1000..1029).
@@ -28,18 +28,43 @@ use crosstalk_spec::paging::{ConversationList, Page, PageRequest, SpanReaderList
 use super::Ctx;
 use super::page::{self, Key};
 use crate::backend::Result;
+use crate::backend::fixture::world::conversations::Conversations;
 use crate::backend::fixture::world::conversations::{ConversationRecord, TurnRecord};
 
 pub use marks::span_point;
+
+/// One read's context with its conversations, which the backend builds on
+/// the first conversation read. Derefs to the read's [`Ctx`].
+pub struct Cv<'c, 'a> {
+    ctx: &'c Ctx<'a>,
+    pub conversations: std::sync::Arc<Conversations>,
+}
+
+impl<'a> std::ops::Deref for Cv<'_, 'a> {
+    type Target = Ctx<'a>;
+
+    fn deref(&self) -> &Ctx<'a> {
+        self.ctx
+    }
+}
+
+impl<'c, 'a> Cv<'c, 'a> {
+    /// `ctx` with its conversations, built on first use.
+    pub fn of(ctx: &'c Ctx<'a>) -> Result<Self> {
+        Ok(Self {
+            ctx,
+            conversations: ctx.conversations()?,
+        })
+    }
+}
 
 fn index(i: usize) -> TurnIndex {
     TurnIndex(u32::try_from(i).unwrap_or(u32::MAX))
 }
 
 /// Where a threaded exchange sits.
-pub fn point(ctx: &Ctx, exchange: ExchangeId) -> Option<TurnPoint> {
-    ctx.world
-        .conversations
+pub fn point(ctx: &Cv, exchange: ExchangeId) -> Option<TurnPoint> {
+    ctx.conversations
         .locate(exchange)
         .map(|(conversation, turn)| TurnPoint {
             conversation,
@@ -71,8 +96,8 @@ fn history_len(turn: &TurnRecord) -> usize {
         + usize::from(turn.output.is_some())
 }
 
-fn origin_link(ctx: &Ctx, record: &ConversationRecord) -> OriginLink {
-    let conversations = &ctx.world.conversations;
+fn origin_link(ctx: &Cv, record: &ConversationRecord) -> OriginLink {
+    let conversations = &ctx.conversations;
     match record.origin {
         ConversationOrigin::Root => OriginLink::Root,
         ConversationOrigin::Fork {
@@ -103,7 +128,7 @@ fn origin_link(ctx: &Ctx, record: &ConversationRecord) -> OriginLink {
 
 /// The conversation as the list shows it. `None` for a conversation with
 /// no turn (never stored).
-fn row(ctx: &Ctx, record: &ConversationRecord) -> Option<ConversationRow> {
+fn row(ctx: &Cv, record: &ConversationRecord) -> Option<ConversationRow> {
     let first = record.turns.first()?;
     let last = record.turns.last()?;
     Some(ConversationRow {
@@ -119,15 +144,14 @@ fn row(ctx: &Ctx, record: &ConversationRecord) -> Option<ConversationRow> {
 
 /// `QueryApi::conversations`: `ConversationId` descending.
 pub fn list(
-    ctx: &Ctx,
+    ctx: &Cv,
     filter: &ConversationFilter,
     request: &PageRequest<ConversationList>,
 ) -> Result<Page<ConversationRow, ConversationList>> {
     let agent = filter.agent.map(|a| ctx.agent(a));
     let known = agent.is_none_or(|a| !ctx.members(a).is_empty());
     let items: Vec<(Key, ConversationRow)> = if known {
-        ctx.world
-            .conversations
+        ctx.conversations
             .records()
             .filter(|r| agent.is_none_or(|a| ctx.agent(r.agent) == a))
             .filter(|r| filter.origins.is_empty() || filter.origins.contains(&r.origin.kind()))
@@ -150,8 +174,8 @@ pub fn list(
 }
 
 /// `QueryApi::conversation`: the head.
-pub fn head(ctx: &Ctx, id: ConversationId) -> Result<Option<ConversationHead>> {
-    let conversations = &ctx.world.conversations;
+pub fn head(ctx: &Cv, id: ConversationId) -> Result<Option<ConversationHead>> {
+    let conversations = &ctx.conversations;
     let Some(record) = conversations.get(id) else {
         return Ok(None);
     };
@@ -233,14 +257,14 @@ pub fn head(ctx: &Ctx, id: ConversationId) -> Result<Option<ConversationHead>> {
 
 /// `QueryApi::exchange_turns`.
 pub fn exchange_turns(
-    ctx: &Ctx,
+    ctx: &Cv,
     ids: &IdBatch<ExchangeId>,
 ) -> BTreeMap<ExchangeId, ExchangePlacement> {
     ids.ids()
         .iter()
         .filter_map(|id| {
             let point = point(ctx, *id)?;
-            let turn = ctx.world.conversations.turn(*id)?;
+            let turn = ctx.conversations.turn(*id)?;
             Some((
                 *id,
                 ExchangePlacement {
@@ -254,7 +278,7 @@ pub fn exchange_turns(
 }
 
 /// `QueryApi::span_points`: the recorded (originated) spans of `ids`.
-pub fn span_points(ctx: &Ctx, ids: &IdBatch<SpanId>) -> BTreeMap<SpanId, SpanPoint> {
+pub fn span_points(ctx: &Cv, ids: &IdBatch<SpanId>) -> BTreeMap<SpanId, SpanPoint> {
     ids.ids()
         .iter()
         .filter_map(|id| span_point(ctx, *id).map(|point| (*id, point)))
@@ -264,11 +288,11 @@ pub fn span_points(ctx: &Ctx, ids: &IdBatch<SpanId>) -> BTreeMap<SpanId, SpanPoi
 /// `QueryApi::span_readers`: newest reader exchange first. `None` for a
 /// span the fixture never recorded.
 pub fn readers(
-    ctx: &Ctx,
+    ctx: &Cv,
     span: SpanId,
     request: &PageRequest<SpanReaderList>,
 ) -> Result<Option<Page<Reader, SpanReaderList>>> {
-    if ctx.world.conversations.span(span).is_none() {
+    if ctx.conversations.span(span).is_none() {
         return Ok(None);
     }
     let items: Vec<(Key, Reader)> = marks::readers(ctx, span);

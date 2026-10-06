@@ -9,12 +9,12 @@ use crosstalk_spec::interfaces::l8_surface::conversation::text::{
 };
 use crosstalk_spec::observed::message::PartRef;
 
+use super::Cv;
 use super::index;
 use super::turns::body;
 use crate::backend::Result;
-use crate::backend::fixture::queries::Ctx;
 
-fn message_text(ctx: &Ctx, hash: MessageHash, limit: TextLimit) -> Result<MessageText> {
+fn message_text(ctx: &Cv, hash: MessageHash, limit: TextLimit) -> Result<MessageText> {
     let body = match body(ctx, hash) {
         None => BodyText::BodyDropped,
         Some(message) => {
@@ -40,12 +40,12 @@ fn message_text(ctx: &Ctx, hash: MessageHash, limit: TextLimit) -> Result<Messag
 /// `QueryApi::conversation_text`: aligned with `conversation_turns` for the
 /// same window.
 pub fn window(
-    ctx: &Ctx,
+    ctx: &Cv,
     id: ConversationId,
     window: &TurnWindow,
     limit: TextLimit,
 ) -> Result<Option<ConversationText>> {
-    let Some(record) = ctx.world.conversations.get(id) else {
+    let Some(record) = ctx.conversations.get(id) else {
         return Ok(None);
     };
     let total = u32::try_from(record.turns.len()).unwrap_or(u32::MAX);
@@ -75,7 +75,7 @@ pub fn window(
 
 /// `QueryApi::part_text`: `None` when no such message is stored; a part
 /// with no text or a slice off its text is `InvalidInput`.
-pub fn part(ctx: &Ctx, part: PartRef, slice: TextSlice) -> Result<Option<PartText>> {
+pub fn part(ctx: &Cv, part: PartRef, slice: TextSlice) -> Result<Option<PartText>> {
     let Some(message) = body(ctx, part.message) else {
         return Ok(None);
     };

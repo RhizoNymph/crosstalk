@@ -228,7 +228,7 @@ touches the mapping, not the layout.
 
 ### Backends
 
-- **Fixture**: answers every read from `World::conversations`
+- **Fixture**: answers every read from its conversations
   (`backend/fixture/queries/conversations/`): the list (canonical agent,
   origin and replay filters, `ConversationId` descending, keyset cursor
   bound to the filter and the resolved cluster), the head (origin links,
@@ -252,9 +252,14 @@ touches the mapping, not the layout.
 
 The fixture's traffic generator knows exchanges only as ids on content
 matches and spans only as locations, so `backend/fixture/world/conversations/`
-threads that traffic into conversations once, after the world is
-generated (`World::conversations`, shared like `blobs`; a replay's copy
-keeps the turns started by its cutoff):
+threads that traffic into conversations. They are not part of world
+generation, where they cost about 80% of the time (some 800 ms of 960 ms
+in a debug build): the backend builds them once, on its first
+conversation read (`LazyConversations`, a `OnceLock`, so concurrent first
+reads build once), and a replay snapshot cuts them at its present on its
+own first conversation read. Pages that read no conversation never build
+them. Reads reach them through `Ctx::conversations` and the queries'
+`Cv` wrapper:
 
 - a **reader turn** per reader exchange: its inputs are the messages the
   copies arrived in (`ContentMatch::read_at`, bodies in `Blobs`, dropped
@@ -296,7 +301,7 @@ inputs as assistant messages.
 | `ui/src/pages/conversation/tests.rs`, `links_tests.rs` | component rendering from view models; the entry links |
 | `ui/src/pages/common/links.rs` | `agent_conversations_url`, `conversation_url`, `exchange_url`, `span_url` |
 | `ui/src/pages/agents/detail.rs`, `topology/drawer/{mod,model}.rs`, `transmission/{model,sections}.rs` | the entry links: "Conversations" on the agent header and drawer agent panel; "in sender's / reader's conversation" on each evidence match |
-| `ui/src/pages/mod.rs`, `backend/fixture/world/mod.rs` | module registration; `World::conversations` |
+| `ui/src/pages/mod.rs`, `backend/fixture/{mod,replay}.rs`, `queries/mod.rs` | module registration; the lazily built conversations (`FixtureBackend::conversations`, `Snapshot::conversations`, `Ctx::with_conversations`) |
 
 Pages and reads:
 

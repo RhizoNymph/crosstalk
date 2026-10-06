@@ -18,7 +18,8 @@ fn world() -> &'static World {
 }
 
 fn conversations() -> &'static Conversations {
-    &world().conversations
+    static CONVERSATIONS: OnceLock<Conversations> = OnceLock::new();
+    CONVERSATIONS.get_or_init(|| build(world()).expect("conversations"))
 }
 
 fn cases() -> &'static Cases {

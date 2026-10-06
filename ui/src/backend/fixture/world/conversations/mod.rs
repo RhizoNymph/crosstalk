@@ -31,7 +31,8 @@
 //! conversation view cut the same bytes.
 //!
 //! The overlay is data only: the reads over it are the fixture's
-//! conversation queries.
+//! conversation queries. It is built on the first conversation read, not
+//! with the world ([`LazyConversations`]).
 
 mod build;
 mod messages;
@@ -40,7 +41,7 @@ mod messages;
 mod tests;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use crosstalk_spec::derived::provenance::span::{RelaySource, SpanLocation};
 use crosstalk_spec::ids::{
@@ -172,6 +173,31 @@ pub struct Cases {
     pub replay: (CorpusId, ConversationId),
     /// The turn still waiting for its provenance scan.
     pub pending_scan: ExchangeId,
+}
+
+/// Conversations built on first use, once. The world does not build them
+/// with the rest of its data (they cost most of its generation time); the
+/// fixture builds them on its first conversation read, so pages that never
+/// read a conversation pay nothing. Concurrent first reads build once:
+/// `OnceLock::get_or_init` runs one initializer and the others wait for it.
+#[derive(Debug, Default)]
+pub struct LazyConversations(OnceLock<Result<Arc<Conversations>, String>>);
+
+impl LazyConversations {
+    /// The conversations, building them with `build` on the first call.
+    /// A failed build is kept: every later call fails the same way.
+    pub fn get_or_build(
+        &self,
+        build: impl FnOnce() -> Result<Conversations, String>,
+    ) -> Result<Arc<Conversations>, String> {
+        self.0.get_or_init(|| build().map(Arc::new)).clone()
+    }
+
+    /// Whether they were built (or their build failed).
+    #[cfg(test)]
+    pub fn is_built(&self) -> bool {
+        self.0.get().is_some()
+    }
 }
 
 /// Every conversation of the fixture. Empty (the default) until

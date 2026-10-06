@@ -32,8 +32,7 @@ fn backend() -> &'static FixtureBackend {
 
 fn cases() -> Cases {
     backend()
-        .world
-        .conversations
+        .conversation_records()
         .cases()
         .expect("cases")
         .clone()
@@ -76,7 +75,11 @@ async fn all(
 #[tokio::test]
 async fn an_agents_conversations_are_its_own_newest_first_each_once() {
     let fork = cases().fork.0;
-    let agent = backend().world.conversations.get(fork).expect("fork").agent;
+    let agent = backend()
+        .conversation_records()
+        .get(fork)
+        .expect("fork")
+        .agent;
     let rows = all(&ConversationFilter {
         agent: Some(agent),
         ..ConversationFilter::default()
@@ -579,4 +582,83 @@ async fn a_delegated_childs_head_names_its_parent() {
     let link = head.delegated_from.expect("spawned by a delegation");
     assert_eq!(link.child.conversation, placement.conversation);
     assert!(head.traffic.received >= 1);
+}
+
+#[tokio::test]
+async fn conversations_are_built_on_the_first_conversation_read_only() {
+    let fresh = FixtureBackend::try_new(crate::testing::SEED).expect("fixture");
+    assert!(!fresh.conversations_built(), "generation builds none");
+    let _ = fresh
+        .agents(
+            &everyone(),
+            &crosstalk_spec::aggregates::agents::filter::AgentFilter::default(),
+            crate::backend::fixture::clock::all_time().expect("window"),
+            &page(5),
+        )
+        .await
+        .expect("agents");
+    assert!(
+        !fresh.conversations_built(),
+        "a page without conversations pays nothing"
+    );
+    let rows = fresh
+        .conversations(&everyone(), &ConversationFilter::default(), &page(5))
+        .await
+        .expect("conversations");
+    assert!(fresh.conversations_built());
+    assert!(!rows.items().is_empty());
+    assert_eq!(
+        *fresh.conversation_records(),
+        *backend().conversation_records(),
+        "the same seed builds the same conversations"
+    );
+}
+
+#[test]
+fn concurrent_first_reads_build_once() {
+    let fresh = FixtureBackend::try_new(crate::testing::SEED).expect("fixture");
+    let (a, b) = std::thread::scope(|scope| {
+        let a = scope.spawn(|| fresh.conversation_records());
+        let b = scope.spawn(|| fresh.conversation_records());
+        (a.join().expect("a"), b.join().expect("b"))
+    });
+    assert!(
+        std::sync::Arc::ptr_eq(&a, &b),
+        "one build serves both reads"
+    );
+}
+
+#[tokio::test]
+async fn a_replay_reads_the_conversations_cut_at_its_present() {
+    use crate::backend::fixture::clock::{HOUR, NOW, minus};
+    let at = minus(NOW, 24 * HOUR);
+    let replay = FixtureBackend::try_replay_at(crate::testing::SEED, at).expect("replay");
+    let rows = all_of(&replay, &ConversationFilter::default()).await;
+    let every = all(&ConversationFilter::default()).await;
+    assert!(!rows.is_empty());
+    assert!(
+        rows.len() < every.len(),
+        "later conversations are not there yet"
+    );
+    assert!(rows.iter().all(|r| r.started_at <= at));
+}
+
+async fn all_of(
+    b: &FixtureBackend,
+    filter: &ConversationFilter,
+) -> Vec<crosstalk_spec::interfaces::l8_surface::conversation::ConversationRow> {
+    let mut out = Vec::new();
+    let mut request: PageRequest<ConversationList> = page(500);
+    loop {
+        let page: Page<_, ConversationList> = b
+            .conversations(&everyone(), filter, &request)
+            .await
+            .expect("conversations");
+        let (items, next) = page.into_parts();
+        out.extend(items);
+        match next {
+            Some(next) => request.after = Some(next),
+            None => return out,
+        }
+    }
 }
