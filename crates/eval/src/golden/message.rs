@@ -4,7 +4,8 @@
 //! index means the same part on both sides and a spec `PartRef` becomes a
 //! bench `(MessageId, part)` mechanically. What the bench does not store
 //! is dropped: reasoning and tool-call signatures, opaque reasoning's
-//! payload, media bytes, unknown blocks' raw JSON. A tool call's arguments
+//! payload, media bytes (a media part keeps its kind), unknown blocks'
+//! kind and raw JSON. A tool call's arguments
 //! are the spec's canonical JSON text, which the bench's canonical form
 //! must reproduce byte for byte ([`ToolArguments::Json`]); a difference is
 //! an error, never a silent re-canonicalisation.
@@ -49,12 +50,9 @@ pub fn convert(
                     spec::UserPart::Text(text) => UserPart::Text {
                         text: text.0.clone(),
                     },
-                    spec::UserPart::Media(media) => {
-                        lossy.media_kinds += 1;
-                        UserPart::Media {
-                            media_type: media_type(media.kind).to_owned(),
-                        }
-                    }
+                    spec::UserPart::Media(media) => UserPart::Media {
+                        kind: media_kind(media.kind),
+                    },
                     spec::UserPart::Unknown(_) => {
                         lossy.unknown_blocks += 1;
                         UserPart::Unknown
@@ -104,12 +102,12 @@ pub fn convert(
     })
 }
 
-/// The spec names a media part's kind, not its media type.
-pub fn media_type(kind: MediaKind) -> &'static str {
+/// A media part's kind; its bytes are not stored.
+pub fn media_kind(kind: MediaKind) -> bench::message::MediaKind {
     match kind {
-        MediaKind::Image => "image",
-        MediaKind::Audio => "audio",
-        MediaKind::Document => "document",
+        MediaKind::Image => bench::message::MediaKind::Image,
+        MediaKind::Audio => bench::message::MediaKind::Audio,
+        MediaKind::Document => bench::message::MediaKind::Document,
     }
 }
 
@@ -151,12 +149,9 @@ fn tool_result(result: &spec::ToolResult, lossy: &mut Lossy) -> ToolResult {
                 ToolResultContent::Text(text) => ResultContent::Text {
                     text: text.0.clone(),
                 },
-                ToolResultContent::Media(media) => {
-                    lossy.media_kinds += 1;
-                    ResultContent::Media {
-                        media_type: media_type(media.kind).to_owned(),
-                    }
-                }
+                ToolResultContent::Media(media) => ResultContent::Media {
+                    kind: media_kind(media.kind),
+                },
                 ToolResultContent::Unknown(_) => {
                     lossy.unknown_blocks += 1;
                     ResultContent::Unknown

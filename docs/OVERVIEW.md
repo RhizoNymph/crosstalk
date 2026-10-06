@@ -1582,7 +1582,9 @@ Features Index:
       selection's worlds, labels and predictions (reference, live or the
       demo swarm's gateway export) in the bench format a2a-bench/1
       (ct-eval export, run --predictions-out, swarm --export-out
-      --predictions-out, verify), refusing what the format cannot express.
+      --predictions-out, verify): controls no exchange carries are dropped
+      and counted in the manifest's per-world notes, and what the format
+      cannot express is refused.
     entry_points:
       - crates/eval/src/lib.rs
       - crates/eval/src/pipeline.rs

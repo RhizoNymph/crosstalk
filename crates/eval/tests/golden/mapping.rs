@@ -8,11 +8,11 @@
 //! one test, an identity cluster).
 
 use a2a_bench_format::check::WorldInputs;
-use a2a_bench_format::labels::Label;
+use a2a_bench_format::labels::{ClusterKind, Label};
 use a2a_bench_format::message::{AssistantPart, Body, ResultContent, ToolArguments, UserPart};
 use a2a_bench_format::predictions::{Prediction, State};
 use crosstalk_eval::corpus::{Coverage, Driven, HashedMessage, World, WorldBuilder};
-use crosstalk_eval::golden::{self, Gap, GoldenError, Lossy, ids, message};
+use crosstalk_eval::golden::{self, Lossy, ids, message};
 use crosstalk_eval::keys::{AgentKey, SourceRef, WorldKey};
 use crosstalk_eval::location::{in_message, whole_part};
 use crosstalk_eval::pipeline::{Detector, ReferenceDetector};
@@ -325,7 +325,7 @@ fn reference_predictions_locate_the_read_and_attribute_every_exchange() {
     let rows = golden::predictions::rows(
         &detection.transmissions,
         &directory,
-        detection.agents.attribution(),
+        &golden::predictions::held(detection.agents.attribution()),
         &Default::default(),
         golden::predictions::Unlocated::Fail,
         &export.index,
@@ -416,10 +416,9 @@ fn message_parts_keep_what_the_bench_stores() {
     assert_eq!(
         parts[1],
         UserPart::Media {
-            media_type: "image".into()
+            kind: a2a_bench_format::message::MediaKind::Image
         }
     );
-    assert_eq!(lossy.media_kinds, 1);
 
     let results = HashedMessage::new(MessageBody::Tool(NonEmpty::new(ToolResult {
         call_id: ToolCallId("call_7".into()),
@@ -457,17 +456,96 @@ fn spec_and_bench_ids_line_up() {
         assert_eq!(bench.id.to_string(), exchange.id().ulid_text());
         assert_eq!(bench.at_us.as_micros(), exchange.at().as_micros());
         assert_eq!(bench.source.file(), exchange.source().file);
-        assert!(bench.client.credential.starts_with("k0:"));
+        assert!(bench.client.credential.starts_with("k:"));
     }
 }
 
-/// The format's `agent_cluster` row writes `kind` twice, so a cluster is
-/// refused, never written unreadable or dropped.
+/// An identity cluster is an `agent_cluster` row of cluster `identity`,
+/// and it round-trips through the format.
 #[test]
-fn a_cluster_is_refused_as_a_gap() {
+fn an_identity_cluster_is_exported() {
     let built = build_with(true);
-    match golden::export(&built.world) {
-        Err(GoldenError::Unexpressible(Gap::ClusterRow { label })) => assert_eq!(label, "t4"),
-        other => panic!("expected the cluster gap, got {:?}", other.map(|_| ())),
+    let (export, _) = exported(&built);
+    let clusters: Vec<_> = export
+        .labels
+        .iter()
+        .filter_map(|label| match label {
+            Label::AgentCluster(row) => Some(row.fields().clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(clusters.len(), 1);
+    assert_eq!(clusters[0].id.as_str(), "t4");
+    assert_eq!(clusters[0].cluster, ClusterKind::Identity);
+    let line = serde_json::to_string(&export.labels[export.labels.len() - 1])
+        .unwrap_or_else(|e| panic!("{e}"));
+    let back: Label = serde_json::from_str(&line).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(back, export.labels[export.labels.len() - 1]);
+}
+
+/// A control placed in a message no exchange carries can never match: it
+/// is dropped and counted in the world's notes, and later ids keep their
+/// truth index.
+#[test]
+fn a_control_no_exchange_carries_is_dropped_and_noted() {
+    let key = WorldKey::new("w1");
+    let mut world = WorldBuilder::new(dataset(), key);
+    let alice = world
+        .agent("alice", Driven::Model, "test/model")
+        .unwrap_or_else(|e| panic!("{e}"));
+    let bob = world
+        .agent("bob", Driven::Model, "test/model")
+        .unwrap_or_else(|e| panic!("{e}"));
+    let prompt = system("You are a careful agent.");
+    let bob_ex = world
+        .exchange(draft(&bob, 0, vec![prompt.clone()], says("Hello.")))
+        .unwrap_or_else(|e| panic!("{e}"));
+    let never_sent = user("A note nobody sends.");
+    let source = SourceRef::new("fixture.json", "/truth");
+    for (at, message) in [never_sent.clone(), prompt.clone()].iter().enumerate() {
+        world.expect(Expectation::NoTransmission(
+            NegativeControl::new(NegativeLabel {
+                from: alice.clone(),
+                to: bob.clone(),
+                reader_exchange: None,
+                at: Some(whole_part(message.message(), 0).unwrap_or_else(|e| panic!("{e}"))),
+                origin: None,
+                text: None,
+                reason: NegativeReason::SharedSource,
+                tier: Tier::Structural,
+                source: source.at(format!("/{at}")),
+            })
+            .unwrap_or_else(|e| panic!("{e}")),
+        ));
     }
+    let world = world.finish(Coverage::Partial);
+    let export = golden::export(&world).unwrap_or_else(|e| panic!("{e}"));
+    export.check().unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(
+        export.notes.get(golden::labels::UNCARRIED_CONTROL),
+        Some(&1)
+    );
+    let controls: Vec<_> = export
+        .labels
+        .iter()
+        .filter_map(|label| match label {
+            Label::NegativeControl(row) => Some(row.fields().clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(controls.len(), 1);
+    assert_eq!(controls[0].id.as_str(), "t1");
+    assert_eq!(
+        controls[0].at.map(|at| at.exchange),
+        Some(ids::exchange(bob_ex))
+    );
+}
+
+/// A repeatable flag is one list setting.
+#[test]
+fn a_repeatable_flag_is_a_list() {
+    let mut settings = std::collections::BTreeMap::new();
+    golden::manifest::list(&mut settings, "include", &["a".to_owned(), "b".to_owned()]);
+    let json = serde_json::to_string(&settings).unwrap_or_else(|e| panic!("{e}"));
+    assert_eq!(json, r#"{"include":["a","b"]}"#);
 }

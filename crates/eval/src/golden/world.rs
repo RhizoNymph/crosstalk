@@ -10,7 +10,7 @@
 //! that carries each message, which places a ct-eval location that names
 //! no exchange.
 
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use a2a_bench_format as bench;
 use bench::check::{WorldInputs, check_labels};
@@ -24,7 +24,7 @@ use bench::time::Timestamp;
 use crosstalk_spec::ids::{ExchangeId, MessageHash};
 use crosstalk_spec::observed::client::{ClientContext, InferenceServer, UpstreamKind, Vendor};
 use crosstalk_spec::observed::exchange::{
-    Continuation, Exchange as SpecExchange, ExchangeOutcome, StopReason,
+    Continuation, Exchange as SpecExchange, ExchangeFailure, ExchangeOutcome, StopReason,
 };
 use crosstalk_spec::observed::message::Message as SpecMessage;
 use crosstalk_spec::support::Timestamp as SpecTimestamp;
@@ -42,6 +42,9 @@ pub struct WorldExport {
     pub messages: Vec<bench::message::Message>,
     pub exchanges: Vec<Exchange>,
     pub labels: Vec<Label>,
+    /// Counts for the world's manifest entry (`WorldEntry::notes`): labels
+    /// the converter dropped or did not make, by name.
+    pub notes: BTreeMap<String, u64>,
     pub coverage: Coverage,
     pub index: MessageIndex,
     pub lossy: Lossy,
@@ -159,16 +162,15 @@ impl WorldBuilder {
                 exchange: id,
             }));
         }
-        let (response, stop) = match &spec.outcome {
+        let (response, stop, error) = match &spec.outcome {
             ExchangeOutcome::Completed { response, stop, .. } => {
-                (Some(*response), Some(stop_text(*stop)))
+                (Some(*response), Some(stop_text(*stop)), None)
             }
             ExchangeOutcome::Failed {
-                partial_response, ..
-            } => {
-                self.lossy.failed_exchanges += 1;
-                (*partial_response, None)
-            }
+                partial_response,
+                failure,
+                ..
+            } => (*partial_response, None, Some(failure_text(*failure))),
         };
         let mut request = Vec::with_capacity(spec.request.len());
         for hash in &spec.request {
@@ -189,6 +191,7 @@ impl WorldBuilder {
             response: Response {
                 messages: response,
                 stop,
+                error,
             },
             fidelity: fidelity(draft.fidelity),
             source: ids::source(draft.source),
@@ -237,6 +240,7 @@ impl WorldBuilder {
         key: bench::ids::WorldKey,
         decl: WorldDecl,
         labels: Vec<Label>,
+        notes: BTreeMap<String, u64>,
         coverage: Coverage,
     ) -> WorldExport {
         WorldExport {
@@ -245,6 +249,7 @@ impl WorldBuilder {
             messages: self.messages,
             exchanges: self.exchanges,
             labels,
+            notes,
             coverage,
             index: self.index,
             lossy: self.lossy,
@@ -290,12 +295,15 @@ pub fn export(world: &World) -> Result<WorldExport, GoldenError> {
         agents,
     };
     let mut labels = super::labels::exchange_agents(builder.owners())?;
-    labels.extend(super::labels::truth(
-        world.key(),
-        world.truth(),
-        builder.index(),
-    )?);
-    Ok(builder.finish(key, decl, labels, super::kinds::coverage(world.coverage())))
+    let truth = super::labels::truth(world.key(), world.truth(), builder.index())?;
+    labels.extend(truth.labels);
+    Ok(builder.finish(
+        key,
+        decl,
+        labels,
+        truth.notes,
+        super::kinds::coverage(world.coverage()),
+    ))
 }
 
 fn fidelity(fidelity: corpus::Fidelity) -> Fidelity {
@@ -306,7 +314,7 @@ fn fidelity(fidelity: corpus::Fidelity) -> Fidelity {
     }
 }
 
-/// What a proxy observes: the credential's digest (`k<secret version>:<hex>`),
+/// What a proxy observes: the credential's digest (`k:<hex>`),
 /// the harness session, the request's ordinal in it, the vendor and model.
 fn client(
     context: &ClientContext,
@@ -319,11 +327,7 @@ fn client(
         .as_ref()
         .ok_or(GoldenError::Unexpressible(Gap::NoCredential { exchange }))?;
     Ok(Client {
-        credential: format!(
-            "k{}:{}",
-            credential.hash.key().0,
-            credential.hash.digest().to_hex()
-        ),
+        credential: format!("k:{}", credential.hash.digest().to_hex()),
         session: context.ids.session.clone(),
         turn,
         vendor: Some(vendor(&context.upstream.kind)),
@@ -342,6 +346,20 @@ fn vendor(kind: &UpstreamKind) -> String {
         },
         UpstreamKind::InferenceServer(InferenceServer::Vllm) => "vllm".to_owned(),
         UpstreamKind::InferenceServer(InferenceServer::Sglang) => "sglang".to_owned(),
+    }
+}
+
+/// A failed exchange's failure, as `response.error`.
+fn failure_text(failure: ExchangeFailure) -> String {
+    match failure {
+        ExchangeFailure::Upstream { status } => format!("upstream {status}"),
+        ExchangeFailure::UpstreamUnreachable => "upstream_unreachable".to_owned(),
+        ExchangeFailure::StreamTruncated => "stream_truncated".to_owned(),
+        ExchangeFailure::MalformedStream { offset } => format!("malformed_stream at {offset}"),
+        ExchangeFailure::UpstreamErrorEvent => "upstream_error_event".to_owned(),
+        ExchangeFailure::UnparseableResponse => "unparseable_response".to_owned(),
+        ExchangeFailure::ClientDisconnected => "client_disconnected".to_owned(),
+        ExchangeFailure::Timeout => "timeout".to_owned(),
     }
 }
 

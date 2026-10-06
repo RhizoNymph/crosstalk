@@ -94,7 +94,7 @@ impl<W: Write> GoldenRun<W> {
                 let rows = predictions::rows(
                     &detection.transmissions,
                     &directory,
-                    detection.agents.attribution(),
+                    &predictions::held(detection.agents.attribution()),
                     &std::collections::BTreeMap::new(),
                     predictions::Unlocated::Fail,
                     &export.index,

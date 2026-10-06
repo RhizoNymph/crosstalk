@@ -187,7 +187,11 @@ pub fn manifest_spec(args: &SourceArgs, source: &AnySource) -> Result<ManifestSp
     let started = Instant::now();
     let files = match source {
         AnySource::Salt(salt) => {
-            let mut files = salt.files().to_vec();
+            let mut files: Vec<String> = salt
+                .files()
+                .iter()
+                .map(|path| manifest::slashed(path))
+                .collect();
             files.sort();
             files
         }

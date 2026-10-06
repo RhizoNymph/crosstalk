@@ -14,7 +14,8 @@ path = "src/bin/ct-eval/main.rs"
 
 [dependencies]
 # The bench's on-disk format. A path dependency until the bench repository
-# is pushed; it moves to a pinned git tag before merge.
+# is pushed (feat/format at 06874bf); it moves to a pinned git tag before
+# merge.
 a2a-bench-format = { path = "../../../../a2a-transmission-bench/feat-format/crates/format" }
 crosstalk-spec = { path = "../../spec" }
 crosstalk-flow = { path = "../flow" }

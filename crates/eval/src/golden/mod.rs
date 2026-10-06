@@ -16,8 +16,10 @@
 //! ```
 //!
 //! What the format cannot express is refused with a [`Gap`], never worked
-//! around; what it can express only without some detail (a semantic match's
-//! similarity, a failed exchange's failure) is counted in [`Lossy`].
+//! around; labels it drops by rule (a control no exchange carries, a key
+//! group of one agent) are counted in the world's manifest `notes`; what it
+//! holds only without some detail (a semantic match's similarity) is
+//! counted in [`Lossy`].
 
 pub mod ids;
 pub mod kinds;
@@ -36,7 +38,7 @@ use std::path::Path;
 
 use a2a_bench_format as bench;
 use crosstalk_spec::derived::flow::access::AccessKind;
-use crosstalk_spec::ids::{AccessId, ChannelId, ExchangeId, MessageHash};
+use crosstalk_spec::ids::{AccessId, ExchangeId, MessageHash};
 use serde::Serialize;
 
 pub use manifest::ManifestSpec;
@@ -59,54 +61,19 @@ pub enum Gap {
         "exchange {exchange:?} has no credential; a bench client needs a credential fingerprint"
     )]
     NoCredential { exchange: ExchangeId },
-    #[error(
-        "channel {channel:?} holds {resources} canonical resources; a bench route names exactly one"
-    )]
-    ChannelResources {
-        channel: ChannelId,
-        resources: usize,
-    },
-    #[error("{locator}: a file on a host that is not a repository; a bench `file` has no host")]
-    FileOnHost { locator: String },
-    #[error("{locator}: an MCP resource; a bench `opaque` has no server and needs a key")]
-    McpLocator { locator: String },
-    #[error(
-        "label {label}: an agent_cluster row; the format writes its `kind` twice (the row's tag and the cluster's kind), so labels.jsonl could not be read back"
-    )]
-    ClusterRow { label: String },
-    #[error(
-        "label {label}: it names a place in message {message:?} and no exchange, and no exchange carries that message; a bench location is in an exchange that carries its message"
-    )]
-    UncarriedLocation { label: String, message: MessageHash },
-    #[error(
-        "exchange {exchange:?} is tied to detector agents {first:?} and {second:?}; a bench attribution gives an exchange one agent"
-    )]
-    ExchangeTiedTwice {
-        exchange: ExchangeId,
-        first: crosstalk_spec::ids::AgentId,
-        second: crosstalk_spec::ids::AgentId,
-    },
 }
 
-/// Details the format has no field for, counted per export.
+/// Details the format has no field for, counted per export. What a world
+/// drops or does not label is in its manifest entry's `notes` instead.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
 pub struct Lossy {
-    /// Media parts written with their kind (`image`, `audio`,
-    /// `document`) as the media type: the spec records no MIME type.
-    pub media_kinds: u64,
     /// Unknown provider blocks, written without their kind.
     pub unknown_blocks: u64,
-    /// Failed exchanges, written with their partial response (if any) and
-    /// no stop reason: the bench has no failure field.
-    pub failed_exchanges: u64,
     /// Semantic matches, written without their similarity.
     pub similarities: u64,
     /// Detector agents the evidence names that hold no exchange, written
     /// as `unattributed`.
     pub unattributed_agents: u64,
-    /// Demo-swarm key groups of one agent, which a bench cluster (two or
-    /// more agents) cannot hold.
-    pub single_agent_key_groups: u64,
     /// Demo-swarm transmissions whose evidence names an exchange outside
     /// the exported world; ct-eval drops their predictions too.
     pub dropped_transmissions: u64,
@@ -118,12 +85,9 @@ pub struct Lossy {
 
 impl Lossy {
     pub fn add(&mut self, other: Self) {
-        self.media_kinds += other.media_kinds;
         self.unknown_blocks += other.unknown_blocks;
-        self.failed_exchanges += other.failed_exchanges;
         self.similarities += other.similarities;
         self.unattributed_agents += other.unattributed_agents;
-        self.single_agent_key_groups += other.single_agent_key_groups;
         self.dropped_transmissions += other.dropped_transmissions;
         self.agent_conflicts += other.agent_conflicts;
     }
@@ -216,6 +180,8 @@ pub enum GoldenError {
         #[source]
         source: std::io::Error,
     },
+    #[error("the source digest: {0}")]
+    Source(bench::source::SourceDigestError),
     #[error("encoding: {0}")]
     Encode(#[source] serde_json::Error),
     #[error("verifying: {0}")]

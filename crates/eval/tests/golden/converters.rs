@@ -16,7 +16,7 @@ use crosstalk_eval::datasets::swarm::{SwarmSelection, SwarmSource};
 use crosstalk_eval::datasets::swe_splice::SpliceSource;
 use crosstalk_eval::datasets::tau2::{self, Tau2Source};
 use crosstalk_eval::datasets::wiki::{WikiSelection, WikiSource};
-use crosstalk_eval::golden::{Gap, GoldenError, ids};
+use crosstalk_eval::golden::ids;
 
 use super::common::{dir, export_reference, fixtures, labels, worlds};
 
@@ -106,22 +106,26 @@ fn tau2() -> Tau2Source {
         .unwrap_or_else(|e| panic!("{e}"))
 }
 
-/// τ²-bench labels a shared-source control on a record after the reader's
-/// last call: a message no exchange carries, which a bench location cannot
-/// name. The export stops on it; every exchange id is still derived.
+/// τ²-bench labels shared-source controls on records after the reader's
+/// last call: messages no exchange carries. They are dropped and noted, and
+/// the rest exports and checks.
 #[test]
-fn tau2_stops_on_a_control_no_exchange_carries() {
-    let mut refused = 0;
-    for world in worlds(&mut tau2()) {
-        match crosstalk_eval::golden::export(&world) {
-            Ok(export) => {
-                export.check().unwrap_or_else(|e| panic!("{e}"));
-            }
-            Err(GoldenError::Unexpressible(Gap::UncarriedLocation { .. })) => refused += 1,
-            Err(other) => panic!("{}: {other}", world.key()),
-        }
-    }
-    assert!(refused > 0, "the fixture holds such a control");
+fn tau2_exports_and_notes_uncarried_controls() {
+    let out = dir("tau2");
+    let (finished, verified) = export_reference(&mut tau2(), &out);
+    assert!(verified.worlds > 0);
+    let uncarried: u64 = finished
+        .manifest
+        .worlds
+        .iter()
+        .filter_map(|world| {
+            world
+                .notes
+                .get(crosstalk_eval::golden::labels::UNCARRIED_CONTROL)
+        })
+        .sum();
+    assert!(uncarried > 0, "the fixture holds such a control");
+    assert!(truth_rows(&labels(&out)) > 0);
     ids_are_derived(&worlds(&mut tau2()));
 }
 

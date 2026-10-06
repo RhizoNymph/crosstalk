@@ -1,47 +1,45 @@
 //! Spec locators as bench resources (design §6.1): `Repository` →
 //! `repository`, `File` with a `<host>/<owner…>/<name>` host → `repo_file`,
-//! `File` without a host → `file`, `Url` → `url` (its canonical text, which
-//! the bench canonicalises again), `Opaque` → `opaque`.
-//!
-//! Two locators have no bench form, and are refused rather than guessed at:
-//! a `File` whose host is a machine, not a repository (the bench's `file`
-//! has no host), and an `Mcp` locator (the bench's `opaque` has no server
-//! and needs a key where the spec's target is optional).
+//! any other `File` → `file` (with its host, if any), `Url` → `url` (its
+//! canonical text, which the bench canonicalises again), `Mcp` → `mcp`,
+//! `Opaque` → `opaque`. Every locator has a bench form.
 
 use a2a_bench_format::resource::{Repository, Resource};
 use crosstalk_spec::derived::flow::resource::Locator;
 
-use super::GoldenError;
 use crate::truth::kinds::locator_key;
 
-pub fn resource(locator: &Locator) -> Result<Resource, GoldenError> {
+pub fn resource(locator: &Locator) -> Resource {
     match locator {
-        Locator::Repository { host, owner, name } => Ok(Resource::Repository(Repository {
+        Locator::Repository { host, owner, name } => Resource::Repository(Repository {
             host: host.0.clone(),
             owner: owner.clone(),
             name: name.clone(),
-        })),
-        Locator::File { host: None, path } => Ok(Resource::File { path: path.clone() }),
-        Locator::File {
-            host: Some(host),
-            path,
-        } => match repository(&host.0) {
-            Some(repository) => Ok(Resource::RepoFile {
+        }),
+        Locator::File { host, path } => match host.as_ref().and_then(|host| repository(&host.0)) {
+            Some(repository) => Resource::RepoFile {
                 repository,
                 path: path.clone(),
-            }),
-            None => Err(GoldenError::Unexpressible(super::Gap::FileOnHost {
-                locator: locator_key(locator),
-            })),
+            },
+            None => Resource::File {
+                host: host.as_ref().map(|host| host.0.clone()),
+                path: path.clone(),
+            },
         },
-        Locator::Url { .. } => Ok(Resource::Url(locator_key(locator))),
-        Locator::Opaque { tool, key } => Ok(Resource::Opaque {
+        Locator::Url { .. } => Resource::Url(locator_key(locator)),
+        Locator::Opaque { tool, key } => Resource::Opaque {
             tool: tool.0.clone(),
             key: key.clone(),
-        }),
-        Locator::Mcp { .. } => Err(GoldenError::Unexpressible(super::Gap::McpLocator {
-            locator: locator_key(locator),
-        })),
+        },
+        Locator::Mcp {
+            server,
+            tool,
+            target,
+        } => Resource::Mcp {
+            server: server.clone(),
+            tool: tool.0.clone(),
+            target: target.clone(),
+        },
     }
 }
 

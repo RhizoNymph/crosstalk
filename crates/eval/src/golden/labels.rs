@@ -11,7 +11,7 @@
 //! | `AccessOnly` | `access_only` |
 //! | `NoTransmission` | `negative_control` |
 //! | `Unjudged` | `exemption` |
-//! | `AgentCluster` (keys that are one agent) | `agent_cluster`, kind `identity`: refused ([`Gap::ClusterRow`]) |
+//! | `AgentCluster` (keys that are one agent) | `agent_cluster`, cluster `identity` |
 //!
 //! Locations: a label's content and an exemption's place are in its reader
 //! exchange. A negative control's place is in its reader exchange when it
@@ -21,14 +21,14 @@
 //! exchange (SALT's rejected sends). Those are placed in the first exchange
 //! of the reader (or, for an origin, the sender) that carries the message,
 //! and the control's `reader_exchange` stays absent, so it still covers
-//! every exchange. A place in a message no exchange carries (τ²-bench's
-//! controls on a record after the reader's last call) has no bench form
-//! ([`Gap::UncarriedLocation`]).
-//!
-//! An `agent_cluster` row cannot be written today: the format's row tag and
-//! the cluster's kind are both `kind`, so the line holds the field twice
-//! and no reader accepts it ([`Gap::ClusterRow`]). Clusters are built and
-//! checked (`AgentCluster::new`), then refused.
+//! every exchange; with no such exchange of that agent, the world's first
+//! carrier. A control whose message no exchange carries (τ²-bench's
+//! controls on a record after the reader's last call) can never match: it
+//! is dropped and counted in the world's manifest notes as
+//! [`UNCARRIED_CONTROL`]. Ids keep their truth index, so a dropped row
+//! leaves a gap.
+
+use std::collections::BTreeMap;
 
 use a2a_bench_format as bench;
 use bench::labels::{
@@ -40,7 +40,7 @@ use crosstalk_spec::ids::ExchangeId;
 
 use super::kinds;
 use super::world::MessageIndex;
-use super::{Gap, GoldenError, ids, resource};
+use super::{GoldenError, ids, resource};
 use crate::keys::{AgentKey, WorldKey};
 use crate::truth::{AgentCluster as EvalCluster, Expectation, RouteExpectation, TransmissionLabel};
 
@@ -57,13 +57,25 @@ pub fn exchange_agents(owners: &[(ExchangeId, String)]) -> Result<Vec<Label>, Go
         .collect()
 }
 
-/// The world's truth rows, `t<index>`.
+/// The per-world manifest note counting controls no exchange carries.
+pub const UNCARRIED_CONTROL: &str = "uncarried_control";
+
+/// A world's truth rows and the counts its manifest entry notes.
+#[derive(Debug, Clone, Default)]
+pub struct Truth {
+    pub labels: Vec<Label>,
+    pub notes: BTreeMap<String, u64>,
+}
+
+/// The world's truth rows, `t<index>` (a dropped row leaves its index
+/// unused).
 pub fn truth(
     world: &WorldKey,
     truth: &[Expectation],
     index: &MessageIndex,
-) -> Result<Vec<Label>, GoldenError> {
+) -> Result<Truth, GoldenError> {
     let mut out = Vec::with_capacity(truth.len());
+    let mut notes = BTreeMap::new();
     for (at, expectation) in truth.iter().enumerate() {
         let id = ids::label(format!("t{at}"))?;
         let invalid = |source| GoldenError::Label {
@@ -88,31 +100,32 @@ pub fn truth(
                 let label = control.label();
                 let from = name(world, &label.from)?;
                 let to = name(world, &label.to)?;
-                let uncarried = |message| {
-                    GoldenError::Unexpressible(Gap::UncarriedLocation {
-                        label: id.to_string(),
-                        message,
-                    })
-                };
+                // A place no exchange carries can never match: dropped and
+                // counted (format.md, "Locations: anchors, not scopes").
                 let at = match &label.at {
                     Some(at) => {
                         let exchange = match label.reader_exchange {
-                            Some(reader) => reader,
-                            None => index
-                                .carrier(at.part.message, &label.to.name)
-                                .map_err(|_| uncarried(at.part.message))?,
+                            Some(reader) => Some(reader),
+                            None => index.carrier(at.part.message, &label.to.name).ok(),
                         };
-                        Some(index.location(exchange, at)?)
+                        match exchange {
+                            Some(exchange) => Some(index.location(exchange, at)?),
+                            None => {
+                                *notes.entry(UNCARRIED_CONTROL.to_owned()).or_insert(0) += 1;
+                                continue;
+                            }
+                        }
                     }
                     None => None,
                 };
                 let origin = match &label.origin {
-                    Some(origin) => {
-                        let exchange = index
-                            .carrier(origin.part.message, &label.from.name)
-                            .map_err(|_| uncarried(origin.part.message))?;
-                        Some(index.location(exchange, origin)?)
-                    }
+                    Some(origin) => match index.carrier(origin.part.message, &label.from.name) {
+                        Ok(exchange) => Some(index.location(exchange, origin)?),
+                        Err(_) => {
+                            *notes.entry(UNCARRIED_CONTROL.to_owned()).or_insert(0) += 1;
+                            continue;
+                        }
+                    },
                     None => None,
                 };
                 Label::NegativeControl(
@@ -145,14 +158,11 @@ pub fn truth(
                 .map_err(invalid)?,
             ),
             Expectation::AgentCluster(cluster) => {
-                identity(world, id.clone(), cluster)?;
-                return Err(GoldenError::Unexpressible(Gap::ClusterRow {
-                    label: id.to_string(),
-                }));
+                Label::AgentCluster(identity(world, id.clone(), cluster)?)
             }
         });
     }
-    Ok(out)
+    Ok(Truth { labels: out, notes })
 }
 
 /// A ct-eval cluster: keys that are one agent.
@@ -170,7 +180,7 @@ fn identity(
     AgentCluster::new(ClusterFields {
         id: id.clone(),
         agents,
-        kind: ClusterKind::Identity,
+        cluster: ClusterKind::Identity,
         tier: kinds::tier(label.tier),
         source: ids::source(&label.source),
     })
@@ -207,7 +217,7 @@ fn transmission(
 pub fn route(route: &RouteExpectation) -> Result<Route, GoldenError> {
     Ok(match route {
         RouteExpectation::Channel { resource: locator } => Route::Channel {
-            resource: resource::resource(locator)?,
+            resource: resource::resource(locator),
         },
         RouteExpectation::Delegation { direction } => Route::Delegation {
             direction: kinds::direction(*direction),

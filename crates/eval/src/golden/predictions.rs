@@ -18,15 +18,17 @@
 //! Locations translate as labels' do: a content match's read location is in
 //! its reader exchange, its origin (the matched span's `IndexedSpan`) in the
 //! span's exchange, a co-access's read and write in their accesses'
-//! exchanges. A channel route is the bench resource of the channel's one
-//! canonical resource; a channel holding none or several has no bench form.
+//! exchanges. A content match's channel route names every canonical
+//! resource the detector's channel holds (`PredictedRoute::Channel`, none
+//! when the channel is unknown). A co-access names one resource: the
+//! channel's, when it holds exactly one, else the read access's own.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use a2a_bench_format as bench;
 use bench::predictions::{
-    Attribution, CoAccess, ContentEvidence, Prediction, Quality, State, Transmission,
-    TransmissionFields, Unattributed,
+    Attribution, CoAccess, ContentEvidence, PredictedRoute, Prediction, Quality, State,
+    Transmission, TransmissionFields, Unattributed,
 };
 use crosstalk_spec::aggregates::quality::QualityMatch;
 use crosstalk_spec::derived::flow::access::{AccessKind, AccessOp};
@@ -38,7 +40,7 @@ use crosstalk_spec::derived::flow::verdict::Judgeable;
 use crosstalk_spec::ids::{AgentId, ExchangeId};
 
 use super::world::MessageIndex;
-use super::{Gap, GoldenError, Lossy, ids, kinds, resource};
+use super::{GoldenError, Lossy, ids, kinds, resource};
 use crate::predict::Directory;
 
 /// How [`rows`] treats a transmission it cannot locate (an access the
@@ -52,23 +54,30 @@ pub enum Unlocated {
     Drop,
 }
 
-/// The prediction rows of one world's detection (module docs).
-/// `attribution` is the detector's agent of each exchange it placed, by
-/// canonical id; `aliases` maps any other id the evidence names to its
-/// canonical one.
+/// Each agent's exchanges, from a detector's agent of each exchange.
+pub fn held(
+    attribution: &BTreeMap<ExchangeId, AgentId>,
+) -> BTreeMap<AgentId, BTreeSet<ExchangeId>> {
+    let mut held: BTreeMap<AgentId, BTreeSet<ExchangeId>> = BTreeMap::new();
+    for (exchange, agent) in attribution {
+        held.entry(*agent).or_default().insert(*exchange);
+    }
+    held
+}
+
+/// The prediction rows of one world's detection (module docs). `held` is
+/// each detector agent's exchanges, by canonical id (an exchange held twice
+/// is written as such, and `check_predictions` refuses it); `aliases` maps
+/// any other id the evidence names to its canonical one.
 pub fn rows(
     transmissions: &[SpecTransmission],
     directory: &impl Directory,
-    attribution: &BTreeMap<ExchangeId, AgentId>,
+    held: &BTreeMap<AgentId, BTreeSet<ExchangeId>>,
     aliases: &BTreeMap<AgentId, AgentId>,
     unlocated: Unlocated,
     index: &MessageIndex,
     lossy: &mut Lossy,
 ) -> Result<Vec<Prediction>, GoldenError> {
-    let mut held: BTreeMap<AgentId, Vec<ExchangeId>> = BTreeMap::new();
-    for (exchange, agent) in attribution {
-        held.entry(*agent).or_default().push(*exchange);
-    }
     let mut sorted: Vec<&SpecTransmission> = transmissions.iter().collect();
     sorted.sort_by_key(|transmission| transmission.id);
     let mut named = BTreeSet::new();
@@ -99,7 +108,7 @@ pub fn rows(
         }
     }
     let mut out = Vec::with_capacity(held.len() + rows.len());
-    for (agent, exchanges) in &held {
+    for (agent, exchanges) in held {
         out.push(Prediction::Attribution(Attribution {
             agent: ids::detector_agent(*agent)?,
             exchanges: exchanges.iter().copied().map(ids::exchange).collect(),
@@ -137,7 +146,7 @@ fn convert(
         fields.quality = Some(quality(QualityMatch::from(judgeable)));
         match judgeable {
             Judgeable::Confirmed(confirmed) => {
-                let route = route(&transmission.route, directory)?;
+                let route = route(&transmission.route, directory);
                 let (from, to) = (canonical(confirmed.from()), canonical(transmission.to));
                 named.insert(from);
                 named.insert(to);
@@ -213,9 +222,9 @@ fn co_access(
     let write_at = directory
         .whole_part(write.exchange, *call)
         .ok_or(GoldenError::UnlocatedAccess { access: write.id })?;
-    let resource = match route(&transmission.route, directory)? {
-        bench::labels::Route::Channel { resource } => resource,
-        _ => resource::resource(&read_resource.locator)?,
+    let resource = match route(&transmission.route, directory) {
+        PredictedRoute::Channel { mut resources } if resources.len() == 1 => resources.remove(0),
+        _ => resource::resource(&read_resource.locator),
     };
     let (from, to) = (canonical(write.agent), canonical(read.agent));
     named.insert(from);
@@ -231,32 +240,22 @@ fn co_access(
     })
 }
 
-fn route(
-    route: &SpecRoute,
-    directory: &impl Directory,
-) -> Result<bench::labels::Route, GoldenError> {
-    use bench::labels::Route;
-    Ok(match route {
-        SpecRoute::Channel(channel) => {
-            let resources = directory.channel(*channel).unwrap_or_default();
-            match resources {
-                [one] => Route::Channel {
-                    resource: resource::resource(one)?,
-                },
-                _ => {
-                    return Err(GoldenError::Unexpressible(Gap::ChannelResources {
-                        channel: *channel,
-                        resources: resources.len(),
-                    }));
-                }
-            }
-        }
-        SpecRoute::Delegation(direction) => Route::Delegation {
+fn route(route: &SpecRoute, directory: &impl Directory) -> PredictedRoute {
+    match route {
+        SpecRoute::Channel(channel) => PredictedRoute::Channel {
+            resources: directory
+                .channel(*channel)
+                .unwrap_or_default()
+                .iter()
+                .map(resource::resource)
+                .collect(),
+        },
+        SpecRoute::Delegation(direction) => PredictedRoute::Delegation {
             direction: kinds::direction(*direction),
         },
-        SpecRoute::Direct(_) => Route::Direct,
-        SpecRoute::Unobserved => Route::Unobserved,
-    })
+        SpecRoute::Direct(_) => PredictedRoute::Direct,
+        SpecRoute::Unobserved => PredictedRoute::Unobserved,
+    }
 }
 
 fn state(state: &TransmissionState) -> State {

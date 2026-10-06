@@ -122,6 +122,8 @@ impl<W: Write> ExportWriter<W> {
         self.worlds.push(WorldEntry {
             key: world.key.clone(),
             exchanges: u64::try_from(world.exchanges.len()).unwrap_or(u64::MAX),
+            labels: Some(u64::try_from(world.labels.len()).unwrap_or(u64::MAX)),
+            notes: world.notes.clone(),
         });
         Ok(inputs)
     }

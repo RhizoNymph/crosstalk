@@ -5,12 +5,12 @@
 
 use a2a_bench_format::files::{ExchangeRow, Exchanges, Predictions};
 use a2a_bench_format::jsonl::FileReader;
-use a2a_bench_format::labels::Label;
+use a2a_bench_format::labels::{ClusterKind, Label};
 use a2a_bench_format::predictions::Prediction;
 use crosstalk_eval::datasets::swarm_truth::Inputs;
 use crosstalk_eval::datasets::swarm_truth::window::Margins;
 use crosstalk_eval::golden::swarm::{DETECTOR, Outputs, export};
-use crosstalk_eval::golden::{Gap, GoldenError, ids, verify};
+use crosstalk_eval::golden::{ids, verify};
 use serde_json::json;
 
 use super::common::labels;
@@ -51,7 +51,12 @@ fn a_bench_run_exports_with_its_predictions() {
         verified.exchanges,
         (written.a001.len() + written.a002.len() + written.a003.len()) as u64
     );
-    assert_eq!(finished.lossy.single_agent_key_groups, 1);
+    assert_eq!(
+        finished.manifest.worlds[0]
+            .notes
+            .get(crosstalk_eval::golden::swarm::KEY_GROUP_NOT_A_CLUSTER),
+        Some(&1)
+    );
 
     let file = std::fs::File::open(out.join("exchanges.jsonl")).unwrap_or_else(|e| panic!("{e}"));
     let mut reader = FileReader::<Exchanges, _>::open(std::io::BufReader::new(file))
@@ -121,25 +126,35 @@ fn the_manifest_is_the_same_without_writing_the_export() {
     assert_eq!(with.manifest, without.manifest);
 }
 
-/// A key group of two agents is a `key_group` cluster, which the format
-/// cannot write today (its row holds `kind` twice): the export stops on it.
+/// A key group of two agents is a `key_group` cluster, `k<group>`, that
+/// passes the checks and reads back.
 #[test]
-fn a_shared_key_group_is_refused_as_a_gap() {
+fn a_shared_key_group_is_a_cluster() {
     let dir = fixture::dir("golden-key-group");
     let mut truth = fixture::truth_rows();
     truth.push(json!({"kind": "agent_cluster", "world": fixture::WORLD, "key_group": 7, "agents": ["a002", "a003"]}));
     let written = fixture::write(&dir, &truth);
-    let result = export(
+    let out = written.truth.with_file_name("a2a");
+    export(
         &inputs(&written),
         Margins::default(),
         &Outputs {
-            export: None,
+            export: Some(out.clone()),
             predictions: None,
             detector_version: "test".to_owned(),
         },
-    );
-    match result {
-        Err(GoldenError::Unexpressible(Gap::ClusterRow { label })) => assert_eq!(label, "k7"),
-        other => panic!("expected the cluster gap, got {:?}", other.map(|_| ())),
-    }
+    )
+    .unwrap_or_else(|e| panic!("{e}"));
+    verify(&out, None).unwrap_or_else(|e| panic!("{e}"));
+    let clusters: Vec<_> = labels(&out)
+        .into_iter()
+        .flat_map(|(_, rows)| rows)
+        .filter_map(|row| match row {
+            Label::AgentCluster(cluster) => Some(cluster.fields().clone()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(clusters.len(), 1);
+    assert_eq!(clusters[0].id.as_str(), "k7");
+    assert_eq!(clusters[0].cluster, ClusterKind::KeyGroup);
 }

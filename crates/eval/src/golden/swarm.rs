@@ -9,17 +9,18 @@
 //! only the log's exchanges inside the run window, of sessions the truth
 //! names, each its session owner's. Exchanges are in time order
 //! (`started_at`, then id). Truth rows are `t<index>` as for every world.
-//! A key group of two or more agents is an `agent_cluster` of kind
-//! `key_group`, `k<key group>`, which the format cannot write today
-//! ([`Gap::ClusterRow`]); a key group of one agent, which a bench cluster
-//! cannot hold, is counted in `Lossy::single_agent_key_groups`.
+//! A key group of two or more agents is an `agent_cluster` of cluster
+//! `key_group`, `k<key group>`; a key group of one agent is not a cluster,
+//! and is counted in the world's notes as [`KEY_GROUP_NOT_A_CLUSTER`].
 //!
 //! Predictions are the transmissions `detected::predictions` predicts from
 //! (`detected::choose`). The gateway's export places no exchange under an
 //! agent, so attribution is what ct-eval ties agents through: a confirmed
 //! transmission's reader exchanges are its reader's, an access's exchange
 //! is its canonical agent's (`AccessDetail::agent`), and an access's own
-//! agent id is an alias of that canonical one. A sender that is neither a
+//! agent id is an alias of that canonical one. An exchange tied to two
+//! detector agents is written under both, and `check_predictions` fails
+//! the world on it. A sender that is neither a
 //! reader nor an accessor holds no exchange and is `unattributed`, whose
 //! predictions ct-eval drops as `unknown_detected_agent` too. A
 //! transmission whose evidence lies outside the world is dropped and
@@ -33,7 +34,7 @@ use std::path::{Path, PathBuf};
 use a2a_bench_format as bench;
 use bench::exchange::{AgentDecl, Driven, WorldDecl};
 use bench::files::DetectorInfo;
-use bench::labels::{AgentCluster, ClusterFields, ClusterKind, Tier};
+use bench::labels::{AgentCluster, ClusterFields, ClusterKind, Label, Tier};
 use bench::predictions::WorldStatus;
 use crosstalk_spec::ids::{AgentId, ExchangeId, MessageHash};
 use crosstalk_spec::observed::exchange::{Exchange, ExchangeOutcome};
@@ -44,7 +45,7 @@ use super::predictions::{self, Unlocated};
 use super::run::{Finished, write_manifest};
 use super::world::{Draft, WorldBuilder, WorldExport};
 use super::writer::{ExportWriter, PredictionsWriter};
-use super::{Gap, GoldenError, ids, kinds, labels};
+use super::{GoldenError, ids, kinds, labels};
 use crate::corpus::{self, World};
 use crate::datasets::swarm_truth::bodies::{BlobBodies, Bodies, Cached};
 use crate::datasets::swarm_truth::detected::{
@@ -58,6 +59,9 @@ use crate::datasets::swarm_truth::{
     AgentIndex, Diagnostics, Inputs, JoinFailure, SwarmTruthError, resolve,
 };
 use crate::keys::SourceRef;
+
+/// The per-world manifest note counting key groups of one agent.
+pub const KEY_GROUP_NOT_A_CLUSTER: &str = "key_group_not_a_cluster";
 
 /// The detector name a demo-swarm predictions file carries.
 pub const DETECTOR: &str = "crosstalk-gateway-export";
@@ -196,8 +200,9 @@ fn export_world<B: Bodies>(
             .collect::<Result<_, GoldenError>>()?,
     };
     let mut rows = labels::exchange_agents(builder.owners())?;
-    rows.extend(labels::truth(world.key(), world.truth(), builder.index())?);
-    let mut single = 0;
+    let truth = labels::truth(world.key(), world.truth(), builder.index())?;
+    rows.extend(truth.labels);
+    let mut notes = truth.notes;
     for group in &prepared.key_groups {
         let agents = group
             .agents
@@ -205,14 +210,14 @@ fn export_world<B: Bodies>(
             .map(|agent| ids::agent(agent))
             .collect::<Result<Vec<_>, _>>()?;
         if agents.len() < 2 {
-            single += 1;
+            *notes.entry(KEY_GROUP_NOT_A_CLUSTER.to_owned()).or_insert(0) += 1;
             continue;
         }
         let id = ids::label(format!("k{}", group.key_group))?;
-        AgentCluster::new(ClusterFields {
+        let cluster = AgentCluster::new(ClusterFields {
             id: id.clone(),
             agents,
-            kind: ClusterKind::KeyGroup,
+            cluster: ClusterKind::KeyGroup,
             tier: Tier::Construction,
             source: bench::ids::SourceRef::new(
                 truth_name,
@@ -223,23 +228,22 @@ fn export_world<B: Bodies>(
             label: id.to_string(),
             source,
         })?;
-        return Err(GoldenError::Unexpressible(Gap::ClusterRow {
-            label: id.to_string(),
-        }));
+        rows.push(Label::AgentCluster(cluster));
     }
-    let mut export = builder.finish(key, decl, rows, kinds::coverage(world.coverage()));
-    export.lossy.single_agent_key_groups += single;
-    Ok(export)
+    Ok(builder.finish(key, decl, rows, notes, kinds::coverage(world.coverage())))
 }
 
 /// The agents ct-eval ties through the evidence (module docs): each
-/// exported exchange's canonical agent, and every alias's canonical id.
-type Ties = (BTreeMap<ExchangeId, AgentId>, BTreeMap<AgentId, AgentId>);
+/// canonical agent's exported exchanges, and every alias's canonical id.
+type Ties = (
+    BTreeMap<AgentId, BTreeSet<ExchangeId>>,
+    BTreeMap<AgentId, AgentId>,
+);
 
 fn ties(
     chosen: &[&crosstalk_spec::interfaces::l8_surface::evidence::TransmissionEvidence],
     export: &WorldExport,
-) -> Result<Ties, GoldenError> {
+) -> Ties {
     let exported: BTreeSet<bench::ids::ExchangeId> = export
         .exchanges
         .iter()
@@ -254,45 +258,24 @@ fn ties(
         }
     }
     let canonical = |agent: AgentId| aliases.get(&agent).copied().unwrap_or(agent);
-    let mut claims: BTreeMap<ExchangeId, BTreeSet<AgentId>> = BTreeMap::new();
+    let mut held: BTreeMap<AgentId, BTreeSet<ExchangeId>> = BTreeMap::new();
+    let mut tie = |agent: AgentId, exchange: ExchangeId| {
+        if exported.contains(&ids::exchange(exchange)) {
+            held.entry(canonical(agent)).or_default().insert(exchange);
+        }
+    };
     for item in chosen {
         let transmission = item.transmission();
         if let Some(confirmed) = transmission.state.confirmed() {
             for content in confirmed.content().iter() {
-                claims
-                    .entry(content.reader_exchange())
-                    .or_default()
-                    .insert(canonical(transmission.to));
+                tie(transmission.to, content.reader_exchange());
             }
         }
         for detail in item.accesses() {
-            claims
-                .entry(detail.access().exchange)
-                .or_default()
-                .insert(canonical(detail.agent()));
+            tie(detail.agent(), detail.access().exchange);
         }
     }
-    let mut attribution = BTreeMap::new();
-    for (exchange, agents) in claims {
-        if !exported.contains(&ids::exchange(exchange)) {
-            continue;
-        }
-        let mut agents = agents.into_iter();
-        match (agents.next(), agents.next()) {
-            (Some(agent), None) => {
-                attribution.insert(exchange, agent);
-            }
-            (Some(first), Some(second)) => {
-                return Err(GoldenError::Unexpressible(Gap::ExchangeTiedTwice {
-                    exchange,
-                    first,
-                    second,
-                }));
-            }
-            (None, _) => {}
-        }
-    }
-    Ok((attribution, aliases))
+    (held, aliases)
 }
 
 /// The selection a demo-swarm export pins: the run window's margins.
@@ -398,7 +381,7 @@ fn finish<W: Write, B: Bodies>(
             .iter()
             .filter(|entry| matches!(entry.failure, JoinFailure::DetectedAgentConflict { .. }))
             .count() as u64;
-        let (attribution, aliases) = ties(&chosen, export)?;
+        let (held, aliases) = ties(&chosen, export);
         let transmissions: Vec<_> = chosen
             .iter()
             .map(|item| item.transmission().clone())
@@ -406,7 +389,7 @@ fn finish<W: Write, B: Bodies>(
         let rows = predictions::rows(
             &transmissions,
             &directory,
-            &attribution,
+            &held,
             &aliases,
             Unlocated::Drop,
             &export.index,

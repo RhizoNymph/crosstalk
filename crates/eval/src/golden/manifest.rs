@@ -1,12 +1,14 @@
 //! `manifest.json`: everything that fixes an export's bytes.
 //!
 //! - **Source.** The dataset's directory relative to the data root, its
-//!   own revision ([`revision`]) and a digest of its files ([`digest_files`]).
+//!   own revision ([`revision`]) and the format's source digest of the
+//!   files read ([`digest_files`]).
 //! - **Converter.** This crate's version and the crosstalk commit it was
 //!   built from ([`crosstalk_commit`]).
 //! - **Selection and pace.** The flags that pick the worlds and step the
 //!   virtual clock, as the caller lists them.
-//! - **Worlds and files.** The writer's world entries and file digests.
+//! - **Worlds and files.** The writer's world entries (exchanges, label
+//!   rows, notes) and file digests.
 //!
 //! The dataset version is 1 for every ct-eval converter: the golden export
 //! is the baseline the bench's own converters are diffed against.
@@ -19,6 +21,7 @@ use std::path::{Path, PathBuf};
 use a2a_bench_format as bench;
 use bench::ids::{DatasetId, Digest};
 use bench::manifest::{Converter, Manifest, Setting, Source, Split};
+use bench::source::SourceDigest;
 use bench::version::FORMAT;
 
 use super::GoldenError;
@@ -26,9 +29,6 @@ use super::writer::Written;
 
 /// The dataset version of every ct-eval converter's export.
 pub const DATASET_VERSION: u32 = 1;
-
-/// The BLAKE3 derive-key context of a source digest.
-pub const SOURCE_DIGEST_CONTEXT: &str = "crosstalk-eval golden source";
 
 /// Directory names never part of a dataset's bytes: version control and
 /// download caches.
@@ -195,8 +195,9 @@ fn read_head(git: &Path) -> Option<String> {
 }
 
 /// Every regular file under `root` (following symbolic links, skipping
-/// [`SKIPPED_DIRS`]), by path relative to `root`, sorted.
-pub fn files_under(root: &Path) -> Result<Vec<PathBuf>, GoldenError> {
+/// [`SKIPPED_DIRS`]), by its `/`-separated path relative to `root`, in
+/// byte order: the order a source digest takes them in.
+pub fn files_under(root: &Path) -> Result<Vec<String>, GoldenError> {
     let mut out = Vec::new();
     let mut stack = vec![PathBuf::new()];
     while let Some(relative) = stack.pop() {
@@ -213,7 +214,7 @@ pub fn files_under(root: &Path) -> Result<Vec<PathBuf>, GoldenError> {
                     stack.push(path);
                 }
             } else if meta.is_file() {
-                out.push(path);
+                out.push(slashed(&path));
             }
         }
     }
@@ -221,21 +222,29 @@ pub fn files_under(root: &Path) -> Result<Vec<PathBuf>, GoldenError> {
     Ok(out)
 }
 
-/// The keyed BLAKE3 ([`SOURCE_DIGEST_CONTEXT`]) of `files`, each a name and
-/// a path, in the order given: for each, its name's UTF-8 bytes, a zero
-/// byte, its length as eight little-endian bytes, and its bytes.
+/// `path` with `/` between its components.
+pub fn slashed(path: &Path) -> String {
+    path.components()
+        .map(|component| component.as_os_str().to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
+/// The format's source digest (`a2a_bench_format::source::SourceDigest`)
+/// of `files`: each a `/`-separated name relative to the dataset root and
+/// the path to read it from. They are taken in byte order of their names.
 pub fn digest_files(files: &[(String, PathBuf)]) -> Result<Digest, GoldenError> {
-    let mut hasher = blake3::Hasher::new_derive_key(SOURCE_DIGEST_CONTEXT);
+    let mut sorted: Vec<&(String, PathBuf)> = files.iter().collect();
+    sorted.sort_by(|a, b| a.0.as_bytes().cmp(b.0.as_bytes()));
+    let mut digest = SourceDigest::new();
     let mut buffer = vec![0u8; 1 << 20];
-    for (name, full) in files {
-        hasher.update(name.as_bytes());
-        hasher.update(&[0]);
+    for (name, full) in sorted {
         let mut file = fs::File::open(full).map_err(|source| GoldenError::io(full, source))?;
         let len = file
             .metadata()
             .map_err(|source| GoldenError::io(full, source))?
             .len();
-        hasher.update(&len.to_le_bytes());
+        let mut part = digest.file(name, len).map_err(GoldenError::Source)?;
         loop {
             let read = file
                 .read(&mut buffer)
@@ -243,18 +252,18 @@ pub fn digest_files(files: &[(String, PathBuf)]) -> Result<Digest, GoldenError> 
             if read == 0 {
                 break;
             }
-            hasher.update(&buffer[..read]);
+            part.update(&buffer[..read]);
         }
+        part.end().map_err(GoldenError::Source)?;
     }
-    Ok(Digest::from_bytes(*hasher.finalize().as_bytes()))
+    Ok(digest.finish())
 }
 
-/// [`digest_files`] over `files` under `root`, named by their paths
-/// relative to it.
-pub fn digest_tree(root: &Path, files: &[PathBuf]) -> Result<Digest, GoldenError> {
+/// [`digest_files`] over `files` (`/`-separated, relative to `root`).
+pub fn digest_tree(root: &Path, files: &[String]) -> Result<Digest, GoldenError> {
     let named: Vec<(String, PathBuf)> = files
         .iter()
-        .map(|relative| (relative.to_string_lossy().into_owned(), root.join(relative)))
+        .map(|relative| (relative.clone(), root.join(relative)))
         .collect();
     digest_files(&named)
 }
@@ -268,10 +277,13 @@ pub fn int(value: u64) -> Setting {
     Setting::Int(i64::try_from(value).unwrap_or(i64::MAX))
 }
 
-/// Puts a repeatable flag's values in `settings` as `name[0]`, `name[1]`, …
-/// (`Setting` holds no list).
+/// Puts a repeatable flag's values in `settings` as one list, when there
+/// are any.
 pub fn list(settings: &mut BTreeMap<String, Setting>, name: &str, values: &[String]) {
-    for (at, value) in values.iter().enumerate() {
-        settings.insert(format!("{name}[{at}]"), text(value.clone()));
+    if !values.is_empty() {
+        settings.insert(
+            name.to_owned(),
+            Setting::List(values.iter().cloned().map(Setting::Text).collect()),
+        );
     }
 }
