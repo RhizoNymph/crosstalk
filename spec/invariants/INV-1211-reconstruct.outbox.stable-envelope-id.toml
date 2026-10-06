@@ -1,0 +1,19 @@
+[invariant]
+id = "reconstruct.outbox.stable-envelope-id"
+statement = "Each event staged in the reconstruct outbox is published under one envelope id, fixed in a committed transaction before its first publish and never before the transaction that staged it committed."
+kind = "coordination"
+requires = ["integration"]
+rationale = """
+A relay can crash after publishing and before deleting the row. If each
+attempt minted a new id, the bus would hold the event twice; with the id
+and time stamped on the row once, before the first publish, every retry
+republishes the same id and the bus deduplicates it
+(transport.publish.idempotent-on-id). Publishing only committed rows keeps
+"a store publishes what it decides".
+"""
+
+[evidence]
+integration = "crosstalk_reconstruct::integration::outbox_relay_publishes_each_event_once_under_its_stamped_id"
+
+[evidence-review]
+integration = { agent = "false", human = "false" }

@@ -23,8 +23,8 @@ use crate::ids::{
     OperatorId, ProjectionId, SecretVersion, SinkId, TransmissionId,
 };
 use crate::interfaces::l8_surface::audit::{
-    AuditBody, AuditEntry, AuditFilter, AuditOutcome, AuditSubject, ConfigChange, ConfigOutcome,
-    ConfigRecord, OperatorRecord, Rejection,
+    AuditBody, AuditEntry, AuditFilter, AuditIntent, AuditOutcome, AuditSubject, ConfigChange,
+    ConfigOutcome, ConfigRecord, OperatorRecord, Rejection,
 };
 use crate::interfaces::l8_surface::export::{
     ExportBasis, ExportDataset, ExportEvent, ExportFormat, ExportHeader, ExportHeaderParts,
@@ -66,8 +66,8 @@ fn operator_entry(at: &str, record: OperatorRecord) -> AuditEntry {
     }
 }
 
-/// An operator's call in each outcome: applied, refused by the store, and
-/// forbidden before anything ran. Exhaustive over `AuditOutcome`.
+/// An operator's call in each outcome: applied, refused by the store,
+/// forbidden before anything ran, and interrupted by a stop mid-call. Exhaustive over `AuditOutcome`.
 fn every_operator_entry() -> Vec<(&'static str, AuditEntry)> {
     let governor = caller(&[Permission::View, Permission::Govern]);
     let viewer = caller(&[Permission::View]);
@@ -80,6 +80,7 @@ fn every_operator_entry() -> Vec<(&'static str, AuditEntry)> {
         AuditOutcome::Forbidden {
             missing: Permission::Govern,
         },
+        AuditOutcome::Interrupted,
     ];
     outcomes
         .into_iter()
@@ -88,6 +89,7 @@ fn every_operator_entry() -> Vec<(&'static str, AuditEntry)> {
                 AuditOutcome::Succeeded(_) => ("entry_operator_succeeded", &governor),
                 AuditOutcome::Rejected(_) => ("entry_operator_rejected", &governor),
                 AuditOutcome::Forbidden { .. } => ("entry_operator_forbidden", &viewer),
+                AuditOutcome::Interrupted => ("entry_operator_interrupted", &governor),
             };
             let record = OperatorRecord::new(by, set_policy(), outcome.clone())
                 .expect("the outcome matches the caller's permissions");
@@ -594,4 +596,19 @@ fn audit_filters_refuse_unknown_fields() {
         r#"{"by": [{"type": "resolver"}], "subject": null, "window": null}"#,
         "unknown variant `resolver`",
     );
+}
+
+/// A write-ahead intent as `PgAuditLog` stores it: the call's entry id,
+/// time, caller snapshot and action. Decoding re-checks the permission.
+#[test]
+fn audit_intent_golden() {
+    let governor = caller(&[Permission::View, Permission::Govern]);
+    let intent = AuditIntent::new(
+        audit_id(ULID_C),
+        ts("2026-10-04T12:34:56.789012Z"),
+        &governor,
+        set_policy(),
+    )
+    .expect("the governor holds Govern");
+    assert_golden(AREA, "audit_intent", &intent);
 }

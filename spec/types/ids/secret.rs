@@ -114,6 +114,51 @@ impl DeploymentSecret {
     fn digest(&self, raw: &[u8]) -> Blake3 {
         Blake3::from_bytes(*blake3::keyed_hash(&self.key, raw).as_bytes())
     }
+
+    /// BLAKE3's key derivation over this secret's key and `label`. Its own
+    /// mode (`derive_key`, with a fixed context), so no keyed digest of any
+    /// raw value equals a derived key. The key has a fixed length, so key
+    /// and label split one way only.
+    fn derived(&self, label: &str) -> [u8; SECRET_LEN] {
+        let mut hasher = blake3::Hasher::new_derive_key(DERIVED_KEY_CONTEXT);
+        hasher.update(&self.key);
+        hasher.update(label.as_bytes());
+        *hasher.finalize().as_bytes()
+    }
+}
+
+/// BLAKE3's key-derivation context for [`KeyedHasher::derive_key`]:
+/// hard-coded, globally unique, and versioned with the derivation.
+const DERIVED_KEY_CONTEXT: &str = "crosstalk 2026-10 deployment secret derived key v1";
+
+/// A key derived from the current deployment secret for one purpose
+/// ([`KeyedHasher::derive_key`]), such as the MAC key of a store's page
+/// cursors. Secret material: no serde, `Clone` or `PartialEq`, and its
+/// `Debug` prints nothing of it.
+pub struct DerivedKey {
+    version: SecretVersion,
+    key: [u8; SECRET_LEN],
+}
+
+impl DerivedKey {
+    /// The secret version the key was derived from.
+    pub const fn version(&self) -> SecretVersion {
+        self.version
+    }
+
+    /// The key bytes, for the component that keys its MAC with them.
+    pub const fn as_bytes(&self) -> &[u8; SECRET_LEN] {
+        &self.key
+    }
+}
+
+/// The version only; the key is never formatted.
+impl fmt::Debug for DerivedKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DerivedKey")
+            .field("version", &self.version)
+            .finish_non_exhaustive()
+    }
 }
 
 /// The version only; the key is never formatted.
@@ -244,6 +289,22 @@ impl KeyedHasher {
     /// The digests of a raw account id at `at`.
     pub fn account(&self, raw: &[u8], at: Timestamp) -> SecretDigests<AccountHash> {
         self.digests(raw, at, AccountHash::from_keyed_digest)
+    }
+
+    /// The key for `label`'s purpose, derived from the current secret
+    /// version only: the same secret and label give the same key on every
+    /// node and after every restart, so a MAC keyed with it (a store's or
+    /// the surface's page cursors, `surface.cursor.survives-restart`) still
+    /// verifies after a restart. A rotation changes the key, which
+    /// invalidates what the old one keyed. Distinct labels give unrelated
+    /// keys; `label` is a literal naming the purpose and its version
+    /// (`"crosstalk.cursor.v1.surface"`). See
+    /// `canonical.ids.derived-key-per-purpose`.
+    pub fn derive_key(&self, label: &'static str) -> DerivedKey {
+        DerivedKey {
+            version: self.current.version,
+            key: self.current.derived(label),
+        }
     }
 
     fn open_overlap(&self, at: Timestamp) -> Option<&Overlap> {

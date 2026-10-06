@@ -359,7 +359,11 @@ pub trait EdgeStore {
 ///   exchange), `Access::at` for an access, and `Confirmed::at` for a
 ///   transmission event. `TransmissionClassified` with cause `Refit` is left
 ///   out: it builds a version that is not active yet, and activation waits
-///   for all of it.
+///   for all of it;
+/// - envelopes still in the publish spool (`SpoolingBus`, see
+///   [`crate::interfaces::l2_transport`]): their `Envelope::at`. A spooled
+///   capture is input the pipeline has not seen yet
+///   (`topology.frontier.covers-spool`).
 ///
 /// `ticked_through` is the earliest last-processed tick among the flow
 /// correlator shards.
@@ -369,8 +373,10 @@ pub trait EdgeStore {
 /// and the correlator's own held state is bounded by `settle_after`.
 ///
 /// Implementations: `PgFrontierSource` (the transport's delivery and
-/// dead-letter tables, the shards' tick checkpoints and the proxy's
-/// in-flight registry), `ManualFrontier` (tests).
+/// dead-letter tables, the shards' tick checkpoints, the proxy's in-flight
+/// registry and the publish spool's oldest record), `ManualFrontier`
+/// (tests). `PgFrontierSource` reads L2, L5 and the proxy, so it lives in
+/// the composer (`crosstalk-gateway`), not in L7's crate.
 pub trait FrontierSource {
     fn frontier(&self) -> impl Future<Output = Result<PipelineFrontier, EdgeError>> + Send;
 }

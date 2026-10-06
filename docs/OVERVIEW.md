@@ -395,7 +395,10 @@ Features Index:
       decisions it takes from the transaction that makes them (the topic
       catalog owns TopicVersionDropped, the channel registry
       ChannelDiscovered), and every store method that
-      depends on the time takes it as an argument (the types are also the
+      depends on the time takes it as an argument; consumer-published
+      envelope ids derive from their input (EventId::derive) and MAC keys
+      from the deployment secret (KeyedHasher::derive_key), so both
+      survive a restart (the types are also the
       JSON wire format: wire_contract), with tests for the invariants
       checked at runtime and one TOML file per invariant in
       spec/invariants. Harness and server wire behavior it is based on is
@@ -812,7 +815,11 @@ Features Index:
     doc: docs/features/topology_store.md
   postgres_stores:
     description: >
-      Reviewed design (roadmap P7.3, PR #103, not implemented): detections that survive
+      Reviewed design (roadmap P7.3, PR #103; workstream S, the spec
+      changes, landed: EventId::derive, KeyedHasher::derive_key,
+      BusError::SpoolFull, AuditOutcome::Interrupted with AuditIntent and
+      AuditIntents, PgBus/SpoolingBus/PgFrontierSource docs, INV-1200 to
+      INV-1221; W1 to W9 not implemented): detections that survive
       a gateway restart. Surveys what is persisted today (serve runs Live
       on memory stores and MpscBus; the L3 to L7 Postgres stores exist but
       are unwired, and crosstalk migrate runs no layer migrations) and
@@ -829,9 +836,12 @@ Features Index:
       retention per store, and the restart semantics of /readyz, /healthz
       and the API. Includes the test strategy (reference-model agreement,
       restart equivalence, conformance on Postgres), the spec changes
-      proposed, the parallel workstreams and the nine recorded decisions.
+      (landed), the parallel workstreams and the nine recorded decisions.
     entry_points:
       - docs/features/postgres_stores.md
+      - spec/types/ids.rs
+      - spec/types/interfaces/l2_transport.rs
+      - spec/types/interfaces/l8_surface/audit.rs
       - crates/gateway/src/live/mod.rs
       - crates/store/src/migrate.rs
     depends_on: [store, gateway, transport, reconstruct, provenance, flow_store, flow_correlator, search_alerts, topology_store, surface_service, conformance]

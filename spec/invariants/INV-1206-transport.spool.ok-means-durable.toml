@@ -1,0 +1,19 @@
+[invariant]
+id = "transport.spool.ok-means-durable"
+statement = "A SpoolingBus::publish that returned Ok has its envelope in the inner bus's log or fsynced in the spool, and no crash or restart loses it."
+kind = "coordination"
+requires = ["dst", "integration"]
+rationale = """
+The spool exists so capture never drops an exchange while the database is
+down (decision Q5). Its Ok must mean exactly what the inner bus's Ok
+means, or the capture side, which forgets an exchange once published,
+would lose captures at a crash during an outage.
+"""
+
+[evidence]
+dst = "crosstalk_transport::dst::spool_ok_survives_seeded_crashes"
+integration = "crosstalk_transport::integration::spool_publish_survives_restart_while_database_down"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

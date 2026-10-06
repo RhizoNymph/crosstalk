@@ -16,11 +16,15 @@ use crate::derived::flow::channel::policy::PolicyHistory;
 use crate::derived::flow::resource::ResourcePattern;
 use crate::derived::flow::transmission::Transmission;
 use crate::derived::flow::verdict::VerdictLog;
-use crate::ids::{AgentId, AlertId, AlertRuleId, ChannelId, ProjectionId, SinkId, TransmissionId};
+use crate::ids::{
+    AgentId, AlertId, AlertRuleId, AuditId, ChannelId, ProjectionId, SinkId, TransmissionId,
+};
 use crate::interfaces::l2_transport::{ConsumerGroup, DeadLetter};
 use crate::interfaces::l6_analysis::SearchResults;
 use crate::interfaces::l8_surface::actions::{ActionOutcome, OperatorAction};
-use crate::interfaces::l8_surface::audit::{AuditEntry, AuditError, AuditFilter, AuditLog};
+use crate::interfaces::l8_surface::audit::{
+    AuditEntry, AuditError, AuditFilter, AuditIntent, AuditIntents, AuditLog,
+};
 use crate::interfaces::l8_surface::channel_traffic::{
     ChannelTransmissionFilter, ChannelTransmissionPage,
 };
@@ -465,6 +469,24 @@ fn audit_log<T: AuditLog>(x: &mut T, never: &Dummy) {
     assert_send(x.query(arg(never), arg(never)));
 }
 
+impl AuditIntents for Dummy {
+    async fn intend(&mut self, _intent: &AuditIntent) -> Result<(), AuditError> {
+        match *self {}
+    }
+    async fn complete(&mut self, _entry: AuditEntry) -> Result<(), AuditError> {
+        match *self {}
+    }
+    async fn recover_interrupted(&mut self) -> Result<Vec<AuditId>, AuditError> {
+        match *self {}
+    }
+}
+
+fn audit_intents<T: AuditIntents>(x: &mut T, never: &Dummy) {
+    assert_send(x.intend(arg(never)));
+    assert_send(x.complete(arg(never)));
+    assert_send(x.recover_interrupted());
+}
+
 impl AlertSink for Dummy {
     fn id(&self) -> SinkId {
         match *self {}
@@ -521,6 +543,7 @@ fn l8_surface_futures_are_send() {
     let _ = live_feed::<Dummy>;
     let _ = live_stream::<Dummy>;
     let _ = audit_log::<Dummy>;
+    let _ = audit_intents::<Dummy>;
     let _ = alert_sink::<Dummy>;
     let _ = export_stream::<Dummy>;
     let _ = row_source::<Dummy>;

@@ -12,7 +12,7 @@ whoever investigates an incident from the log.
 
 [evidence]
 type = "crosstalk_spec::interfaces::l8_surface::audit::OperatorRecord::new"
-unit = ["crosstalk_spec::tests::audit::forbidden_record_requires_missing_permission", "crosstalk_spec::tests::audit::attempted_record_requires_permission", "crosstalk_spec::tests::audit::every_action_reports_its_kind_permission_and_subjects", "crosstalk_spec::tests::wire::surface_actions::audit::operator_records_refuse_outcomes_their_caller_contradicts"]
+unit = ["crosstalk_spec::tests::audit::forbidden_record_requires_missing_permission", "crosstalk_spec::tests::audit::attempted_record_requires_permission", "crosstalk_spec::tests::audit::every_action_reports_its_kind_permission_and_subjects", "crosstalk_spec::tests::wire::surface_actions::audit::operator_records_refuse_outcomes_their_caller_contradicts", "crosstalk_spec::tests::audit_intents::interrupted_record_requires_permission", "crosstalk_spec::tests::audit_intents::intent_requires_permission"]
 
 [evidence-review]
 type = { agent = "true", human = "false" }

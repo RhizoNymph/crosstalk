@@ -32,7 +32,8 @@
 //!   history, the operator directory and the audit log.
 //! - `LiveFeed` ([`live`]): the SSE endpoint that tells the UI, by id, what
 //!   to re-query.
-//! - `AuditLog` ([`audit`]): `PgAuditLog`, append-only.
+//! - `AuditLog` and `AuditIntents` ([`audit`]): `PgAuditLog`, append-only,
+//!   with its write-ahead intents.
 //! - `OperatorStore` ([`operators`]): `PgOperatorStore`, the directory and
 //!   its config loads, each recorded in the audit log in its transaction.
 //! - `SinkRegistry` ([`sinks`]): `PgSinkRegistry`, the configured sinks and
@@ -824,9 +825,10 @@ pub trait OperatorActions {
     /// `VerdictError` for `SetVerdict`, `RuleError` for rule management,
     /// `CatalogError` and `PinError` for pins. A call that returns `Ok` or an `ActionError` other than `Store` leaves exactly one
     /// operator audit entry, whose outcome is what it returns
-    /// (`AuditOutcome::of`): a `Succeeded` entry is written in the same
-    /// transaction as the action's effect, and a `Forbidden` or `Rejected`
-    /// one with no effect. A `Store` error had no effect and leaves at most
+    /// (`AuditOutcome::of`): a permitted call records an `AuditIntent`
+    /// before its effect and its entry after it, an interrupted one is
+    /// recorded `Interrupted` at start (`audit::AuditIntents`), and a
+    /// `Forbidden` or `Rejected` one has no effect. A `Store` error had no effect and leaves at most
     /// one entry, written when the audit log is still reachable.
     fn act(
         &self,
