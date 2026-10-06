@@ -4,7 +4,7 @@
 //!   own revision ([`revision`]) and the format's source digest of the
 //!   files read ([`digest_files`]).
 //! - **Converter.** This crate's version and the crosstalk commit it was
-//!   built from ([`crosstalk_commit`]).
+//!   built from ([`CROSSTALK_COMMIT`], recorded by the build script).
 //! - **Selection and pace.** The flags that pick the worlds and step the
 //!   virtual clock, as the caller lists them.
 //! - **Worlds and files.** The writer's world entries (exchanges, label
@@ -65,18 +65,18 @@ impl ManifestSpec {
 pub fn converter() -> Converter {
     Converter {
         version: env!("CARGO_PKG_VERSION").to_owned(),
-        git: crosstalk_commit().unwrap_or_else(|| UNKNOWN.to_owned()),
+        git: CROSSTALK_COMMIT.to_owned(),
     }
 }
 
 /// What a revision or commit that cannot be found is recorded as.
 pub const UNKNOWN: &str = "unknown";
 
-/// The commit of the crosstalk checkout this crate was built from (its
-/// `.git`, read without running git), if the checkout is still there.
-pub fn crosstalk_commit() -> Option<String> {
-    git_head(Path::new(env!("CARGO_MANIFEST_DIR")), None)
-}
+/// The crosstalk commit this binary was built from, as `build.rs` recorded
+/// it: `<sha>`, `<sha>-dirty` when tracked files differed from it, or
+/// [`UNKNOWN`] when built without git. Fixed at build time, so an export and
+/// a run by one binary always name the same converter.
+pub const CROSSTALK_COMMIT: &str = env!("CROSSTALK_EVAL_GIT");
 
 /// A dataset's own revision:
 ///
