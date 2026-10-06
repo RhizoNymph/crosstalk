@@ -1,0 +1,47 @@
+[invariant]
+id = "provenance.match.forward-direct-read"
+statement = "With forwarding on, a lookup hit of a read on another agent's forwarded span (Relayed from its input message m) does not count toward a ContentMatch when a decode layer of one of the reader's non-assistant inputs in the exchange's request (the read itself included) holds the hit's k-gram and at least w (the winnowing window) k-grams of m that the forwarder's output message does not hold. Only those hits are dropped; when m's or the forwarder's body is gone, none is."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+With forwarding on, a forward is matchable under its forwarder
+(provenance.index.forwarded-indexed), and every peer that read the same
+upstream itself (its own inspect_database or get_log in SALT, its own
+shell output in the SWE corpora) matched the forward: 44,529 SALT false
+positives, 8,444 on splice, 2,851 on open-swe. Such a peer has its own
+path to the original, which is the nearer source.
+
+L4 tells a direct read of the source from a delivery of the forward by
+content: a delivery carries only what the forwarder wrote, while a direct
+read also holds the source's text around the forward (the tool's header,
+the rows the forwarder did not paste). So a reader input layer that holds
+at least w k-grams of m that are absent from the forwarder's output
+message is a direct read of m, and the forward's hits that such a layer
+also holds are explained by it. The current read counts (the peer's own
+tool result), and so do the reader's earlier reads in the request: a
+reader that read the source itself earlier does not receive the same text
+again from the forwarder; only what it never read itself (another source,
+the forwarder's own text) still matches.
+
+Measured with forwarding on (live, against integration/impl 2adbed4,
+together with provenance.match.own-output-replay): SALT precision 0.143
+-> 0.882 (tool-result false positives 46,275 -> 478), splice 0.162 ->
+0.621. Counting earlier reads costs SALT's forwarding row 0.967 -> 0.885:
+a peer's paste of a raw log holding the schema the reader had read itself
+is not matched on the schema. Counting only the read being scanned kept
+that row at 0.967 but left precision at 0.702 (prompt text forwarded back
+and forth in user turns).
+
+Tradeoff: a forward that holds the whole source (nothing of m outside the
+forward) cannot be told from it, so a peer's own read of exactly that
+source still matches the forwarder; and a direct read that holds less
+than w k-grams of m beyond the forward is not recognised. The rule is
+per hit, so a match keeps its other runs.
+"""
+
+[evidence]
+unit = ["crosstalk_provenance::tests::nearer_source::direct_read_of_a_forwarded_source_does_not_match_the_forwarder", "crosstalk_provenance::tests::nearer_source::earlier_direct_read_explains_only_that_sources_forward"]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

@@ -24,8 +24,8 @@ COPY . .
 # resolution and one lock on the cached target dir. ct-eval's default gates
 # path is compiled in as /src/crates/eval/gates.toml, which the runtime image
 # does not have; the file is shipped beside it and `bench` passes --gates.
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/src/target \
+RUN --mount=type=cache,sharing=locked,target=/usr/local/cargo/registry \
+    --mount=type=cache,sharing=locked,target=/src/target \
     cargo build --locked --release \
         -p crosstalk-demo --bin crosstalk-demo \
         -p crosstalk-eval --bin ct-eval \

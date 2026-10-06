@@ -188,8 +188,11 @@ async fn swarm(claude_code_shape: bool, seed: u64) -> Run {
 async fn swarm_with(claude_code_shape: bool, seed: u64, mix: TaskMix) -> Run {
     let recorder = Recorder::start().await;
     let pages = wiki().await;
+    // Unique per call: tests may run the same (shape, seed) concurrently.
+    static CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+    let call = CALLS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     let truth = std::env::temp_dir().join(format!(
-        "crosstalk-demo-truth-v2-{}-{claude_code_shape}-{seed}.jsonl",
+        "crosstalk-demo-truth-v2-{}-{claude_code_shape}-{seed}-{call}.jsonl",
         std::process::id()
     ));
     let base = |addr: SocketAddr| format!("http://{addr}").parse::<BaseUrl>().expect("url");
@@ -278,6 +281,8 @@ fn check(run: &Run) -> (BTreeSet<String>, bool) {
     assert_eq!(header["keys"], 3);
     assert_eq!(header["agents_per_key"], 2);
     assert_eq!(header["claude_code_shape"], run.config.claude_code_shape);
+    assert_eq!(header["scenario"], run.config.scenario.name());
+    assert_eq!(run.report.scenario, run.config.scenario);
     assert_eq!(header["gateway_url"], run.config.gateway.url());
     assert_eq!(header["wiki_url"], run.config.wiki.url());
     let started = header["started_at_unix_ms"].as_u64().expect("start");
@@ -314,7 +319,44 @@ fn check(run: &Run) -> (BTreeSet<String>, bool) {
     let mut kinds = BTreeSet::new();
     let mut skipped_failure = false;
     let mut by_kind: BTreeMap<String, u64> = BTreeMap::new();
-    for row in &rows[4..] {
+    // One `session` row per conversation the gateway saw, naming the agent
+    // the request's metadata names.
+    let cluster_of: BTreeMap<&str, &Value> = clusters
+        .iter()
+        .flat_map(|c| {
+            c["agents"]
+                .as_array()
+                .expect("agents")
+                .iter()
+                .map(move |a| (a.as_str().expect("name"), &c["key_group"]))
+        })
+        .collect();
+    let mut session_agents: BTreeMap<String, String> = BTreeMap::new();
+    for row in rows[4..].iter().filter(|r| r["kind"] == "session") {
+        assert_eq!(row["world"], world);
+        let session = row["session"].as_str().expect("session").to_owned();
+        let agent = row["agent"].as_str().expect("agent").to_owned();
+        assert_eq!(&row["key_group"], cluster_of[agent.as_str()]);
+        assert!(row["started_at_unix_ms"].as_u64().expect("start") >= started);
+        assert!(
+            session_agents.insert(session, agent).is_none(),
+            "one session row per conversation"
+        );
+    }
+    for (session, requests) in &run.sessions {
+        let agent = session_agents
+            .get(session)
+            .unwrap_or_else(|| panic!("no session row for {session}"));
+        for request in requests {
+            let sent: Value = serde_json::from_slice(&request.body).expect("request json");
+            assert_eq!(
+                sent["metadata"]["user_id"],
+                format!("{agent}_session_{session}")
+            );
+        }
+    }
+    assert_eq!(session_agents.len() as u64, run.report.sessions);
+    for row in rows[4..].iter().filter(|r| r["kind"] != "session") {
         let kind = row["kind"].as_str().expect("kind").to_owned();
         *by_kind.entry(kind.clone()).or_default() += 1;
         kinds.insert(kind.clone());
@@ -512,4 +554,31 @@ async fn every_row_kind_appears() {
         .map(str::to_owned)
         .collect();
     assert_eq!(all, expected);
+}
+
+/// Two runs with the same seed, as every bench run is, must not share a
+/// session or a key: a long-lived gateway would thread the second run into
+/// the first one's conversations, and the scorer's session joins would mix
+/// runs. Their behaviour still comes from the seed alone.
+#[tokio::test]
+async fn runs_with_one_seed_share_no_session_or_key() {
+    let first = swarm(false, 42).await;
+    let second = swarm(false, 42).await;
+    assert_ne!(first.report.run, second.report.run);
+    let sessions = |run: &Run| -> BTreeSet<String> { run.sessions.keys().cloned().collect() };
+    let (a, b) = (sessions(&first), sessions(&second));
+    assert!(!a.is_empty() && !b.is_empty());
+    assert!(
+        a.is_disjoint(&b),
+        "sessions repeat across runs: {:?}",
+        a.intersection(&b).collect::<Vec<_>>()
+    );
+    let run_a = first.report.run.clone();
+    let run_b = second.report.run.clone();
+    for group in 0..3 {
+        assert_ne!(
+            crate::swarm::agent::api_key(42, &run_a, group),
+            crate::swarm::agent::api_key(42, &run_b, group)
+        );
+    }
 }

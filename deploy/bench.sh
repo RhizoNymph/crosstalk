@@ -15,6 +15,7 @@
 #   6. wait_caught_up           /healthz `live.watermark_micros` past the
 #                               swarm's end (exports are cut at the watermark)
 #   7. fetch_detections         ct-eval swarm-fetch (export + evidence)
+#      snapshot_inputs          copy the exchange log and blobs into the run dir
 #   8. score                    ct-eval swarm, headline, ct-eval's exit code
 # Nothing after step 4 may restart or recreate crosstalk: its detection
 # state is in memory. Every `compose run` here passes --no-deps for that.
@@ -33,6 +34,10 @@ bench_usage() {
   --agents N             swarm agents (default 20)
   --duration D           swarm run time, e.g. 90s, 2m (default 2m)
   --seed N               swarm seed (default 42)
+  --scenario S           headline (default): high-entropy model prose, the
+                         headline precision/recall; boilerplate: templated
+                         prose unrelated agents share, a regression scenario
+                         for false positives on shared text
   --claude-code-shape    Claude Code request shape (system turns, headers)
   --settle-timeout SECS  give up waiting for the watermark after this long
                          (default 900; with the demo flow config it is
@@ -223,6 +228,20 @@ fetch_detections() {
         || bench_fail "ct-eval swarm-fetch failed; the detection state is still in crosstalk until it restarts"
 }
 
+# After the export: copy the gateway's exchange log and blob store into the
+# run directory, so the run can be re-scored anywhere (ct-eval swarm needs
+# the truth, the exchange log, the blobs and the export). Both accumulate
+# across runs (blobs are content-addressed), so this copies everything so
+# far; the importer joins on the run's sessions.
+snapshot_inputs() {
+    local run="$1" id dir="${here}/bench/${run}"
+    id="$(compose ps -q crosstalk)"
+    [[ -n "$id" ]] || bench_fail "no crosstalk container to copy the exchange log and blobs from"
+    docker cp "${id}:${bench_data_dir}/exchanges/exchange-log.jsonl" "${dir}/exchange-log.jsonl" \
+        && docker cp "${id}:${bench_data_dir}/blobs" "${dir}/blobs" \
+        || bench_fail "could not copy the exchange log and blobs into ${dir}"
+}
+
 # 8. Score offline against the exchange log and blobs read in place on the
 # data volume; print the headline and return ct-eval's exit code (2: a gate
 # failed).
@@ -241,12 +260,12 @@ score() {
         return "$rc"
     fi
     echo
-    echo "bench ${run}"
+    echo "bench ${run} ($(sed -n 's/^scenario=//p' "${dir}/bench.env"))"
     grep -m 1 '^overall:' "${dir}/report/report.txt" || true
     if grep -q '^gates:' "${dir}/report/report.txt"; then
         sed -n '/^gates:/,/^$/p' "${dir}/report/report.txt"
     else
-        echo "gates: none apply to demo-swarm"
+        echo "gates: none defined for this dataset in ${bench_gates}"
     fi
     if ((rc == 2)); then echo "result: GATE FAILED"; else echo "result: pass"; fi
     echo "report: ${dir}/report/report.txt"
@@ -254,13 +273,17 @@ score() {
 }
 
 bench() {
-    local agents=20 duration=2m seed=42 shape=0 yes=0 timeout=900 run rc=0 end_ms
+    local agents=20 duration=2m seed=42 scenario=headline shape=0 yes=0 timeout=900 run rc=0 end_ms
     local extra=()
     while (($# > 0)); do
         case "$1" in
             --agents) positive_int "$1" "${2-}"; agents="$2"; shift 2 ;;
             --duration) [[ -n "${2-}" ]] || bench_fail "--duration needs a value"; duration="$2"; shift 2 ;;
             --seed) [[ "${2-}" =~ ^[0-9]+$ ]] || bench_fail "--seed needs an integer"; seed="$2"; shift 2 ;;
+            --scenario)
+                [[ "${2-}" == headline || "${2-}" == boilerplate ]] \
+                    || bench_fail "--scenario needs headline or boilerplate, got '${2-}'"
+                scenario="$2"; shift 2 ;;
             --claude-code-shape) shape=1; shift ;;
             --settle-timeout) positive_int "$1" "${2-}"; timeout="$2"; shift 2 ;;
             --yes | -y) yes=1; shift ;;
@@ -288,17 +311,18 @@ bench() {
 
     run="$(date -u +%Y%m%dT%H%M%SZ)"
     mkdir "${here}/bench/${run}" || bench_fail "deploy/bench/${run} already exists"
-    local swarm_args=(--agents "$agents" --duration "$duration" --seed "$seed")
+    local swarm_args=(--agents "$agents" --duration "$duration" --seed "$seed" --scenario "$scenario")
     ((shape == 1)) && swarm_args+=(--claude-code-shape)
     {
         echo "run=${run}"
+        echo "scenario=${scenario}"
         echo "swarm=${swarm_args[*]} ${extra[*]}"
         echo "evidence_window_ms=$(demo_flow_ms evidence_window_ms)"
         echo "suspected_ttl_ms=$(demo_flow_ms suspected_ttl_ms)"
         echo "crosstalk_image=$(docker image inspect --format '{{.Id}}' crosstalk:dev)"
         echo "demo_image=$(docker image inspect --format '{{.Id}}' crosstalk-demo:dev)"
     } >"${here}/bench/${run}/bench.env"
-    echo "run.sh bench: run ${run} -> deploy/bench/${run}/" >&2
+    echo "run.sh bench: run ${run} (scenario ${scenario}) -> deploy/bench/${run}/" >&2
 
     run_swarm "$run" "${swarm_args[@]}" "${extra[@]}"
     # Whole seconds: `date +%3N` is not portable (uutils prints nanoseconds),
@@ -307,6 +331,7 @@ bench() {
     echo "swarm_end_unix_ms=${end_ms}" >>"${here}/bench/${run}/bench.env"
     wait_caught_up "$run" "$end_ms" "$timeout"
     fetch_detections "$run"
+    snapshot_inputs "$run"
     score "$run" || rc=$?
     exit "$rc"
 }

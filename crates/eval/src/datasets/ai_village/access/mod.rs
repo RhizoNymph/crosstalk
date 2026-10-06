@@ -1,726 +1,313 @@
-//! Reads and writes of shared resources, tagged from bash commands.
+//! Reads and writes of shared resources, from bash commands, as L5's
+//! extractor sees them.
 //!
-//! Agents share code and pages through repositories and web APIs. This
-//! module reads an executed bash command and its output and says which
-//! canonical resource ([`super::resource`]) it read or wrote:
+//! Every command goes through `crosstalk_flow`'s [`ToolExtractors`] as the
+//! `bash` tool call the agent made, with its output as the result: the
+//! locators, the ops and each write's [`WriteOutcome`] (judged from the
+//! output: git, curl, wget and the forge CLIs print their failures) are
+//! the extractor's own. So are the commands it reads:
 //!
-//! | Command | Access | Resource from |
+//! | Command | Access | Locator |
 //! | --- | --- | --- |
-//! | `git push` | write | the output's `To <remote>` line, else a URL argument, else the directory's known remote |
-//! | `git clone <url>` | read | the URL (and the clone's directory learns it) |
-//! | `git pull`, `git fetch` | read | the output's `From <remote>` line, else a URL argument, else the directory's known remote |
-//! | `gh`/`glab` `issue`/`pr`/`mr` `create`, `comment`, `note`, `edit`, `close`, `reopen`, `merge`, `review`, `approve` | write | `-R`/`--repo`, else a URL argument, else the directory's remote, else a URL in the output |
-//! | `gh`/`glab` `issue`/`pr`/`mr` `view`, `list`, `diff`, `checks`, `status` | read | the same |
-//! | `gh api` / `glab api` (`repos/…`, `projects/…`) | the method (`-X`, else POST with a field flag, else GET) | the API path |
-//! | `curl` | the method (`-X`/`--request`, `-I` HEAD, else POST with a data/form flag unless `-G`, PUT with `-T`, else GET) | each URL argument |
-//! | `wget` | the method (`--method`, else POST with `--post-data`/`--post-file`, else GET) | each URL argument |
+//! | `git push` | write, no content in the call (`WritePayload::Unseen`) | the repository (`Locator::Repository`) |
+//! | `git pull`, `git fetch`, `git clone`, `gh repo clone` | read | the repository |
+//! | `gh`/`glab` `issue`/`pr`/`mr` `create` | write | the collection (`/issues`, `/pulls`, `/-/issues`, `/-/merge_requests`) |
+//! | `gh`/`glab` `comment`, `note`, `edit`, `review` | write | the thread (`/issues/<N>`, `/-/merge_requests/<N>`) |
+//! | `gh`/`glab` `view` / `list` | read | the thread / the collection |
+//! | `gh api`, `glab api`, `curl`, `wget` | the HTTP method's | the URL's site locator: a repository, its file (`File { host: "<host>/<o>/<n>" }`), a thread, or the URL |
+//! | `cat`, `head`, `tail`, `sed -n '<lines>p'` of a file; `>`, `>>`, `tee` into one | read; write | the file: in a clone whose remote is known, the repository's file |
 //!
-//! HTTP commands follow the agreed L5 `HttpTool` contract ([`http`]):
-//! `GET`/`HEAD` read, `POST`/`PUT`/`PATCH`/`DELETE` write, any other method
-//! is no access, and each such access keeps the `http_request` call it is
-//! equivalent to ([`Access::http`]). git and the forge CLIs' issue, PR and
-//! MR commands speak their own protocols: only a Bash extractor sees them
-//! (`http` is `None`).
+//! Only shared resources are kept ([`kind`]): every village agent has its
+//! own computer, so a file outside a known clone is its alone.
 //!
-//! Each write carries the spec's `WriteOutcome`, judged from the output
-//! ([`outcome`]); a read whose output shows a failure is no access.
+//! **What the converter adds** is the shell's true state, which the
+//! gateway's context cannot know (see the feature doc's findings):
 //!
-//! [`Shell`] keeps what one agent's shell has revealed: its working
-//! directory (the bash tool is one persistent shell) and the remote of each
-//! directory, learnt from `cd`, `git clone`, `git remote add/set-url`,
-//! `git remote -v` output and push/pull output. A write keeps its
-//! **payload**: the text it carried (`--body`, `--title`, `--description`,
-//! `--message` of issue and review commands, `-d`/`--data`/`--json` of curl),
-//! so a reader's output can be checked for it.
+//! - the village's bash tool is one persistent shell per agent, so the
+//!   working directory carries over between calls (L5's `bash` does not
+//!   persist it; the context is moved as Claude Code's persistent `Bash`
+//!   would be);
+//! - the home directory is [`HOME`], so `~` and `$HOME` are expanded
+//!   before extraction (L5 cannot follow `~`);
+//! - a clone made before the window is learnt from the remote a push or
+//!   pull prints (`To <remote>`, `From <remote>`): the directory the
+//!   command ended in is bound to it, and the command is extracted again
+//!   with the binding.
+//!
+//! A write keeps the text its author typed into the command ([`payload`]),
+//! unless L5 says the call carries none of its content (`git push`).
 
-pub mod http;
-pub mod outcome;
+pub mod payload;
 pub mod shell;
 
-use std::collections::BTreeMap;
+use std::sync::LazyLock;
 
+use crosstalk_flow::extract::resource::RepoId;
+use crosstalk_flow::extract::{
+    AbsolutePath, Classified, ConversationContext, ExtractConfig, ExtractedOp, ToolExtractors,
+    WritePayload,
+};
 use crosstalk_spec::derived::flow::access::WriteOutcome;
 use crosstalk_spec::derived::flow::resource::Locator;
+use crosstalk_spec::observed::message::{
+    CanonicalJson, Text, ToolArguments, ToolCall, ToolCallId, ToolExecution, ToolName, ToolOutcome,
+    ToolResult, ToolResultContent,
+};
 
-pub use http::{HTTP_TOOL, HttpMethod, HttpRequest};
-
-use super::resource::{Forge, from_remote, from_url, repo, urls};
-use shell::{SimpleCommand, commands, heredoc_argument};
+use super::resource::{ResourceKind, kind};
 
 /// The bash tool's home directory in the village's computers.
 pub const HOME: &str = "/home/computeruse";
 
-/// A read, or a write with its outcome.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+/// The village's shell tool, as the agents call it.
+pub const BASH_TOOL: &str = "bash";
+
+/// A shell tool whose working directory persists across calls in L5's
+/// catalog (Claude Code's), used to move the context as the village's
+/// persistent shell moves.
+const PERSISTENT_SHELL: &str = "Bash";
+
+/// The extractor's default configuration, which the gateway runs with.
+static CONFIG: LazyLock<ExtractConfig> = LazyLock::new(ExtractConfig::default);
+
+/// What a write carried.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Payload {
+    /// The content is not in the call (`git push`): the gateway records
+    /// the write without spans, so only co-access can link it.
+    Unseen,
+    /// The texts the author typed (here-document bodies, body flags,
+    /// data); may be empty.
+    Authored(Vec<String>),
+}
+
+/// A read, or a write with its outcome and payload.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Op {
     Read,
-    Write(WriteOutcome),
+    Write {
+        outcome: WriteOutcome,
+        payload: Payload,
+    },
 }
 
 impl Op {
-    pub fn is_write(self) -> bool {
-        matches!(self, Self::Write(_))
+    pub fn is_write(&self) -> bool {
+        matches!(self, Self::Write { .. })
     }
 
     /// Whether this access can be one side of a pair: every read, and
     /// every write the spec pairs (`WriteOutcome::pairs`).
-    pub fn pairs(self) -> bool {
+    pub fn pairs(&self) -> bool {
         match self {
             Self::Read => true,
-            Self::Write(outcome) => outcome.pairs(),
+            Self::Write { outcome, .. } => outcome.pairs(),
         }
     }
 }
 
-/// The command that made an access.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Tool {
-    Git,
-    GitHubCli,
-    GitLabCli,
-    Curl,
-    Wget,
-}
-
-/// One read or write of a canonical resource.
+/// One read or write of a shared resource.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Access {
     pub op: Op,
+    /// The extractor's locator.
     pub resource: Locator,
-    pub tool: Tool,
-    /// What the command did, for reports (`git push`, `glab issue comment`).
-    pub verb: String,
-    /// Text a write carried; empty for reads.
-    pub payload: Vec<String>,
-    /// The `http_request` call an HTTP command is equivalent to; `None`
-    /// for git and the forge CLIs' issue commands (Bash extractor only).
-    pub http: Option<HttpRequest>,
+    pub kind: ResourceKind,
 }
 
 impl Access {
-    /// Whether L5's `HttpTool` extractor would see this access had the
-    /// agent used the equivalent call.
-    pub fn http_visible(&self) -> bool {
-        self.http.is_some()
+    /// What a write carried; `None` for a read.
+    pub fn payload(&self) -> Option<&Payload> {
+        match &self.op {
+            Op::Read => None,
+            Op::Write { payload, .. } => Some(payload),
+        }
+    }
+
+    /// `<read|write> <kind>`, for counts.
+    pub fn label(&self) -> String {
+        let op = if self.op.is_write() { "write" } else { "read" };
+        format!("{op} {}", self.kind.as_str())
     }
 }
 
-/// An access before its output is judged.
-#[derive(Debug, Clone)]
-struct Draft {
-    write: bool,
-    resource: Locator,
-    tool: Tool,
-    verb: String,
-    payload: Vec<String>,
-    http: Option<HttpRequest>,
-}
-
-impl Draft {
-    /// The access, judged from `output`: a write gets its outcome, a read
-    /// with a failed output is dropped.
-    fn judge(self, output: &str) -> Option<Access> {
-        let op = if self.write {
-            Op::Write(outcome::write_outcome(self.tool, output))
-        } else if outcome::failed(output) {
-            return None;
-        } else {
-            Op::Read
-        };
-        Some(Access {
-            op,
-            resource: self.resource,
-            tool: self.tool,
-            verb: self.verb,
-            payload: self.payload,
-            http: self.http,
-        })
-    }
-}
-
-/// One agent's shell: working directory and known remotes.
+/// One agent's persistent shell, as the extractor's conversation context.
 #[derive(Debug, Clone)]
 pub struct Shell {
-    cwd: String,
-    remotes: BTreeMap<String, Locator>,
+    context: ConversationContext,
+    /// Commands the extractor refused (an unterminated quote, arguments
+    /// that are not a command): no access, as in the gateway.
+    unextracted: u64,
 }
 
 impl Default for Shell {
     fn default() -> Self {
         Self {
-            cwd: HOME.to_owned(),
-            remotes: BTreeMap::new(),
+            context: ConversationContext::new(AbsolutePath::parse(HOME).ok(), None),
+            unextracted: 0,
         }
     }
 }
-
-const WRITE_VERBS: &[&str] = &[
-    "create", "comment", "note", "edit", "close", "reopen", "merge", "review", "approve",
-];
-const READ_VERBS: &[&str] = &["view", "list", "diff", "checks", "status"];
-const PAYLOAD_FLAGS: &[&str] = &[
-    "--body",
-    "-b",
-    "--title",
-    "-t",
-    "--description",
-    "--message",
-    "-m",
-];
-const CURL_DATA: &[&str] = &[
-    "-d",
-    "--data",
-    "--data-raw",
-    "--data-binary",
-    "--data-urlencode",
-    "--data-ascii",
-    "--json",
-    "-F",
-    "--form",
-    "--form-string",
-];
 
 impl Shell {
-    pub fn cwd(&self) -> &str {
-        &self.cwd
+    /// The shell's working directory, when it is known.
+    pub fn cwd(&self) -> Option<&str> {
+        self.context.cwd().map(AbsolutePath::as_str)
     }
 
-    /// The remote this shell knows for `dir`.
-    pub fn remote_of(&self, dir: &str) -> Option<&Locator> {
-        self.remotes.get(dir)
+    /// How many commands the extractor refused.
+    pub fn unextracted(&self) -> u64 {
+        self.unextracted
     }
 
-    /// The accesses of one executed command, given its output (stdout and
-    /// stderr together). Updates the shell's directory and remotes.
+    /// The shared-resource accesses of one executed command, given its
+    /// output (stdout and stderr together). Moves the shell and learns
+    /// its clones.
     pub fn accesses(&mut self, command: &str, output: &str) -> Vec<Access> {
-        self.drafts(command, output)
-            .into_iter()
-            .filter_map(|draft| draft.judge(output))
-            .collect()
-    }
-
-    fn drafts(&mut self, command: &str, output: &str) -> Vec<Draft> {
-        let mut out = Vec::new();
-        for simple in commands(command) {
-            let words = strip_prefixes(&simple);
-            let Some(program) = words.first() else {
-                continue;
-            };
-            let program = program.rsplit('/').next().unwrap_or(program);
-            match program {
-                "cd" => {
-                    let target = words.get(1).map_or(HOME, String::as_str);
-                    self.cwd = self.resolve(target);
-                }
-                "git" => out.extend(self.git(&words[1..], output)),
-                "gh" => out.extend(self.forge_cli(Forge::GitHub, &words[1..], output)),
-                "glab" => out.extend(self.forge_cli(Forge::GitLab, &words[1..], output)),
-                "curl" => out.extend(curl(&words[1..])),
-                "wget" => out.extend(wget(&words[1..])),
-                _ => {}
-            }
-        }
-        out
-    }
-
-    /// `path` as an absolute directory (`~` is the home directory).
-    fn resolve(&self, path: &str) -> String {
-        let path = path.trim();
-        let absolute = if let Some(rest) = path.strip_prefix('~') {
-            format!("{HOME}{rest}")
-        } else if path.starts_with('/') {
-            path.to_owned()
-        } else {
-            format!("{}/{path}", self.cwd)
-        };
-        crate::reference::route::normalize_path(&absolute)
-    }
-
-    fn learn(&mut self, dir: String, remote: &Locator) {
-        self.remotes.insert(dir, remote.clone());
-    }
-
-    fn git(&mut self, args: &[String], output: &str) -> Vec<Draft> {
-        let mut dir = self.cwd.clone();
-        let mut at = 0;
-        while at < args.len() && args[at].starts_with('-') {
-            if (args[at] == "-C" || args[at] == "-c") && at + 1 < args.len() {
-                if args[at] == "-C" {
-                    dir = self.resolve(&args[at + 1]);
-                }
-                at += 2;
-            } else {
-                at += 1;
-            }
-        }
-        let Some(sub) = args.get(at) else {
-            return Vec::new();
-        };
-        let rest: Vec<&String> = args[at + 1..]
-            .iter()
-            .filter(|a| !a.starts_with('-'))
-            .collect();
-        let url_arg = rest.iter().find_map(|a| from_remote(a));
-        let access = |write: bool, resource: Locator, verb: &str| Draft {
-            write,
-            resource,
-            tool: Tool::Git,
-            verb: format!("git {verb}"),
-            payload: Vec::new(),
-            http: None,
-        };
-        match sub.as_str() {
-            "clone" => {
-                let Some(resource) = url_arg else {
-                    return Vec::new();
-                };
-                let target = rest.get(1).map(|d| d.as_str()).unwrap_or_else(|| {
-                    rest.first()
-                        .and_then(|url| url.trim_end_matches('/').rsplit('/').next())
-                        .map_or("", |name| name.trim_end_matches(".git"))
-                });
-                if !target.is_empty() {
-                    let target = resolve_in(&dir, target);
-                    self.learn(target, &resource);
-                }
-                if outcome::failed(output) {
-                    return Vec::new();
-                }
-                vec![access(false, resource, "clone")]
-            }
-            "push" | "pull" | "fetch" => {
-                let marker = if sub == "push" { "To " } else { "From " };
-                let from_output = output.lines().find_map(|line| {
-                    line.trim()
-                        .strip_prefix(marker)
-                        .and_then(|rest| from_remote(rest.split_whitespace().next()?))
-                });
-                let resource = from_output
-                    .or(url_arg)
-                    .or_else(|| self.remotes.get(&dir).cloned());
-                let Some(resource) = resource else {
-                    return Vec::new();
-                };
-                self.learn(dir, &resource);
-                vec![access(sub == "push", resource, sub)]
-            }
-            "remote" => {
-                match rest.first().map(|s| s.as_str()) {
-                    Some("add") | Some("set-url") => {
-                        if let Some(resource) = rest.get(2).and_then(|url| from_remote(url)) {
-                            self.learn(dir, &resource);
-                        }
-                    }
-                    _ => {
-                        // `git remote -v`: learn the first fetch remote.
-                        if let Some(resource) = output.lines().find_map(|line| {
-                            let mut fields = line.split_whitespace();
-                            let _name = fields.next()?;
-                            from_remote(fields.next()?)
-                        }) {
-                            self.learn(dir, &resource);
-                        }
-                    }
-                }
+        let expanded = expand_home(command);
+        let result = result(output);
+        let mut extracted = match extract(&self.context, &expanded, &result) {
+            Some(found) => found,
+            None => {
+                self.unextracted += 1;
                 Vec::new()
             }
-            _ => Vec::new(),
+        };
+        let mut after = self.context.clone();
+        after.observe(&CONFIG, &call(PERSISTENT_SHELL, &expanded), Some(&result));
+        if let Some(dir) = after.cwd().cloned()
+            && after.repos().locate(&dir).is_none()
+            && let Some(repo) = printed_remote(&expanded, output)
+        {
+            let mut before = self.context.clone();
+            before.bind_repo(dir.clone(), repo.clone());
+            after.bind_repo(dir, repo);
+            extracted = extract(&before, &expanded, &result).unwrap_or_default();
         }
-    }
-
-    fn forge_cli(&mut self, forge: Forge, args: &[String], output: &str) -> Vec<Draft> {
-        let tool = match forge {
-            Forge::GitHub => Tool::GitHubCli,
-            Forge::GitLab => Tool::GitLabCli,
-        };
-        let program = match forge {
-            Forge::GitHub => "gh",
-            Forge::GitLab => "glab",
-        };
-        let Some(noun) = args.first() else {
-            return Vec::new();
-        };
-        if noun == "api" {
-            return api(forge, tool, &args[1..]).into_iter().collect();
-        }
-        if !matches!(noun.as_str(), "issue" | "pr" | "mr") {
-            return Vec::new();
-        }
-        let Some(verb) = args.get(1) else {
-            return Vec::new();
-        };
-        let write = if WRITE_VERBS.contains(&verb.as_str()) {
-            true
-        } else if READ_VERBS.contains(&verb.as_str()) {
-            false
-        } else {
-            return Vec::new();
-        };
-        let flag = |names: &[&str]| -> Vec<String> {
-            let mut values = Vec::new();
-            let mut at = 2;
-            while at < args.len() {
-                let word = &args[at];
-                if let Some((name, value)) = word.split_once('=')
-                    && names.contains(&name)
-                {
-                    values.push(value.to_owned());
-                } else if names.contains(&word.as_str()) && at + 1 < args.len() {
-                    values.push(args[at + 1].clone());
-                    at += 1;
-                }
-                at += 1;
-            }
-            values
-        };
-        let named = flag(&["-R", "--repo"])
+        self.context = after;
+        let authored = payload::authored(command);
+        extracted
             .into_iter()
-            .find_map(|value| from_url(&value).or_else(|| repo(forge, &value)));
-        let url_arg = args[2..]
-            .iter()
-            .filter(|a| a.starts_with("http"))
-            .find_map(|a| from_url(a));
-        let output_url = || urls(output).into_iter().find_map(from_url);
-        let Some(resource) = named
-            .or(url_arg)
-            .or_else(|| self.remotes.get(&self.cwd).cloned())
-            .or_else(output_url)
-        else {
-            return Vec::new();
-        };
-        let mut payload_flags: Vec<&str> = PAYLOAD_FLAGS.to_vec();
-        if forge == Forge::GitLab {
-            payload_flags.push("-d");
-        }
-        let payload = if write {
-            flag(&payload_flags)
-                .into_iter()
-                .map(|value| heredoc_argument(&value).unwrap_or(value))
-                .filter(|value| !value.trim().is_empty())
-                .collect()
-        } else {
-            Vec::new()
-        };
-        vec![Draft {
-            write,
-            resource,
-            tool,
-            verb: format!("{program} {noun} {verb}"),
-            payload,
-            http: None,
-        }]
-    }
-}
-
-fn resolve_in(dir: &str, target: &str) -> String {
-    if target.starts_with('/') {
-        crate::reference::route::normalize_path(target)
-    } else if let Some(rest) = target.strip_prefix('~') {
-        crate::reference::route::normalize_path(&format!("{HOME}{rest}"))
-    } else {
-        crate::reference::route::normalize_path(&format!("{dir}/{target}"))
-    }
-}
-
-/// The words after environment assignments and `sudo`, `env`, `timeout N`,
-/// `time`, `nohup`, `command`, `exec`.
-fn strip_prefixes(simple: &SimpleCommand) -> Vec<String> {
-    let mut words = simple.words.as_slice();
-    loop {
-        match words.first().map(String::as_str) {
-            Some(word)
-                if word.contains('=')
-                    && !word.starts_with('-')
-                    && word.split('=').next().is_some_and(|name| {
-                        !name.is_empty()
-                            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_')
-                    }) =>
-            {
-                words = &words[1..];
-            }
-            Some("sudo" | "env" | "time" | "nohup" | "command" | "exec") => words = &words[1..],
-            Some("timeout") => {
-                words = &words[1..];
-                while words.first().is_some_and(|w| w.starts_with('-')) {
-                    words = &words[1..];
-                }
-                if !words.is_empty() {
-                    words = &words[1..];
-                }
-            }
-            _ => break,
-        }
-    }
-    words.to_vec()
-}
-
-/// `gh api` / `glab api` on a repository or project path: the method is
-/// `-X`, else POST with a field flag, else GET; field values are the
-/// payload and the body (a JSON object, as the CLIs send it).
-fn api(forge: Forge, tool: Tool, args: &[String]) -> Option<Draft> {
-    let mut method: Option<String> = None;
-    let mut fields: Vec<(String, String)> = Vec::new();
-    let mut input = false;
-    let mut path: Option<&str> = None;
-    let mut at = 0;
-    while at < args.len() {
-        let word = args[at].as_str();
-        match word {
-            "-X" | "--method" => {
-                method = args.get(at + 1).cloned();
-                at += 1;
-            }
-            "-f" | "-F" | "--field" | "--raw-field" => {
-                if let Some((name, value)) = args.get(at + 1).and_then(|f| f.split_once('=')) {
-                    fields.push((name.to_owned(), value.to_owned()));
-                }
-                at += 1;
-            }
-            "--input" => {
-                input = true;
-                at += 1;
-            }
-            _ if word.starts_with('-') => {}
-            _ if path.is_none() => path = Some(word),
-            _ => {}
-        }
-        at += 1;
-    }
-    let path = path?.trim_start_matches('/');
-    let (url, resource) = match forge {
-        Forge::GitHub => {
-            let url = format!("https://api.github.com/{path}");
-            let segments: Vec<&str> = path.split(['/', '?']).collect();
-            let resource = match segments.as_slice() {
-                ["repos", owner, name, ..] => repo(Forge::GitHub, &format!("{owner}/{name}")),
-                _ => None,
-            }?;
-            (url, resource)
-        }
-        Forge::GitLab => {
-            let path = path.strip_prefix("api/v4/").unwrap_or(path);
-            if !path.starts_with("projects/") {
-                return None;
-            }
-            let url = format!("https://gitlab.com/api/v4/{path}");
-            let resource = from_url(&url)?;
-            (url, resource)
-        }
-    };
-    let method = match method {
-        Some(name) => HttpMethod::parse(&name)?,
-        None if !fields.is_empty() || input => HttpMethod::Post,
-        None => HttpMethod::Get,
-    };
-    let write = method.writes();
-    let body = (write && !fields.is_empty()).then(|| {
-        serde_json::Value::Object(
-            fields
-                .iter()
-                .map(|(name, value)| (name.clone(), value.clone().into()))
-                .collect(),
-        )
-        .to_string()
-    });
-    let payload = if write {
-        fields
-            .into_iter()
-            .map(|(_, value)| value)
-            .filter(|value| !value.trim().is_empty())
+            .filter_map(|classified| {
+                let kind = kind(&classified.locator)?;
+                let op = match classified.op {
+                    ExtractedOp::Read => Op::Read,
+                    ExtractedOp::Write {
+                        outcome,
+                        payload: WritePayload::Unseen,
+                    } => Op::Write {
+                        outcome,
+                        payload: Payload::Unseen,
+                    },
+                    ExtractedOp::Write {
+                        outcome,
+                        payload: WritePayload::CallArguments,
+                    } => Op::Write {
+                        outcome,
+                        payload: Payload::Authored(authored.clone()),
+                    },
+                };
+                Some(Access {
+                    op,
+                    resource: classified.locator,
+                    kind,
+                })
+            })
             .collect()
-    } else {
-        Vec::new()
-    };
-    let program = match forge {
-        Forge::GitHub => "gh",
-        Forge::GitLab => "glab",
-    };
-    Some(Draft {
-        write,
-        resource,
-        tool,
-        verb: format!("{program} api"),
-        payload,
-        http: Some(HttpRequest { method, url, body }),
+    }
+}
+
+/// The call id every converted command gets; the extractor only pairs it
+/// with its result.
+const CALL_ID: &str = "village-bash";
+
+/// The `bash` call of `command`, as `name`.
+fn call(name: &str, command: &str) -> ToolCall {
+    ToolCall {
+        id: ToolCallId(CALL_ID.to_owned()),
+        name: ToolName(name.to_owned()),
+        arguments: ToolArguments::Json(CanonicalJson(
+            serde_json::json!({ "command": command }).to_string(),
+        )),
+        execution: ToolExecution::Client,
+        signature: None,
+    }
+}
+
+/// The village records no exit status: every result is a success, judged
+/// by its text.
+fn result(output: &str) -> ToolResult {
+    ToolResult {
+        call_id: ToolCallId(CALL_ID.to_owned()),
+        content: vec![ToolResultContent::Text(Text(output.to_owned()))],
+        outcome: ToolOutcome::Success,
+    }
+}
+
+/// The extractor's accesses; `None` when it refuses the command.
+fn extract(
+    context: &ConversationContext,
+    command: &str,
+    result: &ToolResult,
+) -> Option<Vec<Classified>> {
+    let extractors = ToolExtractors::new(&CONFIG, context);
+    match extractors.extract_classified(&call(BASH_TOOL, command), Some(result)) {
+        Ok(found) => Some(found),
+        Err(error) => {
+            tracing::debug!(?error, "bash command not extracted");
+            None
+        }
+    }
+}
+
+/// The forge repository a `git push`, `pull` or `fetch` printed as its
+/// remote (`To <remote>`, `From <remote>`).
+fn printed_remote(command: &str, output: &str) -> Option<RepoId> {
+    let git = command.contains("git");
+    let markers: Vec<&str> = [
+        (git && command.contains("push"), "To "),
+        (
+            git && (command.contains("pull") || command.contains("fetch")),
+            "From ",
+        ),
+    ]
+    .into_iter()
+    .filter_map(|(ran, marker)| ran.then_some(marker))
+    .collect();
+    output.lines().find_map(|line| {
+        let line = line.trim();
+        let remote = markers
+            .iter()
+            .find_map(|marker| line.strip_prefix(marker))?
+            .split_whitespace()
+            .next()?;
+        let repo = RepoId::parse(remote, None)?;
+        repo.forge_parts().map(|_| repo.clone())
     })
 }
 
-/// Combined short options (`-sSL`, `-sX`) as separate flags; the last one
-/// keeps any value that follows.
-fn split_short(args: &[String]) -> Vec<String> {
-    let mut out = Vec::with_capacity(args.len());
-    for arg in args {
-        match arg.strip_prefix('-') {
-            Some(flags)
-                if flags.len() > 1
-                    && !flags.starts_with('-')
-                    && flags.chars().all(|c| c.is_ascii_alphabetic()) =>
-            {
-                out.extend(flags.chars().map(|c| format!("-{c}")));
-            }
-            _ => out.push(arg.clone()),
+/// `command` with `~` (a word's leading `~` before `/` or the word's end)
+/// and `$HOME` / `${HOME}` replaced by [`HOME`].
+pub fn expand_home(command: &str) -> String {
+    let command = command.replace("${HOME}", HOME).replace("$HOME", HOME);
+    let mut out = String::with_capacity(command.len());
+    let mut previous: Option<char> = None;
+    let mut chars = command.chars().peekable();
+    while let Some(c) = chars.next() {
+        let word_start = previous.is_none_or(|p| {
+            p.is_whitespace() || matches!(p, '=' | ';' | '&' | '|' | '(' | '"' | '\'')
+        });
+        let ends = chars.peek().is_none_or(|next| {
+            *next == '/'
+                || next.is_whitespace()
+                || matches!(next, ';' | '&' | '|' | ')' | '"' | '\'')
+        });
+        if c == '~' && word_start && ends {
+            out.push_str(HOME);
+        } else {
+            out.push(c);
         }
+        previous = Some(c);
     }
     out
-}
-
-fn curl(args: &[String]) -> Vec<Draft> {
-    let args = split_short(args);
-    let args = args.as_slice();
-    let mut method: Option<String> = None;
-    let mut data: Vec<String> = Vec::new();
-    let mut get = false;
-    let mut upload = false;
-    let mut targets: Vec<&str> = Vec::new();
-    let mut at = 0;
-    while at < args.len() {
-        let word = args[at].as_str();
-        let (name, inline) = match word.split_once('=') {
-            Some((name, value)) if name.starts_with("--") => (name, Some(value)),
-            _ => (word, None),
-        };
-        let value = || {
-            inline
-                .map(str::to_owned)
-                .or_else(|| args.get(at + 1).cloned())
-        };
-        let takes_value = inline.is_none();
-        match name {
-            "-X" | "--request" => {
-                method = value();
-                if takes_value {
-                    at += 1;
-                }
-            }
-            "-G" | "--get" => get = true,
-            "-I" | "--head" => method = Some("HEAD".to_owned()),
-            "-T" | "--upload-file" => {
-                upload = true;
-                if takes_value {
-                    at += 1;
-                }
-            }
-            "--url" => match inline {
-                Some(url) => targets.push(url),
-                None => {
-                    if let Some(url) = args.get(at + 1) {
-                        targets.push(url.as_str());
-                    }
-                    at += 1;
-                }
-            },
-            _ if CURL_DATA.contains(&name) => {
-                if let Some(value) = value() {
-                    data.push(value);
-                }
-                if takes_value {
-                    at += 1;
-                }
-            }
-            // Options with a value the converter does not need.
-            "-H" | "--header" | "-o" | "--output" | "-u" | "--user" | "-A" | "--user-agent"
-            | "-e" | "--referer" | "-m" | "--max-time" | "-w" | "--write-out" | "-b"
-            | "--cookie" | "-c" | "--cookie-jar" | "--connect-timeout" | "--retry" => {
-                if takes_value {
-                    at += 1;
-                }
-            }
-            _ if word.starts_with("http://") || word.starts_with("https://") => {
-                targets.push(word);
-            }
-            _ => {}
-        }
-        at += 1;
-    }
-    let method = match method {
-        Some(name) => match HttpMethod::parse(&name) {
-            Some(method) => method,
-            None => return Vec::new(),
-        },
-        None if upload => HttpMethod::Put,
-        None if !data.is_empty() && !get => HttpMethod::Post,
-        None => HttpMethod::Get,
-    };
-    let write = method.writes();
-    let sent: Vec<String> = data
-        .into_iter()
-        .filter(|value| !value.starts_with('@'))
-        .collect();
-    let body = (write && !sent.is_empty()).then(|| sent.join("&"));
-    let payload = if write { sent } else { Vec::new() };
-    drafts(targets, method, body, payload, Tool::Curl, "curl")
-}
-
-/// One draft per URL target of an HTTP command.
-fn drafts(
-    targets: Vec<&str>,
-    method: HttpMethod,
-    body: Option<String>,
-    payload: Vec<String>,
-    tool: Tool,
-    program: &str,
-) -> Vec<Draft> {
-    let write = method.writes();
-    targets
-        .into_iter()
-        .filter_map(|url| Some((url, from_url(url)?)))
-        .map(|(url, resource)| Draft {
-            write,
-            resource,
-            tool,
-            verb: format!("{program} {}", if write { "write" } else { "read" }),
-            payload: payload.clone(),
-            http: Some(HttpRequest {
-                method,
-                url: url.to_owned(),
-                body: body.clone(),
-            }),
-        })
-        .collect()
-}
-
-fn wget(args: &[String]) -> Vec<Draft> {
-    let mut method: Option<String> = None;
-    let mut post: Option<String> = None;
-    let mut post_file = false;
-    let mut targets: Vec<&str> = Vec::new();
-    let mut at = 0;
-    while at < args.len() {
-        let word = args[at].as_str();
-        let (name, inline) = match word.split_once('=') {
-            Some((name, value)) if name.starts_with("--") => (name, Some(value.to_owned())),
-            _ => (word, None),
-        };
-        let mut value = || {
-            inline.clone().or_else(|| {
-                at += 1;
-                args.get(at).cloned()
-            })
-        };
-        match name {
-            "--method" => method = value(),
-            "--post-data" | "--body-data" => post = value(),
-            "--post-file" | "--body-file" => {
-                post_file = true;
-                let _ = value();
-            }
-            _ if word.starts_with("http://") || word.starts_with("https://") => {
-                targets.push(word);
-            }
-            _ => {}
-        }
-        at += 1;
-    }
-    let method = match method {
-        Some(name) => match HttpMethod::parse(&name) {
-            Some(method) => method,
-            None => return Vec::new(),
-        },
-        None if post.is_some() || post_file => HttpMethod::Post,
-        None => HttpMethod::Get,
-    };
-    let write = method.writes();
-    let body = post.filter(|_| write);
-    let payload = body.iter().cloned().collect();
-    drafts(targets, method, body, payload, Tool::Wget, "wget")
 }

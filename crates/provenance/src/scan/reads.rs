@@ -237,6 +237,7 @@ impl Scanner {
             let spread = self
                 .not_distinctive(session, layer.text.text(), &kgrams, widespread)
                 .await?;
+            let counted = self.nearer_hits(session, &hits, &carrier).await?;
             let reader = session.reader;
             let live = &session.live;
             let keep = |span| {
@@ -253,15 +254,22 @@ impl Scanner {
                     .collect();
                 extents_by_span(&template, &kgrams, keep)
             };
-            let by_span = extents_by_span(&hits, &kgrams, keep);
-            for (span, extents) in by_span {
-                if boilerplate.contains_key(&span) && !self.distinctive(layer.text.text(), &extents)
-                {
+            // The reader's nearer source (`nearer`): hits its own output or
+            // its own read of a forward's source explains are not counted.
+            // Whether a match is a skeleton or an inherited fragment is
+            // judged on all its hits: what the reader already had does not
+            // change what the origin shares with the read.
+            let mut counted = extents_by_span(&counted, &kgrams, keep);
+            for (span, all) in extents_by_span(&hits, &kgrams, keep) {
+                let Some(extents) = counted.remove(&span) else {
+                    continue;
+                };
+                if boilerplate.contains_key(&span) && !self.distinctive(layer.text.text(), &all) {
                     tracing::debug!(exchange = ?session.exchange, span = ?span, "skeleton match dropped");
                     continue;
                 }
                 if self
-                    .inherited_fragment(session, layer.text.text(), span, &extents)
+                    .inherited_fragment(session, layer.text.text(), span, &all)
                     .await?
                 {
                     tracing::debug!(exchange = ?session.exchange, span = ?span, "inherited fragment dropped");

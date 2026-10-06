@@ -1,6 +1,8 @@
 //! Test helpers: a router over the fixture backend and request shortcuts.
 
+pub mod fixture_api;
 pub mod http;
+pub mod proxy;
 
 use std::sync::{Arc, OnceLock};
 use topcoat::context::{AppContext, Cx};
@@ -188,7 +190,7 @@ pub async fn get_from(router: &Router, uri: &str) -> Reply {
     send_to(router, get_request(uri)).await
 }
 
-async fn send_to(router: &Router, request: Request) -> Reply {
+pub async fn send_to(router: &Router, request: Request) -> Reply {
     let response = router.handle(request).await;
     let status = response.status();
     let headers = response.headers().clone();

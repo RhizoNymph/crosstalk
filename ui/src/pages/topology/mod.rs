@@ -50,7 +50,7 @@ use crate::data::elements::{TIMEBRUSH_JS, TOPOLOGY_JS};
 use crate::error::UiError;
 use crate::pages::common::action::{require, status_of};
 use crate::pages::common::form::{FormFields, invalid};
-use crate::pages::view::{defaults_error, view_state};
+use crate::pages::view::{page_defaults_error, view_state};
 use crate::url::scope::{align_down, align_up};
 use crate::url::view_state::{GraphMode, ViewState, format_time as rfc3339};
 use crosstalk_spec::interfaces::l8_surface::QueryApi;
@@ -319,7 +319,7 @@ async fn workspace(
     // The view state was built from this request's present, so it reads.
     let present = present(cx)
         .await
-        .map_err(|e| defaults_error(UiError::Query(e.clone())))?;
+        .map_err(|e| page_defaults_error(cx, UiError::Query(e.clone())))?;
     let brush_src = timeline_src(state, present.now, present.bucket_width);
     let brush_from = rfc3339(state.scope.window.start());
     let brush_to = rfc3339(state.scope.window.end());

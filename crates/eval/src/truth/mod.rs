@@ -4,6 +4,10 @@
 //!
 //! - a [`ExpectedTransmission`]: one agent's text must be found in another
 //!   agent's input at a given reader exchange and location;
+//! - an [`ExpectedAccess`]: the same, through a channel, but one the
+//!   detector can only suspect: a co-access with no content to confirm it
+//!   (a write that carries no spans, such as a `git push`; or content the
+//!   sender never wrote to the resource, INV-963);
 //! - a [`NegativeControl`]: a pair, exchange or location where a detector
 //!   must **not** report a transmission (a rejected send, text both agents
 //!   got from a shared source, harness boilerplate, a scripted sender);
@@ -93,6 +97,8 @@ pub enum InvalidLabel {
     SmallCluster,
     #[error("a label's need is out of reach (undecodable or unobserved) exactly when its tier is")]
     Reach,
+    #[error("an access-only label needs a channel route: access evidence names a resource")]
+    AccessOffChannel,
 }
 
 fn check_pair(from: &AgentKey, to: &AgentKey) -> Result<(), InvalidLabel> {
@@ -148,6 +154,55 @@ impl TryFrom<TransmissionLabel> for ExpectedTransmission {
 impl From<ExpectedTransmission> for TransmissionLabel {
     fn from(expected: ExpectedTransmission) -> Self {
         expected.0
+    }
+}
+
+/// A transmission a detector should see only as an access pattern: the
+/// sender wrote a resource and the reader read it, but no content links
+/// the two. The write carries no spans (a `git push`: its content is not
+/// in the call, `WritePayload::Unseen`), or the reader got the sender's
+/// content from a resource the sender never wrote (INV-963,
+/// `flow.route.shared-upstream-stays-suspected`). The detector suspects
+/// the channel on its co-access and never confirms it. Only access
+/// evidence (a suspected or discarded prediction) finds the label, and it
+/// is scored apart from content recall, under access-only recall.
+///
+/// Built only through [`ExpectedAccess::new`]: a valid
+/// [`ExpectedTransmission`] whose route is a channel, since access evidence
+/// always names a resource.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "TransmissionLabel", into = "TransmissionLabel")]
+pub struct ExpectedAccess(ExpectedTransmission);
+
+impl ExpectedAccess {
+    pub fn new(label: TransmissionLabel) -> Result<Self, InvalidLabel> {
+        if !matches!(label.route, RouteExpectation::Channel { .. }) {
+            return Err(InvalidLabel::AccessOffChannel);
+        }
+        ExpectedTransmission::new(label).map(Self)
+    }
+
+    /// The transmission, for alignment.
+    pub fn transmission(&self) -> &ExpectedTransmission {
+        &self.0
+    }
+
+    pub fn label(&self) -> &TransmissionLabel {
+        self.0.label()
+    }
+}
+
+impl TryFrom<TransmissionLabel> for ExpectedAccess {
+    type Error = InvalidLabel;
+
+    fn try_from(label: TransmissionLabel) -> Result<Self, Self::Error> {
+        Self::new(label)
+    }
+}
+
+impl From<ExpectedAccess> for TransmissionLabel {
+    fn from(expected: ExpectedAccess) -> Self {
+        expected.0.0
     }
 }
 
@@ -310,6 +365,8 @@ pub struct Exemption {
 #[serde(tag = "expect", content = "label", rename_all = "snake_case")]
 pub enum Expectation {
     Transmission(ExpectedTransmission),
+    /// A transmission only access evidence should find.
+    AccessOnly(ExpectedAccess),
     NoTransmission(NegativeControl),
     AgentCluster(AgentCluster),
     /// Predictions here are unjudged.

@@ -1,7 +1,9 @@
 //! HTTP statuses for errors on data routes.
 
 use crosstalk_spec::interfaces::l8_surface::{ConflictKind, QueryError};
-use topcoat::router::error::{bad_request, forbidden, internal_server_error, not_found};
+use topcoat::router::error::{
+    bad_request, forbidden, internal_server_error, not_found, service_unavailable,
+};
 
 use crate::error::UiError;
 
@@ -11,8 +13,14 @@ pub enum ErrorStatus {
     BadRequest,
     Forbidden,
     NotFound,
+    /// The http backend's call never reached the gateway
+    /// (`Unavailable`): 503, worth retrying.
+    Unavailable,
     Internal,
 }
+
+/// The `Retry-After` of a 503: the gateway may be back by then.
+const RETRY_AFTER_SECS: u64 = 5;
 
 pub fn status_of(error: &UiError) -> ErrorStatus {
     match error {
@@ -35,22 +43,25 @@ pub fn status_of(error: &UiError) -> ErrorStatus {
                 | ConflictKind::ProjectionNotReady { .. }
                 | ConflictKind::ProjectionFailed { .. },
             ) => ErrorStatus::BadRequest,
-            QueryError::Store { .. } | QueryError::Unavailable { .. } | QueryError::Conflict(_) => {
-                ErrorStatus::Internal
-            }
+            QueryError::Unavailable { .. } => ErrorStatus::Unavailable,
+            QueryError::Store { .. } | QueryError::Conflict(_) => ErrorStatus::Internal,
         },
     }
 }
 
 /// Converts an error into the router error for its status. A 400 carries
-/// the error's message, so the element can show why; a 500 is logged and
-/// carries nothing.
+/// the error's message, so the element can show why; a 503 or 500 is
+/// logged and carries nothing.
 pub fn query_error(error: impl Into<UiError>) -> topcoat::Error {
     let error = error.into();
     match status_of(&error) {
         ErrorStatus::BadRequest => bad_request(error.to_string()).into(),
         ErrorStatus::Forbidden => forbidden().into(),
         ErrorStatus::NotFound => not_found().into(),
+        ErrorStatus::Unavailable => {
+            tracing::error!(error = %error, "data route: the gateway did not answer");
+            service_unavailable(RETRY_AFTER_SECS).into()
+        }
         ErrorStatus::Internal => {
             tracing::error!(error = %error, "data route backend failure");
             internal_server_error(error).into()
@@ -103,7 +114,7 @@ mod tests {
                     kind: crosstalk_spec::interfaces::l8_surface::UnavailableKind::Timeout,
                     reason: "no response within 50 ms".to_owned(),
                 }),
-                ErrorStatus::Internal,
+                ErrorStatus::Unavailable,
             ),
             (
                 UiError::Query(QueryError::Conflict(ConflictKind::AgentMerged {

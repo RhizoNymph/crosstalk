@@ -5,7 +5,7 @@ use std::time::Duration;
 use crate::cli::{Command, UsageError};
 use crate::http::BaseUrl;
 use crate::knobs::{Fraction, KnobError, PositiveSpan, Rng, Span, parse_duration};
-use crate::protocol::{PageSlug, TOPICS, Task, Topic};
+use crate::protocol::{PageSlug, Scenario, TOPICS, Task, Topic};
 use crate::swarm::stats::{Percentiles, percentile};
 use crate::wiki::store::{Author, Wiki, WriteError};
 
@@ -243,11 +243,12 @@ fn cli_parses_each_subcommand() {
         "swarm --agents 200 --agents-per-key 10 --think-ms 100..200 --turns 3 \
          --write-fraction 0.5 --read-fraction 0.5 --pages 9 --topics 3 --duration 90s \
          --seed 5 --stream-fraction 0.5 --claude-code-shape --json \
-         --gateway http://gw:1/anthropic --ground-truth /tmp/t.jsonl",
+         --gateway http://gw:1/anthropic --ground-truth /tmp/t.jsonl --scenario boilerplate",
     )) else {
         panic!("swarm parses")
     };
     assert!(json);
+    assert_eq!(config.scenario, Scenario::Boilerplate);
     assert_eq!(config.agents.get(), 200);
     assert_eq!(config.agents_per_key.get(), 10);
     assert_eq!(config.think_ms, Span::ordered(100, 200));
@@ -264,6 +265,12 @@ fn cli_parses_each_subcommand() {
     assert_eq!(config.agents.get(), 150);
     assert!(!config.claude_code_shape);
     assert_eq!(config.stream_fraction, Fraction::ONE);
+    assert_eq!(config.scenario, Scenario::Headline);
+    let Ok(Command::Swarm { config, .. }) = Command::parse(&args("swarm --scenario=headline"))
+    else {
+        panic!("headline parses")
+    };
+    assert_eq!(config.scenario, Scenario::Headline);
 
     let Ok(Command::Upstream(up)) =
         Command::parse(&args("upstream --listen=127.0.0.1:1 --stream-ms 5..9"))
@@ -309,6 +316,15 @@ fn cli_refuses_bad_lines() {
         Command::parse(&args("swarm --write-fraction 0.7 --read-fraction 0.7")),
         Err(UsageError::Value { .. })
     ));
+    for bad in ["Headline", "templated", ""] {
+        assert!(
+            matches!(
+                Command::parse(&["swarm".to_owned(), "--scenario".to_owned(), bad.to_owned()]),
+                Err(UsageError::Value { .. })
+            ),
+            "{bad:?}"
+        );
+    }
     assert!(matches!(
         Command::parse(&args("swarm stray")),
         Err(UsageError::Positional(_))

@@ -1,13 +1,16 @@
-//! Times, resources, the bash access tagger and provider shapes.
+//! Times, resources, the bash accesses (through L5's extractor) and
+//! provider shapes.
 
+use crosstalk_eval::datasets::ai_village::access::payload::authored;
 use crosstalk_eval::datasets::ai_village::access::shell::{commands, heredoc_argument};
-use crosstalk_eval::datasets::ai_village::access::{Op, Shell, Tool};
+use crosstalk_eval::datasets::ai_village::access::{Access, Op, Payload, Shell, expand_home};
 use crosstalk_eval::datasets::ai_village::provider::response;
-use crosstalk_eval::datasets::ai_village::resource::{from_remote, from_url, urls};
+use crosstalk_eval::datasets::ai_village::resource::{ResourceKind, from_remote, from_url};
 use crosstalk_eval::datasets::ai_village::time::{
     Day, Window, format_seconds, parse_timestamp, village_day,
 };
 use crosstalk_eval::truth::kinds::locator_key;
+use crosstalk_spec::derived::flow::access::WriteOutcome;
 use crosstalk_spec::observed::exchange::{StopReason, WireProtocol};
 use crosstalk_spec::observed::message::{AssistantPart, Reasoning, ToolArguments};
 use serde_json::json;
@@ -68,6 +71,12 @@ fn village_days_run_from_ten_utc() {
     assert!(window.contains(ts("2026-07-18 09:59:59")));
     assert!(!window.contains(ts("2026-07-18 10:00:00")));
     assert!(Window::days(day("2026-07-17"), day("2026-07-13")).is_err());
+    let slice = Window::first_hours(day("2026-07-13"), 8).unwrap_or_else(|e| panic!("{e}"));
+    assert!(slice.contains(ts("2026-07-13 17:59:59")));
+    assert!(!slice.contains(ts("2026-07-13 18:00:00")));
+    assert!(!slice.contains(ts("2026-07-13 09:59:59")));
+    assert!(Window::first_hours(day("2026-07-13"), 0).is_err());
+    assert!(Window::first_hours(day("2026-07-13"), 25).is_err());
     assert!(Day::parse("2026-7").is_err());
 }
 
@@ -77,13 +86,15 @@ fn key(text: &str) -> Option<String> {
 
 #[test]
 fn repository_forms_meet_on_one_resource() {
-    let github = Some("https://github.com/ai-village-agents/tracker".to_owned());
+    // The repository itself: every remote, web, API and Pages form.
+    let github = Some("repo://github.com/ai-village-agents/tracker".to_owned());
     for form in [
         "https://github.com/ai-village-agents/tracker",
         "https://github.com/AI-Village-Agents/Tracker.git",
-        "https://github.com/ai-village-agents/tracker/issues/12#issuecomment-1",
-        "https://api.github.com/repos/ai-village-agents/tracker/issues/12/comments",
-        "https://raw.githubusercontent.com/ai-village-agents/tracker/main/README.md",
+        "https://github.com/ai-village-agents/tracker/tree/main",
+        "https://api.github.com/repos/ai-village-agents/tracker",
+        "https://api.github.com/repos/ai-village-agents/tracker/commits?per_page=5",
+        "https://codeload.github.com/ai-village-agents/tracker/zip/refs/heads/main",
         "https://ai-village-agents.github.io/tracker/index.html?v=2",
         "https://www.github.com/ai-village-agents/tracker",
         "https://x-access-token:[REDACTED]@github.com/ai-village-agents/tracker.git",
@@ -93,6 +104,7 @@ fn repository_forms_meet_on_one_resource() {
     for remote in [
         "git@github.com:ai-village-agents/tracker.git",
         "ssh://git@github.com/ai-village-agents/tracker",
+        "https://github.com/ai-village-agents/tracker.git",
     ] {
         assert_eq!(
             from_remote(remote).map(|l| locator_key(&l)),
@@ -100,42 +112,74 @@ fn repository_forms_meet_on_one_resource() {
             "{remote}"
         );
     }
-    let gitlab = Some("https://gitlab.com/ai-village-agents/village/signal-garden".to_owned());
+    // A local bare repository is no forge's.
+    assert_eq!(from_remote("/srv/git/tracker.git"), None);
+    // A user site's root is its `<o>.github.io` repository.
+    assert_eq!(
+        key("https://ai-village-agents.github.io/"),
+        Some("repo://github.com/ai-village-agents/ai-village-agents.github.io".to_owned())
+    );
+    // Files of the repository, however they are reached.
+    let readme = Some("file://github.com/ai-village-agents/tracker/README.md".to_owned());
+    for form in [
+        "https://raw.githubusercontent.com/ai-village-agents/tracker/main/README.md",
+        "https://github.com/ai-village-agents/tracker/blob/main/README.md",
+        "https://api.github.com/repos/ai-village-agents/tracker/contents/README.md",
+    ] {
+        assert_eq!(key(form), readme, "{form}");
+    }
+    // Threads: an issue and a pull request share one GitHub page.
+    let thread = Some("https://github.com/ai-village-agents/tracker/issues/12".to_owned());
+    for form in [
+        "https://github.com/ai-village-agents/tracker/issues/12#issuecomment-1",
+        "https://github.com/ai-village-agents/tracker/pull/12",
+        "https://api.github.com/repos/ai-village-agents/tracker/issues/12/comments",
+    ] {
+        assert_eq!(key(form), thread, "{form}");
+    }
+    // GitLab: nested groups joined with `/`.
+    let gitlab = Some("repo://gitlab.com/ai-village-agents/village/signal-garden".to_owned());
     for form in [
         "https://gitlab.com/ai-village-agents/village/signal-garden.git",
-        "https://gitlab.com/ai-village-agents/village/signal-garden/-/issues/3",
-        "https://gitlab.com/api/v4/projects/ai-village-agents%2Fvillage%2Fsignal-garden/issues",
+        "https://gitlab.com/ai-village-agents/village/signal-garden/-/tree/main",
+        "https://gitlab.com/api/v4/projects/ai-village-agents%2Fvillage%2Fsignal-garden",
         "https://oauth2:[REDACTED]@gitlab.com/ai-village-agents/village/signal-garden.git",
     ] {
         assert_eq!(key(form), gitlab, "{form}");
     }
     assert_eq!(
-        key("https://ai-village-agents.gitlab.io/signal-garden/page.html"),
-        Some("https://gitlab.com/ai-village-agents/signal-garden".to_owned())
+        key("https://gitlab.com/ai-village-agents/village/signal-garden/-/issues/3"),
+        Some("https://gitlab.com/ai-village-agents/village/signal-garden/-/issues/3".to_owned())
     );
+    assert_eq!(
+        key("https://ai-village-agents.gitlab.io/signal-garden/page.html"),
+        Some("repo://gitlab.com/ai-village-agents/signal-garden".to_owned())
+    );
+    // A numeric project id and a unique Pages domain name no project path.
     assert_eq!(
         key("https://gitlab.com/api/v4/projects/84161768/pipelines?per_page=2"),
-        Some("https://gitlab.com/api/v4/projects/84161768".to_owned())
+        Some("https://gitlab.com/api/v4/projects/84161768/pipelines?per_page=2".to_owned())
     );
-    // A unique Pages domain names no project: the site is the resource.
     assert_eq!(
         key("https://quiet-rooms-gallery-83555a.gitlab.io/start.html"),
-        Some("https://quiet-rooms-gallery-83555a.gitlab.io/".to_owned())
+        Some("https://quiet-rooms-gallery-83555a.gitlab.io/start.html".to_owned())
     );
     assert_eq!(
         key("https://Example.com:443/a/./b/../c?y=2&x=1#top"),
         Some("https://example.com/a/c?x=1&y=2".to_owned())
     );
-    assert_eq!(key("ftp://example.com/x"), None);
-    // A forge page that names no repository is just its URL.
+    // A scheme-less host is https.
     assert_eq!(
-        key("https://github.com/only-owner"),
-        Some("https://github.com/only-owner".to_owned())
+        key("www.informations.com"),
+        Some("https://www.informations.com/".to_owned())
     );
+    // Whatever L5 makes of the rest: another scheme is its URL, a bare
+    // file name is no URL.
     assert_eq!(
-        urls("see https://a.com/x and 'http://b.org/y?z=1' `https://c.io`"),
-        vec!["https://a.com/x", "http://b.org/y?z=1", "https://c.io"]
+        key("ftp://example.com/x"),
+        Some("ftp://example.com/x".to_owned())
     );
+    assert_eq!(key("README.md"), None);
 }
 
 #[test]
@@ -189,85 +233,195 @@ fn the_shell_splitter_unquotes_and_skips_data() {
     assert_eq!(heredoc_argument("plain"), None);
 }
 
+fn keys(accesses: &[Access]) -> Vec<(bool, String)> {
+    accesses
+        .iter()
+        .map(|a| (a.op.is_write(), locator_key(&a.resource)))
+        .collect()
+}
+
 #[test]
 fn bash_commands_become_accesses() {
     let mut shell = Shell::default();
     // A push names its remote in the output; the directory learns it.
     let pushed = shell.accesses(
         "cd /home/computeruse/tracker && git push origin main",
-        "To https://github.com/ai-village-agents/tracker.git\n   1..2  main -> main",
+        "To https://github.com/ai-village-agents/tracker.git\n   1a2b3c4..5d6e7f8  main -> main",
     );
-    assert_eq!(pushed.len(), 1);
-    assert!(pushed[0].op.is_write());
-    assert_eq!(pushed[0].tool, Tool::Git);
     assert_eq!(
-        locator_key(&pushed[0].resource),
-        "https://github.com/ai-village-agents/tracker"
+        keys(&pushed),
+        vec![(
+            true,
+            "repo://github.com/ai-village-agents/tracker".to_owned()
+        )]
     );
-    // A pull with no `From` line resolves through the learnt directory.
+    assert_eq!(pushed[0].kind, ResourceKind::Repository);
+    assert_eq!(
+        pushed[0].op,
+        Op::Write {
+            outcome: WriteOutcome::Delivered,
+            payload: Payload::Unseen
+        }
+    );
+    assert_eq!(shell.cwd(), Some("/home/computeruse/tracker"));
+    // The shell persists: a later pull runs in the learnt clone.
     let pulled = shell.accesses("git pull", "Already up to date.");
-    assert_eq!(pulled.len(), 1);
-    assert_eq!(pulled[0].op, Op::Read);
-    assert_eq!(pulled[0].resource, pushed[0].resource);
-    // A clone teaches its directory.
-    let cloned = shell.accesses(
-        "cd ~ && git clone https://gitlab.com/g/proj.git && cd proj && git fetch",
+    assert_eq!(
+        keys(&pulled),
+        keys(&pushed)
+            .into_iter()
+            .map(|(_, k)| (false, k))
+            .collect::<Vec<_>>()
+    );
+    // A file of the clone is the repository's file; `~` is the home.
+    let read = shell.accesses(
+        "cat ~/tracker/docs/plan.md && sed -n '1,20p' README.md",
+        "# Plan",
+    );
+    assert_eq!(
+        keys(&read),
+        vec![
+            (
+                false,
+                "file://github.com/ai-village-agents/tracker/docs/plan.md".to_owned()
+            ),
+            (
+                false,
+                "file://github.com/ai-village-agents/tracker/README.md".to_owned()
+            ),
+        ]
+    );
+    // A write into the clone carries what the author typed.
+    let written = shell.accesses(
+        "cat > notes.md <<'EOF'\nMeet at the old mill at nine tonight, bring the ledger\nEOF",
         "",
     );
-    assert_eq!(cloned.len(), 2);
-    assert!(cloned.iter().all(|a| a.op == Op::Read));
     assert_eq!(
-        locator_key(&cloned[1].resource),
-        "https://gitlab.com/g/proj"
+        keys(&written),
+        vec![(
+            true,
+            "file://github.com/ai-village-agents/tracker/notes.md".to_owned()
+        )]
     );
-    assert_eq!(shell.cwd(), "/home/computeruse/proj");
-    // Issue commands: writes keep their payload.
+    assert_eq!(
+        written[0].payload(),
+        Some(&Payload::Authored(vec![
+            "Meet at the old mill at nine tonight, bring the ledger".to_owned()
+        ]))
+    );
+    // A clone teaches its directory; files outside a clone are the agent's own.
+    let cloned = shell.accesses(
+        "cd ~ && git clone https://gitlab.com/g/proj.git && cd proj && git fetch && cat /etc/hosts",
+        "",
+    );
+    assert_eq!(
+        keys(&cloned),
+        vec![(false, "repo://gitlab.com/g/proj".to_owned())]
+    );
+    assert_eq!(shell.cwd(), Some("/home/computeruse/proj"));
+    // Issue commands: a comment writes the thread, a view reads it.
     let commented = shell.accesses(
         "gh issue comment 7 -R ai-village-agents/tracker --body 'Fixed the parser bug in tracker'",
         "https://github.com/ai-village-agents/tracker/issues/7#issuecomment-9",
     );
-    assert_eq!(commented.len(), 1);
-    assert!(commented[0].op.is_write());
-    assert_eq!(commented[0].verb, "gh issue comment");
     assert_eq!(
-        commented[0].payload,
-        vec!["Fixed the parser bug in tracker".to_owned()]
+        keys(&commented),
+        vec![(
+            true,
+            "https://github.com/ai-village-agents/tracker/issues/7".to_owned()
+        )]
+    );
+    assert_eq!(
+        commented[0].payload(),
+        Some(&Payload::Authored(vec![
+            "Fixed the parser bug in tracker".to_owned()
+        ]))
+    );
+    let created = shell.accesses(
+        "glab issue create --title 'Signal garden: broken link on the start page'",
+        "https://gitlab.com/g/proj/-/issues/4",
+    );
+    assert_eq!(
+        keys(&created),
+        vec![(true, "https://gitlab.com/g/proj/-/issues".to_owned())]
     );
     let viewed = shell.accesses(
         "glab issue view 3 --repo ai-village-agents/village/signal-garden",
-        "",
+        "title: x",
     );
-    assert_eq!(viewed[0].op, Op::Read);
     assert_eq!(
-        locator_key(&viewed[0].resource),
-        "https://gitlab.com/ai-village-agents/village/signal-garden"
+        keys(&viewed),
+        vec![(
+            false,
+            "https://gitlab.com/ai-village-agents/village/signal-garden/-/issues/3".to_owned()
+        )]
     );
-    let noted = shell.accesses("glab mr note 4 -m 'Looks good to me, merging'", "");
-    // The directory's remote names the repository.
-    assert!(noted[0].op.is_write());
-    assert_eq!(locator_key(&noted[0].resource), "https://gitlab.com/g/proj");
-    // curl: data makes a write, -G keeps a read.
+    // curl: the site rules name the repository's file; data makes a write.
+    let raw = shell.accesses(
+        "curl -sL https://raw.githubusercontent.com/o/r/main/a.md",
+        "text",
+    );
+    assert_eq!(
+        keys(&raw),
+        vec![(false, "file://github.com/o/r/a.md".to_owned())]
+    );
     let posted = shell.accesses(
         "curl -s -X POST https://api.example.com/notes -H 'Content-Type: application/json' -d '{\"text\":\"hello there\"}'",
         "",
     );
     assert!(posted[0].op.is_write());
     assert_eq!(
-        posted[0].payload,
-        vec!["{\"text\":\"hello there\"}".to_owned()]
+        posted[0].payload(),
+        Some(&Payload::Authored(vec![
+            "{\"text\":\"hello there\"}".to_owned()
+        ]))
     );
-    let got = shell.accesses("curl -sG https://api.example.com/notes -d q=1", "");
-    assert_eq!(got[0].op, Op::Read);
-    assert!(got[0].payload.is_empty());
-    let api = shell.accesses("gh api repos/o/r/issues -f title=x", "");
-    assert!(api[0].op.is_write());
-    assert_eq!(locator_key(&api[0].resource), "https://github.com/o/r");
     assert!(shell.accesses("ls -la && echo done", "").is_empty());
+    // A failed push is rejected; a failed read is no access.
+    let refused = shell.accesses(
+        "git push",
+        "To https://gitlab.com/g/proj.git\n ! [rejected]        main -> main (fetch first)\nerror: failed to push some refs",
+    );
+    assert!(matches!(
+        refused[0].op,
+        Op::Write {
+            outcome: WriteOutcome::Rejected,
+            ..
+        }
+    ));
     assert!(
         shell
-            .accesses("timeout 30 git push", "fatal: no remote")
-            .len()
-            <= 1
+            .accesses(
+                "git clone https://github.com/o/missing.git",
+                "fatal: repository 'https://github.com/o/missing.git/' not found"
+            )
+            .is_empty()
+    );
+}
+
+#[test]
+fn home_is_expanded_where_the_shell_would() {
+    assert_eq!(
+        expand_home("cd ~ && cat ~/a.txt \"$HOME/b\" ${HOME}/c x~y"),
+        "cd /home/computeruse && cat /home/computeruse/a.txt \"/home/computeruse/b\" /home/computeruse/c x~y"
+    );
+}
+
+#[test]
+fn authored_text_is_bodies_flags_and_data() {
+    let script = "cd x && cat > a.md <<'EOF'\nline one\nline two\nEOF\ngh pr create -t 'The title' --body \"$(cat <<'BODY'\nBody here\nBODY\n)\" && echo hi > b";
+    assert_eq!(
+        authored(script),
+        vec![
+            "line one\nline two".to_owned(),
+            "Body here".to_owned(),
+            "The title".to_owned(),
+            "hi".to_owned(),
+        ]
+    );
+    assert_eq!(
+        authored("gh api repos/o/r/issues -f title=Broken -F body='It fails'"),
+        vec!["Broken".to_owned(), "It fails".to_owned()]
     );
 }
 

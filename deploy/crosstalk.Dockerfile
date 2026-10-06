@@ -19,8 +19,11 @@ COPY . .
 
 # Cache mounts keep the registry and target dir across builds; the binary is
 # copied out of the mount because it does not survive the RUN step.
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/src/target \
+# sharing=locked: compose builds this, the demo and the UI images in
+# parallel, and they share these caches by path; unlocked, two builds
+# unpacking the same crate fail with "File exists".
+RUN --mount=type=cache,sharing=locked,target=/usr/local/cargo/registry \
+    --mount=type=cache,sharing=locked,target=/src/target \
     cargo build --locked --release --bin crosstalk \
     && install -D target/release/crosstalk /out/crosstalk
 

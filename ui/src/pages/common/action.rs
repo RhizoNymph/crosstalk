@@ -5,7 +5,7 @@
 //! On failure the handler renders the page again with the error next to the
 //! form, under the status [`status_of`] gives.
 
-use crosstalk_spec::interfaces::l8_surface::{Caller, Permission};
+use crosstalk_spec::interfaces::l8_surface::{Caller, Permission, UnavailableKind};
 use topcoat::context::Cx;
 use topcoat::router::StatusCode;
 use topcoat::router::error::see_other;
@@ -13,6 +13,7 @@ use topcoat::router::error::see_other;
 use super::flash::{self, Flash};
 use super::form::FormFields;
 use crate::app::{backend, caller, can};
+use crate::backend::http::failure::classify;
 use crate::components::href;
 use crate::error::UiError;
 use crate::url::view_state::ViewState;
@@ -84,7 +85,18 @@ pub fn require(caller: &Caller, permission: Permission) -> Result<(), UiError> {
 pub async fn perform(cx: &Cx, action: OperatorAction) -> Result<ActionOutcome, UiError> {
     let caller = caller(cx);
     require(&caller, action.required_permission())?;
-    Ok(backend(cx).act(&caller, action).await?)
+    let kind = action.kind();
+    backend(cx).act(&caller, action).await.map_err(|error| {
+        if let Some(failure) = classify(&error) {
+            tracing::error!(
+                backend = "http",
+                action = ?kind,
+                failure = ?failure,
+                "action did not reach the gateway"
+            );
+        }
+        UiError::from(error)
+    })
 }
 
 /// The flash after an accepted action: `applied` when it changed state,
@@ -108,7 +120,15 @@ pub fn status_of(error: &UiError) -> StatusCode {
                 StatusCode::NOT_FOUND
             }
             QueryError::Conflict(_) | QueryError::VersionNotRetained { .. } => StatusCode::CONFLICT,
-            QueryError::Store { .. } | QueryError::Unavailable { .. } => StatusCode::BAD_GATEWAY,
+            QueryError::Store { .. } => StatusCode::BAD_GATEWAY,
+            // As the gateway page answers: a refused token is the gateway's
+            // answer (502), an unreachable gateway is no answer (503).
+            QueryError::Unavailable { kind, .. } => match kind {
+                UnavailableKind::Unauthenticated => StatusCode::BAD_GATEWAY,
+                UnavailableKind::Transport | UnavailableKind::Body | UnavailableKind::Timeout => {
+                    StatusCode::SERVICE_UNAVAILABLE
+                }
+            },
         },
     }
 }

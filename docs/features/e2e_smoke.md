@@ -35,10 +35,12 @@ be a layer depending on the gateway, which the rule refuses.
   transmissions behind an edge, transmission rows, the evidence page, and
   channel rows.
 - **Tests:**
-  - those that run today: the scenario, L0/L1, the pipeline, and the
-    surface answering;
-  - those that wait for L3 to L7 in `Live`, still marked
-    `#[ignore = "waits for …"]`; run them with `--include-ignored`;
+  - the scenario, L0/L1, L5's extractor on the scenario's calls, the
+    pipeline, and the surface answering;
+  - detection through `Live`, read through the surface: two agents (L3),
+    the A→B channel edge, the confirmed transmission, the evidence match,
+    and the channel the cross-agent transmission created, listed and
+    confirmed. None is ignored;
   - the determinism test: the scenario fed and settled twice gives
     identical transmissions, at least one confirmed.
 
@@ -181,15 +183,13 @@ read (`eventually`, up to 10 s) until it shows what they expect.
 | `crates/e2e/tests/smoke/scenario.rs` | Determinism, time order, and the L0 identity. Also checks the history replay L3 threads by, the `Write` arguments carrying the sentence, and the read result and B's answer carrying it. | |
 | `crates/e2e/tests/smoke/extract.rs` | The scenario's `Write` and `Read` calls, with their results, through L5's `ToolExtractors` (crosstalk-flow, a dev-dependency) under the context the system prompt states: one delivered write and one read on the page's file locator. | |
 | `crates/e2e/tests/smoke/pipeline.rs` | Every body is stored, and every exchange is published in order, stamped at its end. | |
-| `crates/e2e/tests/smoke/surface.rs` | The surface answers today. Plus ignored tests: two agents (L3), the A→B channel edge, the confirmed transmission, the evidence match, and the channel created by the cross-agent transmission, listed and confirmed. | |
+| `crates/e2e/tests/smoke/surface.rs` | The surface answers for the scenario's window; two agents (L3); the A→B channel edge; the confirmed transmission; the evidence match; the channel created by the cross-agent transmission, listed and confirmed. | |
 | `crates/gateway/tests/architecture.rs` | `Composer::E2e`, and `e2e_composes_gateway_and_layers_and_no_layer_uses_it`. | |
 
 ## Running against `Live`
 
-`compose` builds a `Live` process. Run the smoke with
-`--include-ignored`; the ignored detection tests pass except the
-evidence test (see Gaps found), and their `#[ignore]` attributes can be
-dropped once it does.
+`compose` builds a `Live` process, and every smoke test runs against it;
+none is ignored.
 
 To feed a running `Live` from `crosstalk-ui` for a demo:
 
@@ -223,20 +223,31 @@ Then read through the UI, or through `crosstalk_e2e::read`.
    alone, never a store.
 8. **No other crate changes.** Gaps found in other crates are reported,
    not patched (below).
+9. **The evidence shows the sentence on both sides.** Every content match
+   runs from A to B in `b2-repeat`, carried by B's `Read` result. At
+   least one match has the whole sentence inside its origin highlight
+   (A's `content` value) and, inside its read highlight, the sentence
+   less at most `w - 1` characters at each end, with matched bytes at
+   least that long. `w` is the winnowing window of the provenance config
+   `Live` runs with (16 by default). Winnowing selects a fingerprint in
+   every window of `w` k-grams, so a matched run loses at most `w - 1`
+   characters at either end, and the read highlight starts at a
+   fingerprint, not at the sentence. Tested; the check fails if the whole
+   sentence is required on the read side.
 
 ## Gaps found (for the gateway's composition)
 
-- **The evidence test's assertions** (open; the owner decides). L4 cuts
-  argument spans per string value (INV-1057) and excludes locator values
-  (INV-1058), so the evidence page holds one match, carried by B's
-  `Read` tool result. It still fails at `surface.rs` line 240
-  (`SENTENCE.contains(quoted.trim())`) on its first excerpt:
-  - the origin highlight is A's whole page text (the `content` value,
-    shown JSON-escaped as the part stores it), which contains `SENTENCE`
-    but is not limited to it;
-  - the read highlight, checked next, is the matched run in B's tool
-    result: it starts mid-sentence and spans the `Read` tool's
-    line-number prefixes and the page's later lines.
+- **The origin excerpt is shown JSON-escaped** (open). L4 cuts argument
+  spans per string value (INV-1057), but the origin excerpt is cut from
+  the stored part, so A's page text shows `\n` escapes rather than line
+  breaks. The evidence test does not depend on it (the sentence has no
+  escaped characters); the UI shows it as stored.
+- Resolved: the evidence test's assertions. The page holds one match,
+  carried by B's `Read` result. The origin highlight is A's whole
+  `content` value, and the read highlight starts mid-sentence (9
+  characters in) and runs through the `Read` line prefixes. So the test
+  asserts the winnowing bound (invariant 9) instead of the highlight lying
+  inside the sentence.
 - Resolved by `Live`: the evidence feeder fills `MemoryEvidence`'s spans
   from L4's span store, and `MemoryEvidence` reads accesses and resources
   from L5's registry; the stores' outbox is forwarded

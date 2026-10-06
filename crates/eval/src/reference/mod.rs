@@ -28,6 +28,13 @@
 //! grouped into one confirmed spec `Transmission` per (reader exchange,
 //! sender, route), with the route from where the hit sits ([`route`]).
 //!
+//! **Rereads.** A channel hit on a span the matcher already reported to
+//! the same reader through the same channel, in an earlier exchange, is
+//! dropped: the reader received that span at its first read
+//! (`flow.correlator.reread-refreshes-delivery`, INV-1122, which the
+//! datasets' reread controls encode). Hits on one span in one exchange all
+//! count. Direct routes are never rereads.
+//!
 //! **Boilerplate.** A shingle held by more than `max_postings` distinct
 //! originated spans is boilerplate, as L4's frequency cutoff makes it
 //! (`interfaces::l4_provenance`; the default, [`MAX_POSTINGS`], is L4's
@@ -198,6 +205,8 @@ struct Matcher<'w> {
     index: HashMap<u64, Postings>,
     seen: Vec<HashSet<u64>>,
     channels: BTreeMap<ChannelId, Vec<Locator>>,
+    /// (span, reader, channel route key) already reported, for rereads.
+    delivered: HashSet<(SpanId, usize, String)>,
     matches: usize,
     out_of_reach: usize,
 }
@@ -216,6 +225,7 @@ pub fn run(world: &World, config: ReferenceConfig) -> Result<ReferenceOutput, Re
         index: HashMap::new(),
         seen: vec![HashSet::new(); world.agents().len()],
         channels: BTreeMap::new(),
+        delivered: HashSet::new(),
         matches: 0,
         out_of_reach: 0,
     };
@@ -237,6 +247,7 @@ pub fn run(world: &World, config: ReferenceConfig) -> Result<ReferenceOutput, Re
                 hits.extend(matcher.scan(exchange, reader, message, part)?);
             }
         }
+        let hits = matcher.first_reads(reader, hits);
         transmissions.extend(matcher.group(exchange, reader, hits)?);
         if let Some(response) = exchange.response() {
             matcher.index_response(exchange, reader, response);
@@ -534,6 +545,25 @@ impl Matcher<'_> {
                 "direct:user_turn".into(),
             ),
         }
+    }
+
+    /// `hits` (one exchange's, of `reader`) without the channel hits whose
+    /// span an earlier exchange already delivered to `reader` through the
+    /// same channel; the rest are recorded as delivered.
+    fn first_reads(&mut self, reader: usize, hits: Vec<Hit>) -> Vec<Hit> {
+        let key = |hit: &Hit| (hit.content.origin(), reader, hit.route_key.clone());
+        let (fresh, rereads): (Vec<Hit>, Vec<Hit>) = hits.into_iter().partition(|hit| {
+            !matches!(hit.route, Route::Channel(_)) || !self.delivered.contains(&key(hit))
+        });
+        if !rereads.is_empty() {
+            tracing::debug!(reader, rereads = rereads.len(), "reference rereads dropped");
+        }
+        for hit in &fresh {
+            if matches!(hit.route, Route::Channel(_)) {
+                self.delivered.insert(key(hit));
+            }
+        }
+        fresh
     }
 
     /// One confirmed transmission per (sender, route) among an exchange's

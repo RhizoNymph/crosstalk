@@ -3,9 +3,9 @@
 //! The client returns a call that never reached the gateway (the network,
 //! a timeout, a cut body, a `401`) as the client-only `Unavailable { kind,
 //! reason }`, and a response the binding does not describe as
-//! `Store { reason }` (`crosstalk_client`'s error mapping), so the page
-//! shows the existing "the gateway's store failed" state and the log says
-//! why:
+//! `Store { reason }` (`crosstalk_client`'s error mapping). Pages show the
+//! gateway page or the error panel (`crate::error::describe`) and the log
+//! says why:
 //!
 //! | Error | Level | Meaning |
 //! | --- | --- | --- |
@@ -17,13 +17,15 @@
 use std::fmt::Debug;
 
 use crosstalk_spec::interfaces::l8_surface::live::LiveEnd;
-use crosstalk_spec::interfaces::l8_surface::{ActionError, QueryError};
+use crosstalk_spec::interfaces::l8_surface::{ActionError, QueryError, UnavailableKind};
 
 /// How a failed call reads in the log.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Severity {
-    /// The call did not get an answer from the surface.
-    Unavailable,
+    /// The call never reached a surface that answered it.
+    Unavailable(UnavailableKind),
+    /// The surface's store failed, or the answer was off the binding.
+    Failed,
     /// The surface refused the caller.
     Refused,
     /// The surface answered about the request.
@@ -38,7 +40,8 @@ pub trait CallError: Debug {
 impl CallError for QueryError {
     fn severity(&self) -> Severity {
         match self {
-            Self::Store { .. } | Self::Unavailable { .. } => Severity::Unavailable,
+            Self::Unavailable { kind, .. } => Severity::Unavailable(*kind),
+            Self::Store { .. } => Severity::Failed,
             Self::Forbidden { .. } => Severity::Refused,
             _ => Severity::Answered,
         }
@@ -48,7 +51,8 @@ impl CallError for QueryError {
 impl CallError for ActionError {
     fn severity(&self) -> Severity {
         match self {
-            Self::Store { .. } | Self::Unavailable { .. } => Severity::Unavailable,
+            Self::Unavailable { kind, .. } => Severity::Unavailable(*kind),
+            Self::Store { .. } => Severity::Failed,
             Self::Forbidden { .. } => Severity::Refused,
             _ => Severity::Answered,
         }
@@ -59,7 +63,16 @@ impl CallError for ActionError {
 pub fn outcome<T, E: CallError>(method: &'static str, result: Result<T, E>) -> Result<T, E> {
     if let Err(error) = &result {
         match error.severity() {
-            Severity::Unavailable => {
+            Severity::Unavailable(kind) => {
+                tracing::error!(
+                    backend = "http",
+                    method,
+                    kind = ?kind,
+                    error = ?error,
+                    "gateway call did not reach the gateway"
+                );
+            }
+            Severity::Failed => {
                 tracing::error!(backend = "http", method, error = ?error, "gateway call failed");
             }
             Severity::Refused => {
@@ -107,11 +120,11 @@ mod tests {
     use super::*;
 
     #[test]
-    fn store_failures_are_unavailable_and_forbidden_is_refused() {
+    fn store_failures_failed_and_forbidden_is_refused() {
         let store = QueryError::Store {
             reason: "no caller".to_owned(),
         };
-        assert_eq!(store.severity(), Severity::Unavailable);
+        assert_eq!(store.severity(), Severity::Failed);
         let forbidden = ActionError::Forbidden {
             missing: Permission::Triage,
         };
@@ -127,12 +140,12 @@ mod tests {
                 kind,
                 reason: "sending the request: refused".to_owned(),
             };
-            assert_eq!(query.severity(), Severity::Unavailable, "{kind:?}");
+            assert_eq!(query.severity(), Severity::Unavailable(kind), "{kind:?}");
             let action = ActionError::Unavailable {
                 kind,
                 reason: "no caller: expired".to_owned(),
             };
-            assert_eq!(action.severity(), Severity::Unavailable, "{kind:?}");
+            assert_eq!(action.severity(), Severity::Unavailable(kind), "{kind:?}");
         }
     }
 }

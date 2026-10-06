@@ -1,94 +1,55 @@
 //! Who the http backend acts as, read from the server.
 //!
-//! The spec has no "who am I" read, and over HTTP the caller argument of
-//! every trait method is ignored: the server derives the caller from the
-//! bearer token (`surface.api.caller-from-session`). So the UI finds its
-//! operator in `QueryApi::operators`, the server's directory, current and
-//! former operators alike:
+//! Over HTTP the caller argument of every trait method is ignored: the
+//! server derives the caller from the bearer token
+//! (`surface.api.caller-from-session`). The UI asks the server who that is
+//! with `QueryApi::me` (`GET /me`), which any caller may read:
 //!
 //! ```text
-//! operators() ─▶ the current ones (non-empty permissions)
-//!   OperatorPick::TheOnlyOne ─▶ exactly one, else NoOperator / Several
-//!   OperatorPick::Id(id)     ─▶ that one, else NotListed / Former
-//!   ─▶ Access::of_operator: its name, and a caller with exactly its permissions
+//! me() ─▶ Operator { id, name, permissions }: the token's operator as the
+//!         server's directory names it, with the permissions this request
+//!         was authenticated with (never empty)
+//!   ─▶ Access::of_operator: its name, a caller with exactly those permissions
 //! ```
 //!
 //! [`resolve`] runs once at startup (an error stops the UI: a bad token is
-//! a 401 there) and then every [`REFRESH`] by [`spawn_refresh`], by the id
-//! found at startup, so the UI's permission gating follows the server's
-//! directory. A failed refresh keeps the last access and logs a warning:
-//! the server still refuses what the token may not do.
+//! a 401 there) and then every [`REFRESH`] by [`spawn_refresh`], so the
+//! UI's permission gating and its "signed in as" label follow the server.
+//! A failed refresh keeps the last access and logs a warning: the server
+//! still refuses what the token may not do.
 
 use std::time::Duration;
 
 use crosstalk_client::HttpClient;
 use crosstalk_spec::ids::OperatorId;
 use crosstalk_spec::interfaces::l8_surface::operators::{
-    InvalidOperatorName, Operator, OperatorName, TrustedOperator,
+    InvalidOperatorName, OperatorName, TrustedOperator,
 };
 use crosstalk_spec::interfaces::l8_surface::{Caller, QueryApi, QueryError};
 use tokio::sync::watch;
 use tokio::task::JoinHandle;
 use tokio::time::MissedTickBehavior;
 
-use crate::config::{Access, AccessError, OperatorPick};
+use crate::config::{Access, AccessError};
 use crate::url::ulid::UlidId;
 
-/// How often the operator's permissions are read again while serving.
+/// How often the operator's access is read again while serving.
 pub const REFRESH: Duration = Duration::from_secs(30);
 
-/// Why the server's directory does not say who the UI is.
+/// Why the server did not say who the UI is.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum IdentityError {
-    /// Listing the operators failed: the server is unreachable, refused
-    /// the token (`401`, which the client reports as a store failure), or
-    /// the token's operator may not view (`403`).
-    #[error("listing the server's operators failed: {}", crate::error::describe(.0))]
+    /// Reading `me` failed: the server is unreachable, or refused the
+    /// token (`401`, which the client reports as a store failure).
+    #[error("asking the server who the token is failed: {}", crate::error::describe(.0))]
     Read(QueryError),
-    #[error("the server lists no current operator")]
-    NoOperator,
-    #[error(
-        "the server lists {} current operators ({}); name the token's in backend.http.operator",
-        .ids.len(),
-        .ids.iter().map(|id| id.to_ulid()).collect::<Vec<_>>().join(", ")
-    )]
-    Several { ids: Vec<OperatorId> },
-    #[error("the server lists no operator {}", .0.to_ulid())]
-    NotListed(OperatorId),
-    #[error("operator {} is a former operator on the server (no permissions)", .0.to_ulid())]
-    Former(OperatorId),
+    /// The server answered with an operator no directory gives a caller
+    /// (no permissions), which `me` never does.
     #[error(transparent)]
     Access(#[from] AccessError),
     /// The placeholder caller's name; "unsent" is valid, so never.
     #[error("the placeholder operator name: {0:?}")]
     Placeholder(InvalidOperatorName),
-}
-
-/// The operator `pick` names among the server's.
-pub fn pick(operators: &[Operator], pick: OperatorPick) -> Result<&Operator, IdentityError> {
-    let current = || operators.iter().filter(|o| !o.permissions.is_empty());
-    match pick {
-        OperatorPick::TheOnlyOne => {
-            let mut found = current();
-            match (found.next(), found.next()) {
-                (None, _) => Err(IdentityError::NoOperator),
-                (Some(one), None) => Ok(one),
-                (Some(_), Some(_)) => Err(IdentityError::Several {
-                    ids: current().map(|o| o.id).collect(),
-                }),
-            }
-        }
-        OperatorPick::Id(id) => {
-            let operator = operators
-                .iter()
-                .find(|o| o.id == id)
-                .ok_or(IdentityError::NotListed(id))?;
-            if operator.permissions.is_empty() {
-                return Err(IdentityError::Former(id));
-            }
-            Ok(operator)
-        }
-    }
 }
 
 /// The caller the trait methods are given before the UI knows who it is.
@@ -103,21 +64,19 @@ fn unsent_caller() -> Result<Caller, IdentityError> {
     Ok(access.caller())
 }
 
-/// The access the server's directory gives the operator `which` names.
-pub async fn resolve(client: &HttpClient, which: OperatorPick) -> Result<Access, IdentityError> {
-    let operators = client
-        .operators(&unsent_caller()?)
+/// The access the server gives the client's token.
+pub async fn resolve(client: &HttpClient) -> Result<Access, IdentityError> {
+    let operator = client
+        .me(&unsent_caller()?)
         .await
         .map_err(IdentityError::Read)?;
-    let operator = pick(&operators, which)?;
-    Ok(Access::of_operator(operator)?)
+    Ok(Access::of_operator(&operator)?)
 }
 
-/// Reads the operator `id`'s access again every `every`, sending it when
-/// it changed. Ends when every receiver is gone.
+/// Reads the token's access again every `every`, sending it when it
+/// changed. Ends when every receiver is gone.
 pub fn spawn_refresh(
     client: HttpClient,
-    id: OperatorId,
     sender: watch::Sender<Access>,
     every: Duration,
 ) -> JoinHandle<()> {
@@ -128,7 +87,7 @@ pub fn spawn_refresh(
         ticks.tick().await;
         while !sender.is_closed() {
             ticks.tick().await;
-            match resolve(&client, OperatorPick::Id(id)).await {
+            match resolve(&client).await {
                 Ok(access) => {
                     let changed = sender.send_if_modified(|current| {
                         let changed = *current != access;
@@ -139,7 +98,7 @@ pub fn spawn_refresh(
                     });
                     if changed {
                         tracing::info!(
-                            operator = %id.to_ulid(),
+                            operator = %access.caller().operator().to_ulid(),
                             name = access.name(),
                             permissions = ?access.caller().permissions(),
                             "operator access changed on the server"
@@ -147,7 +106,6 @@ pub fn spawn_refresh(
                     }
                 }
                 Err(error) => tracing::warn!(
-                    operator = %id.to_ulid(),
                     error = %error,
                     "refreshing the operator's access failed; keeping the last"
                 ),
@@ -158,65 +116,32 @@ pub fn spawn_refresh(
 
 #[cfg(test)]
 mod tests {
+    use crosstalk_spec::interfaces::l8_surface::operators::Operator;
     use crosstalk_spec::interfaces::l8_surface::{Permission, PermissionSet};
 
     use super::*;
 
-    fn operator(n: u128, permissions: &[Permission]) -> Operator {
-        Operator {
-            id: OperatorId::from_raw(n),
-            name: OperatorName::new(&format!("op{n}")).expect("name"),
-            permissions: PermissionSet::of(permissions.iter().copied()),
-        }
-    }
-
-    #[test]
-    fn the_only_current_operator_is_the_tokens() {
-        let operators = [operator(1, &[]), operator(2, &[Permission::View])];
-        let found = pick(&operators, OperatorPick::TheOnlyOne).expect("one");
-        assert_eq!(found.id, OperatorId::from_raw(2));
-    }
-
-    #[test]
-    fn several_or_no_current_operators_need_an_id() {
-        let operators = [
-            operator(1, &[Permission::View]),
-            operator(2, &[Permission::View]),
-        ];
-        assert_eq!(
-            pick(&operators, OperatorPick::TheOnlyOne),
-            Err(IdentityError::Several {
-                ids: vec![OperatorId::from_raw(1), OperatorId::from_raw(2)]
-            })
-        );
-        assert_eq!(
-            pick(&[operator(1, &[])], OperatorPick::TheOnlyOne),
-            Err(IdentityError::NoOperator)
-        );
-        let chosen = pick(&operators, OperatorPick::Id(OperatorId::from_raw(2))).expect("by id");
-        assert_eq!(chosen.name.as_str(), "op2");
-    }
-
-    #[test]
-    fn a_named_operator_must_be_current() {
-        let operators = [operator(1, &[]), operator(2, &[Permission::View])];
-        assert_eq!(
-            pick(&operators, OperatorPick::Id(OperatorId::from_raw(1))),
-            Err(IdentityError::Former(OperatorId::from_raw(1)))
-        );
-        assert_eq!(
-            pick(&operators, OperatorPick::Id(OperatorId::from_raw(3))),
-            Err(IdentityError::NotListed(OperatorId::from_raw(3)))
-        );
-    }
-
     #[test]
     fn the_access_carries_exactly_the_servers_permissions() {
-        let listed = operator(2, &[Permission::View, Permission::Content]);
+        let listed = Operator {
+            id: OperatorId::from_raw(2),
+            name: OperatorName::new("op2").expect("name"),
+            permissions: PermissionSet::of([Permission::View, Permission::Content]),
+        };
         let access = Access::of_operator(&listed).expect("access");
         assert_eq!(access.name(), "op2");
         assert_eq!(access.caller().operator(), listed.id);
         assert_eq!(access.caller().permissions(), listed.permissions);
         assert!(!access.caller().has(Permission::Triage));
+    }
+
+    #[test]
+    fn an_operator_without_permissions_has_no_access() {
+        let former = Operator {
+            id: OperatorId::from_raw(3),
+            name: OperatorName::new("former").expect("name"),
+            permissions: PermissionSet::EMPTY,
+        };
+        assert!(Access::of_operator(&former).is_err());
     }
 }

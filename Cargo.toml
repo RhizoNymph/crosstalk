@@ -1,5 +1,8 @@
 [workspace]
 members = ["spec", "crates/*", "ui"]
+# A Claude Code session working from `crates/` leaves a `.claude` write-tracking
+# directory there, which the `crates/*` glob would otherwise take for a crate.
+exclude = ["crates/.claude"]
 resolver = "3"
 
 [workspace.package]

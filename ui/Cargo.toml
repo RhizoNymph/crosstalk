@@ -24,9 +24,12 @@ tokio = { version = "=1.53.1", features = ["rt-multi-thread", "macros", "sync", 
 topcoat = { version = "=0.9.0", default-features = false, features = ["router", "runtime", "serve", "view", "discover", "asset", "sse", "tailwind"] }
 tracing = "=0.1.44"
 tracing-subscriber = { version = "=0.3.23", features = ["env-filter", "json"] }
+url = "=2.5.8"
 
 [dev-dependencies]
 crosstalk-conformance = { path = "../crates/conformance" }
+# The test proxy that cuts the gateway away (`testing::proxy`).
+tokio = { version = "=1.53.1", features = ["net", "io-util"] }
 
 [build-dependencies]
 topcoat = { version = "=0.9.0", default-features = false, features = ["tailwind"] }
