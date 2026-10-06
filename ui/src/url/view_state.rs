@@ -11,6 +11,13 @@
 //! cross-agent traffic is all unconfirmed are left out of channel lists,
 //! the review queue, the channels-mode graph and the overview's counts.
 //!
+//! A page that follows the present carries `follow=<span>`
+//! ([`FollowSpan`]) in place of `from`/`to`; the two are exclusive. Parsing
+//! resolves it against [`Defaults::follow_end`], so the state's window is
+//! concrete either way and only [`ViewState::to_query`] prints `follow`.
+//! Data routes and shard arguments take the pinned form
+//! ([`ViewState::pinned`]).
+//!
 //! The window is on bucket boundaries: the surface refuses any other
 //! (`InvalidInput(UnalignedWindow)`), so a URL with an unaligned window is
 //! not canonical and parses to the smallest aligned window covering it.
@@ -21,6 +28,7 @@ use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::ids::{AgentId, ChannelId, TopicId};
 use crosstalk_spec::support::{TimeWindow, Timestamp};
 
+use super::follow::{FollowSpan, InvalidFollowSpan};
 use super::route::{decode_kind, encode_kind};
 use super::scope::{Scope, ViewFilter, is_aligned, snap};
 use super::ulid::{InvalidUlid, UlidId};
@@ -32,6 +40,7 @@ use crosstalk_spec::aggregates::filter::UnconfirmedChannels;
 pub struct RawViewState {
     pub from: Option<String>,
     pub to: Option<String>,
+    pub follow: Option<String>,
     pub v: Option<String>,
     pub w: Option<String>,
     pub g: Option<String>,
@@ -42,6 +51,11 @@ pub struct RawViewState {
     pub x: Option<String>,
     pub u: Option<String>,
 }
+
+/// Every key of the view state, in canonical order.
+pub const KEYS: [&str; 12] = [
+    "from", "to", "follow", "v", "w", "g", "a", "c", "r", "t", "x", "u",
+];
 
 /// Agents mode draws agent to agent; channels mode draws channels as nodes
 /// between their writers and readers.
@@ -54,9 +68,13 @@ pub enum GraphMode {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ViewState {
+    /// The resolved window: concrete and aligned even when following.
     pub scope: Scope,
     pub weighting: Weighting,
     pub graph: GraphMode,
+    /// `Some` when the URL follows the present: `scope.window` is then the
+    /// span ending at this request's [`Defaults::follow_end`].
+    pub follow: Option<FollowSpan>,
 }
 
 /// Values used for keys the URL does not carry, and the bucket width
@@ -65,6 +83,9 @@ pub struct ViewState {
 pub struct Defaults {
     /// On bucket boundaries.
     pub window: TimeWindow,
+    /// Where a followed window ends: the backend's present, aligned up to
+    /// a bucket boundary.
+    pub follow_end: Timestamp,
     pub topic_version: TopicModelVersion,
     pub bucket: BucketWidth,
 }
@@ -75,6 +96,10 @@ pub enum ViewStateError {
     Time { key: &'static str },
     #[error("from must be before to")]
     EmptyWindow,
+    #[error(transparent)]
+    Follow(#[from] InvalidFollowSpan),
+    #[error("follow: a URL either follows or names from and to, not both")]
+    FollowWithWindow,
     #[error("v: not a topic model version")]
     Version,
     #[error("w: expected tx or bytes")]
@@ -107,23 +132,40 @@ pub struct Parsed {
 
 impl ViewState {
     pub fn parse(raw: &RawViewState, defaults: Defaults) -> Result<Parsed, ViewStateError> {
-        let complete = raw.from.is_some()
-            && raw.to.is_some()
+        let follow = match &raw.follow {
+            Some(_) if raw.from.is_some() || raw.to.is_some() => {
+                return Err(ViewStateError::FollowWithWindow);
+            }
+            Some(text) => Some(FollowSpan::parse(text)?),
+            None => None,
+        };
+        let complete = (follow.is_some() || (raw.from.is_some() && raw.to.is_some()))
             && raw.v.is_some()
             && raw.w.is_some()
             && raw.g.is_some();
 
-        let start = match &raw.from {
-            Some(text) => parse_time(text, "from")?,
-            None => defaults.window.start(),
+        let (window, aligned) = match follow {
+            Some(span) => (
+                span.window(defaults.follow_end, defaults.bucket)
+                    .map_err(|_| ViewStateError::EmptyWindow)?,
+                true,
+            ),
+            None => {
+                let start = match &raw.from {
+                    Some(text) => parse_time(text, "from")?,
+                    None => defaults.window.start(),
+                };
+                let end = match &raw.to {
+                    Some(text) => parse_time(text, "to")?,
+                    None => defaults.window.end(),
+                };
+                let asked = TimeWindow::new(start, end).map_err(|_| ViewStateError::EmptyWindow)?;
+                (
+                    snap(asked, defaults.bucket),
+                    is_aligned(asked, defaults.bucket),
+                )
+            }
         };
-        let end = match &raw.to {
-            Some(text) => parse_time(text, "to")?,
-            None => defaults.window.end(),
-        };
-        let asked = TimeWindow::new(start, end).map_err(|_| ViewStateError::EmptyWindow)?;
-        let aligned = is_aligned(asked, defaults.bucket);
-        let window = snap(asked, defaults.bucket);
         let complete = complete && aligned;
 
         let topic_version = match &raw.v {
@@ -171,17 +213,24 @@ impl ViewState {
                 },
                 weighting,
                 graph,
+                follow,
             },
             complete,
             aligned,
         })
     }
 
-    /// The canonical query string, without the leading `?`.
+    /// The canonical query string, without the leading `?`: `follow` when
+    /// following, else the window's `from` and `to`.
     pub fn to_query(&self) -> String {
-        let mut pairs: Vec<(&str, String)> = vec![
-            ("from", format_time(self.scope.window.start())),
-            ("to", format_time(self.scope.window.end())),
+        let mut pairs: Vec<(&str, String)> = match self.follow {
+            Some(span) => vec![("follow", span.as_str().to_owned())],
+            None => vec![
+                ("from", format_time(self.scope.window.start())),
+                ("to", format_time(self.scope.window.end())),
+            ],
+        };
+        pairs.extend([
             ("v", self.scope.topic_version.0.to_string()),
             (
                 "w",
@@ -199,7 +248,7 @@ impl ViewState {
                 }
                 .to_owned(),
             ),
-        ];
+        ]);
         let filter = &self.scope.filter;
         push_list(&mut pairs, "a", filter.agents.iter().map(|id| id.to_ulid()));
         push_list(
@@ -227,6 +276,24 @@ impl ViewState {
             .map(|(k, v)| format!("{k}={}", encode_component(&v)))
             .collect::<Vec<_>>()
             .join("&")
+    }
+
+    /// The same view at its resolved window, without `follow`: what data
+    /// routes, shard arguments and "Pin" take.
+    pub fn pinned(&self) -> Self {
+        Self {
+            follow: None,
+            ..self.clone()
+        }
+    }
+
+    /// The same view following the last `span`, for "Follow". The window
+    /// is the current one until the next render resolves the span.
+    pub fn following(&self, span: FollowSpan) -> Self {
+        Self {
+            follow: Some(span),
+            ..self.clone()
+        }
     }
 
     /// The same view with a different graph mode, for the mode toggle.
@@ -305,6 +372,7 @@ mod tests {
         Defaults {
             window: TimeWindow::new(ts("2026-10-02T00:00:00Z"), ts("2026-10-03T00:00:00Z"))
                 .expect("window"),
+            follow_end: ts("2026-10-03T00:00:00Z"),
             topic_version: TopicModelVersion(3),
             bucket: BucketWidth::from_micros(
                 std::num::NonZeroU64::new(300_000_000).expect("five minutes"),
@@ -321,6 +389,7 @@ mod tests {
             let slot = match k {
                 "from" => &mut raw.from,
                 "to" => &mut raw.to,
+                "follow" => &mut raw.follow,
                 "v" => &mut raw.v,
                 "w" => &mut raw.w,
                 "g" => &mut raw.g,
@@ -422,6 +491,101 @@ mod tests {
         assert_eq!(
             ViewState::parse(&raw("u=maybe"), defaults()),
             Err(ViewStateError::Unconfirmed)
+        );
+    }
+
+    #[test]
+    fn a_followed_query_resolves_its_window_and_prints_follow() {
+        let parsed =
+            ViewState::parse(&raw("follow=6h&v=3&w=tx&g=agents"), defaults()).expect("parse");
+        assert!(parsed.complete && parsed.aligned);
+        assert_eq!(parsed.state.follow, Some(FollowSpan::SixHours));
+        assert_eq!(
+            parsed.state.scope.window,
+            TimeWindow::new(ts("2026-10-02T18:00:00Z"), ts("2026-10-03T00:00:00Z"))
+                .expect("window")
+        );
+        assert_eq!(parsed.state.to_query(), "follow=6h&v=3&w=tx&g=agents");
+    }
+
+    #[test]
+    fn a_followed_query_round_trips_with_its_filter() {
+        let mut state = ViewState::parse(&raw("follow=1d"), defaults())
+            .expect("parse")
+            .state;
+        state.scope.filter.false_detections = FalseDetections::Exclude;
+        state.weighting = Weighting::MatchedBytes;
+        let query = state.to_query();
+        assert_eq!(query, "follow=1d&v=3&w=bytes&g=agents&x=exclude-false");
+        let parsed = ViewState::parse(&raw(&query), defaults()).expect("reparse");
+        assert!(parsed.complete);
+        assert_eq!(parsed.state, state);
+    }
+
+    #[test]
+    fn a_followed_query_without_its_other_keys_is_incomplete() {
+        let parsed = ViewState::parse(&raw("follow=1d"), defaults()).expect("parse");
+        assert!(!parsed.complete);
+        assert_eq!(parsed.state.to_query(), "follow=1d&v=3&w=tx&g=agents");
+    }
+
+    #[test]
+    fn the_followed_window_ends_at_the_follow_end_not_the_default_window() {
+        let mut later = defaults();
+        later.follow_end = ts("2026-10-03T00:12:00Z");
+        let parsed = ViewState::parse(&raw("follow=1h&v=3&w=tx&g=agents"), later).expect("parse");
+        assert_eq!(
+            parsed.state.scope.window,
+            TimeWindow::new(ts("2026-10-02T23:15:00Z"), ts("2026-10-03T00:15:00Z"))
+                .expect("window")
+        );
+    }
+
+    #[test]
+    fn follow_and_a_window_are_exclusive() {
+        for query in [
+            "follow=1d&from=2026-10-02T00:00:00Z&to=2026-10-03T00:00:00Z",
+            "follow=1d&from=2026-10-02T00:00:00Z",
+            "follow=1d&to=2026-10-03T00:00:00Z",
+        ] {
+            assert_eq!(
+                ViewState::parse(&raw(query), defaults()),
+                Err(ViewStateError::FollowWithWindow),
+                "{query}"
+            );
+        }
+    }
+
+    #[test]
+    fn follow_must_be_a_preset() {
+        for text in ["24h", "2d", "15m", "", "forever"] {
+            assert_eq!(
+                ViewState::parse(&raw(&format!("follow={text}")), defaults()),
+                Err(ViewStateError::Follow(InvalidFollowSpan)),
+                "{text}"
+            );
+        }
+        assert_eq!(
+            ViewStateError::Follow(InvalidFollowSpan).to_string(),
+            "follow: expected 1h, 6h, 1d or 7d"
+        );
+    }
+
+    #[test]
+    fn pinning_keeps_the_resolved_window_and_following_drops_it() {
+        let followed = ViewState::parse(&raw("follow=1d&v=3&w=tx&g=channels"), defaults())
+            .expect("parse")
+            .state;
+        let pinned = followed.pinned();
+        assert_eq!(pinned.follow, None);
+        assert_eq!(pinned.scope.window, followed.scope.window);
+        assert_eq!(
+            pinned.to_query(),
+            "from=2026-10-02T00:00:00Z&to=2026-10-03T00:00:00Z&v=3&w=tx&g=channels"
+        );
+        assert_eq!(
+            pinned.following(FollowSpan::Week).to_query(),
+            "follow=7d&v=3&w=tx&g=channels"
         );
     }
 
