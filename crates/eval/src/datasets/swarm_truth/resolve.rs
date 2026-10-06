@@ -81,7 +81,12 @@ pub struct ResolveCounts {
     /// `session` rows.
     pub sessions: u64,
     /// Exchanges of the log in the truth's sessions: the world's traffic.
+    /// Only the run window's when the log was split by it
+    /// ([`super::window`]).
     pub exchanges: u64,
+    /// Exchanges of the truth's sessions left out as outside the run
+    /// window (`session_reused_outside_run`).
+    pub excluded_outside_window: u64,
     pub transmissions: u64,
     pub without_sender: u64,
     pub self_reads: u64,

@@ -2,10 +2,12 @@
 //! parsing, the join of truth rows to captured exchanges, and the scoring
 //! of a saved export.
 
+mod access_only;
 mod fixture;
 mod replay;
 mod scenario;
 mod sessions;
+mod window;
 
 use std::io::Cursor;
 
