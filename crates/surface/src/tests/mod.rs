@@ -11,6 +11,7 @@ mod channels;
 mod content;
 pub(crate) mod conversation_fakes;
 mod conversations;
+mod cursor;
 mod export;
 pub(crate) mod fakes;
 mod listing;

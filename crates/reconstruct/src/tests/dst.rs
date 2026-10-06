@@ -93,7 +93,7 @@ fn dst_agent_seen_once_per_evidence() {
                     .map_err(|e| fail(format!("{e}")))?;
             }
             let mut announced: BTreeMap<(AgentId, String), usize> = BTreeMap::new();
-            for (_, event) in rig.bus.seen() {
+            for event in rig.store_events() {
                 if let BusEvent::Ingest(IngestEvent::AgentSeen { agent, evidence }) = event {
                     *announced
                         .entry((agent, format!("{evidence:?}")))
@@ -369,4 +369,225 @@ async fn futures_join<F: Future<Output = ()> + 'static>(tasks: Vec<F>) {
             }
         })
         .await;
+}
+
+/// A bus that fails the publishes a seeded plan names, as a consumer that
+/// stops between its store writes and its publishes sees it, and records
+/// every envelope it was handed.
+#[derive(Debug, Clone, Default)]
+struct FlakyBus {
+    /// Every envelope handed over and accepted, duplicates included.
+    published: std::sync::Arc<std::sync::Mutex<Vec<crosstalk_spec::events::Envelope>>>,
+    /// Whether each next publish fails, in order; publishes past the plan
+    /// land.
+    plan: std::sync::Arc<std::sync::Mutex<std::collections::VecDeque<bool>>>,
+}
+
+impl FlakyBus {
+    fn published(&self) -> Vec<crosstalk_spec::events::Envelope> {
+        self.published
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+}
+
+impl crosstalk_spec::interfaces::l2_transport::EventBus for FlakyBus {
+    type Subscription = super::rig::Silent;
+
+    async fn publish(
+        &self,
+        envelope: crosstalk_spec::events::Envelope,
+    ) -> Result<(), crosstalk_spec::interfaces::l2_transport::BusError> {
+        let fails = self
+            .plan
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .pop_front()
+            .unwrap_or(false);
+        if fails {
+            return Err(crosstalk_spec::interfaces::l2_transport::BusError::Disconnected);
+        }
+        self.published
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(envelope);
+        Ok(())
+    }
+
+    async fn subscribe(
+        &self,
+        _subjects: &[crosstalk_spec::events::Subject],
+        _group: crosstalk_spec::interfaces::l2_transport::ConsumerGroup,
+        _retry: crosstalk_spec::interfaces::l2_transport::RetryPolicy,
+    ) -> Result<super::rig::Silent, crosstalk_spec::interfaces::l2_transport::BusError> {
+        Ok(super::rig::Silent)
+    }
+}
+
+type FlakyConsumer = crate::consumer::ReconstructConsumer<
+    crosstalk_memory::reconstruct::MemoryAgents,
+    super::rig::Threader,
+    crosstalk_transport::blob::MemoryBlobStore,
+    crate::evidence::ChainEvidence,
+    crate::ids::UlidSource<crosstalk_spec::ids::mint::SeededRandom>,
+    FlakyBus,
+>;
+
+/// A consumer over fresh reference stores, publishing on `bus`, with the
+/// rig's id seeds and `rig`'s message bodies, and the receiver of what its
+/// agent store publishes.
+fn flaky_consumer(
+    rig: &Rig,
+    bus: &FlakyBus,
+) -> (
+    FlakyConsumer,
+    tokio::sync::mpsc::UnboundedReceiver<BusEvent>,
+) {
+    use crosstalk_memory::support::{IdSequence, Outbox};
+    let (outbox, store_events) = Outbox::channel();
+    let agents = crosstalk_memory::reconstruct::MemoryAgents::new(IdSequence::default(), outbox);
+    let threader = crate::thread::ConversationThreader::new(
+        MemoryConversations::new(),
+        std::sync::Arc::clone(&rig.scene.messages),
+        crate::thread::ReadsMembers(agents.clone()),
+        super::support::ulids(11),
+    );
+    let consumer = crate::consumer::ReconstructConsumer::new(crate::consumer::ConsumerParts {
+        agents,
+        threader,
+        messages: std::sync::Arc::clone(&rig.scene.messages),
+        deriver: crate::evidence::ChainEvidence::default(),
+        agent_ids: super::support::ulids(13),
+        bus: std::sync::Arc::new(bus.clone()),
+    });
+    (consumer, store_events)
+}
+
+/// Deliver `order` to `consumer`; a delivery that fails is delivered again
+/// at a seeded later point, as the bus redelivers a nacked delivery.
+/// Returns every delivery made, in order, failed ones included.
+async fn deliver_until_handled(
+    rig: &mut Rig,
+    consumer: &mut FlakyConsumer,
+    exchanges: &[Exchange],
+    order: Vec<usize>,
+    rng: &mut SimRng,
+) -> Result<Vec<usize>, CheckFailed> {
+    let mut queue: std::collections::VecDeque<usize> = order.into();
+    let mut delivered = Vec::new();
+    while let Some(n) = queue.pop_front() {
+        delivered.push(n);
+        let envelope = rig.captured(&exchanges[n]);
+        match consumer.handle(&envelope).await {
+            Ok(_) => {}
+            Err(crate::consumer::ConsumeError::Publish(_)) => {
+                let at = below(rng, queue.len() as u64 + 1) as usize;
+                queue.insert(at, n);
+            }
+            Err(error) => return Err(fail(format!("delivery failed: {error}"))),
+        }
+    }
+    Ok(delivered)
+}
+
+/// The bus's log of `envelopes` as `PgBus` keeps it: the first event per
+/// envelope id. Fails when an id carries two different events.
+fn log_of(
+    envelopes: &[crosstalk_spec::events::Envelope],
+) -> Result<BTreeMap<EventId, String>, CheckFailed> {
+    let mut log = BTreeMap::new();
+    for envelope in envelopes {
+        let event = format!("{:?}", envelope.event);
+        match log.get(&envelope.id) {
+            Some(held) if *held != event => {
+                return Err(fail(format!(
+                    "{} carries two events",
+                    envelope.id.ulid_text()
+                )));
+            }
+            Some(_) => {}
+            None => {
+                log.insert(envelope.id, event);
+            }
+        }
+    }
+    Ok(log)
+}
+
+/// `transport.consumer.derived-envelope-ids` for L3: deliveries whose
+/// publishes fail at seeded points (the consumer stopped after its writes)
+/// are redelivered until handled. The same deliveries made with every
+/// publish landing give exactly the same bus log (each envelope id with
+/// its one event) and exactly the same agent store events (`AgentSeen`
+/// included: it is staged with the write, so no announcement is lost to a
+/// failed publish).
+#[test]
+fn redelivery_republishes_the_same_envelope_ids() {
+    sim_test(
+        "redelivery_republishes_the_same_envelope_ids",
+        &config(),
+        |ctx: SimCtx| async move {
+            let mut rig = Rig::new();
+            let exchanges = traffic(&mut rig, 8).await;
+            let mut rng = ctx.rng();
+            let order = schedule(&mut rng, exchanges.len());
+
+            let flaky = FlakyBus::default();
+            {
+                let mut plan = flaky
+                    .plan
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                for _ in 0..64 {
+                    plan.push_back(below(&mut rng, 3) == 0);
+                }
+            }
+            let (mut interrupted, mut interrupted_events) = flaky_consumer(&rig, &flaky);
+            let delivered =
+                deliver_until_handled(&mut rig, &mut interrupted, &exchanges, order, &mut rng)
+                    .await?;
+
+            let calm = FlakyBus::default();
+            let (mut uninterrupted, mut uninterrupted_events) = flaky_consumer(&rig, &calm);
+            let failed = deliver_until_handled(
+                &mut rig,
+                &mut uninterrupted,
+                &exchanges,
+                delivered.clone(),
+                &mut rng,
+            )
+            .await?;
+            ctx.check(failed == delivered, || {
+                "the calm bus failed a publish".to_owned()
+            })?;
+
+            let expected = log_of(&calm.published())?;
+            let got = log_of(&flaky.published())?;
+            ctx.check(got == expected, || {
+                format!("the interrupted run's log differs:\n  got:      {got:?}\n  expected: {expected:?}")
+            })?;
+            let deltas = got
+                .values()
+                .filter(|event| event.contains("ConversationDelta"))
+                .count();
+            ctx.check(deltas == exchanges.len(), || {
+                format!("{deltas} deltas for {} exchanges", exchanges.len())
+            })?;
+            let store_events = |receiver: &mut tokio::sync::mpsc::UnboundedReceiver<BusEvent>| {
+                crosstalk_memory::support::drain(receiver)
+            };
+            let got = store_events(&mut interrupted_events);
+            let expected = store_events(&mut uninterrupted_events);
+            ctx.check(
+                got.iter()
+                    .any(|event| matches!(event, BusEvent::Ingest(IngestEvent::AgentSeen { .. }))),
+                || "no AgentSeen was staged".to_owned(),
+            )?;
+            ctx.check(got == expected, || {
+                "the interrupted run's store events differ".to_owned()
+            })?;
+            Ok(())
+        },
+    );
 }

@@ -268,6 +268,8 @@ pub struct World<I = MemoryFingerprintIndex, M = DisabledSemanticMatcher, S = Me
     pub messages: MemoryMessages,
     pub ids: Ids,
     pub config: ProvenanceConfig,
+    /// Every turn run so far, in order (the model-agreement transcripts).
+    pub ran: Vec<Ran>,
 }
 
 impl World {
@@ -312,6 +314,7 @@ where
             messages,
             ids: Ids::seeded(7),
             config,
+            ran: Vec::new(),
         }
     }
 
@@ -350,11 +353,13 @@ where
             .process(&delta)
             .await
             .expect("processing a delta");
-        Ran {
+        let ran = Ran {
             exchange: id,
             delta,
             processed,
-        }
+        };
+        self.ran.push(ran.clone());
+        ran
     }
 
     /// The text of part 0 of the stored message `hash`.

@@ -15,5 +15,5 @@ dst = "crosstalk_transport::dst::spool_drains_each_record_once_under_its_id"
 integration = "crosstalk_transport::integration::spool_drain_after_outage_publishes_each_id_once"
 
 [evidence-review]
-dst = { agent = "false", human = "false" }
+dst = { agent = "true", human = "false" }
 integration = { agent = "false", human = "false" }

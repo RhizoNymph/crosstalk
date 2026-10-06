@@ -1,6 +1,6 @@
 //! What L6's Postgres stores share: the schema's migrations, the column
-//! codec, page cursors, the outbox they publish from, and the storage
-//! failure every store maps into its spec error.
+//! codec, page cursors and keyset pages, the outbox they publish from, and
+//! the storage failure every store maps into its spec error ([`tx`]).
 //!
 //! Every table lives in schema `analysis` (`crosstalk_store::Layer::Analysis`)
 //! and every runtime query names it, so no query depends on `search_path`.
@@ -8,8 +8,10 @@
 pub mod codec;
 pub mod cursor;
 pub mod outbox;
+pub mod paging;
 #[cfg(test)]
 pub(crate) mod testing;
+pub mod tx;
 
 use crosstalk_spec::ids::mint::UlidExhausted;
 use crosstalk_store::{Layer, Migrations, SerializableError, StoreError, TxError, migrate};
@@ -18,6 +20,7 @@ use sqlx::PgPool;
 pub use codec::CodecError;
 pub use cursor::CursorKey;
 pub use outbox::{BusSink, ChannelSink, EventSink, OutboxError, SinkError};
+pub use tx::Failure;
 
 /// L6's embedded migrations (`crates/analysis/migrations`), run in schema
 /// `analysis`.

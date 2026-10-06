@@ -546,6 +546,15 @@ impl ProvenanceStore for PgProvenanceStore {
         Ok(Some((record, status_from(&row)?)))
     }
 
+    async fn started_at(&self, id: ExchangeId) -> Result<Option<Timestamp>, ProvenanceStoreError> {
+        let started_at: Option<i64> =
+            sqlx::query_scalar("SELECT started_at FROM provenance.exchanges WHERE exchange = $1")
+                .bind(id_bytes(id))
+                .fetch_optional(&self.pool)
+                .await?;
+        Ok(started_at.map(time_from).transpose()?)
+    }
+
     async fn spans(&self, ids: &[SpanId]) -> Result<Vec<SpanRecord>, ProvenanceStoreError> {
         let keys: Vec<Vec<u8>> = ids.iter().copied().map(id_bytes).collect();
         let query = concat!(

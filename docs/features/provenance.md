@@ -56,10 +56,11 @@ only. `crosstalk-memory`, `crosstalk-sim`, `crosstalk-testkit` and
 - **Shard routing across nodes.** The index refuses misrouted fingerprints
   (`WrongShard`), and the scanner only sends fingerprints this node owns. A
   multi-node fan-out of lookups is not built.
-- **The spec read traits for L4 records on Postgres** (`SpanIndex`, a
-  later `ProvenanceReads`). The records and the indexes they need exist
-  (see [Tables](#tables-and-indexes)); the memory store implements
-  `SpanIndex` (below).
+- **Composing the Postgres stores into `serve`.** `PgProvenanceStore`
+  serves `SpanIndex`, `ProvenanceReads` and `ProvenanceStore::started_at`;
+  the gateway's L4 stage still runs over the memory store and keeps its
+  own map of exchange starts until P7.3's W8 switches it
+  ([postgres_stores.md](postgres_stores.md)).
 - **Coverage-guided fuzzing** (`fuzz` evidence) and the
   `span-state-written-only-by-advance` lint.
 
@@ -400,6 +401,13 @@ over any spec `BlobStore`).
 **`record_exchange(&Exchange)`.** Records the exchange's start, request
 hashes and output, with status `Pending`.
 
+**`started_at(exchange)`.** The recorded start (`ProvenanceStore::started_at`),
+`None` when the exchange was never recorded. It is a read of the record
+alone, kept when the request lists are pruned, so a stage that stamps a
+delta's extracted accesses with it loses nothing across a restart over
+Postgres (the `ExchangeCaptured` acked before the crash is not
+redelivered).
+
 **`process(&ConversationDelta)`** goes by the exchange's status:
 
 | Status | What happens |
@@ -473,7 +481,38 @@ Migrations `crates/provenance/migrations/0001_provenance.sql` and
 | `observed` | fingerprint, observation, time | primary key (fingerprint, observation); observation; (fingerprint, at) |
 
 `PgFingerprintIndex` agrees with `crosstalk-memory`'s
-`MemoryFingerprintIndex` (the model-based harness runs both). Each write is
+`MemoryFingerprintIndex` (the model-based harness runs both).
+
+**Model agreement under the match rules**
+(`provenance.store.pg-agrees-with-memory`, `integration::rules`). Each rule
+scenario runs from one seed over the memory index and store, then over
+`PgFingerprintIndex` and `PgProvenanceStore` (one shared pool, tables
+emptied and the index sequence restarted between scenarios), checking the
+rule's outcome on both. The two runs must leave identical transcripts:
+every turn's outcome with its envelopes, every exchange's record, start,
+scan status, spans (final states, hit counts, index sequences) and
+matches, `SpanIndex::spans` for every span, and the index watermark.
+Covered: the spread rule and skeletons, inherited fragments (page names
+the orchestrator gave, copies of given secrets, whole deliveries, replies
+from words seen apart), the reader-output floor and rare-token bound
+(including the bound raised by reads), own-output replays (SALT `get_log`,
+AgentDojo `send_money`, per-run), forwards with direct reads (now and
+earlier), forwards of the reader's own text and their expiry, shadowed
+fragments with the secret and no-writer controls, context k-grams and
+short-span hashes. `integration::restart` adds the token observations'
+retention (frequencies at the retention boundary and after expiry, no
+observation row left).
+
+**Restart** (`provenance.restart.decisions-durable`,
+`integration::restart`): a new engine on new pools over the same database
+replays every scanned delta with the first delivery's envelopes, reads
+every recorded start, and scans an exchange captured before the restart.
+The consumer's envelope ids are derived from the delta's exchange and the
+record announced (`span_event_id`, `match_id`), so a redelivery, a
+republish of the delta under a new envelope id, or a delivery to a
+restarted consumer publishes the same ids
+(`dst::redelivery_republishes_the_same_envelope_ids`,
+`transport.consumer.derived-envelope-ids`). Each write is
 one transaction that first deletes observations outside retention. The
 boilerplate cutoff is a correlated count, on insert and on lookup.
 `PgProvenanceStore` writes each commit in one transaction with row locks,
@@ -551,7 +590,8 @@ spans `commit_scan` wrote: `record` adds nothing, `spans` returns the
 originated spans (any state whose origin is `Originated`) and the
 forwarded spans (`Relayed` from an input) as recorded, leaving out spans
 relayed from another span, common spans and unknown ids. `Live`'s evidence
-feeder reads through it. `PgProvenanceStore` does not yet.
+feeder reads through it. `PgProvenanceStore` answers the same through
+`store/reads.rs`.
 
 ## Files
 
@@ -572,7 +612,7 @@ feeder reads through it. `PgProvenanceStore` does not yet.
 | `src/engine.rs` | Processing, replay, eviction | `Provenance`, `Processed`, `EngineError`, `envelopes`, `exchange_record` |
 | `src/consumer.rs` | The bus consumer | `GROUP`, `SUBJECTS`, `subscribe`, `run`, `ConsumerSettings`, `ConsumerStats` |
 | `src/span.rs` | Deterministic ids | `span_id`, `span_event_id`, `match_id` |
-| `src/store/{mod,memory,pg}.rs` | L4's records | `ProvenanceStore`, `MemoryProvenanceStore`, `PgProvenanceStore`, `ExchangeRecord`, `ScanStatus`, `ScanFailure`, `SpanRecord` (`committed`, `indexed_at`), `Forwarding`, `Relay`, `StoredMatch`, `ScanCommit`, `MessageScan`, `MIGRATIONS`, `migrate` |
+| `src/store/{mod,memory,pg}.rs` | L4's records | `ProvenanceStore` (with `started_at`), `MemoryProvenanceStore`, `PgProvenanceStore`, `ExchangeRecord`, `ScanStatus`, `ScanFailure`, `SpanRecord` (`committed`, `indexed_at`), `Forwarding`, `Relay`, `StoredMatch`, `ScanCommit`, `MessageScan`, `MIGRATIONS`, `migrate` |
 | `src/index/{mod,pg}.rs` | The Postgres fingerprint index | `PgFingerprintIndex` |
 | `src/semantic.rs` | The semantic stub | `DisabledSemanticMatcher` |
 | `src/pg.rs` | Shared Postgres conversions | — |
@@ -581,7 +621,8 @@ feeder reads through it. `PgProvenanceStore` does not yet.
 | `src/tests/` | Unit tests, scenarios, fixtures, AgentDojo | evidence `crosstalk_provenance::tests::*` |
 | `src/props/` | Property tests and the scenario generator | evidence `crosstalk_provenance::props::*` |
 | `src/dst.rs` | Simulations of the consumer | evidence `crosstalk_provenance::dst::*` |
-| `src/integration/` | Postgres tests (gated on `TEST_DATABASE_URL`) | evidence `crosstalk_provenance::integration::*` |
+| `src/integration/` | Postgres tests (gated on `TEST_DATABASE_URL`): index, engine, reads; `rules.rs` the match rules against the memory model (`transcript`, `agree!`); `restart.rs` restart replay, `started_at`, token-observation retention | evidence `crosstalk_provenance::integration::*`; `pg_world_on`, `PgWorld`, `truncate` |
+| `src/tests/started.rs` | `started_at` on any store | `started_at_is_the_recorded_start` |
 
 ## Invariants and constraints
 
@@ -621,6 +662,10 @@ feeder reads through it. `PgProvenanceStore` does not yet.
   boundaries. Decoded reads map back to the bytes as they arrived.
 - Every time is an argument: the exchange's start for scans, the injected
   clock for eviction.
+- The Postgres store and index agree with the memory reference on every
+  match rule (`provenance.store.pg-agrees-with-memory`, INV-X), and a
+  restart over them loses no decision or start
+  (`provenance.restart.decisions-durable`, INV-X).
 - Span states change only through `SpanState::advance`.
 - No `unwrap` or `expect` outside tests, except one commented infallible
   default.

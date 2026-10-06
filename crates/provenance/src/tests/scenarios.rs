@@ -585,6 +585,7 @@ where
         messages,
         ids,
         config,
+        ran,
     } = world;
     let index = engine.into_index();
     let engine =
@@ -595,6 +596,7 @@ where
         messages,
         ids,
         config,
+        ran,
     }
 }
 

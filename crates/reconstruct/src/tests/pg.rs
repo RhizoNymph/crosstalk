@@ -6,12 +6,13 @@
 //! (`crosstalk_store::TestDb::new_or_skip`): without it the test prints
 //! its skip line and passes.
 
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use crosstalk_memory::support::{IdSequence, Outbox};
-use crosstalk_spec::events::BusEvent;
-use crosstalk_spec::ids::MergeId;
+use crosstalk_spec::events::{BusEvent, Envelope};
 use crosstalk_spec::ids::mint::UlidExhausted;
+use crosstalk_spec::ids::{EventId, MergeId};
 use crosstalk_spec::support::Timestamp;
 use crosstalk_store::TestDb;
 use sqlx::PgPool;
@@ -20,38 +21,67 @@ use tokio::sync::{Semaphore, SemaphorePermit};
 
 use crate::agents::{PgAgents, run_migrations};
 use crate::ids::IdSource;
-use crate::publish::{EventSink, SinkError};
+use crate::publish::{EventSink, SinkError, Stamp};
 
 /// The cursor key every test store uses.
 pub(crate) const CURSOR_KEY: [u8; 32] = [7; 32];
+
+/// The process's test stamps: increasing ids, at their ordinal's
+/// microsecond.
+static STAMPS: AtomicU64 = AtomicU64::new(1);
+
+/// The next test stamp.
+pub(crate) fn test_stamp() -> Stamp {
+    let n = STAMPS.fetch_add(1, Ordering::Relaxed);
+    Stamp {
+        id: EventId::from_ulid(u128::from(n)),
+        at: Timestamp::from_micros(n),
+    }
+}
 
 /// Publishes into the reference harness's outbox.
 pub(crate) struct OutboxSink(pub(crate) Outbox);
 
 impl EventSink for OutboxSink {
-    async fn publish(&self, events: Vec<BusEvent>) -> Result<(), SinkError> {
-        self.0.publish(events);
+    fn stamp(&self) -> Result<Stamp, SinkError> {
+        Ok(test_stamp())
+    }
+
+    async fn publish(&self, envelope: Envelope) -> Result<(), SinkError> {
+        self.0.publish([envelope.event]);
         Ok(())
     }
 }
 
-/// Records every published event, in order.
+/// Records every published envelope, in order.
 #[derive(Debug, Clone, Default)]
-pub(crate) struct Recorder(pub(crate) Arc<Mutex<Vec<BusEvent>>>);
+pub(crate) struct Recorder(pub(crate) Arc<Mutex<Vec<Envelope>>>);
 
 impl Recorder {
-    /// Everything published since the last call.
+    /// Every event published since the last call.
     pub(crate) fn take(&self) -> Vec<BusEvent> {
+        self.take_envelopes()
+            .into_iter()
+            .map(|envelope| envelope.event)
+            .collect()
+    }
+
+    /// Every envelope published since the last call.
+    pub(crate) fn take_envelopes(&self) -> Vec<Envelope> {
         std::mem::take(&mut *self.0.lock().unwrap_or_else(PoisonError::into_inner))
     }
 }
 
 impl EventSink for Recorder {
-    async fn publish(&self, events: Vec<BusEvent>) -> Result<(), SinkError> {
+    fn stamp(&self) -> Result<Stamp, SinkError> {
+        Ok(test_stamp())
+    }
+
+    async fn publish(&self, envelope: Envelope) -> Result<(), SinkError> {
         self.0
             .lock()
             .unwrap_or_else(PoisonError::into_inner)
-            .extend(events);
+            .push(envelope);
         Ok(())
     }
 }

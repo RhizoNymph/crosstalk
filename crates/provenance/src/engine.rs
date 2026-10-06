@@ -224,6 +224,13 @@ where
         Ok(())
     }
 
+    /// When the recorded exchange `exchange` started; `None` when its
+    /// `ExchangeCaptured` was not recorded. Read from the store, so it
+    /// survives a restart over a durable store.
+    pub async fn started_at(&self, exchange: ExchangeId) -> Result<Option<Timestamp>, EngineError> {
+        Ok(self.store.started_at(exchange).await?)
+    }
+
     /// Process one `ConversationDelta`.
     pub async fn process(&mut self, delta: &ConversationDelta) -> Result<Processed, EngineError> {
         let Some((record, status)) = self.store.exchange(delta.exchange).await? else {
