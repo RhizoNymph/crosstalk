@@ -34,6 +34,11 @@ The contract is the spec's ([query_surface](query_surface.md),
   current from L3's and L5's events and rebuilds it from the stores.
 - `crosstalk_api::InProcess`: the surface over the memory stores, with the
   relay from the stores' outbox to the node facts and the live feed.
+- L8's own Postgres stores (`crosstalk_surface::pg`, P7.3 workstream W7):
+  `PgAuditLog` (`AuditLog` and `AuditIntents`), `PgOperatorStore`,
+  `PgSinkRegistry`, their migration, and the write-ahead intent flow of
+  `act` with `Surface::recover_interrupted`; the cursor key derived from
+  the deployment secret (`Surface::with_secret`).
 
 ## Non-scope
 
@@ -42,9 +47,11 @@ The contract is the spec's ([query_surface](query_surface.md),
   verified.
 - Porting the UI fixture's world generator; the UI seeds through the spec's
   write traits on `InProcess::stores`.
-- Postgres stores and the integration evidence they carry (P7.3); alert
-  sink delivery (`AlertSink` implementations); config loading beyond the
-  operator directory; benchmarks.
+- The Postgres store bundle (`PgStores: SurfaceStores`, P7.3 W8) and the
+  other layers' Postgres stores; calling `recover_interrupted` at start and
+  configuring the sinks from config (the gateway, W8); alert sink delivery
+  (`AlertSink` implementations); config loading beyond the operator
+  directory; benchmarks.
 - The pipeline consumers (L3–L7). In process, nothing turns a published
   `PolicyChanged` into a recorded decision except `SetPolicy` itself, and
   nothing counts accesses or classifications into L7 except whoever seeds.
@@ -52,16 +59,18 @@ The contract is the spec's ([query_surface](query_surface.md),
 ## Shape
 
 ```text
-crosstalk-surface (layer crate: depends on crosstalk-spec, blake3, thiserror, tokio, tracing)
+crosstalk-surface (layer crate: depends on crosstalk-spec, crosstalk-store, blake3, serde,
+                   serde_json, sqlx, thiserror, tokio, tracing)
   SurfaceStores ── one associated type per spec store trait group, Clone handles for the writers
   Surface<S> { stores, clock: Arc<dyn Clock>, config, ids: IdMinter, cursors: CursorKey,
                search_models: SearchModels, feed: FeedHandle }
      ├─ QueryApi        (query/*)      permission → watermark → store reads → Watermarked / Page
-     ├─ OperatorActions (actions/*)    permission → one store write, stamped → audit entry → result
+     ├─ OperatorActions (actions/*)    permission → intent → one store write, stamped → entry (intent removed) → result
      ├─ LiveFeed        (live/*)       permission → FeedHandle::open → FeedStream
      └─ export          (export/*)     permission → format → watermark → ExportSource::plan → limits
                                        → header → audit Started → SurfaceExport (sealed rows)
   NodeCache ◀── NodeFeeder::apply / rebuild / consume ── AgentReads, ChannelReads, ChannelRegistry
+  pg::{PgAuditLog, PgOperatorStore, PgSinkRegistry} ── schema "surface" (migrations/0001_surface.sql)
 crosstalk-api (composer)
   InProcess::start(options) ─ memory stores ─ one Outbox ─ relay task ─▶ NodeFeeder, FeedHandle
                              └─ Surface<MemoryStores>, operators loaded, node facts rebuilt
@@ -72,7 +81,8 @@ crosstalk-api (composer)
 `ChannelRegistry`, `ChannelReads`), `Transmissions` (`TransmissionStore`,
 `TransmissionVerdicts`), `Topics` (`TopicCatalog`), `Search`, `Embedder`,
 `Projections`, `Alerts` (`AlertReads`, `AlertActions`, `AlertRuleStore`),
-`Edges` (`EdgeStore`), `Audit`, `Operators`, `Sinks`, `DeadLetters`, `Bus`
+`Edges` (`EdgeStore`), `Audit` (`AuditIntents`, which is `AuditLog` with
+write-ahead intents), `Operators`, `Sinks`, `DeadLetters`, `Bus`
 (`EventBus`), `Blobs`, `Evidence` and `Export` (`ExportSource`). A store whose
 trait writes through `&mut self` is `Clone`, a handle on the same store: the
 surface clones it per write and holds no lock of its own across a store call.
@@ -192,11 +202,23 @@ missing }` before anything is read. Then, by area:
 
 ```text
 act(caller, action): at = clock.now()
-  caller lacks action.required_permission() ─▶ Err(Forbidden { missing })
-  else apply: one store call, author = caller.operator(), time = at
-  record = OperatorRecord::new(caller, action, AuditOutcome::of(&result)); append at `at`
-  appended ─▶ result      append failed ─▶ Err(Store)
+  caller lacks action.required_permission() ─▶ append Forbidden { missing } entry at `at` ─▶ Err(Forbidden)
+  else id = mint; intend(AuditIntent::new(id, at, caller, action))
+       intend failed ─▶ Err(Store), no effect, no entry
+       apply: one store call, author = caller.operator(), time = at
+       complete(intent.entry(AuditOutcome::of(&result))): entry appended, intent removed
+       completed ─▶ result      complete failed ─▶ Err(Store), the intent stays
+start (the composer, before serving): Surface::recover_interrupted
+       each leftover intent ─▶ entry with AuditOutcome::Interrupted (oldest first)
 ```
+
+The effect commits in the owning layer's store and the entry in the
+audit log; no transaction spans both (decision Q3). The intent is durable
+before the effect, so a process that stops between them leaves it, and
+the next start records the call as `Interrupted`: the effect may or may
+not have applied, and the log says so (`surface.audit.no-silent-effect`).
+A completion the log refuses also leaves the intent, recorded at the next
+start. A forbidden call has no effect and records no intent.
 
 - `SetPolicy`: unknown channel `NotFound`, superseded (through
   `ChannelDirectory`) `Conflict(ChannelSuperseded)`; then
@@ -353,13 +375,13 @@ stops the relay and the fitter and ends every stream with `ShuttingDown`.
 | `crates/surface/src/lib.rs` | Crate doc, modules, re-exports | `Surface`, `SurfaceConfig`, `SurfaceStores`, `EvidenceRecords`, `NodeCache`, `NodeFeeder` |
 | `crates/surface/src/stores.rs` | The store bundle and the evidence port | `SurfaceStores`, `EvidenceRecords`, `RecordReadError` |
 | `crates/surface/src/config.rs` | What `present` reports, export bounds, feed limits | `SurfaceConfig` |
-| `crates/surface/src/service.rs` | The service, permission check, windows, pages | `Surface::new`, `stores`, `config`, `feed` |
+| `crates/surface/src/service.rs` | The service, permission check, windows, pages | `Surface::new` (drawn cursor key), `Surface::with_secret` (key derived from the deployment secret), `stores`, `config`, `feed` |
 | `crates/surface/src/ids.rs` | One ULID generator over the clock | `IdMinter` |
-| `crates/surface/src/cursor.rs` | Surface-issued cursors; search models per cursor | `CursorKey`, `RequestDigest`, `SearchModels` |
+| `crates/surface/src/cursor.rs` | Surface-issued cursors; the key (drawn, or derived with `KeyedHasher::derive_key`); opaque positions for the Postgres audit log; search models per cursor | `CursorKey` (`draw`, `derive`, `seal`/`open`, `wrap`/`unwrap`, `issue`/`resume`), `SURFACE_CURSOR_LABEL`, `RequestDigest`, `SearchModels` |
 | `crates/surface/src/audit.rs` | Appending entries | (crate) `audit_append` |
 | `crates/surface/src/query/mod.rs` | `impl QueryApi`, one line per method | — |
 | `crates/surface/src/query/{channels,channel_rows,channel_traffic,agents,alerts,topology,topics,content,evidence,projections,admin}.rs` | Per-area handlers (`admin`: verdicts, quality, audit, `operators`, `me`) | (crate) `*_query`; `content::read_topics_under` (a row's topic under a version, shared with the export) |
-| `crates/surface/src/actions/mod.rs` | `impl OperatorActions`, `Surface::request` | — |
+| `crates/surface/src/actions/mod.rs` | `impl OperatorActions` (intent, effect, completion), `Surface::request`, `Surface::recover_interrupted` | — |
 | `crates/surface/src/actions/apply.rs` | Each action's store call | — |
 | `crates/surface/src/actions/errors.rs` | `BusError` for actions | — |
 | `crates/surface/src/live/mod.rs` | `impl LiveFeed`, the feed handle | `FeedHandle`, `FeedClosed`, `FeedStream`, `FeedWriter` |
@@ -368,6 +390,14 @@ stops the relay and the fitter and ends every stream with `ShuttingDown`.
 | `crates/surface/src/export/{hasher,stream,source}.rs` | Row hasher, audited stream, spec-trait source | `Blake3RowHasher`, `SurfaceExport`, `SpecExportSource`, `PlannedRows` |
 | `crates/surface/src/export/transmissions.rs` | The transmissions and verdicts datasets | `TransmissionSource`, `NoTransmissions`, `StoredTransmissions::new(store, directory, catalog)` |
 | `crates/surface/src/nodes/{mod,feeder,summary}.rs` | Node facts cache, feeder, summaries | `NodeCache`, `NodeFeeder`, `NodeFeedError` |
+| `crates/surface/migrations/0001_surface.sql` | Schema `surface`: `audit` (append-only trigger), `audit_subjects`, `action_intents`, `operator_directory`, `sinks` | — |
+| `crates/surface/src/pg/mod.rs` | L8's Postgres stores, migrations, storage failures | `MIGRATIONS`, `run_migrations`, `PgAuditLog`, `PgOperatorStore`, `PgSinkRegistry`, `SinkConfig`, `AUDIT_CURSOR_LABEL`, `CodecError` |
+| `crates/surface/src/pg/audit.rs` | `AuditLog` + `AuditIntents` on Postgres | `PgAuditLog::new(pool, retry, &KeyedHasher)` |
+| `crates/surface/src/pg/operators.rs` | `OperatorStore` on Postgres; the directory's stored form and its rebuild | `PgOperatorStore::new(pool, retry, SeededRandom)`, `directory` |
+| `crates/surface/src/pg/sinks.rs` | `SinkRegistry` on Postgres | `PgSinkRegistry::{configure, open}`, `SinkConfig` |
+| `crates/surface/src/pg/codec.rs` | Column codec (times, wire JSON) | `CodecError` |
+| `crates/surface/src/pg/testing.rs` | Test database, case pools, fixed secret | (test) |
+| `crates/surface/src/integration/` | Postgres tests: the memory harnesses (`model.rs`), restart, append-only, config atomicity | — |
 | `crates/surface/src/tests/` | Unit and property tests over the memory stores (`world.rs` wires them) | — |
 | `crates/surface/src/dst/` | Simulation tests under `crosstalk-sim` | — |
 | `crates/surface/src/props.rs` | The excerpt property | — |
@@ -386,17 +416,32 @@ stops the relay and the fitter and ends every stream with `ShuttingDown`.
   surface accepted it; the client stamps nothing.
 - An action call that returns `Ok` or a refusal leaves exactly one operator
   entry whose `AuditOutcome::result` is the returned value; `Store` leaves at
-  most one. In process the effect and the entry are two calls: an audit log
-  that refuses after the effect leaves it unaudited (reported as `Store`); a
-  database `SurfaceStores` makes them one transaction.
+  most one, or an intent. Every permitted call records its intent before
+  its effect, and the entry replaces it in one transaction; an intent left
+  by a stop or a refused completion becomes an `Interrupted` entry at the
+  next start (`surface.audit.no-silent-effect`, INV-1218). An intent
+  reserves its id: no other entry or intent may take it.
+- The Postgres audit tables refuse every `UPDATE` and `DELETE` (a
+  trigger), whatever the role (`surface.audit.append-only`).
+- A config load's directory and its config entries commit in one
+  transaction (`PgOperatorStore`); the audit ids it mints draw from the
+  random source the composer gives it (`SeededRandom::from_entropy` in a
+  gateway, `surface.ids.unique-across-restart`).
 - `Watermarked` responses carry a watermark read before their data.
 - Surface cursors are unforgeable (keyed MAC) and bound to their request.
+  With `Surface::with_secret` (and in `PgAuditLog`) the key is derived from
+  the deployment secret under a per-purpose label
+  (`crosstalk.cursor.v1.surface`, `crosstalk.cursor.v1.audit`), so a cursor
+  resolves after a restart with the same secret and fails after a rotation
+  (INV-1219).
 - The live feed never waits for a stream; within a stream cursors share the
   epoch and never go down; heartbeats carry the newest passed entry.
 - An export audits a refusal, or `Started` before its header and then
   `Ended` or `Abandoned`.
-- `crosstalk-surface` depends on the spec only (plus blake3, thiserror,
-  tokio, tracing); memory, sim, testkit and transport are dev-dependencies.
+- `crosstalk-surface` depends on the spec and `crosstalk-store` (plus
+  blake3, serde, serde_json, sqlx, thiserror, tokio, tracing); memory, sim,
+  testkit and transport are dev-dependencies. Every Postgres query names
+  schema `surface`; no store reads a clock.
   Its `tokio` test-util (paused time) comes through `crosstalk-sim`, a
   dev-dependency.
 - Time comes from the injected `Clock`; elapsed time (retention, heartbeats)
@@ -429,11 +474,23 @@ recorded, and the channel discovered by the transmission that co-access
 opened (`Fixture::channel`, awaiting content, so listed unconfirmed; or
 `Fixture::discover` with any transmission). Unit tests (`tests::{permissions, actions,
 outcomes, alerts, reads, channels, listing, content, export, live,
-nodes}`), property
+nodes, cursor}`), property
 tests (`tests::props::*`, `props`) and simulations (`dst::{live, actions,
 reads}`, `crosstalk_sim::sim_test!`) are the evidence of the surface
 invariants; `crates/api/src/tests.rs` runs the in-process surface end to
-end.
+end. `tests::actions::interrupted_call_is_recorded_at_start` stops a call
+between its effect and its entry (a publish that hangs, the future
+dropped) and recovers it in a new surface; `tests::cursor` resolves a
+cursor in a restarted surface with the same secret.
+
+The Postgres stores (`integration`, `TestDb::new_or_skip`, skipped without
+`TEST_DATABASE_URL`) run the memory crate's harnesses
+(`model::surface::{check_audit_log, check_audit_intents,
+check_operator_store, check_sink_registry}`) against fresh truncated
+tables, and test restarts over a new pool (leftover intents recovered as
+`Interrupted`, audit cursors, sinks and their last deliveries), the
+append-only trigger, and a config load whose entries are refused storing
+no directory.
 
 ## Conversation reads
 

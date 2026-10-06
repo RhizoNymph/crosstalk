@@ -665,9 +665,11 @@ Features Index:
       group): every QueryApi method with its permission checked first,
       watermark-first reads, paging and a keyed-MAC cursor for
       transmission rows by id, typed errors through the spec's From
-      impls; OperatorActions::act (one store write stamped with the
-      caller and the accept time, then exactly one OperatorRecord whose
-      AuditOutcome inverts to the returned result) and Surface::request;
+      impls; OperatorActions::act (a write-ahead AuditIntent, one store
+      write stamped with the caller and the accept time, then exactly one
+      OperatorRecord whose AuditOutcome inverts to the returned result,
+      appended as the intent is removed; Surface::recover_interrupted
+      records leftover intents as Interrupted at start) and Surface::request;
       the live feed (a writer task owning the epoch's log, bounded
       per-stream buffers that end lagging streams, resume and resync,
       heartbeats, session ends, a bus consumer that appends before it
@@ -691,13 +693,20 @@ Features Index:
       (SpanIndex); an opt-in in-process projection fitter
       (ProjectionFitting::Deterministic, FakeLayoutFitter) fits queued jobs.
       Rows by id and a channel's transmissions read topics from
-      TopicCatalog::assignments under the page's version. The HTTP server (P7.1) is http_server.
+      TopicCatalog::assignments under the page's version. L8's Postgres
+      stores (P7.3 W7, crosstalk_surface::pg, schema surface): PgAuditLog
+      (AuditLog + AuditIntents, append-only trigger, cursors keyed from the
+      deployment secret), PgOperatorStore (directory and config entries in
+      one transaction) and PgSinkRegistry; Surface::with_secret derives the
+      surface's cursor key from the secret so cursors survive a restart.
+      The HTTP server (P7.1) is http_server.
     entry_points:
       - crates/surface/src/lib.rs
       - crates/surface/src/service.rs
       - crates/surface/src/stores.rs
       - crates/surface/src/query/mod.rs
       - crates/surface/src/actions/mod.rs
+      - crates/surface/src/pg/mod.rs
       - crates/surface/src/live/mod.rs
       - crates/surface/src/export/mod.rs
       - crates/surface/src/nodes/mod.rs
