@@ -332,21 +332,22 @@ fn the_spool_section_is_checked() {
     let spool = custom.spool_config(data).expect("valid");
     assert_eq!(spool.dir(), Path::new("/var/lib/crosstalk/outage"));
     assert_eq!(spool.probe(), Duration::from_millis(50));
-    let absolute = section(serde_json::json!({"dir": "/var/lib/crosstalk/elsewhere"}))
-        .expect("parses");
+    let absolute =
+        section(serde_json::json!({"dir": "/var/lib/crosstalk/elsewhere"})).expect("parses");
     assert!(absolute.spool_config(data).is_ok());
     for dir in ["/tmp/spool", "../spool", "/var/lib/crosstalk"] {
         let outside = section(serde_json::json!({ "dir": dir })).expect("parses");
         assert!(
             matches!(
                 outside.spool_config(data),
-                Err(InvalidSpoolSection::OutsideDataDir { .. } | InvalidSpoolSection::ParentComponent(_))
+                Err(InvalidSpoolSection::OutsideDataDir { .. }
+                    | InvalidSpoolSection::ParentComponent(_))
             ),
             "{dir}"
         );
     }
-    let segment_above_max = section(serde_json::json!({"max_bytes": 1024, "segment_bytes": 4096}))
-        .expect("parses");
+    let segment_above_max =
+        section(serde_json::json!({"max_bytes": 1024, "segment_bytes": 4096})).expect("parses");
     assert!(matches!(
         segment_above_max.spool_config(data),
         Err(InvalidSpoolSection::Bounds(_))

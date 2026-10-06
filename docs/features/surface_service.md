@@ -47,9 +47,10 @@ The contract is the spec's ([query_surface](query_surface.md),
   verified.
 - Porting the UI fixture's world generator; the UI seeds through the spec's
   write traits on `InProcess::stores`.
-- The Postgres store bundle (`PgStores: SurfaceStores`, P7.3 W8) and the
+- The Postgres store bundle (`crosstalk_api::PgStores: SurfaceStores`,
+  P7.3 W8, implemented: [postgres_mode.md](postgres_mode.md)) and the
   other layers' Postgres stores; calling `recover_interrupted` at start and
-  configuring the sinks from config (the gateway, W8); alert sink delivery
+  configuring the sinks from config (the gateway does both); alert sink delivery
   (`AlertSink` implementations); config loading beyond the operator
   directory; benchmarks.
 - The pipeline consumers (L3–L7). In process, nothing turns a published
@@ -401,7 +402,8 @@ stops the relay and the fitter and ends every stream with `ShuttingDown`.
 | `crates/surface/src/tests/` | Unit and property tests over the memory stores (`world.rs` wires them) | — |
 | `crates/surface/src/dst/` | Simulation tests under `crosstalk-sim` | — |
 | `crates/surface/src/props.rs` | The excerpt property | — |
-| `crates/api/src/in_process/mod.rs` | The in-process surface, its relay and settle barrier | `InProcess` (`start`, `start_with`, `settle`, `fit_projections`, `shutdown`), `InProcessOptions`, `InProcessError` |
+| `crates/api/src/in_process/mod.rs` | The in-process surface, its relay and settle barrier; generic over a `HostedStores` bundle (the memory stores, or `PgStores`), `host` building the surface over stores already open (operators loaded, node facts rebuilt, a new feed epoch, the cursor key drawn or derived from the secret) | `InProcess<S = MemoryStores>` (`start`, `start_with`, `start_with_reads`, `host`, `settle`, `fit_projections` (memory), `caller`, `shutdown`), `HostedStores`, `CursorSecret`, `InProcessOptions`, `InProcessError` |
+| `crates/api/src/pg/{mod,evidence}.rs` | The Postgres store bundle (W8) | `PgStores`, `PgOpen`, `PgSettings`, `PgIds`, `PgEvidence` ([postgres_mode.md](postgres_mode.md)) |
 | `crates/api/src/in_process/stores.rs` | The memory stores as `SurfaceStores`; evidence records read from the registry and spans as recorded | `MemoryStores`, `MemoryEvidence` (`new`, `insert_span`, `SpanIndex`), `Directory` |
 | `crates/api/src/in_process/fitting.rs` | The opt-in in-process projection fitter | `ProjectionFitting`, `FitRunError`, (crate) `Fitter` |
 | `crates/api/src/tests/in_process.rs` | Settle, evidence reads and fitter passes | — |

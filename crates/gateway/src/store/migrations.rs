@@ -11,11 +11,11 @@
 
 use crosstalk_flow::consumer::{FlowConfig, InvalidFlowConfig, Settings as FlowSettings};
 use crosstalk_flow::store::PgFlowDurability;
+use crosstalk_spec::support::Timestamp;
 use crosstalk_store::sqlx::PgPool;
 use crosstalk_store::sqlx::migrate::Migrator;
 use crosstalk_store::sqlx::{self};
 use crosstalk_store::{Layer, Migrations, SerializableRetry, Store, StoreError, migrate};
-use crosstalk_spec::support::Timestamp;
 
 use super::MigrateError;
 
@@ -161,8 +161,8 @@ pub async fn reset_correlator(
     flow: FlowConfig,
     now: Timestamp,
 ) -> Result<(), MigrateError> {
-    let settings =
-        FlowSettings::try_from(flow).map_err(|error: InvalidFlowConfig| MigrateError::Flow(error))?;
+    let settings = FlowSettings::try_from(flow)
+        .map_err(|error: InvalidFlowConfig| MigrateError::Flow(error))?;
     PgFlowDurability::new(pool.clone(), SerializableRetry::default())
         .reset_correlator(&settings, now)
         .await?;

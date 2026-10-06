@@ -44,7 +44,7 @@ use crosstalk_flow::consumer::{DurableInputs, FlowConsumer, FlowDeps, Settings a
 use crosstalk_flow::store::{PgExtractionLedger, PgFlowDurability, PgShardTicks};
 use crosstalk_provenance::index::PgFingerprintIndex;
 use crosstalk_spec::events::Subject;
-use crosstalk_spec::ids::KeyedHasher;
+use crosstalk_spec::ids::{KeyedHasher, RandomSource};
 use crosstalk_spec::interfaces::l2_transport::{ConsumerGroup, EventBus};
 use crosstalk_spec::interfaces::l7_topology::EdgeStore;
 use crosstalk_store::SerializableRetry;
@@ -296,6 +296,9 @@ impl Live<PgSet> {
         let reader = clock.reader();
         surface.clock = Arc::clone(&reader);
         surface.timing = flow.timing;
+        // The ids the surface mints are persisted too: drawn like every
+        // other generator's (`surface.ids.unique-across-restart`).
+        surface.seed = ids.random(0x5F00).next_u64();
         let blobs = match (&pipeline, blobs) {
             (Some(pipeline), _) => pipeline.blobs().clone(),
             (None, blobs) => LiveBlobs::open(&blobs).await?,
@@ -349,8 +352,8 @@ impl Live<PgSet> {
         let relayed_topology = drain(&pool, &mut outbox_ids, &announcer)
             .await
             .map_err(|error| recovery_failed(RecoveryStep::RelayingOutboxes)(&error))?;
-        let outbox_relayed = u64::try_from(relayed_agents + relayed_flow).unwrap_or(u64::MAX)
-            + relayed_topology;
+        let outbox_relayed =
+            u64::try_from(relayed_agents + relayed_flow).unwrap_or(u64::MAX) + relayed_topology;
 
         status.phase(PipelinePhase::Recovering(RecoveryStep::RestoringFlow));
         let mut consumer = FlowConsumer::with_durability(
@@ -368,12 +371,10 @@ impl Live<PgSet> {
         status.update(|status| {
             status.report.deliveries_redelivered = recovered.redelivered;
             status.report.outbox_relayed = outbox_relayed;
-            status.report.flow_checkpoint_micros =
-                restored.ticked_through.map(|at| at.as_micros());
-            status.report.accesses_refed = u64::try_from(
-                restored.accesses_refed + restored.tool_calls_refed,
-            )
-            .unwrap_or(u64::MAX);
+            status.report.flow_checkpoint_micros = restored.ticked_through.map(|at| at.as_micros());
+            status.report.accesses_refed =
+                u64::try_from(restored.accesses_refed + restored.tool_calls_refed)
+                    .unwrap_or(u64::MAX);
         });
         tracing::info!(
             redelivered = recovered.redelivered,
@@ -400,13 +401,12 @@ impl Live<PgSet> {
             .surface
             .recover_interrupted()
             .await
-            .map_err(|error| recovery_failed(RecoveryStep::RebuildingNodes)(&format!("{error:?}")))?;
-        let watermark = backend
-            .stores
-            .edges
-            .watermark()
-            .await
-            .map_err(|error| recovery_failed(RecoveryStep::RebuildingNodes)(&format!("{error:?}")))?;
+            .map_err(|error| {
+                recovery_failed(RecoveryStep::RebuildingNodes)(&format!("{error:?}"))
+            })?;
+        let watermark = backend.stores.edges.watermark().await.map_err(|error| {
+            recovery_failed(RecoveryStep::RebuildingNodes)(&format!("{error:?}"))
+        })?;
         tracing::info!(
             interrupted = interrupted.len(),
             watermark = watermark.at().as_micros(),
@@ -553,11 +553,7 @@ impl Live<PgSet> {
             )),
             _ => None,
         };
-        let topology = tokio::spawn(topology_relay.run(
-            announcer,
-            outbox_ids,
-            TOPOLOGY_RELAY_POLL,
-        ));
+        let topology = tokio::spawn(topology_relay.run(announcer, outbox_ids, TOPOLOGY_RELAY_POLL));
         let retention = tokio::spawn(prune_periodically(bus.clone(), Arc::clone(&reader)));
         let ticker = match ticking {
             Ticking::Periodic => Some(tokio::spawn(settle::tick_periodically(
@@ -581,11 +577,7 @@ impl Live<PgSet> {
             clock,
             activity,
             stages: running,
-            quiet: PgQuiet {
-                bus,
-                spool,
-                pool,
-            },
+            quiet: PgQuiet { bus, spool, pool },
             publishers: vec![topology, retention],
             ticker,
             capture: None,
@@ -605,8 +597,7 @@ fn check_bus(bus: &PgBus, flow: &FlowSettings) -> Result<(), LiveError> {
     let config = bus.config();
     if config.ack_timeout.get() <= flow.checkpoint_every {
         return Err(LiveError::AckTimeout {
-            ack_timeout_ms: u64::try_from(config.ack_timeout.get().as_millis())
-                .unwrap_or(u64::MAX),
+            ack_timeout_ms: u64::try_from(config.ack_timeout.get().as_millis()).unwrap_or(u64::MAX),
             checkpoint_ms: u64::try_from(flow.checkpoint_every.as_millis()).unwrap_or(u64::MAX),
         });
     }

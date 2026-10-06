@@ -159,7 +159,12 @@ mod tests {
 
     #[test]
     fn nothing_pending_is_the_tick_alone() {
-        let frontier = combine(Some(at(50)), &[stats("a", None, None)], &groups(&["a"]), None);
+        let frontier = combine(
+            Some(at(50)),
+            &[stats("a", None, None)],
+            &groups(&["a"]),
+            None,
+        );
         assert_eq!(
             frontier,
             PipelineFrontier {

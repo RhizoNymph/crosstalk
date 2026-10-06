@@ -81,12 +81,11 @@ impl Stage for ProvenanceStage {
 
     async fn handle(&mut self, envelope: &Envelope) -> Result<(), StageError> {
         match &envelope.event {
-            BusEvent::Ingest(IngestEvent::ExchangeCaptured(exchange)) => {
-                self.engine
-                    .record_exchange(exchange)
-                    .await
-                    .map_err(engine_error)
-            }
+            BusEvent::Ingest(IngestEvent::ExchangeCaptured(exchange)) => self
+                .engine
+                .record_exchange(exchange)
+                .await
+                .map_err(engine_error),
             BusEvent::Ingest(IngestEvent::ConversationDelta(delta)) => {
                 let processed = self.engine.process(delta).await.map_err(engine_error)?;
                 // Extracted before provenance's events are published: the

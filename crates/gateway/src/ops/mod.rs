@@ -36,14 +36,14 @@ use tokio::sync::watch;
 
 use crate::live::recovery::{RecoveryReport, StatusReader};
 use crate::live::{LiveReport, LiveReporter};
-use crate::spool::LiveBus;
-use crosstalk_spec::support::Clock;
-use crosstalk_transport::{PgBus, SpoolState, SpoolStats};
 use crate::log::consumer::{LogCounts, LogStats};
 use crate::pipeline::{PipelineCounts, PipelineStats};
 use crate::role::Role;
+use crate::spool::LiveBus;
 use crate::store::{StoreCheck, StoreProbe};
 use crate::tasks::Tasks;
+use crosstalk_spec::support::Clock;
+use crosstalk_transport::{PgBus, SpoolState, SpoolStats};
 
 /// Whether the gateway is serving or shutting down. The process's phase
 /// is `Ok` or `Draining`; a report says `Degraded` while it serves short

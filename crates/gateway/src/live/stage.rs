@@ -37,10 +37,10 @@ use crosstalk_provenance::store::MemoryProvenanceStore;
 use crosstalk_reconstruct::thread::{MemoryConversations, ThreadConfig};
 use crosstalk_spec::events::{BusEvent, Envelope, Subject};
 use crosstalk_spec::ids::EventId;
+use crosstalk_spec::interfaces::l2_transport::EventBus;
 use crosstalk_spec::interfaces::l2_transport::{
     ConsumerGroup, Delivery, RetryPolicy, Subscription,
 };
-use crosstalk_spec::interfaces::l2_transport::EventBus;
 use crosstalk_spec::support::{Clock, Timestamp};
 use crosstalk_transport::{MpscBus, MpscSubscription};
 use tokio::sync::{mpsc, oneshot};

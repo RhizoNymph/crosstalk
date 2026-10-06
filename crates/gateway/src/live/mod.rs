@@ -167,9 +167,7 @@ pub enum LiveError {
         ack_timeout_ms: u64,
         checkpoint_ms: u64,
     },
-    #[error(
-        "flow.checkpoint_unacked ({unacked}) exceeds the bus's group capacity ({capacity})"
-    )]
+    #[error("flow.checkpoint_unacked ({unacked}) exceeds the bus's group capacity ({capacity})")]
     UnackedAboveCapacity { unacked: usize, capacity: usize },
     #[error("{0} correlator shards are more than the shard ticks can number")]
     TooManyShards(usize),
@@ -394,7 +392,6 @@ impl Live<MemorySet> {
             stage_tasks,
         })
     }
-
 }
 
 impl<S: LiveStoreSet> Live<S> {
@@ -486,6 +483,31 @@ impl<S: LiveStoreSet> Live<S> {
     /// The caller of one request, from the loaded access config.
     pub async fn caller(&self, identity: RequestIdentity) -> Result<Caller, CallerError> {
         self.backend.caller(identity).await
+    }
+
+    /// Stop as a killed process would: every task aborted at once, nothing
+    /// drained, acked or checkpointed, the bus's background tasks stopped
+    /// without touching its state (a Postgres bus leaves held deliveries
+    /// held, for the next start's `recover_held`). For restart tests; the
+    /// spool, which outlives the process in a deployment, is the caller's
+    /// to close.
+    pub async fn kill(self) {
+        let mut tasks: Vec<JoinHandle<()>> = Vec::new();
+        tasks.extend(self.ticker);
+        tasks.extend(self.capture);
+        tasks.extend(self.exchange_log);
+        tasks.extend(self.stages.into_iter().map(|running| running.task));
+        tasks.extend(self.publishers);
+        for task in &tasks {
+            task.abort();
+        }
+        for task in tasks {
+            // An aborted task's join reports the cancellation.
+            let _ = task.await;
+        }
+        self.quiet.stop().await;
+        drop(self.backend);
+        tracing::warn!("live process killed");
     }
 
     /// Drain and stop by `deadline`: the capture stage handles what is

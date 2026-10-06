@@ -26,7 +26,7 @@ use std::time::Duration;
 use crosstalk_api::http::{Auth, HttpApi, HttpConfig, StaticTokens};
 use crosstalk_api::pg::{PgSettings, PgStores};
 use crosstalk_api::{CursorSecret, InProcess, InProcessOptions, PgIds, PgOpen};
-use crosstalk_spec::ids::{KeyedHasher, SeededRandom};
+use crosstalk_spec::ids::{KeyedHasher, RandomSource, SeededRandom};
 use crosstalk_spec::support::Clock;
 use crosstalk_store::sqlx::PgPool;
 use crosstalk_store::{DatabaseUrl, SerializableRetry};
@@ -417,7 +417,9 @@ async fn run_pipeline(start: PipelineStart, mut stop: oneshot::Receiver<()>) -> 
                         .router
                         .set(HttpApi::new(Arc::clone(live.surface()), auth, http).router());
                 }
-                Ok(None) => tracing::error!("no operator directory stored; the API stays unavailable"),
+                Ok(None) => {
+                    tracing::error!("no operator directory stored; the API stays unavailable")
+                }
                 Err(error) => {
                     tracing::error!(error = ?error, "reading the operator directory failed; the API stays unavailable");
                 }
@@ -510,12 +512,18 @@ async fn run_api(start: ApiStart, mut stop: oneshot::Receiver<()>) {
 type ApiSurface = InProcess<PgStores<PgBus, LiveBlobs>>;
 
 async fn host_api(start: &ApiStart) -> Result<ApiSurface, StartError> {
-    let mut live = LiveConfig::new(LiveClock::Read(Arc::clone(&start.clock)), start.config.flow, 0)?;
+    let mut live = LiveConfig::new(
+        LiveClock::Read(Arc::clone(&start.clock)),
+        start.config.flow,
+        0,
+    )?;
     live.surface.access = access(start.config.api.as_ref().map(|api| &api.operator));
-    let flow = crosstalk_flow::consumer::Settings::try_from(start.config.flow)
-        .map_err(LiveError::Flow)?;
+    let flow =
+        crosstalk_flow::consumer::Settings::try_from(start.config.flow).map_err(LiveError::Flow)?;
     let options: InProcessOptions = InProcessOptions {
         timing: flow.timing,
+        // The surface's minted ids are persisted: OS entropy.
+        seed: SERVE_IDS.random(0x5F00).next_u64(),
         ..live.surface
     };
     let (stores, _topology_relay) = PgStores::open(PgOpen {

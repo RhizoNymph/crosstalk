@@ -22,10 +22,10 @@ use std::time::Duration;
 pub mod lock;
 pub mod migrations;
 
+use crosstalk_spec::support::Clock;
 use crosstalk_store::sqlx::PgPool;
 use crosstalk_store::sqlx::postgres::PgPoolOptions;
 use crosstalk_store::{DbFailure, Store, StoreConfig, StoreError, classify};
-use crosstalk_spec::support::Clock;
 use tokio::sync::watch;
 
 use crate::config::{GatewayConfig, StoreSection};

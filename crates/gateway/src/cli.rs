@@ -354,11 +354,24 @@ mod tests {
             })
         );
         assert_eq!(
-            parse(&["migrate", "--config", "c", "--reset-correlator", "--reset-correlator"]),
+            parse(&[
+                "migrate",
+                "--config",
+                "c",
+                "--reset-correlator",
+                "--reset-correlator"
+            ]),
             Err(UsageError::Repeated("--reset-correlator"))
         );
         assert_eq!(
-            parse(&["serve", "--role", "all", "--config", "c", "--discard-corrupt"]),
+            parse(&[
+                "serve",
+                "--role",
+                "all",
+                "--config",
+                "c",
+                "--discard-corrupt"
+            ]),
             Err(UsageError::Unexpected("--discard-corrupt".to_owned()))
         );
     }

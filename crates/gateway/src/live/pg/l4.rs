@@ -68,7 +68,11 @@ pub struct PgProvenanceStage {
 }
 
 impl PgProvenanceStage {
-    pub fn new(config: &ProvenanceConfig, extract: &ExtractConfig, parts: PgProvenanceParts) -> Self {
+    pub fn new(
+        config: &ProvenanceConfig,
+        extract: &ExtractConfig,
+        parts: PgProvenanceParts,
+    ) -> Self {
         Self {
             engine: Provenance::new(
                 config,

@@ -140,7 +140,8 @@ pub type PgProjections<E> = PgProjectionStore<PgAnalysisSink<E>>;
 /// What alert rules read about their subjects.
 pub type PgAlertFacts<E> = FlowFacts<PgTransmissions<E>, PgChannels<E>, PgDirectory<E>>;
 /// L6's alert store.
-pub type PgAlerts<E> = PgAlertStore<FakeEmbedder, PgDirectory<E>, PgAlertFacts<E>, PgAnalysisSink<E>>;
+pub type PgAlerts<E> =
+    PgAlertStore<FakeEmbedder, PgDirectory<E>, PgAlertFacts<E>, PgAnalysisSink<E>>;
 /// L7's edge store, reading the catalog, the directories and the node facts.
 pub type PgEdges<E> = PgEdgeStore<Env<PgCatalog<E>, PgDirectory<E>, NodeCache>>;
 /// What exports read.
@@ -329,8 +330,13 @@ where
         .await
         .map_err(|error| open_failed("agents")(&error))?
         .with_retry(settings.retry);
-        let flow_sink =
-            || FlowSink::new(bus.clone(), Arc::clone(&clock), generator(purpose::FLOW_SINK));
+        let flow_sink = || {
+            FlowSink::new(
+                bus.clone(),
+                Arc::clone(&clock),
+                generator(purpose::FLOW_SINK),
+            )
+        };
         let channels: PgChannels<E> = PgChannelRegistry::open(
             pool.clone(),
             agents.clone(),
@@ -436,11 +442,8 @@ where
             },
         );
         let audit = PgAuditLog::new(pool.clone(), settings.retry, &secret);
-        let operators = PgOperatorStore::new(
-            pool.clone(),
-            settings.retry,
-            ids.random(purpose::OPERATORS),
-        );
+        let operators =
+            PgOperatorStore::new(pool.clone(), settings.retry, ids.random(purpose::OPERATORS));
         let sinks = match settings.configure_sinks {
             true => PgSinkRegistry::configure(
                 pool.clone(),
@@ -613,7 +616,11 @@ where
     }
 
     fn node_feeder(&self) -> NodeFeeder<PgAgentStore<E>, PgChannels<E>> {
-        NodeFeeder::new(self.nodes.clone(), self.agents.clone(), self.channels.clone())
+        NodeFeeder::new(
+            self.nodes.clone(),
+            self.agents.clone(),
+            self.channels.clone(),
+        )
     }
 
     fn operator_handle(&self) -> PgOperatorStore {

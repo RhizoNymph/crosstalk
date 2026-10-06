@@ -235,7 +235,11 @@ impl StatusReader {
         &mut self,
         ready: impl FnMut(&PipelineStatus) -> bool,
     ) -> Option<PipelineStatus> {
-        self.0.wait_for(ready).await.ok().map(|status| status.clone())
+        self.0
+            .wait_for(ready)
+            .await
+            .ok()
+            .map(|status| status.clone())
     }
 }
 

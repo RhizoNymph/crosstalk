@@ -109,7 +109,9 @@ pub enum StartError {
     NoDirectory,
     #[error("postgres mode needs a store section")]
     NoStore,
-    #[error("store.pool.max_connections is {configured}; a pipeline process needs at least {needed}")]
+    #[error(
+        "store.pool.max_connections is {configured}; a pipeline process needs at least {needed}"
+    )]
     PoolTooSmall { configured: u32, needed: u32 },
     #[error("loading the deployment secret: {0}")]
     Secrets(#[from] crosstalk_ingress::credential::SecretError),
@@ -469,9 +471,9 @@ async fn start_postgres(
         let log_tasks = Arc::clone(&late.log_tasks);
         if role.runs_pipeline() {
             tasks.probe("exchange_log", move || {
-                log_tasks.get().is_none_or(|tasks| {
-                    tasks.states().iter().all(|(_, running)| *running)
-                })
+                log_tasks
+                    .get()
+                    .is_none_or(|tasks| tasks.states().iter().all(|(_, running)| *running))
             });
         }
         let stages = Arc::clone(&late.stages);

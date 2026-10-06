@@ -186,7 +186,9 @@ async fn postgres_mode_answers_as_memory_mode_and_after_a_restart() {
     else {
         return;
     };
-    migrate_all(&db.store()).await.expect("every layer migrates");
+    migrate_all(&db.store())
+        .await
+        .expect("every layer migrates");
     let scenario = Scenario::wiki_relay(DEFAULT_START);
     let ends = scenario.ends_at();
     let after = Timestamp::from_micros(ends.as_micros() + AFTER);
@@ -243,7 +245,10 @@ async fn postgres_mode_answers_as_memory_mode_and_after_a_restart() {
         )
         .await
         .expect("postgres answers");
-        assert_eq!(observed, expected[pass], "pass {pass}: postgres mode differs");
+        assert_eq!(
+            observed, expected[pass],
+            "pass {pass}: postgres mode differs"
+        );
     }
     stop_pg(live).await;
 

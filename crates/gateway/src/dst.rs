@@ -181,7 +181,10 @@ async fn frontier_covers_spool(ctx: SimCtx) -> Result<(), CheckFailed> {
         if rng.chance(percent(8)?) {
             let down = !inner.is_down();
             inner.set_down(down);
-            ctx.step(format!("{step}: inner bus {}", if down { "down" } else { "up" }));
+            ctx.step(format!(
+                "{step}: inner bus {}",
+                if down { "down" } else { "up" }
+            ));
         }
         if rng.chance(percent(50)?) {
             let at = Timestamp::from_micros(
@@ -212,7 +215,10 @@ async fn frontier_covers_spool(ctx: SimCtx) -> Result<(), CheckFailed> {
             }
         }
         if rng.chance(percent(30)?) {
-            tokio::time::sleep(Duration::from_millis(rng.below(NonZeroU64::MIN.saturating_add(19)))).await;
+            tokio::time::sleep(Duration::from_millis(
+                rng.below(NonZeroU64::MIN.saturating_add(19)),
+            ))
+            .await;
         }
 
         // The frontier as PgFrontierSource reads it: the spool first, then
@@ -307,7 +313,10 @@ async fn classifier_redelivery(ctx: SimCtx) -> Result<(), CheckFailed> {
     let mut order = Vec::new();
     for (index, _) in deliveries.iter().enumerate() {
         let times = 1 + rng.below(NonZeroU64::MIN.saturating_add(3));
-        order.extend(std::iter::repeat_n(index, usize::try_from(times).unwrap_or(1)));
+        order.extend(std::iter::repeat_n(
+            index,
+            usize::try_from(times).unwrap_or(1),
+        ));
     }
     rng.shuffle(&mut order);
     for index in order {
@@ -317,9 +326,15 @@ async fn classifier_redelivery(ctx: SimCtx) -> Result<(), CheckFailed> {
             .await
             .map_err(|error| failed("classify", error))?
             .ok_or_else(|| CheckFailed::new("a confirmation yields an envelope"))?;
-        ctx.check(out.id == EventId::derive(delivery.id, CLASSIFIED_LABEL, 0), || {
-            format!("{}: the id is not derived from the delivery", out.id.ulid_text())
-        })?;
+        ctx.check(
+            out.id == EventId::derive(delivery.id, CLASSIFIED_LABEL, 0),
+            || {
+                format!(
+                    "{}: the id is not derived from the delivery",
+                    out.id.ulid_text()
+                )
+            },
+        )?;
         match first.get(&delivery.id) {
             Some(earlier) => ctx.check(*earlier == out, || {
                 format!(

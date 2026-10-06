@@ -107,15 +107,18 @@ async fn json(running: &Running, target: &str) -> (StatusCode, Value) {
 /// Send every generation case through the proxy; each response must be
 /// the upstream's, unchanged. Returns how many were sent.
 async fn forward_every_case(running: &Running, upstream: &FakeUpstream) -> u64 {
-    let client = HarnessClient::new(running.proxy_addr().expect("role all runs the proxy"))
-        .prefix(PREFIX);
+    let client =
+        HarnessClient::new(running.proxy_addr().expect("role all runs the proxy")).prefix(PREFIX);
     let mut sent = 0;
     for case in generation_cases() {
         upstream
             .reply_next(Reply::from_case(&case))
             .await
             .expect("scripted");
-        let response = client.send(&case.request).await.expect("the gateway answers");
+        let response = client
+            .send(&case.request)
+            .await
+            .expect("the gateway answers");
         assert_eq!(response.end, BodyEnd::Complete, "case {}", case.name);
         assert_eq!(
             response.differences_from(&case.response),
@@ -141,8 +144,13 @@ async fn forward_every_case(running: &Running, upstream: &FakeUpstream) -> u64 {
 async fn captured(running: &Running, count: u64) {
     for _ in 0..1_000 {
         let pipeline = running.health().pipeline;
-        let spool_full = running.health().spool.map_or(0, |spool| spool.capture_spool_full);
-        if pipeline.published + pipeline.normalize_failed + pipeline.store_failed
+        let spool_full = running
+            .health()
+            .spool
+            .map_or(0, |spool| spool.capture_spool_full);
+        if pipeline.published
+            + pipeline.normalize_failed
+            + pipeline.store_failed
             + pipeline.publish_failed
             + spool_full
             >= count
@@ -176,7 +184,10 @@ async fn capture_spools_while_the_database_is_down() {
     assert!(sent > 0);
     captured(&running, sent).await;
     let health = running.health();
-    assert_eq!(health.pipeline.published, sent, "every capture's publish returned Ok");
+    assert_eq!(
+        health.pipeline.published, sent,
+        "every capture's publish returned Ok"
+    );
     let spool = health.spool.expect("a spool section in postgres mode");
     assert_eq!(spool.state, "spooling");
     assert_eq!(spool.records, sent);
@@ -203,7 +214,10 @@ async fn capture_spools_while_the_database_is_down() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(health["status"], "degraded");
     assert_eq!(health["spool"]["state"], "spooling");
-    assert!(health.get("bus").is_none(), "no bus section without the database");
+    assert!(
+        health.get("bus").is_none(),
+        "no bus section without the database"
+    );
 
     let metrics = ops_get(&running, "/metrics").await;
     let text = String::from_utf8(metrics.body.to_vec()).expect("text");
@@ -214,7 +228,10 @@ async fn capture_spools_while_the_database_is_down() {
         format!("crosstalk_spool_appended_total {sent}"),
         "crosstalk_capture_uncaptured_total{reason=\"spool_full\"} 0".to_owned(),
     ] {
-        assert!(text.lines().any(|candidate| candidate == line), "missing {line}\n{text}");
+        assert!(
+            text.lines().any(|candidate| candidate == line),
+            "missing {line}\n{text}"
+        );
     }
 
     let report = running.shutdown().await;
@@ -252,9 +269,15 @@ async fn a_full_spool_drops_counted_and_the_proxy_still_answers() {
     let metrics = ops_get(&running, "/metrics").await;
     let text = String::from_utf8(metrics.body.to_vec()).expect("text");
     let line = format!("crosstalk_capture_uncaptured_total{{reason=\"spool_full\"}} {sent}");
-    assert!(text.lines().any(|candidate| candidate == line), "missing {line}\n{text}");
+    assert!(
+        text.lines().any(|candidate| candidate == line),
+        "missing {line}\n{text}"
+    );
     let line = format!("crosstalk_pipeline_exchanges_total{{outcome=\"spool_full\"}} {sent}");
-    assert!(text.lines().any(|candidate| candidate == line), "missing {line}\n{text}");
+    assert!(
+        text.lines().any(|candidate| candidate == line),
+        "missing {line}\n{text}"
+    );
 
     running.shutdown().await;
 }

@@ -43,10 +43,7 @@ pub struct PgReconstruct {
 impl PgReconstruct {
     pub fn new(ctx: &StageContext<PgSet>, ids: PgIds) -> Self {
         let source = |salt: u64| {
-            UlidSource::new(UlidGenerator::new(
-                Arc::clone(&ctx.clock),
-                ids.random(salt),
-            ))
+            UlidSource::new(UlidGenerator::new(Arc::clone(&ctx.clock), ids.random(salt)))
         };
         let messages = Arc::new(MessageReader::new(ctx.stores.blobs.clone()));
         let threader = ConversationThreader::new(

@@ -56,7 +56,9 @@ async fn database(test: &str) -> Option<TestDb> {
 
 async fn migrated(test: &str) -> Option<TestDb> {
     let db = database(test).await?;
-    migrate_all(&db.store()).await.expect("every layer migrates");
+    migrate_all(&db.store())
+        .await
+        .expect("every layer migrates");
     Some(db)
 }
 
@@ -252,9 +254,7 @@ async fn pg_readyz_reports_behind_then_every_recovery_step() {
     db.close().await.expect("drops");
 }
 
-async fn task_stop(
-    task: postgres::StopHandle<postgres::PipelineHeld>,
-) -> postgres::PipelineHeld {
+async fn task_stop(task: postgres::StopHandle<postgres::PipelineHeld>) -> postgres::PipelineHeld {
     task.stop().await.flatten()
 }
 
@@ -346,7 +346,11 @@ async fn pg_frontier_covers_pending_deliveries() {
         .expect("subscribes");
     let empty = frontier.frontier().await.expect("reads");
     assert_eq!(empty.oldest_pending, None);
-    assert_eq!(empty.ticked_through, Timestamp::from_micros(0), "no shard ticked");
+    assert_eq!(
+        empty.ticked_through,
+        Timestamp::from_micros(0),
+        "no shard ticked"
+    );
 
     let at = Timestamp::from_micros(T0 - 60_000_000);
     bus.publish(envelope(1, at)).await.expect("publishes");
@@ -355,13 +359,19 @@ async fn pg_frontier_covers_pending_deliveries() {
         .expect("delivered")
         .expect("open")
         .expect("decodes");
-    assert_eq!(frontier.frontier().await.expect("reads").oldest_pending, Some(at));
+    assert_eq!(
+        frontier.frontier().await.expect("reads").oldest_pending,
+        Some(at)
+    );
     // One attempt: a nack dead-letters it, and the dead letter holds.
     inside
         .nack(delivery.id, Duration::from_millis(1), "test".to_owned())
         .await
         .expect("nacks");
-    assert_eq!(frontier.frontier().await.expect("reads").oldest_pending, Some(at));
+    assert_eq!(
+        frontier.frontier().await.expect("reads").oldest_pending,
+        Some(at)
+    );
 
     let later = Timestamp::from_micros(T0);
     bus.publish(envelope(2, later)).await.expect("publishes");
@@ -393,9 +403,12 @@ async fn pg_frontier_covers_the_spool() {
     let clock: Arc<dyn Clock> = Arc::new(ManualClock::at(Timestamp::from_micros(T0)));
     let bus = PgBus::new(pipeline_pool(&db), Arc::clone(&clock), bus_config()).expect("a bus");
     let gate = Gate::closed();
-    let spool = SpoolingBus::open(Gated::new(bus.clone(), gate.clone()), spool_config(dir.path()))
-        .await
-        .expect("the spool opens");
+    let spool = SpoolingBus::open(
+        Gated::new(bus.clone(), gate.clone()),
+        spool_config(dir.path()),
+    )
+    .await
+    .expect("the spool opens");
     let group = Slot::L3Reconstruct.group();
     let frontier = PgFrontierSource::new(
         bus.clone(),
@@ -417,7 +430,10 @@ async fn pg_frontier_covers_the_spool() {
     let at = Timestamp::from_micros(T0 - 120_000_000);
     spool.publish(envelope(7, at)).await.expect("spooled");
     assert_eq!(spool.stats().records, 1);
-    assert_eq!(frontier.frontier().await.expect("reads").oldest_pending, Some(at));
+    assert_eq!(
+        frontier.frontier().await.expect("reads").oldest_pending,
+        Some(at)
+    );
     gate.open();
     let deadline = Instant::now() + PATIENCE;
     while spool.stats().records > 0 {
@@ -479,7 +495,8 @@ async fn pg_watermark_survives_a_restart() {
         .expect("settles");
     let before = live.report().watermark_micros;
     assert!(before > 0, "the watermark advanced by {settled:?}");
-    live.shutdown(Instant::now() + Duration::from_secs(10)).await;
+    live.shutdown(Instant::now() + Duration::from_secs(10))
+        .await;
 
     let restarted = start(clock, "restarted").await;
     assert_eq!(

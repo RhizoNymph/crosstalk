@@ -198,7 +198,11 @@ where
     }
 
     fn node_feeder(&self) -> NodeFeeder<MemoryAgents, MemoryChannels<MemoryAgents>> {
-        NodeFeeder::new(self.nodes.clone(), self.agents.clone(), self.channels.clone())
+        NodeFeeder::new(
+            self.nodes.clone(),
+            self.agents.clone(),
+            self.channels.clone(),
+        )
     }
 
     fn operator_handle(&self) -> InMemoryOperatorStore {
@@ -372,9 +376,14 @@ where
             reads,
         };
         let fitting = options.projection_fitting;
-        let mut started =
-            Self::host(stores, options, published, CursorSecret::Drawn, "in-process access config")
-                .await?;
+        let mut started = Self::host(
+            stores,
+            options,
+            published,
+            CursorSecret::Drawn,
+            "in-process access config",
+        )
+        .await?;
         started.fit_projections(fitting);
         Ok(started)
     }
