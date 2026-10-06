@@ -76,13 +76,22 @@ pub async fn download<S: ExportStream>(export: Export<S>) -> Result<Download, Ui
         dataset_code(header.request().dataset().kind()),
         header.id().to_ulid()
     );
+    // A transmissions export whose states include an unconfirmed one says
+    // on every row whether it is confirmed; any other export's rows are as
+    // they were.
+    let columns = rows::Columns {
+        confirmed: matches!(
+            header.request().dataset(),
+            ExportDataset::Transmissions(scope) if scope.states.includes_unconfirmed()
+        ),
+    };
     let mut body = Vec::new();
     push_line(&mut body, &header_line(&header))?;
     let mut rows = rows;
     loop {
         match rows.next().await {
             ExportStep::Row(row, rest) => {
-                push_line(&mut body, &rows::row(&row))?;
+                push_line(&mut body, &rows::row(&row, columns))?;
                 rows = rest;
             }
             ExportStep::End(trailer) => {

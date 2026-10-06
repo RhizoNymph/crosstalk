@@ -7,7 +7,15 @@
 //!   window that the filter admits ([`Linked::admitted`]: never one whose
 //!   agents have merged into one), as `TransmissionRow::of` builds it; with
 //!   content, its match quotes cut with `ExcerptWindow::MATCH_ONLY` from
-//!   the same evidence the evidence page assembles.
+//!   the same evidence the evidence page assembles. For explicit (not the
+//!   default) `states`, rows are `TransmissionRow::of_in_scope` (with the
+//!   state column): those of the confirmed transmissions above in the
+//!   confirmed states asked for, and every unconfirmed transmission in the
+//!   unconfirmed states asked for, as the reference surface selects them
+//!   (`crosstalk_surface::export::StoredTransmissions`): its two agents
+//!   distinct, its row time (`opened_at`) in the settled window, admitted
+//!   by the filter with the writer of its first co-access as sender and no
+//!   topic.
 //! - Edges: what `topology` counts ([`Linked::counted`]), summed per bucket,
 //!   sender, reader, resolved route and topic.
 //! - Accesses: what `channel_topology` keeps (channels listed as channels,
@@ -23,18 +31,21 @@ use std::collections::{BTreeMap, HashMap};
 use std::num::NonZeroU64;
 
 use crosstalk_spec::aggregates::edge::EdgeSelector;
+use crosstalk_spec::aggregates::filter::FilterSubject;
 use crosstalk_spec::aggregates::projection::Projection;
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
+use crosstalk_spec::aliases::Aliases;
 use crosstalk_spec::derived::flow::access::AccessKind;
-use crosstalk_spec::derived::flow::transmission::Route;
+use crosstalk_spec::derived::flow::transmission::{Crossing, Route};
+use crosstalk_spec::derived::flow::verdict::Verdict;
 use crosstalk_spec::ids::{AgentId, ChannelId, TopicId};
 use crosstalk_spec::interfaces::l8_surface::excerpt::ExcerptWindow;
 use crosstalk_spec::interfaces::l8_surface::export::rows::{
     AccessRow, EdgeRow, LabelContent, TopicContent, TopicRow, TransmissionContent, TransmissionRow,
     projection_rows, verdict_rows,
 };
-use crosstalk_spec::interfaces::l8_surface::export::{ExportPlanError, ExportRow};
-use crosstalk_spec::interfaces::l8_surface::summary::TopicUnder;
+use crosstalk_spec::interfaces::l8_surface::export::{ExportPlanError, ExportRow, ExportStates};
+use crosstalk_spec::interfaces::l8_surface::summary::{TopicUnder, TransmissionStateKind};
 use crosstalk_spec::support::{TimeWindow, Timestamp};
 
 use crate::backend::fixture::clock::BUCKET;
@@ -74,28 +85,49 @@ fn bucket(at: Timestamp) -> Result<TimeWindow, ExportPlanError> {
     .map_err(|e| store("bucket", e))
 }
 
-pub fn transmissions(linked: &Linked, content: bool) -> Result<Vec<ExportRow>, ExportPlanError> {
+/// The content columns of a confirmed record, when the request asks for
+/// them.
+fn quoted(
+    linked: &Linked,
+    labels: &HashMap<TopicId, String>,
+    record: &crate::backend::fixture::world::TxRecord,
+    topic: TopicUnder,
+    content: bool,
+) -> Result<Option<TransmissionContent>, ExportPlanError> {
+    if !content {
+        return Ok(None);
+    }
+    let found = evidence::evidence(
+        linked.ctx,
+        record.transmission.id,
+        ExcerptWindow::MATCH_ONLY,
+    )
+    .map_err(|e| store("evidence", e))?
+    .ok_or_else(|| store("evidence missing", record.transmission.id))?;
+    let label = match topic {
+        TopicUnder::Topic(topic) => labels.get(&topic).cloned(),
+        TopicUnder::Outlier | TopicUnder::Unassigned => None,
+    };
+    TransmissionContent::of(&found, label)
+        .map(Some)
+        .ok_or_else(|| store("confirmed without matches", record.transmission.id))
+}
+
+pub fn transmissions(
+    linked: &Linked,
+    content: bool,
+    states: &ExportStates,
+) -> Result<Vec<ExportRow>, ExportPlanError> {
+    if !states.is_confirmed() {
+        return transmissions_in(linked, content, states);
+    }
     let ctx = linked.ctx;
     let labels = labels(ctx, linked.version);
     let mut rows = Vec::new();
     for counted in linked.admitted() {
         let record = counted.record;
         let topic = topic_under(record, linked.version);
-        let quoted = if content {
-            let found = evidence::evidence(ctx, record.transmission.id, ExcerptWindow::MATCH_ONLY)
-                .map_err(|e| store("evidence", e))?
-                .ok_or_else(|| store("evidence missing", record.transmission.id))?;
-            let label = match topic {
-                TopicUnder::Topic(topic) => labels.get(&topic).cloned(),
-                TopicUnder::Outlier | TopicUnder::Unassigned => None,
-            };
-            Some(
-                TransmissionContent::of(&found, label)
-                    .ok_or_else(|| store("confirmed without matches", record.transmission.id))?,
-            )
-        } else {
-            None
-        };
+        let quoted = quoted(linked, &labels, record, topic, content)?;
         let row = TransmissionRow::of(
             &record.transmission,
             ctx.aliases(),
@@ -105,6 +137,82 @@ pub fn transmissions(linked: &Linked, content: bool) -> Result<Vec<ExportRow>, E
         )
         .map_err(|e| store("transmission row", e))?;
         rows.push(ExportRow::Transmission(Box::new(row)));
+    }
+    Ok(sorted(rows))
+}
+
+/// The rows of an export holding explicit `states`, each with its state
+/// column. Content is asked for only with confirmed states
+/// (`InvalidExportRequest::ContentWithUnconfirmedStates`).
+fn transmissions_in(
+    linked: &Linked,
+    content: bool,
+    states: &ExportStates,
+) -> Result<Vec<ExportRow>, ExportPlanError> {
+    let ctx = linked.ctx;
+    let aliases = linked.aliases();
+    let labels = labels(ctx, linked.version);
+    let mut rows = Vec::new();
+    // The confirmed transmissions the default export holds, in the
+    // confirmed states asked for.
+    for counted in linked.admitted() {
+        let record = counted.record;
+        if !states.contains(TransmissionStateKind::of(&record.transmission.state)) {
+            continue;
+        }
+        let topic = topic_under(record, linked.version);
+        let quoted = quoted(linked, &labels, record, topic, content)?;
+        let row = TransmissionRow::of_in_scope(
+            &record.transmission,
+            aliases,
+            |id| ctx.verdict(id),
+            |_| topic,
+            quoted,
+            states,
+        )
+        .map_err(|e| store("transmission row", e))?;
+        rows.push(ExportRow::Transmission(Box::new(row)));
+    }
+    // The unconfirmed transmissions in the unconfirmed states asked for.
+    for record in &ctx.world.transmissions {
+        let transmission = &record.transmission;
+        let kind = TransmissionStateKind::of(&transmission.state);
+        if ExportStates::CONFIRMED.contains(&kind) || !states.contains(kind) {
+            continue;
+        }
+        if transmission.crossing(aliases) == Crossing::WithinOneAgent {
+            continue;
+        }
+        let topic = topic_under(record, linked.version);
+        let row = TransmissionRow::of_in_scope(
+            transmission,
+            aliases,
+            |id| ctx.verdict(id),
+            |_| topic,
+            None,
+            states,
+        )
+        .map_err(|e| store("transmission row", e))?;
+        if !linked.in_window(row.at()) {
+            continue;
+        }
+        let co_accesses = transmission.state.co_accesses();
+        let Some(co_access) = co_accesses.first() else {
+            continue;
+        };
+        let subject = FilterSubject {
+            from: aliases.agent(co_access.writer()),
+            to: row.summary().to,
+            route: &row.summary().route,
+            topic: match topic {
+                TopicUnder::Topic(topic) => Some(topic),
+                TopicUnder::Outlier | TopicUnder::Unassigned => None,
+            },
+            false_detection: ctx.verdict(transmission.id) == Some(Verdict::FalseDetection),
+        };
+        if linked.filter.admits(&subject, aliases) {
+            rows.push(ExportRow::Transmission(Box::new(row)));
+        }
     }
     Ok(sorted(rows))
 }

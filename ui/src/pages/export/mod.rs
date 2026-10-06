@@ -1,6 +1,9 @@
 //! `/export`: choose a dataset, topic version, format and whether to
 //! include content, over the view's window and filter, and download it;
-//! and the detection quality summary for the window.
+//! and the detection quality summary for the window. A transmissions
+//! export holds the transmission states the URL names ([`states`]: the
+//! confirmed ones by default; the page's states form and its "include
+//! unconfirmed" link write the canonical `states=` list).
 //!
 //! `POST /export` validates the form into the spec's `ExportRequest`
 //! ([`request::parse`]), calls `QueryApi::export` and answers with the
@@ -12,13 +15,14 @@
 pub mod jsonl;
 pub mod quality;
 pub mod request;
+pub mod states;
 
 use crosstalk_spec::interfaces::l8_surface::Permission;
 use crosstalk_spec::interfaces::l8_surface::export::ExportFormats;
 use topcoat::Result;
 use topcoat::context::{Cx, try_request_context};
 use topcoat::router::content::Form;
-use topcoat::router::error::rewrite;
+use topcoat::router::error::{redirect, rewrite};
 use topcoat::router::header::{CONTENT_LENGTH, CONTENT_TYPE};
 use topcoat::router::request::{headers, uri};
 use topcoat::router::{Body, Method, StatusCode, page, route};
@@ -27,8 +31,10 @@ use topcoat::view::{View, component, view};
 use self::jsonl::{Download, download};
 use self::quality::{quality_lines, quality_section};
 use self::request::{DatasetChoice, FORMATS, format_code, format_label, parse};
+use self::states::Requested;
 use crate::app::{backend, caller, can, present};
 use crate::components::form::{BUTTON_PRIMARY, INPUT, LABEL, PANEL, SECTION, SECTION_TITLE};
+use crate::components::href::state_pairs;
 use crate::components::{error_panel, format_time, href, page_header};
 use crate::error::UiError;
 use crate::pages::common::action::{require, status_of};
@@ -36,6 +42,7 @@ use crate::pages::common::form::FormFields;
 use crate::pages::view::view_state;
 use crate::url::view_state::ViewState;
 use crosstalk_spec::interfaces::l8_surface::QueryApi;
+use crosstalk_spec::interfaces::l8_surface::export::ExportStates;
 
 pub const PATH: &str = "/export";
 
@@ -49,8 +56,26 @@ pub struct Rejected {
 #[page("/export")]
 async fn export_get(cx: &Cx) -> Result<impl View> {
     let state = view_state(cx).await?;
-    let rejected = try_request_context::<Rejected>(cx).cloned();
-    Ok(view! { export_page(state: state, rejected: rejected) })
+    let mut rejected = try_request_context::<Rejected>(cx).cloned();
+    let states = match states::from_query(uri(cx).query()) {
+        // A refused post is shown at the URL it was posted to.
+        Ok(Requested {
+            redirect: Some(canonical),
+            ..
+        }) if rejected.is_none() => {
+            let value = canonical.unwrap_or_default();
+            return Err(redirect(href(PATH, &state, &[(states::KEY, &value)])).into());
+        }
+        Ok(requested) => requested.states,
+        Err(error) => {
+            rejected.get_or_insert(Rejected {
+                error,
+                fields: FormFields::default(),
+            });
+            ExportStates::confirmed()
+        }
+    };
+    Ok(view! { export_page(state: state, states: states, rejected: rejected) })
 }
 
 /// Validates, exports and downloads; a refusal is shown on the page.
@@ -62,7 +87,14 @@ async fn export_post(cx: &Cx, Form(fields): Form<FormFields>) -> Result<Download
     let exported = async {
         require(&caller, Permission::View)?;
         let writes = present(cx).await.map_err(|e| UiError::from(e.clone()))?;
-        let request = parse(&fields, &state, &caller, writes.export_formats.as_slice())?;
+        let states = states::from_query(uri(cx).query())?.states;
+        let request = parse(
+            &fields,
+            &state,
+            &states,
+            &caller,
+            writes.export_formats.as_slice(),
+        )?;
         let export = backend.export(&caller, &request).await?;
         download(export).await
     }
@@ -95,7 +127,12 @@ fn show(cx: &Cx, rejected: Rejected) -> topcoat::Error {
 }
 
 #[component]
-async fn export_page(cx: &Cx, state: ViewState, rejected: Option<Rejected>) -> Result<impl View> {
+async fn export_page(
+    cx: &Cx,
+    state: ViewState,
+    states: ExportStates,
+    rejected: Option<Rejected>,
+) -> Result<impl View> {
     let caller = caller(cx);
     // The formats the backend writes, from the request's present (which
     // needs View, like the page).
@@ -156,7 +193,7 @@ async fn export_page(cx: &Cx, state: ViewState, rejected: Option<Rejected>) -> R
                 }
                 <section class=(SECTION)>
                     <h2 class=(SECTION_TITLE)>"Dataset"</h2>
-                    export_form(state: &state, window: window, versions: versions, content: content, writes: writes, retained: retained)
+                    export_form(state: &state, states: &states, window: window, versions: versions, content: content, writes: writes, retained: retained)
                 </section>
                 quality_section(lines: quality)
             },
@@ -167,6 +204,7 @@ async fn export_page(cx: &Cx, state: ViewState, rejected: Option<Rejected>) -> R
 #[component]
 async fn export_form(
     state: &ViewState,
+    states: &ExportStates,
     window: String,
     versions: Vec<u32>,
     content: bool,
@@ -183,7 +221,25 @@ async fn export_form(
     let version = pick("version").unwrap_or_else(|| state.scope.topic_version.0.to_string());
     let format = pick("format").unwrap_or_else(|| "jsonl".to_owned());
     let projection = pick("projection").unwrap_or_default();
-    let include = content && pick("content").is_some();
+    // Unconfirmed transmissions have no content columns.
+    let unconfirmed = states.includes_unconfirmed();
+    let content_allowed = content && !unconfirmed;
+    let include = content_allowed && pick("content").is_some();
+    let canonical = states::canonical(states).unwrap_or_default();
+    let state_boxes: Vec<(&str, &str, bool)> = ExportStates::ALL
+        .into_iter()
+        .map(|kind| {
+            (
+                states::code(kind),
+                states::label(kind),
+                states.contains(kind),
+            )
+        })
+        .collect();
+    let hidden = state_pairs(state);
+    let all_states = states::canonical(&ExportStates::all()).unwrap_or_default();
+    let include_unconfirmed = href(PATH, state, &[(states::KEY, &all_states)]);
+    let confirmed_only = href(PATH, state, &[]);
     let datasets: Vec<(&str, &str, bool)> = DatasetChoice::ALL
         .iter()
         .map(|d| (d.code(), d.label(), d.code() == dataset))
@@ -212,7 +268,7 @@ async fn export_form(
             (format_code(*f), label, format_code(*f) == format, available)
         })
         .collect();
-    let action = href(PATH, state, &[]);
+    let action = href(PATH, state, &[(states::KEY, &canonical)]);
     let filter_note = if state.scope.filter == Default::default() {
         "no filter".to_owned()
     } else {
@@ -220,6 +276,27 @@ async fn export_form(
     };
     let topology = href("/topology", state, &[]);
     Ok(view! {
+        <form method="get" action=(PATH) class=(format!("{PANEL} mb-3 space-y-2"))>
+            for (key, value) in hidden {
+                <input type="hidden" name=(key) value=(value)>
+            }
+            <input type="hidden" name=(states::FORM) value="1">
+            <fieldset class="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm">
+                <legend class=(LABEL)>"Transmission states (transmissions exports)"</legend>
+                for (code, label, checked) in state_boxes {
+                    <label class="flex items-center gap-1.5">
+                        <input type="checkbox" name=(states::PICK) value=(code) checked=(checked)>
+                        (label)
+                    </label>
+                }
+                <button type="submit" class="rounded border border-zinc-300 px-2 py-0.5 text-xs dark:border-zinc-700">"Apply"</button>
+                <a class="text-xs text-sky-700 hover:underline dark:text-sky-400" href=(include_unconfirmed)>"Include unconfirmed"</a>
+                <a class="text-xs text-sky-700 hover:underline dark:text-sky-400" href=(confirmed_only)>"Confirmed only"</a>
+            </fieldset>
+            if unconfirmed {
+                <p class="text-xs text-zinc-500">"Unconfirmed transmissions are included: each row says whether it is confirmed."</p>
+            }
+        </form>
         <form method="post" action=(action) class=(format!("{PANEL} space-y-3"))>
             <p class="text-xs text-zinc-500">
                 "Window " <span class="text-zinc-800 dark:text-zinc-200">(window)</span> " with " (filter_note) ". "
@@ -254,8 +331,8 @@ async fn export_form(
                         }
                     </select>
                 </label>
-                <label class=(if content { "flex items-center gap-1.5 pb-1 text-sm" } else { "flex items-center gap-1.5 pb-1 text-sm text-zinc-400" }) title=(if content { "" } else { "Needs the Content permission" })>
-                    <input type="checkbox" name="content" value="1" checked=(include) disabled=(!content)>
+                <label class=(if content_allowed { "flex items-center gap-1.5 pb-1 text-sm" } else { "flex items-center gap-1.5 pb-1 text-sm text-zinc-400" }) title=(if !content { "Needs the Content permission" } else if unconfirmed { "Unconfirmed transmissions have no content columns" } else { "" })>
+                    <input type="checkbox" name="content" value="1" checked=(include) disabled=(!content_allowed)>
                     "Include message content"
                 </label>
                 <button type="submit" class=(BUTTON_PRIMARY)>"Export"</button>
@@ -263,6 +340,8 @@ async fn export_form(
             <p class="text-xs text-zinc-500">"Downloads one JSON object per line: a header (what was selected, the topic version and the watermark), one line per row, and a trailer with the row count and digest. Accesses and verdicts have no content columns; a projection needs the Content permission."</p>
             if !content {
                 <p class="text-xs text-zinc-500">"Content can be included only with the Content permission."</p>
+            } else if unconfirmed {
+                <p class="text-xs text-zinc-500">"Content is unavailable while unconfirmed states are selected: unconfirmed transmissions have no content columns."</p>
             }
         </form>
     })
@@ -444,5 +523,172 @@ mod tests {
         assert!(audit.body.contains("started exporting"), "{}", audit.body);
         assert!(audit.body.contains("finished exporting"));
         assert!(audit.body.contains("asked to export"));
+    }
+
+    const CONFIRMED_CODES: [&str; 3] = ["confirmed", "classified", "aggregated"];
+    const ALL_STATES: &str = "awaiting_content,suspected,confirmed,classified,aggregated,discarded";
+
+    /// The rows of a JSON Lines body, between its header and trailer.
+    fn rows_of(lines: &[Value]) -> &[Value] {
+        &lines[1..lines.len() - 1]
+    }
+
+    #[tokio::test]
+    async fn the_default_export_page_and_rows_are_unchanged() {
+        let page = get(&url("")).await;
+        assert_eq!(page.status, StatusCode::OK, "{}", page.body);
+        for code in CONFIRMED_CODES {
+            assert!(
+                page.body
+                    .contains(&format!("name=\"state\" value=\"{code}\" checked")),
+                "{code} is ticked by default"
+            );
+        }
+        assert!(page.body.contains("Suspected (unconfirmed)"));
+        assert!(page.body.contains("name=\"state\" value=\"suspected\">"));
+        assert!(page.body.contains("Include unconfirmed"));
+
+        let reply = post(&url(""), "dataset=transmissions&format=jsonl").await;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        let lines = lines(&reply.body);
+        assert!(lines[0]["selection"].get("states").is_none());
+        let rows = rows_of(&lines);
+        assert!(!rows.is_empty());
+        for row in rows {
+            assert!(row.get("confirmed").is_none(), "no confirmed column: {row}");
+            let state = row["state"].as_str().expect("state");
+            assert!(CONFIRMED_CODES.contains(&state), "{state}");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_states_form_redirects_to_the_canonical_url() {
+        let picked = get(&url("&states_form=1&state=discarded&state=suspected")).await;
+        assert!(picked.status.is_redirection(), "{}", picked.status);
+        assert_eq!(
+            picked.location.as_deref(),
+            Some(url("&states=suspected,discarded").as_str())
+        );
+        let default = get(&url(
+            "&states_form=1&state=aggregated&state=confirmed&state=classified",
+        ))
+        .await;
+        assert_eq!(default.location.as_deref(), Some(url("").as_str()));
+        let reordered = get(&url("&states=discarded,suspected")).await;
+        assert_eq!(
+            reordered.location.as_deref(),
+            Some(url("&states=suspected,discarded").as_str())
+        );
+        let none = get(&url("&states_form=1")).await;
+        assert_eq!(
+            none.status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{}",
+            none.body
+        );
+        assert!(
+            none.body
+                .contains("states: choose at least one transmission state")
+        );
+    }
+
+    #[tokio::test]
+    async fn an_include_unconfirmed_export_says_which_rows_are_confirmed() {
+        let target = format!("{}&states={ALL_STATES}", week_url());
+        let page = get(&target).await;
+        assert_eq!(page.status, StatusCode::OK, "{}", page.body);
+        assert!(page.body.contains("each row says whether it is confirmed"));
+        let reply = post(&target, "dataset=transmissions&format=jsonl").await;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        let lines = lines(&reply.body);
+        let header = &lines[0];
+        assert_eq!(
+            header["selection"]["states"],
+            serde_json::json!([
+                "awaiting_content",
+                "suspected",
+                "confirmed",
+                "classified",
+                "aggregated",
+                "discarded"
+            ])
+        );
+        let rows = rows_of(&lines);
+        let mut seen = std::collections::BTreeSet::new();
+        for row in rows {
+            let state = row["state"].as_str().expect("state");
+            assert_eq!(
+                row["confirmed"].as_bool(),
+                Some(CONFIRMED_CODES.contains(&state)),
+                "{row}"
+            );
+            seen.insert(state.to_owned());
+        }
+        assert_eq!(
+            seen.into_iter().collect::<Vec<_>>(),
+            [
+                "aggregated",
+                "awaiting_content",
+                "classified",
+                "confirmed",
+                "discarded",
+                "suspected"
+            ],
+            "a row of every state"
+        );
+        let trailer = lines.last().expect("trailer");
+        assert_eq!(trailer["end"]["status"], "complete");
+        assert_eq!(header["rows"].as_u64(), u64::try_from(rows.len()).ok());
+    }
+
+    #[tokio::test]
+    async fn content_with_unconfirmed_states_is_disabled_and_refused() {
+        let target = url("&states=suspected,confirmed");
+        let page = get(&target).await;
+        assert_eq!(page.status, StatusCode::OK, "{}", page.body);
+        assert!(
+            page.body.contains("name=\"content\" value=\"1\" disabled"),
+            "the content box is disabled"
+        );
+        assert!(
+            page.body
+                .contains("Content is unavailable while unconfirmed states are selected")
+        );
+        // A crafted post asking for both is the form's error, not a 500.
+        let refused = post(&target, "dataset=transmissions&format=jsonl&content=1").await;
+        assert_eq!(
+            refused.status,
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{}",
+            refused.body
+        );
+        assert!(
+            refused
+                .body
+                .contains("content: unconfirmed transmissions have no content columns")
+        );
+    }
+
+    #[tokio::test]
+    async fn other_datasets_and_the_quality_table_ignore_the_states() {
+        let target = url("&states=suspected");
+        let page = get(&target).await;
+        assert!(page.body.contains("Detection quality in this window"));
+        let verdicts = post(&target, "dataset=verdicts&format=jsonl").await;
+        assert_eq!(verdicts.status, StatusCode::OK, "{}", verdicts.body);
+        let plain = post(&url(""), "dataset=verdicts&format=jsonl").await;
+        let rows = |body: &str| {
+            lines(body)[1..]
+                .iter()
+                .filter(|line| line["type"] == "row")
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(rows(&verdicts.body), rows(&plain.body));
+        assert!(
+            rows(&verdicts.body)
+                .iter()
+                .all(|row| row.get("confirmed").is_none())
+        );
     }
 }

@@ -15,6 +15,11 @@
 //!
 //! [`FixtureApi`] has `HttpWorld`'s methods (`access`, `router`, `base`,
 //! `addr`, `stop`), so a test switches harness by its first line.
+//!
+//! Exports do not verify over it: the fixture's row digest
+//! (`backend::fixture::export::digest::RowDigest`) is a stand-in for the
+//! surface's BLAKE3, which the client checks the trailer against. A test of
+//! an export over HTTP uses `HttpWorld`.
 
 use std::net::SocketAddr;
 use std::sync::Arc;
