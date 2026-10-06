@@ -5,6 +5,7 @@ version = 4
 [[package]]
 name = "a2a-bench-format"
 version = "0.1.0"
+source = "git+https://github.com/RhizoNymph/a2a-transmission-bench?tag=a2a-bench-format-v1.0.0#c289eda81edb9d26907ccfe82d5504783b61733e"
 dependencies = [
  "blake3",
  "serde",
