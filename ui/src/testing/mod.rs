@@ -1,5 +1,6 @@
 //! Test helpers: a router over the fixture backend and request shortcuts.
 
+pub mod fixture_api;
 pub mod http;
 pub mod proxy;
 
