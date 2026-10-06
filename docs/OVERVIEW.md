@@ -808,7 +808,7 @@ Features Index:
     doc: docs/features/topology_store.md
   postgres_stores:
     description: >
-      Design only (roadmap P7.3, not implemented): detections that survive
+      Reviewed design (roadmap P7.3, PR #103, not implemented): detections that survive
       a gateway restart. Surveys what is persisted today (serve runs Live
       on memory stores and MpscBus; the L3 to L7 Postgres stores exist but
       are unwired, and crosstalk migrate runs no layer migrations) and
@@ -817,13 +817,15 @@ Features Index:
       envelope id before an idempotent publish, derived envelope ids for
       every consumer (EventId::derive), L5 correlator checkpoints with
       deferred acks plus a held-writes table, an access sequence and an
-      extraction ledger, PgTopicCatalog, PgProjectionStore, PgAuditLog,
+      extraction ledger, a fsynced on-disk publish spool (SpoolingBus) that
+      keeps captures made while the database is down and drains them in
+      order under their envelope ids, PgTopicCatalog, PgProjectionStore, PgAuditLog,
       PgOperatorStore and PgSinkRegistry, PgFrontierSource in the
       composer, one pipeline process per database (advisory lock),
       retention per store, and the restart semantics of /readyz, /healthz
       and the API. Includes the test strategy (reference-model agreement,
       restart equivalence, conformance on Postgres), the spec changes
-      proposed, the parallel workstreams and the open questions.
+      proposed, the parallel workstreams and the nine recorded decisions.
     entry_points:
       - docs/features/postgres_stores.md
       - crates/gateway/src/live/mod.rs

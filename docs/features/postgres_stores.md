@@ -7,11 +7,10 @@ agents, conversations, spans, matches, channels, transmissions, verdicts,
 edges, the watermark, alerts and the audit, and the API shows every
 detection committed before the crash.
 
-**Status: design only.** Nothing on this page is implemented yet. The
-spec changes in [Proposed spec changes](#proposed-spec-changes) are a
-proposal; none has been applied to `spec/`. The user reviews this page
-before any implementation starts. [Open questions](#open-questions) lists
-the decisions that need the user.
+**Status: design reviewed; not implemented yet.** The user reviewed it
+(PR #103) and settled every open question; see [Decisions](#decisions).
+The spec changes in [Proposed spec changes](#proposed-spec-changes) are
+not yet applied to `spec/`; they are the first workstream (S).
 
 ## Scope
 
@@ -26,6 +25,8 @@ the decisions that need the user.
   reach the bus, idempotency and delivery guarantees per consumer, and how
   each consumer resumes after a restart (cursors, checkpoints, the L5 tick
   checkpoint and the L7 watermark).
+- The publish spool: envelopes published while the database is down are
+  spooled to disk and sent on recovery.
 - Retention and persisted watermarks.
 - Restart semantics end to end: `/readyz`, `/healthz`, the API, and what is
   recomputed.
@@ -38,7 +39,8 @@ the decisions that need the user.
 ## Non-scope
 
 - Multi-node operation: JetStream, several pipeline processes sharing
-  correlator shards, coordinated upgrades (P9). The design is single
+  correlator shards, coordinated upgrades, and split `proxy` and
+  `pipeline` roles talking through `PgBus` (decision Q9: P9). The design is single
   pipeline process per database, and it enforces that (see
   [Single writer](#single-pipeline-process)).
 - A Postgres `BlobStore` (`PgBlobStore` in the spec's list). Bodies stay
@@ -46,7 +48,7 @@ the decisions that need the user.
   restart.
 - An exchange store in the spec. The P3 exchange log
   (`exchange-log.jsonl`) is on the persistent volume and survives a
-  restart; replacing it stays a separate gap (open question Q8).
+  restart; replacing it stays a separate gap (decision Q8).
 - Wiring L6's search corpus and alerts consumers and a real topic model
   into `Live`. This page gives their stores a place in the Postgres
   bundle. Running the consumers is P6 wiring, a prerequisite of P7.3's
@@ -132,7 +134,7 @@ event under a **new** id.
                                                     Surface<PgStores> ◀── HTTP API
 ```
 
-The design rests on six decisions:
+The design rests on seven decisions:
 
 1. **The stores are the source of truth.** Every fact the API shows is in
    a Postgres store when it is visible. Nothing the API reads lives only
@@ -169,6 +171,13 @@ The design rests on six decisions:
    advisory lock. A second pipeline process against the same database
    stays not ready instead of corrupting the correlator's single-writer
    assumption.
+7. **Nothing is dropped while the database is down.** `SpoolingBus`
+   wraps `PgBus` and appends every envelope it cannot publish to an
+   fsynced, append-only spool on the data volume. It drains the spool in
+   order, under the same envelope ids, when the database returns. Until
+   the spool is empty, later envelopes queue behind it. The frontier
+   counts spooled envelopes as pending
+   ([The publish spool](#the-publish-spool-database-down)).
 
 ## Per-store decisions and schemas
 
@@ -191,6 +200,7 @@ indexes. Its workstream finalizes it against the spec types' wire forms.
 | Layer | Store | Decision | New migration |
 | --- | --- | --- | --- |
 | L2 | `PgBus`, `PgDeadLetters` | **new**, Postgres | `transport/0001_bus.sql` |
+| L2 | `SpoolingBus` (publish spool) | **new**, local disk (data volume) | none (files under `<data dir>/spool/`) |
 | L3 | `PgAgents`, `PgConversations` | Postgres (exists); add `ExchangePlacements`; stable outbox ids | `reconstruct/0004_outbox_ids.sql` |
 | L4 | `PgProvenanceStore`, `PgFingerprintIndex` | Postgres (exists); add `SpanIndex` | none |
 | L4 | `TokenCache`, `KGramCache` | derived, rebuilt lazily | none |
@@ -510,7 +520,8 @@ for the control flow.
   oldest_pending = min( PgBus::group_stats() oldest pending `at` and oldest dead letter `at`
                           over groups reconstruct, provenance, flow, classify, topology
                           (TransmissionClassified{cause: Refit} excluded),
-                        min started_at of exchanges in flight at the proxy (memory registry) )
+                        min started_at of exchanges in flight at the proxy (memory registry),
+                        SpoolingBus::oldest_at() of envelopes still in the spool )
   ```
 
   A dead letter holds the watermark back on purpose (INV
@@ -540,7 +551,7 @@ for the control flow.
       subject   text NOT NULL,
       PRIMARY KEY (subject, audit_seq)
   );
-  -- Write-ahead record of an action call in progress (see Q3).
+  -- Write-ahead record of an action call in progress (decision Q3).
   CREATE TABLE action_intents (
       id     text COLLATE "C" PRIMARY KEY,
       at     bigint NOT NULL,
@@ -599,7 +610,7 @@ What is **not** atomic, and why that is safe:
   (L8) are in different crates' transactions. The spec says "a database
   `SurfaceStores` makes them one transaction". That would need a
   transaction to cross trait calls, which the spec traits do not allow.
-  Proposed: a write-ahead intent (see Q3).
+  Decided: a write-ahead intent (Q3, see the audit change below).
 
 ### The outbox relay
 
@@ -666,7 +677,7 @@ FlowConsumer:
            + shard_ticks (same ticked_through)
       then ack every delivery the snapshot covers
 restore (start):
-  load checkpoints (or empty shards when none; a format mismatch is a typed start error, see Q2)
+  load checkpoints (or empty shards when none; a format mismatch is a typed start error, Q2)
   load held_writes into HeldWrites
   re-feed accesses WHERE recorded_seq > accesses_through ORDER BY recorded_seq
   subscribe group flow: the bus redelivers every unacked delivery (attempt + 1)
@@ -692,8 +703,13 @@ restore (start):
   checkpoint interval; the bus config checks this at start.
 - Snapshot size grows with what the shards hold (up to
   `content_retention` of delivery records). The snapshot is versioned
-  (`format`). Q2 asks whether that is acceptable, or whether the
-  correlator should become an incremental Postgres store instead.
+  (`format`). Decided (Q2): a snapshot whose `format` the binary does not
+  read is a start error (`FlowRestoreError::IncompatibleSnapshot`), and
+  the process does not consume. The operator runs `crosstalk migrate
+  --reset-correlator`, which deletes `flow.checkpoints` and resets
+  `shard_ticks` to the latest stored tick. The correlator then restarts
+  empty, and pairings pending at the upgrade are lost, knowingly. A binary
+  that can read an older format converts it on load.
 
 ### Single pipeline process
 
@@ -713,8 +729,8 @@ takes no lock and reads the stores.
   cursor key) would all turn `InvalidCursor` after a restart. **Proposed:**
   derive each key from the deployment secret with the spec's keyed hasher
   and a per-store domain label (`crosstalk.cursor.v1.surface`, ...). A
-  secret rotation then invalidates outstanding cursors, which is acceptable
-  (Q4).
+  secret rotation then invalidates outstanding cursors, which is accepted
+  (decision Q4).
 - `Live` seeds every id generator from `seed`. With persistent stores, a
   restart with the same seed replays the same random stream. Ids that
   must be reproducible are already derived from their input (envelopes,
@@ -724,6 +740,160 @@ takes no lock and reads the stores.
   ones. In `serve`, generators are seeded from OS entropy (proposed
   invariant `surface.ids.unique-across-restart`). Tests keep fixed seeds
   and a clock that only moves forward.
+
+### The publish spool (database down)
+
+Decided (Q5): an envelope published while the database is unreachable is
+**spooled to local disk and sent on recovery, never dropped**. The spool
+is in `crosstalk-transport`, as `SpoolingBus<B>`, an `EventBus` decorator
+over `PgBus` (`src/spool/`). It sits next to `FsBlobStore`, the crate's
+other disk store. The gateway wraps `PgBus` in it whenever `store` is
+configured, so every publisher goes through it: the `Ingester`'s
+`ExchangeCaptured`, consumer-derived events, and outbox relays.
+
+**What gets spooled.** In practice only capture produces new input while
+the database is down:
+- Every consumer's store is Postgres, so no consumer gets far enough to
+  publish.
+- Outbox rows are already in the database, so a relay simply waits.
+- Operator actions fail with the store's unavailability error and are not
+  spooled; the caller sees it.
+
+A consumer that committed its writes just before the outage and then
+fails to publish spools those events. They carry derived ids, so a later
+redelivery republishes them as no-ops. Only `BusError::Disconnected` (the
+database unreachable: `ConnectionLost`, `PoolTimedOut`) is spooled.
+`PublishRejected`, `Encode` and the other errors pass through unchanged.
+
+**Where and how it is stored.** The spool lives in `<data dir>/spool/`,
+the persistent volume beside `blobs/` and `exchanges/`. It is overridable
+by the gateway's `spool.dir`, which must stay under the data directory.
+It holds:
+
+- `LOCK`: held with `File::try_lock` (std, no new dependency) for the
+  process's lifetime. A second process on the same data directory fails
+  at start with `SpoolError::Locked`.
+- `segment-<first record number, 20 digits>.log`: append-only segments.
+  Each one starts with the header `b"CTSPOOL1"`. Each record is:
+
+  ```text
+  u32 LE  payload length (≤ 16 MiB)
+  [u8;16] first 16 bytes of BLAKE3(record number LE ‖ payload)
+  u64 LE  record number (dense, from 1, never reused)
+  payload Envelope wire JSON (the bus codec's bytes, unchanged)
+  ```
+
+  A segment rolls at `spool.segment_bytes` (default 64 MiB).
+- `cursor`: the number of the last record the bus holds, plus its
+  segment, as one small JSON file. It is replaced atomically: write
+  `cursor.tmp`, `fdatasync`, `rename`, `fsync` the directory.
+
+**Durability: the fsync points.**
+1. On append, the record is written, then `fdatasync`ed, before `publish`
+   returns `Ok`. `Ok` means the envelope is in `transport.events` or
+   durably in the spool (proposed `transport.spool.ok-means-durable`).
+2. Creating a segment `fsync`s the new file and then the directory before
+   its first record counts as appended.
+3. Advancing the cursor is the write-rename-fsync sequence above, done
+   after the bus transaction that took the batch committed.
+4. A segment is deleted only once the cursor is past its last record,
+   followed by a directory `fsync`.
+
+**Crash during spooling.** On open, each segment is read from the cursor
+on:
+- A short record or a checksum mismatch at the **tail** of the **last**
+  segment is a torn append. That record's `publish` never returned `Ok`,
+  so its exchange was never acknowledged as captured (as for INV-128). It
+  is truncated and logged at warn with its byte count.
+- A bad record anywhere else is `SpoolError::Corrupt { segment, offset }`.
+  Draining stops, and `/readyz` and `/healthz` report it with the
+  segment. The remaining records stay on disk for an operator to keep or
+  discard with `crosstalk spool --discard-corrupt` (a new subcommand).
+  Nothing past the corruption is silently skipped.
+
+**Ordering and stable ids.** The envelope's id and `at` are minted before
+the spool sees it (under the `Ingester`'s id lock for captures; derived
+for consumer events). The spool stores the envelope bytes unchanged, so a
+replayed record has exactly the id it was minted with.
+
+`SpoolingBus` has three states, changed only under its own publish mutex:
+- `Direct`: publish goes straight to `PgBus`.
+- `Spooling`: the database is down; publish appends.
+- `Draining`: the database is back and the spool is non-empty; publish
+  still appends to the tail, behind the backlog.
+
+So once anything is spooled, every later envelope goes behind it until
+the spool is empty (proposed `transport.spool.no-overtaking`). Envelopes
+therefore reach the bus log in publish order, which keeps the `Ingester`'s
+"ids reach the bus in increasing order" guarantee.
+
+Replay is idempotent with the bus's rule. The drainer publishes a batch
+in one `transport.events` transaction (`ON CONFLICT (id) DO NOTHING`),
+then advances the cursor. A crash between the two re-sends the batch,
+which inserts nothing (`transport.publish.idempotent-on-id`). Outbox rows
+never pass through the spool (they wait in the database), so the outbox
+and spool id rules cannot collide. An event that is both spooled and
+later republished from a redelivery has one id and lands once.
+
+**Draining relative to new traffic.**
+- A connection probe (every `spool.probe_ms`, default 1 s, and on every
+  failed append) moves `Spooling` to `Draining` once the database answers.
+- The drainer sends batches of `spool.drain_batch` (default 256) records
+  in order.
+- New publishes keep appending to the tail. When the drainer reaches the
+  tail it takes the publish mutex, sees the spool empty, and switches to
+  `Direct`; the next publish goes to the bus.
+- If the database drops again mid-drain, the state returns to `Spooling`
+  with no record lost or reordered.
+- At start, a non-empty spool means the process starts in `Spooling`, or
+  `Draining` if the database answers. The spool is opened and recovered
+  before the capture stage accepts its first exchange.
+- Draining needs only `transport.events`, so it runs concurrently with the
+  rest of recovery. Pipeline groups see spooled events as ordinary new
+  log entries.
+
+**The watermark.** A spooled envelope is input not yet processed. The
+frontier must count it: `PgFrontierSource`'s `oldest_pending` is also no
+later than the `at` of the oldest record still in the spool
+(`SpoolingBus::oldest_at()`, kept in memory and rebuilt on open; proposed
+`topology.frontier.covers-spool`). Without this, after recovery the
+watermark could finalize a bucket that a still-spooled capture belongs to.
+
+**Bounds.**
+- `spool.max_bytes` defaults to 1 GiB. It must leave room on the volume
+  for the blobs; the gateway checks the volume's free space against it at
+  start and warns.
+- An append that would exceed it is refused with `BusError::SpoolFull {
+  bytes }` (spec change). Capture counts the exchange as `spool_full`; its
+  bodies are already in the blob store but no event names them.
+- A disk I/O error on append is `BusError::Disconnected`, counted as
+  `spool_io`.
+- A full spool never blocks: the proxy keeps forwarding and the client
+  never waits on the spool or the database (proposed
+  `ingress.proxy.forwarding-independent-of-capture-store`).
+
+The drop is honest and counted, and it is the only loss the design
+allows. Raising `max_bytes` is the operator's lever.
+
+**Metrics** (`/metrics`):
+- `crosstalk_spool_state{state="direct|spooling|draining|corrupt"}` (one
+  series is 1);
+- `crosstalk_spool_bytes`, `crosstalk_spool_records`,
+  `crosstalk_spool_oldest_age_seconds` (by the clock: now minus the oldest
+  record's `at`);
+- `crosstalk_spool_appended_total`, `crosstalk_spool_drained_total`;
+- `crosstalk_spool_rejected_total{reason="full|io"}`;
+- `crosstalk_spool_truncated_bytes_total`.
+
+Capture adds `crosstalk_capture_uncaptured_total{reason="spool_full"}`.
+
+**Config** (gateway, `spool` section, every key defaulted):
+`{"max_bytes": 1073741824, "segment_bytes": 67108864, "drain_batch": 256,
+"probe_ms": 1000}`, plus an optional `dir`. Each value goes through
+checked constructors; `segment_bytes` must not exceed `max_bytes`.
+
+**Memory mode** (no `store`): there is no spool. `MpscBus` never
+disconnects.
 
 ## Retention and persisted watermarks
 
@@ -737,6 +907,7 @@ takes no lock and reads the stores.
 | Projection frames | frame retention (surface config) | `PgProjectionStore::expire(now)` | `analysis.projection_jobs.fitted_at` |
 | Extraction ledger | `extract_delivered`, `extract_contexts`, `extract_done` older than `content_retention` | the L4 stage's tick | `at` / `updated_at` columns |
 | Bus log | acked by every group and older than `bus.retention_ms` (7 days proposed) | `PgBus::prune(now, keep)` on the gateway's retention tick | `transport.events` |
+| Publish spool | records deleted (by segment) once drained; bounded by `spool.max_bytes` | `SpoolingBus` drain | `<data dir>/spool/cursor` |
 | Dead letters | never dropped automatically; an operator replays them | - | `transport.dead_letters` |
 | Page cursors | `flow.cursors.issued_at`, `topology.cursors` older than a cursor TTL (1 day proposed) | each store's prune on tick | issue times |
 | Outbox | deleted after publish | relays | - |
@@ -762,10 +933,13 @@ Watermarks and progress markers that are persisted:
 
 Start sequence of `serve --role all` with a `store` section:
 
-1. Parse config. Connect to Postgres, retrying every 5 s as now. The
-   proxy listener binds and forwards at once: forwarding never waits on
-   the database. Until the database is reachable, capture's publish fails
-   and is counted `publish_failed`; Q5 asks whether to spool instead.
+1. Parse config. Open the spool, which takes its `LOCK` and recovers a
+   torn tail. Bind the proxy, which forwards at once: forwarding never
+   waits on the database. Capture publishes through `SpoolingBus`, so it
+   spools until the database answers, then drains
+   ([The publish spool](#the-publish-spool-database-down)). Connect to
+   Postgres, retrying every 5 s as now. Steps 2 to 6 wait for the
+   connection.
 2. Check migrations: every layer's applied versions equal its embedded
    head (a real check replacing today's vacuous one). Behind is a start
    error that names the layer. `serve` never migrates; `crosstalk migrate`
@@ -782,7 +956,8 @@ Start sequence of `serve --role all` with a `store` section:
 6. Subscribe every group (existing groups resume; none starts at the log
    head except a brand-new group), spawn the stages, the ticker, the
    retention tick and the API.
-7. Ready.
+7. `/readyz` reports `"pipeline": "running"` and `"recovery": "done"`. The
+   capture side was ready from step 1.
 
 `/readyz` (body extends today's):
 
@@ -790,19 +965,35 @@ Start sequence of `serve --role all` with a `store` section:
 {"ready": true, "role": "all", "status": "ok",
  "database": "reachable", "migrations": "at_head",
  "pipeline_lock": "held",
+ "capture": "durable", "pipeline": "running",
  "recovery": "done",
  "tasks": [{"name": "exchange_log", "running": true}, {"name": "capture", "running": true},
            {"name": "live", "running": true}, {"name": "proxy", "running": true},
            {"name": "api", "running": true}]}
 ```
 
-- `ready` is false (503) while the database is unreachable, migrations are
-  behind (`"migrations": "behind: flow 1 < 2"`), the lock is held
-  elsewhere, recovery is running (`"recovery": "relaying_outboxes"`,
-  `"restoring_flow"`, `"rebuilding_nodes"`), a task stopped, or the
-  process drains.
-- A backlog does not make the process unready. Readiness means it serves
-  and makes progress. The backlog is in `/healthz`.
+- For roles that capture (`all`, `proxy`), `ready` means the proxy
+  forwards and capture is durable: published to the bus, or appended to a
+  spool with room. So `ready` stays true (200) while the database is
+  down, with `"status": "degraded"`, `"database": "unreachable: ..."`,
+  `"capture": "spooling"` and `"pipeline": "waiting_for_database"`.
+  Readiness gates harness traffic, and the harness must keep working
+  through a database outage.
+- `ready` is false (503) when:
+  - the spool is full (`"capture": "dropping: spool full"`) or corrupt
+    (`"capture": "spool corrupt: <segment>"`);
+  - migrations are behind (`"migrations": "behind: flow 1 < 2"`);
+  - the pipeline lock is held elsewhere;
+  - a task stopped;
+  - the process drains.
+- For the `api` role, `ready` also needs the database: the API reads only
+  the stores.
+- Recovery and draining keep `ready` true with `"status": "degraded"`.
+  They show as `"recovery": "relaying_outboxes" | "restoring_flow" |
+  "rebuilding_nodes" | "done"` and `"capture": "draining (n records)" |
+  "durable"`.
+- A backlog does not make the process unready. The backlog is in
+  `/healthz`.
 
 `/healthz` adds a `bus` section and reports persisted state:
 
@@ -812,8 +1003,16 @@ Start sequence of `serve --role all` with a `store` section:
  "bus": {"groups": {"live-l5-flow": {"pending": 12, "oldest_pending_micros": 1790845212000000,
                                       "dead_letters": 0}, ...}},
  "recovery": {"outbox_relayed": 3, "flow_checkpoint_micros": 1790845210000000,
-              "accesses_refed": 4, "deliveries_redelivered": 17}}
+              "accesses_refed": 4, "deliveries_redelivered": 17},
+ "spool": {"state": "draining", "records": 120, "bytes": 1843200,
+           "oldest_at_micros": 1790845100000000, "max_bytes": 1073741824,
+           "appended": 120, "drained": 0, "rejected_full": 0, "rejected_io": 0,
+           "truncated_bytes": 0}}
 ```
+
+- `spool` is present whenever `store` is configured. `state` is one of
+  `direct`, `spooling`, `draining` or `corrupt`. `status` is `degraded`
+  while the state is not `direct`.
 
 - `live.watermark_micros` is the persisted watermark from the first
   request. It is never lower than before the crash.
@@ -837,9 +1036,13 @@ The API after a restart:
   MAC keys derive from the secret. A live feed stream ends at shutdown.
   A reconnect with an old-epoch cursor gets `Resync`.
 - An exchange in flight at the proxy when the process died is lost. Its
-  client saw the connection cut. Exchanges captured but not yet published
-  were never stored as events, which INV-128 already describes for the
-  bus.
+  client saw the connection cut. An exchange whose spool append had not
+  been fsynced (a torn tail) was never acknowledged as captured. Every
+  envelope whose publish returned `Ok`, to the bus or to the spool,
+  reaches the bus log after the restart.
+- Exchanges captured during a database outage appear once the spool
+  drains and the pipeline processes them, at their capture times. The
+  watermark waited for them (`topology.frontier.covers-spool`).
 
 What is recomputed rather than restored: the node cache (from the
 stores), provenance's token and k-gram caches (lazily), the surface's
@@ -922,11 +1125,54 @@ around.
 8. **P7.3's end-to-end test.** Wiki demo traffic through the proxy,
    restart, then the API shows the graph, the evidence and the alert. The
    alert part depends on the P6 alerts consumer being wired.
+9. **The spool.** The database outage is simulated with `DbLink`, a
+   loopback TCP relay in `crosstalk-testkit` between the pool and the
+   node0 server. It can be cut (every connection reset, new ones refused)
+   and restored. node0 is never stopped.
+   - Unit tests (`crosstalk-transport`, `tempfile`):
+     - the record format round-trips;
+     - a torn tail is truncated: every byte prefix of a last record,
+       written then reopened;
+     - a mid-segment checksum failure is `Corrupt` and stops draining;
+     - the cursor is replaced atomically (a crash at each step of
+       write, fsync, rename leaves either the old or the new cursor);
+     - segments roll and are deleted;
+     - `SpoolFull` at the bound, with nothing written past it;
+     - a second open of the same directory is `Locked`.
+   - DST (paused time, a fault layer over the file operations and the
+     inner bus):
+     - every `Ok` publish reaches the inner bus exactly once by id, in
+       publish order, across seeded crashes during append, during drain
+       (after the batch commit, before the cursor) and during the state
+       switch;
+     - nothing published while non-empty overtakes the backlog;
+     - `oldest_at` never runs ahead of the oldest unsent record.
+   - Integration over `PgBus` and `DbLink`:
+     - DB down then up: cut the link, publish N, restore it, and
+       `transport.events` holds exactly the N ids in order;
+     - kill while spooling: cut, publish, drop the process state without
+       shutdown, reopen with the link still cut, publish more, restore,
+       and every `Ok` id is in the log once.
+   - End to end (`crates/e2e`, Postgres-gated):
+     - Run the restart scenarios through the proxy with the link cut for
+       a seeded window mid-stream.
+     - Then, in a separate run, cut the link, kill the gateway while it
+       spools, restart it with the link still cut, and restore the link.
+     - Compare both with an uninterrupted run using the same state
+       comparison as test 5.
+     - Assert that `/readyz` stays 200 with `capture: spooling` and then
+       `draining`, that `/healthz`'s `spool` section and the
+       `crosstalk_spool_*` series move as specified, and that the
+       watermark never passes the oldest spooled capture's time.
+   - Spool full: with a small `max_bytes`, captures past the bound are
+     counted `spool_full`, the proxy still answers every client
+     unchanged, `/readyz` turns 503 (`dropping: spool full`), and after
+     the drain it is 200 again.
 
 ## Proposed spec changes
 
-These are proposals. None is applied. They are the shared boundary that
-must land first (workstream S).
+These are accepted by the user's review and not yet applied. They are
+the shared boundary that lands first (workstream S).
 
 1. **Derived envelope ids** (`spec/types/ids`): `EventId::derive(parent:
    EventId, label: &'static str, ordinal: u32) -> EventId`. It keeps the
@@ -965,16 +1211,17 @@ must land first (workstream S).
    (it reads L2, L5 and the proxy). The planned evidence path
    `crosstalk_topology::integration::pg_frontier_covers_pending_deliveries`
    becomes `crosstalk_gateway::...` (INV `topology.frontier.covers-pending`).
-6. **Audit atomicity** (`l8_surface/audit.rs`), depending on Q3. Either:
-   - (a) recommended: replace "a database `SurfaceStores` makes them one
-     transaction" with a write-ahead intent. Before the effect, the
-     surface records an intent. The entry is appended, and the intent
-     removed, in one transaction afterwards. At start, each leftover
-     intent is appended with a new `AuditOutcome::Interrupted` (the effect
-     may or may not have applied). New invariant
-     `surface.audit.no-silent-effect` (INV-X).
-   - (b) relax the doc to state the window (an effect can be left
-     unaudited by a crash).
+6. **Audit atomicity** (`l8_surface/audit.rs`, decided Q3): replace "a
+   database `SurfaceStores` makes them one transaction" with a write-ahead
+   intent:
+   - Before the effect, the surface records an intent.
+   - Afterwards, one transaction appends the entry and removes the intent.
+   - At start, each leftover intent is appended with a new
+     `AuditOutcome::Interrupted`: the effect may or may not have applied.
+
+   New invariant `surface.audit.no-silent-effect` (INV-X): "every action
+   call whose effect may have applied has an audit entry, `Interrupted`
+   at worst."
 7. **Cursor keys**: `surface.cursor.survives-restart` (INV-X): "a cursor
    the surface issued resolves after a restart with the same deployment
    secret." The derivation uses the spec's keyed hasher with a domain
@@ -982,7 +1229,38 @@ must land first (workstream S).
 8. **Unique ids across restarts**: `surface.ids.unique-across-restart`
    (INV-X; or under `canonical`, which owns ids): "an id minted after a
    restart never equals a persisted id of the same kind."
-9. **No change** for the checkpoint itself, the extraction ledger, held
+9. **The publish spool** (decided Q5):
+   - `BusError::SpoolFull { bytes: u64 }` (`l2_transport.rs`), and the
+     `l2_transport.rs` doc names `SpoolingBus` as the decorator `serve`
+     puts in front of `PgBus`.
+   - INV-128's sibling for the spool (`transport.durability.pg-publish-persisted`)
+     reads "in `transport.events` or durably spooled".
+   - New invariants (INV-X):
+     - `transport.spool.ok-means-durable` (dst, integration): "a
+       `SpoolingBus::publish` that returned `Ok` has its envelope in the
+       inner bus's log or fsynced in the spool; a crash or restart never
+       loses it."
+     - `transport.spool.drained-once-under-its-id` (dst, integration):
+       "every spooled envelope reaches the inner bus under the id it was
+       spooled with; a drain repeated after a crash adds nothing to the
+       log."
+     - `transport.spool.no-overtaking` (dst): "while the spool holds a
+       record, no envelope published after it reaches the inner bus
+       before it."
+     - `transport.spool.torn-tail-only` (unit): "recovery discards only
+       an incomplete last record of the last segment, whose publish never
+       returned `Ok`; any other bad record stops draining as `Corrupt`."
+     - `transport.spool.bounded` (unit, integration): "the spool never
+       holds more than `max_bytes`; an append past it is refused with
+       `SpoolFull` without waiting."
+     - `topology.frontier.covers-spool` (dst): "`FrontierSource::frontier`
+       returns an `oldest_pending` no later than the `at` of every
+       envelope still in the spool."
+     - `ingress.proxy.forwarding-independent-of-capture-store`
+       (integration): "the proxy forwards and relays every request
+       unchanged whatever the state of the database, the bus or the
+       spool."
+10. **No change** for the checkpoint itself, the extraction ledger, held
    writes or `ExchangePlacements`. They are crate-level ports or existing
    traits.
 
@@ -1004,15 +1282,15 @@ S (spec, first) ──┬─▶ W1 transport ─┐
 | WS | Branch | Owns (files, crates) | Delivers |
 | --- | --- | --- | --- |
 | S | `feat/spec-restart-durability` | `spec/types/ids*`, `spec/types/interfaces/l2_transport.rs`, `l7_topology.rs` (doc), `l8_surface/audit.rs`, `spec/invariants/INV-X-*` | the spec changes above, with type and unit evidence for `EventId::derive` |
-| W1 | `feat/pg-bus` | `crates/transport/{src/pg/**, migrations/**, Cargo.toml}`, transport tests and dst made bus-generic | `PgBus`, `PgDeadLetters`, `group_stats`, `prune`, restart reset; bus conformance over both buses |
+| W1 | `feat/pg-bus` | `crates/transport/{src/pg/**, src/spool/**, migrations/**, Cargo.toml}`, transport tests and dst made bus-generic; `crates/testkit/src/db_link.rs` | `PgBus`, `PgDeadLetters`, `group_stats`, `prune`, restart reset; **`SpoolingBus`** (segments, cursor, lock, states, drain, bounds, `oldest_at`, stats); `DbLink`; bus conformance over both buses; spool unit, DST and integration tests |
 | W2 | `feat/l3-restart` | `crates/reconstruct/**` | `ExchangePlacements` for `PgConversations`; outbox stamp + awaited bus sink; derived ids checked on redelivery; `0004_outbox_ids.sql` |
 | W3 | `feat/l4-pg-span-index` | `crates/provenance/**` | `SpanIndex` for `PgProvenanceStore`; `started_at` read; retention tests including token observations |
 | W4 | `feat/flow-checkpoint` | `crates/flow/**` (with `extract::step` moved in from the gateway, see below) | `0002_restart.sql`; outbox stamp + awaited sink; held writes; access sequence; checkpoint/restore; extraction ledger (memory + Pg); `Publisher` derived ids; restore DST |
 | W5 | `feat/l6-pg-topics-projections` | `crates/analysis/**` | `PgTopicCatalog`, `PgProjectionStore`, outbox stamp; model tests vs memory |
 | W6 | `feat/l7-restart` | `crates/topology/**` | outbox stamp; `BusAnnouncer` derived ids from the input; consumer restart tests |
 | W7 | `feat/surface-pg-stores` | `crates/surface/**` (`migrations/`, `src/pg/**`) | `PgAuditLog` (+ intents), `PgOperatorStore`, `PgSinkRegistry`; cursor key from secret; model tests vs `model::surface` |
-| W8 | `feat/gateway-postgres-live` | `crates/api/src/{in_process/**, pg/**}`, `crates/gateway/**` | `PgStores: SurfaceStores` and `EvidenceRecords` over Postgres; `InProcess` generic over the bundle; `Live` generic over a `LiveStoreSet` (memory, Postgres); `PgFrontierSource`; advisory lock; recovery sequence; `migrate` runs every layer; readiness/health; retention tick; classifier derived ids; removal of the extraction step from `live/layers/extract.rs` |
-| W9 | `test/postgres-restart` | `crates/e2e/**`, `crates/conformance/**`, `crates/api/tests/conformance_pg.rs`, `crates/client/tests/conformance_pg.rs` | restart e2e, conformance on Postgres, P7.3's end-to-end test |
+| W8 | `feat/gateway-postgres-live` | `crates/api/src/{in_process/**, pg/**}`, `crates/gateway/**` | `PgStores: SurfaceStores` and `EvidenceRecords` over Postgres; `InProcess` generic over the bundle; `Live` generic over a `LiveStoreSet` (memory, Postgres); `PgFrontierSource` (including the spool's `oldest_at`); advisory lock; recovery sequence; the `spool` config section, building `SpoolingBus` over `PgBus`, the `spool_full` capture outcome, the `crosstalk spool --discard-corrupt` subcommand, the spool's `/readyz`, `/healthz` and `/metrics` reporting; `migrate` runs every layer; readiness/health; retention tick; classifier derived ids; removal of the extraction step from `live/layers/extract.rs` |
+| W9 | `test/postgres-restart` | `crates/e2e/**`, `crates/conformance/**`, `crates/api/tests/conformance_pg.rs`, `crates/client/tests/conformance_pg.rs` | restart e2e, the spool's end-to-end tests (outage window, kill while spooling, spool full), conformance on Postgres, P7.3's end-to-end test |
 
 Ordering and parallelism:
 
@@ -1028,6 +1306,12 @@ Ordering and parallelism:
   can start once W5 and W7 merge.
 - Each workstream runs crate-scoped checks only; W8 and W9 run the
   Postgres-gated suites against node0.
+- **The spool belongs to W1 (transport), not W8.** It is an `EventBus`
+  decorator with disk I/O, as `FsBlobStore` is, and its correctness (the
+  `Ok` contract, ordering, ids, idempotent drain) is bus semantics that the
+  bus's DST checks. W8 only configures it, wires it, adds it to the
+  frontier and reports it. `SpoolingBus` is generic over the inner bus, so
+  W1 can test it over `MpscBus` with a fault layer before `PgBus` is done.
 
 Expected merge conflicts (acceptable; the merger resolves them):
 
@@ -1043,47 +1327,24 @@ Expected merge conflicts (acceptable; the merger resolves them):
 - `crates/gateway/src/live/layers/{l4.rs, extract.rs}` between W4 (adds
   the flow step) and W8 (switches to it), by construction sequential.
 - `crates/gateway/src/store.rs` (W8) against any concurrent gateway work.
+- `crates/testkit/**`: W1 adds `DbLink`, and W9 may add scenario helpers.
+  Both are additive.
 
-## Open questions
+## Decisions
 
-- **Q1. Durable bus now?** Recommended: `PgBus` in this item. It is the
-  only way work in flight between consumers survives a restart without
-  JetStream, and the spec's frontier design already assumes Postgres
-  delivery tables. Alternatives:
-  - wait for JetStream (P9), and keep everything in flight lost until then;
-  - keep `MpscBus` and replay from stores at start (each consumer
-    re-derives its pending inputs from upstream stores; this needs
-    cross-layer reads the architecture forbids).
-- **Q2. Correlator durability.** Recommended: per-shard snapshots with
-  deferred acks (above). The cost is a snapshot that grows with 30 days of
-  delivery records, and a format version that an upgrade must migrate or
-  discard. If discarded, the correlator restarts empty and loses pending
-  dead-drop pairings. Alternative: make the correlator's media an
-  incremental Postgres store (rows per write, read, open transmission,
-  held match and delivery record). That is a much larger change, but it
-  scales and survives format changes. Which, and is "an incompatible
-  snapshot is a start error that needs `crosstalk migrate
-  --reset-correlator`" acceptable?
-- **Q3. Audit and effect atomicity.** (a) Write-ahead intent with a new
-  `AuditOutcome::Interrupted` (recommended), or (b) relax the spec to
-  allow an unaudited effect after a crash?
-- **Q4. Cursor keys.** Derive from the deployment secret (recommended;
-  rotation invalidates cursors), or store a random key in the database?
-- **Q5. Capture while the database is down.** Today forwarding never
-  depends on Postgres. With `PgBus`, an exchange captured while the
-  database is unreachable cannot be published. Drop it and count it
-  (recommended for now), or spool it to the exchange log and republish
-  from there on recovery?
-- **Q6. Bus log retention.** 7 days after every group acked? Or longer, to
-  allow re-running a consumer from the log?
-- **Q7. Memory mode.** Keep `serve` without a `store` section on memory
-  stores (dev and `try-claude-code.sh`, recommended), or require Postgres
-  for `serve`?
-- **Q8. Exchange store.** Leave the jsonl exchange log as is (recommended
-  for P7.3), or add the spec's exchange store now?
-- **Q9. Split roles.** `PgBus` would also let `proxy` and `pipeline`
-  processes reach each other through the database. Enable that as part of
-  this item, or keep "only `all` is useful" until P9?
+The user decided every question after reviewing PR #103:
+
+| # | Question | Decision |
+| --- | --- | --- |
+| Q1 | Durable bus now? | **`PgBus` in this item** (not waiting for JetStream, not replaying from stores) |
+| Q2 | Correlator durability | **Per-shard snapshots with deferred acks.** A snapshot the binary cannot read is a start error (`IncompatibleSnapshot`) that needs `crosstalk migrate --reset-correlator`; pending pairings are then knowingly lost |
+| Q3 | Audit and effect atomicity | **Write-ahead intent plus `AuditOutcome::Interrupted`** |
+| Q4 | Cursor keys | **Derived from the deployment secret**; a rotation invalidates outstanding cursors |
+| Q5 | Capture while the database is down | **Spool to local disk and send on recovery; never drop** while the spool has room ([The publish spool](#the-publish-spool-database-down)) |
+| Q6 | Bus log retention | **7 days** after every group acked (`bus.retention_ms`) |
+| Q7 | Memory mode | **Kept**: `serve` without `store` runs on memory stores and `MpscBus` (dev, `try-claude-code.sh`) |
+| Q8 | Exchange store | **Keep the jsonl exchange log**; an exchange store in the spec stays a separate gap |
+| Q9 | Split `proxy`/`pipeline` roles over `PgBus` | **Deferred to P9**; only `--role all` captures and detects end to end |
 
 ## Files
 
@@ -1094,6 +1355,8 @@ marked):
 | --- | --- | --- |
 | `crates/transport/migrations/0001_bus.sql` | bus log, groups, deliveries, dead letters | - |
 | `crates/transport/src/pg/{mod,publish,subscribe,dead_letters,prune,stats}.rs` | `PgBus` | `PgBus`, `PgSubscription`, `PgDeadLetters`, `GroupStats`, `PgBusConfig` |
+| `crates/transport/src/spool/{mod,segment,record,cursor,drain,state}.rs` | the publish spool | `SpoolingBus`, `SpoolConfig`, `SpoolState`, `SpoolStats`, `SpoolError` (`Locked`, `Corrupt`, `Io`) |
+| `crates/testkit/src/db_link.rs` | a cuttable TCP relay to the test database | `DbLink` (`start`, `url`, `cut`, `restore`) |
 | `crates/reconstruct/migrations/0004_outbox_ids.sql`; `src/agents/writes.rs`; `src/thread/pg.rs` | stable outbox ids; `ExchangePlacements` | `PgConversations: ExchangePlacements` |
 | `crates/provenance/src/store/pg.rs` | `SpanIndex`, `started_at` | `PgProvenanceStore: SpanIndex` |
 | `crates/flow/migrations/0002_restart.sql`; `src/store/outbox.rs`; `src/consumer/{checkpoint,restore,held}.rs`; `src/extract/{step,ledger}.rs` | checkpoint, held writes, ledger, extraction step | `Checkpoint`, `restore`, `ExtractionLedger`, `PgExtractionLedger`, `MemoryExtractionLedger`, `ExtractionStep` |
@@ -1101,7 +1364,7 @@ marked):
 | `crates/topology/migrations/0002_outbox_ids.sql`; `src/outbox.rs` | stable ids | - |
 | `crates/surface/migrations/0001_surface.sql`; `src/pg/{audit,operators,sinks}.rs`; `src/cursor.rs` | L8 stores, key derivation | `PgAuditLog`, `PgOperatorStore`, `PgSinkRegistry`, `CursorKey::derive` |
 | `crates/api/src/pg/{mod,evidence}.rs` | the Postgres store bundle | `PgStores`, `PgEvidence` |
-| `crates/gateway/src/live/{mod,store_set,recovery,frontier}.rs`, `src/store.rs`, `src/ops/mod.rs` | composition, recovery, frontier, readiness | `LiveStoreSet`, `PgFrontierSource`, `Recovery`, `PipelineLock` |
+| `crates/gateway/src/live/{mod,store_set,recovery,frontier}.rs`, `src/store.rs`, `src/ops/mod.rs`, `src/config/sections.rs`, `src/cli.rs` | composition, recovery, frontier, readiness, the `spool` section and `spool` subcommand | `LiveStoreSet`, `PgFrontierSource`, `Recovery`, `PipelineLock`, `SpoolSection` |
 | `crates/e2e/src/restart.rs`, `crates/e2e/tests/restart/**` | restart tests | - |
 | `docs/features/postgres_stores.md` (this page, exists) | the design | - |
 
@@ -1130,5 +1393,12 @@ marked):
   checkpoint times come from the injected clock.
 - Each layer's tables live in its own schema and are created only by its
   own numbered migrations. Applied migrations are never edited.
+- `SpoolingBus::publish` returns `Ok` only once the envelope is in the
+  bus log or fsynced in the spool. Spooled envelopes reach the bus under
+  their own ids, in publish order, once each, and nothing overtakes them.
+- The spool is bounded. A full spool refuses and counts, and never
+  blocks the proxy. Forwarding never depends on the database, the bus or
+  the spool.
+- The frontier counts every spooled envelope as pending.
 - No new Postgres extension; `vector` and `pg_trgm` only.
 - No test prints, copies or commits `TEST_DATABASE_URL`.
