@@ -12,7 +12,7 @@ use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::interfaces::l7_topology::EdgeQueryError;
 use crosstalk_spec::interfaces::l8_surface::export::{
     ExportBasis, ExportDataset, ExportPlan, ExportPlanError, ExportRequest, ExportRow, ExportScope,
-    ExportSource, RowSource, SourceFailure, settled_window,
+    ExportSource, ExportStates, RowSource, SourceFailure, settled_window,
 };
 use crosstalk_spec::support::{TimeWindow, Watermark};
 
@@ -94,6 +94,7 @@ impl Snapshot<'_> {
         &self,
         kind: Scoped,
         scope: &ExportScope,
+        states: &ExportStates,
         content: bool,
         watermark: Watermark,
     ) -> Result<(ExportBasis, Vec<ExportRow>), ExportPlanError> {
@@ -112,7 +113,7 @@ impl Snapshot<'_> {
             (Some(settled), kind) => {
                 let linked = Linked::at(&self.ctx, Some(settled), &filter, version);
                 match kind {
-                    Scoped::Transmissions => rows::transmissions(&linked, content)?,
+                    Scoped::Transmissions => rows::transmissions(&linked, content, states)?,
                     Scoped::Edges => rows::edges(&linked, content)?,
                     Scoped::Accesses => rows::accesses(&linked)?,
                     Scoped::Topics => rows::topics(
@@ -144,16 +145,34 @@ impl ExportSource for Snapshot<'_> {
     ) -> Result<ExportPlan<PlannedRows>, ExportPlanError> {
         let content = request.include_content();
         let (basis, rows) = match request.dataset() {
-            ExportDataset::Transmissions(scope) => {
-                self.scoped(Scoped::Transmissions, &scope.scope(), content, watermark)?
-            }
-            ExportDataset::Edges(scope) => self.scoped(Scoped::Edges, scope, content, watermark)?,
-            ExportDataset::Accesses(scope) => {
-                self.scoped(Scoped::Accesses, scope, content, watermark)?
-            }
-            ExportDataset::Topics(scope) => {
-                self.scoped(Scoped::Topics, scope, content, watermark)?
-            }
+            ExportDataset::Transmissions(scope) => self.scoped(
+                Scoped::Transmissions,
+                &scope.scope(),
+                &scope.states,
+                content,
+                watermark,
+            )?,
+            ExportDataset::Edges(scope) => self.scoped(
+                Scoped::Edges,
+                scope,
+                &ExportStates::confirmed(),
+                content,
+                watermark,
+            )?,
+            ExportDataset::Accesses(scope) => self.scoped(
+                Scoped::Accesses,
+                scope,
+                &ExportStates::confirmed(),
+                content,
+                watermark,
+            )?,
+            ExportDataset::Topics(scope) => self.scoped(
+                Scoped::Topics,
+                scope,
+                &ExportStates::confirmed(),
+                content,
+                watermark,
+            )?,
             ExportDataset::Verdicts(window) => {
                 let settled = settled_window(*window, watermark);
                 let rows = match settled {

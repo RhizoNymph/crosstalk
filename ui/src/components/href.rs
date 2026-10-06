@@ -29,7 +29,7 @@ pub fn state_pairs(state: &ViewState) -> Vec<(String, String)> {
 }
 
 /// Reverses [`encode_component`]. Malformed escapes are kept as written.
-fn decode_component(text: &str) -> String {
+pub fn decode_component(text: &str) -> String {
     let bytes = text.as_bytes();
     let mut out = Vec::with_capacity(bytes.len());
     let mut i = 0;

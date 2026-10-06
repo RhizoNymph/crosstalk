@@ -47,6 +47,26 @@
     }
   },
   {
+    "type": "text_limit_out_of_range",
+    "data": {
+      "max": 65536,
+      "got": 0
+    }
+  },
+  {
+    "type": "part_without_text",
+    "data": {
+      "index": 2
+    }
+  },
+  {
+    "type": "slice_outside_text",
+    "data": {
+      "from": 9000,
+      "part_len": 8192
+    }
+  },
+  {
     "type": "malformed_request",
     "data": {
       "kind": "data",

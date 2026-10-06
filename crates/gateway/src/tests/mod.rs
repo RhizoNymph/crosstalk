@@ -5,6 +5,7 @@
 
 mod dst;
 mod ingest;
+mod known;
 mod raw;
 mod record;
 mod refusals;
@@ -51,4 +52,11 @@ crosstalk_sim::sim_test! {
 #[tokio::test]
 async fn refusals_are_counted_by_reason_and_protocol() {
     refusals::refusals_are_counted_by_reason_and_protocol().await;
+}
+
+/// An ingester encodes and puts a message body once; later exchanges
+/// repeating it put only their new bodies, and every body stays stored.
+#[tokio::test]
+async fn known_bodies_are_put_once() {
+    known::known_bodies_are_put_once().await;
 }

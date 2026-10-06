@@ -387,6 +387,21 @@ impl TransmissionStore for Flaky {
     > {
         self.inner.list(query, page).await
     }
+
+    async fn holding(
+        &self,
+        matches: &std::collections::BTreeSet<
+            crosstalk_spec::interfaces::l5_flow::transmissions::MatchKey,
+        >,
+    ) -> Result<
+        std::collections::BTreeMap<
+            crosstalk_spec::interfaces::l5_flow::transmissions::MatchKey,
+            TransmissionId,
+        >,
+        TransmissionStoreError,
+    > {
+        self.inner.holding(matches).await
+    }
 }
 
 /// A failed save waits at the head of the queue and is retried with the

@@ -39,6 +39,7 @@ mod nearer;
 mod output;
 mod postings;
 mod reads;
+mod shadowed;
 
 use std::collections::{BTreeSet, HashMap};
 use std::sync::{Arc, Mutex};
@@ -52,13 +53,13 @@ use crosstalk_spec::interfaces::l4_provenance::{FingerprintIndex, IndexError, Se
 use crosstalk_spec::observed::message::Message;
 use crosstalk_spec::support::{Similarity, Timestamp};
 
-use self::cache::{KGramCache, TokenCache};
+use self::cache::{CoverageCache, KGramCache, TokenCache};
 use self::hits::LiveSpans;
 use self::messages::{LoadError, MessageSource};
 use crate::config::{IndexSettings, ProvenanceConfig, ReaderOutputRules, ShortSpans, SpreadRule};
 use crate::decode::DecodePipeline;
 use crate::fingerprint::{KGram, Winnowing, positioned};
-use crate::segment::{Coverage, NovelRunSegmenter, PartKind, message_kgrams, text_parts, view};
+use crate::segment::{Coverage, NovelRunSegmenter, PartKind, text_parts, view};
 use crate::span::match_id;
 use crate::store::{
     ExchangeRecord, ProvenanceStore, ProvenanceStoreError, ScanCommit, ScannedAs, StoredMatch,
@@ -145,6 +146,9 @@ pub struct Scanner {
     /// Input messages' k-grams. Locked only for a lookup or an insert, never
     /// across an await.
     cache: Mutex<KGramCache>,
+    /// Coverages of recent input lists, extended rather than rebuilt
+    /// (`cache::CoverageCache`). Locked like `cache`.
+    coverages: Mutex<CoverageCache>,
     /// The fingerprints of the agents' own output messages
     /// (`nearer`), locked like `cache`.
     own_cache: Mutex<nearer::OwnCache>,
@@ -286,39 +290,42 @@ impl Scanner {
             forwarding: config.forwarding(),
             spread: config.spread(),
             cache: Mutex::new(KGramCache::new(cache::DEFAULT_BUDGET)),
+            coverages: Mutex::new(CoverageCache::new(
+                cache::COVERAGE_BUDGET,
+                cache::COVERAGE_ENTRIES,
+            )),
             own_cache: Mutex::new(nearer::OwnCache::new(cache::DEFAULT_BUDGET)),
             given: Mutex::new(TokenCache::new(cache::DEFAULT_BUDGET)),
         }
     }
 
-    /// The coverage of `inputs`, each message's k-grams computed once.
+    /// The coverage of `inputs`, each message's k-grams computed once: a
+    /// kept coverage of the longest prefix of `inputs` (taken out of the
+    /// cache; [`Scanner::keep_coverage`] puts it back) extended by the
+    /// rest, or a new one.
     pub fn coverage(&self, inputs: &[&Message]) -> Coverage {
-        let mut coverage = Coverage::default();
-        for message in inputs {
-            let cached = self
-                .cache
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .get(message.hash);
-            let kgrams = match cached {
-                Some(kgrams) => kgrams,
-                None => {
-                    let computed = Arc::new(message_kgrams(
-                        self.winnowing(),
-                        self.pipeline(),
-                        message,
-                        |_| true,
-                    ));
-                    self.cache
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .put(message.hash, Arc::clone(&computed));
-                    computed
-                }
-            };
+        let hashes: Vec<MessageHash> = inputs.iter().map(|message| message.hash).collect();
+        let kept = self
+            .coverages
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take_prefix(&hashes);
+        let (from, mut coverage) = kept.unwrap_or_default();
+        for message in inputs.iter().skip(from) {
+            let kgrams = self.cached_kgrams(message);
             coverage.add_kgrams(Some(message.hash), &kgrams);
         }
         coverage
+    }
+
+    /// Keep `coverage`, the coverage of `inputs`, for the next scan whose
+    /// inputs extend them.
+    pub fn keep_coverage(&self, inputs: &[&Message], coverage: Coverage) {
+        let hashes: Vec<MessageHash> = inputs.iter().map(|message| message.hash).collect();
+        self.coverages
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .keep(hashes, coverage);
     }
 
     pub fn segmenter(&self) -> &NovelRunSegmenter {

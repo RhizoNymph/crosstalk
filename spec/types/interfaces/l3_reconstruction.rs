@@ -89,8 +89,12 @@
 //!
 //! Deltas and other records carry the agent the exchange was attributed to,
 //! not its canonical agent; readers resolve through `AgentDirectory`.
+//!
+//! Stored conversations, their transcripts and their turns are read back
+//! through [`conversations::ConversationReads`].
 
 pub mod agents;
+pub mod conversations;
 pub mod lifecycle;
 
 use crate::events::ingest::ConversationDelta;

@@ -1,0 +1,15 @@
+[invariant]
+id = "surface.conversation.view-no-text"
+statement = "conversations, conversation, conversation_turns, span_readers, exchange_turns and span_points return no message text: no part text, tool arguments, tool result text, reasoning text or media bytes, only ids, counts, times, roles, part kinds, byte lengths and ranges, tool names and call ids, provider block type names, models and harness claims."
+kind = "confidentiality"
+requires = ["unit"]
+rationale = """
+View is granted more widely than Content; a structure read that leaked
+text would hand message content to callers not allowed to read it.
+"""
+
+[evidence]
+unit = "crosstalk_surface::tests::conversations::view_reads_carry_no_text"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

@@ -82,7 +82,7 @@ impl RandomSource for SeededRandom {
 /// (in the year 10889). A later clock reading is taken as this.
 pub const MAX_ULID_MILLIS: u64 = (1 << 48) - 1;
 
-const RANDOM_BITS: u32 = 80;
+pub(crate) const RANDOM_BITS: u32 = 80;
 
 /// The last id was the largest ULID there is, so no greater one exists.
 /// Reachable only with a clock past [`MAX_ULID_MILLIS`] and 2^80 ids minted

@@ -4,6 +4,7 @@
 
 mod concurrency;
 mod detection;
+mod holding;
 mod model;
 mod registry;
 mod support;

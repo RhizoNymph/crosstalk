@@ -1,0 +1,22 @@
+[invariant]
+id = "surface.conversation.text-slice"
+statement = "A PartText is bytes from .. from + text.len() of the part's Message::part_text, starting and ending on character boundaries, at most the limit unless one character is longer (then exactly that character), with part_len the whole text's length; a slice starting past the text or inside a character is refused."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+Mark ranges index part text bytes; a slice cut inside a character or off
+by its offset would misplace every highlight after it.
+"""
+
+[evidence]
+type = "crosstalk_spec::interfaces::l8_surface::conversation::text::PartText::cut"
+unit = [
+    "crosstalk_spec::tests::conversation::a_cut_is_the_bytes_from_its_start_up_to_the_limit",
+    "crosstalk_spec::tests::conversation::a_cut_ends_on_a_character_boundary",
+    "crosstalk_spec::tests::conversation::a_cut_from_the_end_is_empty",
+    "crosstalk_spec::tests::conversation::a_cut_refuses_a_start_past_the_end_or_inside_a_character",
+]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

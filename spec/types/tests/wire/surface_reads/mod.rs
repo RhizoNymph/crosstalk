@@ -9,6 +9,7 @@
 
 mod channel_traffic;
 mod channels;
+mod conversation;
 mod evidence;
 mod export;
 mod export_states;

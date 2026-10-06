@@ -1,0 +1,26 @@
+[invariant]
+id = "canonical.ids.derived-key-per-purpose"
+statement = "KeyedHasher::derive_key(label) is a function of the current secret version's key and the label, differs across labels, keys and versions, and never equals a keyed digest of any raw value under that secret."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Page cursors keyed by a MAC must still verify after a restart, so their
+key cannot be drawn at start; deriving it from the deployment secret with
+a per-purpose label makes it the same on every start and every node,
+while one purpose's key reveals nothing of another's. BLAKE3's
+key-derivation mode keeps derived keys apart from the credential and
+account digests the stores hold. A rotation changes the key and
+invalidates outstanding cursors, which is accepted (decision Q4 of
+postgres_stores.md).
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::derived_ids::derived_keys_survive_a_restart_and_separate_purposes",
+    "crosstalk_spec::tests::derived_ids::derived_keys_are_not_keyed_digests",
+    "crosstalk_spec::tests::derived_ids::derived_keys_follow_the_current_version_in_a_rotation",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

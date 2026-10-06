@@ -4,12 +4,16 @@
 
 mod agentdojo;
 mod bench_boilerplate;
+mod bench_channel_template;
 mod config;
+mod coverage_cache;
 mod decode;
+mod decoded_bodies;
 mod fingerprint;
 pub(crate) mod fixtures;
 mod match_quality;
 mod nearer_source;
+pub(crate) mod reads;
 pub(crate) mod scenarios;
 mod segment;
 mod short;

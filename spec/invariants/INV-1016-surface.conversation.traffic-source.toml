@@ -1,0 +1,21 @@
+[invariant]
+id = "surface.conversation.traffic-source"
+statement = "A conversation's source is Replay { corpus } iff its first turn's ClientContext::ingress is Replay { corpus }, and Live otherwise; ReplayFilter::Include keeps every conversation, Exclude exactly the Live ones, Only { corpus: None } exactly the replayed ones and Only { corpus: Some(c) } exactly those replayed from c."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Replayed dataset traffic is shown labelled and filterable beside live
+traffic; mislabelling it would present a dataset's conversations as an
+agent's live work.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::conversation::replay_filter_keeps_by_source",
+    "crosstalk_spec::tests::conversation::ingress_names_its_traffic_source",
+    "crosstalk_reconstruct::tests::conversation_reads::conversation_source_is_its_first_turns",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

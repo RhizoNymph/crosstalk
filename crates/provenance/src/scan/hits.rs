@@ -166,3 +166,21 @@ pub fn merge(mut extents: Vec<(u32, u32)>) -> Vec<(u32, u32)> {
 pub fn covered(merged: &[(u32, u32)]) -> u32 {
     merged.iter().map(|(start, end)| end - start).sum()
 }
+
+/// The runs of `extents` (merged, offsets into `layer`) holding at least
+/// `min_chars` normalized characters, trimmed.
+pub fn long_runs(layer: &str, extents: &[(u32, u32)], min_chars: usize) -> Vec<(u32, u32)> {
+    merge(extents.to_vec())
+        .into_iter()
+        .filter(|(start, end)| {
+            let slice = layer
+                .get(
+                    usize::try_from(*start).unwrap_or(usize::MAX)
+                        ..usize::try_from(*end).unwrap_or(usize::MAX),
+                )
+                .unwrap_or_default();
+            crate::text::normalize::trimmed_len(&crate::text::normalize::normalize(slice))
+                >= min_chars
+        })
+        .collect()
+}

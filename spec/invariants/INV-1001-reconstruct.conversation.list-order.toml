@@ -1,0 +1,18 @@
+[invariant]
+id = "reconstruct.conversation.list-order"
+statement = "ConversationReads::list returns the admitted conversations in ConversationId descending order, and a keyset traversal returns every admitted conversation stored throughout it exactly once, however many conversations are threaded between pages."
+kind = "domain"
+property = "model-based"
+requires = ["property", "integration"]
+rationale = """
+The list is paged with cursors like every other list; an offset would
+skip or repeat conversations while new ones are threaded.
+"""
+
+[evidence]
+property = "crosstalk_reconstruct::tests::conversation_reads::list_traversal_matches_the_model"
+integration = "crosstalk_reconstruct::tests::pg_conversation_reads::pg_conversation_reads_agree_with_memory"
+
+[evidence-review]
+property = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

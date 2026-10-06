@@ -3,13 +3,25 @@
 //! its end; see [`super::export::record`]).
 //!
 //! ```text
-//! act(caller, action) ─permission─┬─ missing ──────────────▶ Operator entry: Forbidden, no effect
-//!                                 └─ held ─▶ apply ─┬─ Ok ──▶ Operator entry: Succeeded
-//!                                                   │         (same transaction as the effect)
-//!                                                   └─ Err ─▶ Operator entry: Rejected, no effect
+//! act(caller, action) ─permission─┬─ missing ───────────────────────────▶ Operator entry: Forbidden, no effect
+//!                                 └─ held ─▶ intend ─▶ apply ─┬─ Ok ──▶ complete: Operator entry Succeeded
+//!                                            (AuditIntent)    │         (appended, intent removed: one txn)
+//!                                                             └─ Err ─▶ complete: Operator entry Rejected
+//! start ─▶ recover_interrupted: each leftover intent ─▶ Operator entry: Interrupted (effect may have applied)
 //! config load ─ diff against stored state ─▶ ConfigChange* ─▶ Config entry each: Applied or Rejected
 //!                                                             (same transaction as the change)
 //! ```
+//!
+//! **Atomicity with the effect.** An action's effect is committed by the
+//! layer that owns it (L3, L5 or L6), in its own store and transaction; the
+//! spec's traits cannot carry one transaction across those calls. So a
+//! durable surface records a write-ahead [`AuditIntent`] before the effect
+//! ([`AuditIntents::intend`]), and afterwards appends the entry and removes
+//! the intent in one transaction ([`AuditIntents::complete`]). At start,
+//! every intent left by a process that stopped mid-call is appended as an
+//! [`AuditOutcome::Interrupted`] entry ([`AuditIntents::recover_interrupted`]):
+//! the effect may or may not have applied, and the log says so rather than
+//! nothing (`surface.audit.no-silent-effect`).
 //!
 //! An entry's [`AuditBody`] is either an operator's call or a change config
 //! made, never a mix: a config change is a [`ConfigChange`], not an
@@ -100,7 +112,17 @@ pub enum AuditOutcome {
     Forbidden {
         missing: Permission,
     },
+    /// The process stopped between the call's [`AuditIntent`] and its
+    /// entry: the effect may or may not have applied, and the caller never
+    /// received a result. Recorded only at start, from a leftover intent
+    /// ([`AuditIntents::recover_interrupted`]); `AuditOutcome::of` never
+    /// returns it.
+    Interrupted,
 }
+
+/// The reason [`AuditOutcome::result`] gives for an `Interrupted` call.
+pub const INTERRUPTED_REASON: &str =
+    "interrupted: the process stopped during the call; its effect may or may not have applied";
 
 /// Why a permitted action, or a config change, was refused or failed:
 /// every `ActionError` except `Forbidden`, which is its own outcome.
@@ -127,6 +149,7 @@ pub enum OutcomeKind {
     Unchanged,
     Rejected,
     Forbidden,
+    Interrupted,
 }
 
 impl AuditOutcome {
@@ -152,7 +175,9 @@ impl AuditOutcome {
     /// inverse of [`AuditOutcome::of`] over everything a surface's `act`
     /// returns; the client-only `ActionError::Unavailable`, which no
     /// surface returns or records, reads back as the `Store` it is served
-    /// as.
+    /// as. An `Interrupted` call returned nothing; it reads back as a
+    /// `Store` error with [`INTERRUPTED_REASON`], what a caller that lost
+    /// the connection would have to assume.
     pub fn result(&self) -> Result<ActionOutcome, ActionError> {
         match self {
             Self::Succeeded(outcome) => Ok(outcome.clone()),
@@ -165,6 +190,9 @@ impl AuditOutcome {
             Self::Rejected(Rejection::Failed { reason }) => Err(ActionError::Store {
                 reason: reason.clone(),
             }),
+            Self::Interrupted => Err(ActionError::Store {
+                reason: INTERRUPTED_REASON.to_owned(),
+            }),
         }
     }
 
@@ -174,6 +202,7 @@ impl AuditOutcome {
             Self::Succeeded(_) => OutcomeKind::Applied,
             Self::Rejected(_) => OutcomeKind::Rejected,
             Self::Forbidden { .. } => OutcomeKind::Forbidden,
+            Self::Interrupted => OutcomeKind::Interrupted,
         }
     }
 }
@@ -481,6 +510,144 @@ impl AuditFilter {
 /// A client chooses every field of the filter, `by` included: which
 /// authors to list, not who is asking.
 impl WireRequest for AuditFilter {}
+
+/// A write-ahead record of an operator action call whose permission check
+/// passed and whose effect is about to be applied: the entry the call will
+/// leave, but for its outcome. Kept until the call's entry is appended
+/// ([`AuditIntents::complete`]), or turned into an `Interrupted` entry at
+/// start ([`AuditIntent::interrupted`]).
+///
+/// Built only through [`AuditIntent::new`]: the caller holds the action's
+/// required permission, because a forbidden call has no effect and needs
+/// no intent. On the wire, `{"id": .., "at": .., "caller": {..}, "action":
+/// ..}`, decoded through [`AuditIntent::new`]; stored, never served.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", try_from = "RawAuditIntent")]
+pub struct AuditIntent {
+    id: AuditId,
+    at: Timestamp,
+    caller: CallerSnapshot,
+    action: OperatorAction,
+}
+
+/// [`AuditIntent`]'s fields, decoded without the check.
+#[derive(Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+struct RawAuditIntent {
+    id: AuditId,
+    at: Timestamp,
+    caller: CallerSnapshot,
+    action: OperatorAction,
+}
+
+impl TryFrom<RawAuditIntent> for AuditIntent {
+    type Error = Rejected<InvalidOperatorRecord>;
+
+    fn try_from(raw: RawAuditIntent) -> Result<Self, Self::Error> {
+        Self::new(raw.id, raw.at, raw.caller, raw.action)
+            .map_err(|error| Rejected::new("audit intent", error))
+    }
+}
+
+impl AuditIntent {
+    /// The intent of `caller`'s call of `action`, accepted at `at`, whose
+    /// entry will have id `id`. `AttemptedWithoutPermission` when the
+    /// caller lacks the action's required permission.
+    pub fn new(
+        id: AuditId,
+        at: Timestamp,
+        caller: impl Into<CallerSnapshot>,
+        action: OperatorAction,
+    ) -> Result<Self, InvalidOperatorRecord> {
+        let caller = caller.into();
+        let required = action.required_permission();
+        if !caller.has(required) {
+            return Err(InvalidOperatorRecord::AttemptedWithoutPermission { required });
+        }
+        Ok(Self {
+            id,
+            at,
+            caller,
+            action,
+        })
+    }
+
+    /// The id the call's entry is appended under.
+    pub const fn id(&self) -> AuditId {
+        self.id
+    }
+
+    /// When the surface accepted the call: the entry's `at`.
+    pub const fn at(&self) -> Timestamp {
+        self.at
+    }
+
+    pub fn caller(&self) -> &CallerSnapshot {
+        &self.caller
+    }
+
+    pub fn action(&self) -> &OperatorAction {
+        &self.action
+    }
+
+    /// The call's entry with `outcome`: same id, time, caller and action.
+    /// `Forbidden` cannot be the outcome of a call that had an intent, and
+    /// is refused as `ForbiddenButPermitted`.
+    pub fn entry(&self, outcome: AuditOutcome) -> Result<AuditEntry, InvalidOperatorRecord> {
+        let record = OperatorRecord::new(self.caller, self.action.clone(), outcome)?;
+        Ok(AuditEntry {
+            id: self.id,
+            at: self.at,
+            body: AuditBody::Operator(record),
+        })
+    }
+
+    /// The entry recovery appends for an intent a stopped process left:
+    /// its call with outcome [`AuditOutcome::Interrupted`].
+    pub fn interrupted(&self) -> AuditEntry {
+        AuditEntry {
+            id: self.id,
+            at: self.at,
+            // Built directly: `new` checked that the caller holds the
+            // action's permission, which is all `OperatorRecord::new`
+            // checks for a non-`Forbidden` outcome.
+            body: AuditBody::Operator(OperatorRecord {
+                caller: self.caller,
+                action: self.action.clone(),
+                outcome: AuditOutcome::Interrupted,
+            }),
+        }
+    }
+}
+
+/// The write-ahead half of a durable audit log
+/// (`surface.audit.no-silent-effect`). Implemented by the store that also
+/// implements [`AuditLog`] (`PgAuditLog`, and the memory reference), so an
+/// intent and its entry live in one store.
+pub trait AuditIntents: AuditLog {
+    /// Record `intent` durably before the call's effect is applied.
+    /// Idempotent on [`AuditIntent::id`]; a different intent under a used
+    /// id, or an id an entry already has, is `IdReused`.
+    fn intend(
+        &mut self,
+        intent: &AuditIntent,
+    ) -> impl Future<Output = Result<(), AuditError>> + Send;
+
+    /// Append `entry` and remove the intent with its id, in one
+    /// transaction. Without such an intent it is [`AuditLog::append`].
+    fn complete(
+        &mut self,
+        entry: AuditEntry,
+    ) -> impl Future<Output = Result<(), AuditError>> + Send;
+
+    /// At start, before the surface accepts a call: append every leftover
+    /// intent as [`AuditIntent::interrupted`] and remove it, each in one
+    /// transaction. Returns the ids appended, oldest intent first.
+    /// Idempotent: a second call finds no intent.
+    fn recover_interrupted(
+        &mut self,
+    ) -> impl Future<Output = Result<Vec<AuditId>, AuditError>> + Send;
+}
 
 /// Append-only storage for audit entries. There is no update or delete.
 pub trait AuditLog {

@@ -1,0 +1,19 @@
+[invariant]
+id = "transport.spool.bounded"
+statement = "The spool never holds more than its configured max_bytes, and an append past it is refused with BusError::SpoolFull without waiting."
+kind = "performance"
+requires = ["unit", "integration"]
+rationale = """
+The spool shares the data volume with the blob store, so it must be
+bounded. A full spool must refuse rather than block: the proxy forwards
+regardless, and capture counts the exchange as uncaptured (spool_full).
+This is the one loss the design allows, honest and counted.
+"""
+
+[evidence]
+unit = "crosstalk_transport::spool::tests::append_past_the_bound_is_spool_full"
+integration = "crosstalk_e2e::spool::full_spool_refuses_and_proxy_still_forwards"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

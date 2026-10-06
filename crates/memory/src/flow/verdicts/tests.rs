@@ -452,3 +452,111 @@ async fn list_returns_what_the_query_matches_newest_first() {
         .collect();
     assert_eq!(ids, (0..5).rev().map(transmission_id).collect::<Vec<_>>());
 }
+
+/// `surface.conversation.inbound-transmission`: `holding` names the
+/// transmission whose confirmed content holds each key, in any state that
+/// keeps content, and leaves out keys no transmission holds.
+#[tokio::test]
+async fn holding_finds_the_transmission_holding_each_match() {
+    use std::collections::BTreeSet;
+
+    use crosstalk_spec::derived::flow::transmission::{Confirmed, Route};
+    use crosstalk_spec::derived::provenance::matching::{Carrier, ContentMatch, MatchKind};
+    use crosstalk_spec::derived::provenance::span::SpanLocation;
+    use crosstalk_spec::ids::{ExchangeId, MessageHash, SpanId};
+    use crosstalk_spec::interfaces::l5_flow::transmissions::MatchKey;
+    use crosstalk_spec::observed::message::PartRef;
+    use crosstalk_spec::support::{Blake3, ByteRange, NonEmpty};
+
+    let sender = AgentId::from_ulid(0x0A6E_0001);
+    let reader = AgentId::from_ulid(0x0A6E_0002);
+    let located = |part: u16, start: u32| SpanLocation {
+        part: PartRef {
+            message: MessageHash::from_digest(Blake3::from_bytes([9; 32])),
+            index: part,
+        },
+        range: ByteRange::new(start, start + 10).unwrap_or_else(|_| panic!("not empty")),
+    };
+    let content = |span: u128, part: u16, start: u32, carrier: Carrier| {
+        ContentMatch::new(
+            SpanId::from_ulid(span),
+            sender,
+            reader,
+            ExchangeId::from_ulid(0xE1),
+            located(part, start),
+            carrier,
+            MatchKind::Exact,
+            NonZeroU32::new(10).unwrap_or(NonZeroU32::MIN),
+        )
+        .unwrap_or_else(|error| panic!("a match: {error:?}"))
+    };
+    let in_tool = content(
+        1,
+        0,
+        0,
+        Carrier::ToolResult(crosstalk_spec::observed::message::ToolCallId(
+            "call_1".into(),
+        )),
+    );
+    let in_tool_again = content(
+        1,
+        0,
+        20,
+        Carrier::ToolResult(crosstalk_spec::observed::message::ToolCallId(
+            "call_1".into(),
+        )),
+    );
+    let in_user = content(1, 1, 0, Carrier::UserTurn);
+    let unheld = content(2, 2, 0, Carrier::UserTurn);
+    let confirmed = |matches: Vec<ContentMatch>| {
+        let mut matches = matches.into_iter();
+        let first = matches.next().unwrap_or_else(|| panic!("one match"));
+        let mut confirmed = Confirmed::new(NonEmpty::new(first), Vec::new(), at(10))
+            .unwrap_or_else(|error| panic!("confirmed: {error:?}"));
+        for content in matches {
+            confirmed
+                .extend(content)
+                .unwrap_or_else(|error| panic!("extended: {error:?}"));
+        }
+        confirmed
+    };
+    let channel = Transmission {
+        id: transmission_id(1),
+        to: reader,
+        route: Route::Channel(crosstalk_spec::ids::ChannelId::from_ulid(7)),
+        opened_at: at(10),
+        state: TransmissionState::Confirmed(confirmed(vec![
+            in_tool.clone(),
+            in_tool_again.clone(),
+        ])),
+    };
+    let direct = Transmission {
+        id: transmission_id(2),
+        to: reader,
+        route: Route::Direct(crosstalk_spec::derived::flow::transmission::DirectCarrier::UserTurn),
+        opened_at: at(10),
+        state: TransmissionState::Confirmed(confirmed(vec![in_user.clone()])),
+    };
+    let (store, _events) = store_with(vec![channel, direct, transmission(3, 0, &[0], 0, 5)]).await;
+    let keys: BTreeSet<MatchKey> = [&in_tool, &in_tool_again, &in_user, &unheld]
+        .into_iter()
+        .map(MatchKey::of)
+        .collect();
+    let held = store
+        .holding(&keys)
+        .await
+        .unwrap_or_else(|error| panic!("holding: {error:?}"));
+    assert_eq!(held.len(), 3);
+    assert_eq!(held.get(&MatchKey::of(&in_tool)), Some(&transmission_id(1)));
+    assert_eq!(
+        held.get(&MatchKey::of(&in_tool_again)),
+        Some(&transmission_id(1))
+    );
+    assert_eq!(held.get(&MatchKey::of(&in_user)), Some(&transmission_id(2)));
+    assert_eq!(held.get(&MatchKey::of(&unheld)), None);
+    let none = store
+        .holding(&BTreeSet::new())
+        .await
+        .unwrap_or_else(|error| panic!("holding: {error:?}"));
+    assert!(none.is_empty());
+}

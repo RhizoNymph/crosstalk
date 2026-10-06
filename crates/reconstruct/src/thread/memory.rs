@@ -11,6 +11,11 @@
 //! each conversation; sightings older than the retention behind the latest
 //! exchange threaded are forgotten after each write, so the set stays
 //! bounded by the retention.
+//!
+//! Each write also records its turn (the spec's `ConversationReads`, read
+//! in its `reads` submodule).
+
+mod reads;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
@@ -19,6 +24,7 @@ use crosstalk_spec::ids::{AgentId, ConversationId, ExchangeId, MessageHash};
 use crosstalk_spec::interfaces::l3_reconstruction::{
     ExchangePlacements, Placement, ThreadError, ThreadOutcome,
 };
+use crosstalk_spec::observed::client::TrafficSource;
 use crosstalk_spec::observed::conversation::{Conversation, ConversationOrigin};
 use crosstalk_spec::support::Timestamp;
 use tokio::sync::Mutex;
@@ -27,6 +33,7 @@ use super::config::{SeenRetention, ThreadConfig};
 
 use super::history::{ChainHash, Entry};
 use super::plan::{Extension, Planned, Target, ThreadReads, Write, plan};
+use super::reads::{Cursors, TurnRow};
 use super::store::{ConversationStore, ResponseKey, ThreadInput, TranscriptEntry};
 use crate::error::{StorageFailure, StoreReason, TxFailure};
 
@@ -38,6 +45,9 @@ struct Stored {
     head: Option<ChainHash>,
     last_system: Option<MessageHash>,
     updated: u64,
+    source: TrafficSource,
+    started_at: Timestamp,
+    last_turn_at: Timestamp,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -46,6 +56,22 @@ struct StoredEntry {
     exchange: ExchangeId,
     history: Option<(u32, ChainHash)>,
     output: bool,
+    carried_over: bool,
+}
+
+impl StoredEntry {
+    /// The entry at `ordinal`.
+    fn transcript(&self, ordinal: u32) -> TranscriptEntry {
+        TranscriptEntry {
+            ordinal,
+            message: self.entry.message,
+            role: self.entry.role,
+            exchange: self.exchange,
+            history_index: self.history.map(|(index, _)| index),
+            output: self.output,
+            carried_over: self.carried_over,
+        }
+    }
 }
 
 /// Every conversation and the indexes the decision looks up.
@@ -58,6 +84,10 @@ struct State {
     holders: HashMap<MessageHash, BTreeSet<ConversationId>>,
     outputs: HashMap<MessageHash, BTreeSet<ConversationId>>,
     records: HashMap<ExchangeId, ThreadOutcome>,
+    /// Each conversation's turns, in threading order.
+    turns: HashMap<ConversationId, Vec<TurnRow>>,
+    /// Where each threaded exchange is: its conversation and turn.
+    turn_of: HashMap<ExchangeId, (ConversationId, u32)>,
     responses: HashMap<ResponseKey, (ConversationId, u32)>,
     updates: u64,
     /// Each attributed agent's sightings of a message: the latest time it
@@ -167,7 +197,11 @@ impl State {
                                 reason: format!("fork parent {} is not stored", parent.ulid_text()),
                             })?;
                     for stored in parent_entries {
-                        entries.push(*stored);
+                        // A fork's base belongs to no turn of the fork.
+                        entries.push(StoredEntry {
+                            carried_over: false,
+                            ..*stored
+                        });
                         if stored.history.is_some_and(|(index, _)| index + 1 == k) {
                             break;
                         }
@@ -182,6 +216,9 @@ impl State {
                         head: None,
                         last_system: None,
                         updated: 0,
+                        source: input.source.clone(),
+                        started_at: input.at,
+                        last_turn_at: input.at,
                     },
                 );
                 for stored in &entries {
@@ -199,12 +236,28 @@ impl State {
                 exchange,
                 history: new.history,
                 output: new.output,
+                carried_over: new.carried_over,
             })
             .collect();
         for stored in &appended {
             self.index(id, stored);
         }
-        self.entries.entry(id).or_default().extend(appended);
+        let transcript = self.entries.entry(id).or_default();
+        let first_ordinal = u32::try_from(transcript.len()).map_err(|_| too_long(id))?;
+        let count = u32::try_from(appended.len()).map_err(|_| too_long(id))?;
+        transcript.extend(appended);
+        let turns = self.turns.entry(id).or_default();
+        let turn = u32::try_from(turns.len()).map_err(|_| too_long(id))?;
+        turns.push(TurnRow {
+            exchange,
+            first_ordinal,
+            entries: count,
+            agent: input.agent,
+            started_at: input.at,
+            outcome: write.outcome.kind(),
+            history_end: write.history_len,
+        });
+        self.turn_of.insert(exchange, (id, turn));
         let updates = self.updates;
         let stored =
             self.conversations
@@ -217,6 +270,7 @@ impl State {
         stored.head = write.head;
         stored.last_system = write.last_system;
         stored.updated = updates;
+        stored.last_turn_at = input.at;
         if let Some(old) = old_head
             && let Some(set) = self.heads.get_mut(&old)
         {
@@ -231,6 +285,15 @@ impl State {
         }
         self.see(input.agent, id, &write.seen, input.at, retention);
         Ok(())
+    }
+}
+
+fn too_long(conversation: ConversationId) -> StorageFailure {
+    StorageFailure::Inconsistent {
+        reason: format!(
+            "conversation {} is beyond the stored range",
+            conversation.ulid_text()
+        ),
     }
 }
 
@@ -420,6 +483,7 @@ impl ThreadReads for Reads<'_> {
 pub struct MemoryConversations {
     state: Arc<Mutex<State>>,
     config: ThreadConfig,
+    cursors: Cursors,
 }
 
 impl MemoryConversations {
@@ -433,7 +497,14 @@ impl MemoryConversations {
         Self {
             state: Arc::default(),
             config,
+            cursors: Cursors::default(),
         }
+    }
+
+    /// The same store, its list cursors tagged with `key`.
+    pub fn with_cursor_key(mut self, key: [u8; 32]) -> Self {
+        self.cursors = Cursors { key };
+        self
     }
 }
 
@@ -495,14 +566,7 @@ impl ConversationStore for MemoryConversations {
                 entries
                     .iter()
                     .enumerate()
-                    .map(|(ordinal, stored)| TranscriptEntry {
-                        ordinal: ordinal as u32,
-                        message: stored.entry.message,
-                        role: stored.entry.role,
-                        exchange: stored.exchange,
-                        history_index: stored.history.map(|(index, _)| index),
-                        output: stored.output,
-                    })
+                    .map(|(ordinal, stored)| stored.transcript(ordinal as u32))
                     .collect()
             })
             .unwrap_or_default())

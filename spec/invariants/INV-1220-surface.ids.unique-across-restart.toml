@@ -1,0 +1,22 @@
+[invariant]
+id = "surface.ids.unique-across-restart"
+statement = "An id minted after a restart never equals a persisted id of the same kind."
+kind = "coordination"
+requires = ["unit", "integration"]
+rationale = """
+Ids that must be reproducible (envelopes, spans, matches, accesses,
+resources, discovered channels, transmissions) are derived from their
+input. Every other minted id (agents, merges, declared channels, rules,
+alerts, audit entries) is drawn from a ULID generator; with persistent
+stores, a restart that replayed the same seed would mint ids already
+stored. serve seeds its generators from OS entropy; tests keep fixed
+seeds and a clock that only moves forward.
+"""
+
+[evidence]
+unit = "crosstalk_gateway::live::tests::serve_seeds_id_generators_from_entropy"
+integration = "crosstalk_e2e::restart::minted_ids_never_collide_after_restart"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

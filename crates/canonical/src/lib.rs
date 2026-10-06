@@ -15,13 +15,17 @@
 //! - [`capture::store`] writes a normalized exchange's bodies and media
 //!   through the spec's
 //!   [`BlobStore`].
+//! - [`exchanges`]: the spec's exchange store (`ExchangeStore`,
+//!   `ExchangeReads`), in memory ([`exchanges::MemoryExchanges`]) and on
+//!   Postgres ([`exchanges::PgExchanges`]).
 //!
 //! Normalization reads no clock, randomness or node state and iterates no
 //! hash map, so the same raw exchange always gives the same result
 //! (`canonical.normalize.deterministic`).
 //!
 //! Roadmap: P2.5 (L1 canonical: Anthropic Messages normalizer). A layer crate:
-//! it depends on the spec, never on another layer crate.
+//! it depends on the spec and `crosstalk-store`, never on another layer
+//! crate.
 //!
 //! [`Normalizer`]: crosstalk_spec::interfaces::l1_canonical::Normalizer
 //! [`RawExchange`]: crosstalk_spec::interfaces::l0_ingress::RawExchange
@@ -35,10 +39,11 @@
 pub mod anthropic;
 mod assemble;
 pub mod capture;
+pub mod exchanges;
 pub mod sse;
 
 pub use anthropic::AnthropicMessages;
-pub use capture::{StoreError, store};
+pub use capture::{StoreError, store, store_unless};
 
 #[cfg(test)]
 mod tests;

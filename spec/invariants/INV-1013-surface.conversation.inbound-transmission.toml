@@ -1,0 +1,22 @@
+[invariant]
+id = "surface.conversation.inbound-transmission"
+statement = "An Inbound or Reader carries a TransmissionMark iff TransmissionStore::holding finds a stored transmission holding that match (by origin span, reader exchange and read location), and the mark names that transmission, its route resolved through supersession and its current state kind."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+A mark links to the evidence page of the transmission it belongs to; a
+mark on the wrong transmission, or one missing, misleads the
+investigator.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_memory::flow::verdicts::tests::holding_finds_the_transmission_holding_each_match",
+    "crosstalk_surface::tests::conversations::inbound_marks_carry_the_holding_transmission",
+]
+integration = "crosstalk_flow::store::tests::holding::pg_holding_finds_the_transmission_holding_each_match"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

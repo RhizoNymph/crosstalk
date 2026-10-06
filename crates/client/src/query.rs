@@ -8,6 +8,7 @@
 //! `export` streams; both are in their own modules ([`crate::frame`],
 //! [`crate::export`]).
 
+use crosstalk_spec::interfaces::l8_surface::conversation::ExchangePlacement;
 use std::collections::BTreeMap;
 
 use crosstalk_spec::aggregates::access::{BipartiteGraph, ResourceUsePage};
@@ -28,7 +29,10 @@ use crosstalk_spec::derived::flow::channel::policy::PolicyHistory;
 use crosstalk_spec::derived::flow::resource::ResourcePattern;
 use crosstalk_spec::derived::flow::transmission::Transmission;
 use crosstalk_spec::derived::flow::verdict::VerdictLog;
-use crosstalk_spec::ids::{AgentId, AlertId, AlertRuleId, ChannelId, ProjectionId, TransmissionId};
+use crosstalk_spec::ids::{
+    AgentId, AlertId, AlertRuleId, ChannelId, ConversationId, ExchangeId, ProjectionId, SpanId,
+    TransmissionId,
+};
 use crosstalk_spec::interfaces::l2_transport::{ConsumerGroup, DeadLetter};
 use crosstalk_spec::interfaces::l6_analysis::SearchResults;
 use crosstalk_spec::interfaces::l8_surface::audit::{AuditEntry, AuditFilter};
@@ -36,12 +40,19 @@ use crosstalk_spec::interfaces::l8_surface::channel_traffic::{
     ChannelTransmissionFilter, ChannelTransmissionPage,
 };
 use crosstalk_spec::interfaces::l8_surface::channels::{ChannelName, ChannelRow, PromotionPreview};
+use crosstalk_spec::interfaces::l8_surface::conversation::text::{
+    ConversationText, PartText, TextLimit, TextSlice,
+};
+use crosstalk_spec::interfaces::l8_surface::conversation::turn::{Reader, TurnPage};
+use crosstalk_spec::interfaces::l8_surface::conversation::{
+    ConversationFilter, ConversationHead, ConversationRow, SpanPoint, TurnWindow,
+};
 use crosstalk_spec::interfaces::l8_surface::evidence::TransmissionEvidence;
 use crosstalk_spec::interfaces::l8_surface::excerpt::ExcerptWindow;
 use crosstalk_spec::interfaces::l8_surface::export::{Export, ExportRequest, RowHasher};
 use crosstalk_spec::interfaces::l8_surface::http::bodies::{
-    EdgeTransmissionsBody, FitProjectionBody, GraphBody, OverviewBody, SearchBody, SeriesBody,
-    TransmissionsBody,
+    EdgeTransmissionsBody, FitProjectionBody, GraphBody, OverviewBody, PartTextBody, SearchBody,
+    SeriesBody, TransmissionsBody,
 };
 use crosstalk_spec::interfaces::l8_surface::http::{RequestBuilder, Route};
 use crosstalk_spec::interfaces::l8_surface::lists::{
@@ -53,10 +64,11 @@ use crosstalk_spec::interfaces::l8_surface::summary::{TransmissionPage, Transmis
 use crosstalk_spec::interfaces::l8_surface::{
     AlertFilter, Caller, Present, QueryApi, QueryError, SinkInfo,
 };
+use crosstalk_spec::observed::message::PartRef;
 use crosstalk_spec::paging::{
     AgentList, AlertList, AlertRuleList, AuditList, ChannelList, ChannelTransmissionList,
-    DeadLetterList, EdgeTransmissionList, Page, PageRequest, ProjectionList, ResourceUseList,
-    SearchList, TopicList, TransmissionList,
+    ConversationList, DeadLetterList, EdgeTransmissionList, Page, PageRequest, ProjectionList,
+    ResourceUseList, SearchList, SpanReaderList, TopicList, TransmissionList,
 };
 use crosstalk_spec::support::TimeWindow;
 use serde::de::DeserializeOwned;
@@ -181,6 +193,91 @@ impl<H: RowHasher + Default + Send + 'static> QueryApi for HttpClient<H> {
         ids: &IdBatch<AgentId>,
     ) -> Result<BTreeMap<AgentId, AgentName>, QueryError> {
         self.query(Route::AgentNames, |b| b.body(ids)).await
+    }
+
+    async fn conversations(
+        &self,
+        _: &Caller,
+        filter: &ConversationFilter,
+        page: &PageRequest<ConversationList>,
+    ) -> Result<Page<ConversationRow, ConversationList>, QueryError> {
+        self.query(Route::Conversations, |b| {
+            b.query("filter", filter).query("page", page)
+        })
+        .await
+    }
+
+    async fn conversation(
+        &self,
+        _: &Caller,
+        id: ConversationId,
+    ) -> Result<Option<ConversationHead>, QueryError> {
+        self.query(Route::Conversation, |b| b.path("id", &id)).await
+    }
+
+    async fn conversation_turns(
+        &self,
+        _: &Caller,
+        id: ConversationId,
+        window: &TurnWindow,
+    ) -> Result<Option<TurnPage>, QueryError> {
+        self.query(Route::ConversationTurns, |b| {
+            b.path("id", &id).query("window", window)
+        })
+        .await
+    }
+
+    async fn span_readers(
+        &self,
+        _: &Caller,
+        span: SpanId,
+        page: &PageRequest<SpanReaderList>,
+    ) -> Result<Option<Page<Reader, SpanReaderList>>, QueryError> {
+        self.query(Route::SpanReaders, |b| {
+            b.path("id", &span).query("page", page)
+        })
+        .await
+    }
+
+    async fn exchange_turns(
+        &self,
+        _: &Caller,
+        ids: &IdBatch<ExchangeId>,
+    ) -> Result<BTreeMap<ExchangeId, ExchangePlacement>, QueryError> {
+        self.query(Route::ExchangeTurns, |b| b.body(ids)).await
+    }
+
+    async fn span_points(
+        &self,
+        _: &Caller,
+        ids: &IdBatch<SpanId>,
+    ) -> Result<BTreeMap<SpanId, SpanPoint>, QueryError> {
+        self.query(Route::SpanPoints, |b| b.body(ids)).await
+    }
+
+    async fn conversation_text(
+        &self,
+        _: &Caller,
+        id: ConversationId,
+        window: &TurnWindow,
+        limit: TextLimit,
+    ) -> Result<Option<ConversationText>, QueryError> {
+        self.query(Route::ConversationText, |b| {
+            b.path("id", &id)
+                .query("window", window)
+                .query("limit", &limit)
+        })
+        .await
+    }
+
+    async fn part_text(
+        &self,
+        _: &Caller,
+        part: PartRef,
+        slice: TextSlice,
+    ) -> Result<Option<PartText>, QueryError> {
+        self.query(Route::PartText, |b| b.body(&PartTextBody { part, slice }))
+            .await
     }
 
     async fn alert_rules(

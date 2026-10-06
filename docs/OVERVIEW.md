@@ -128,8 +128,9 @@ Overview:
       Crates crosstalk-provenance and crosstalk-flow. L4 provenance (span extraction, novelty classification, fingerprint
       index, content matching over part text only, strict decoding,
       escape-folded normalization, boilerplate rules: template skeletons,
-      fragments the origin was given by its own upstream, and unobserved
-      copies without a rare token are not matched) and L5 flow detection (resource
+      fragments the origin was given by its own upstream, short
+      common-word fragments inside another present writer's text, and
+      unobserved copies without a rare token are not matched) and L5 flow detection (resource
       extraction with write outcomes, channel registry with promotion and
       supersession, in which a channel exists only once a transmission
       between different agents goes through it, write/read correlation
@@ -402,7 +403,10 @@ Features Index:
       decisions it takes from the transaction that makes them (the topic
       catalog owns TopicVersionDropped, the channel registry
       ChannelDiscovered), and every store method that
-      depends on the time takes it as an argument (the types are also the
+      depends on the time takes it as an argument; consumer-published
+      envelope ids derive from their input (EventId::derive) and MAC keys
+      from the deployment secret (KeyedHasher::derive_key), so both
+      survive a restart (the types are also the
       JSON wire format: wire_contract), with tests for the invariants
       checked at runtime and one TOML file per invariant in
       spec/invariants. Harness and server wire behavior it is based on is
@@ -447,11 +451,31 @@ Features Index:
       compaction), compaction boundaries, WebSocket increments and replayed traffic
       (labelled, filterable). Structure
       with View, text with Content; turns paged by citeable index windows.
-      Waits on proposed L8 conversation reads
-      (docs/handoff/conversation-view-spec.md, INV-1000..1029).
+      Reads through the L8 conversation reads (conversation_reads,
+      INV-1000..1029).
     entry_points: []
-    depends_on: [ui, query_surface, type_spec]
+    depends_on: [ui, query_surface, type_spec, conversation_reads]
     doc: docs/features/conversation_view.md
+  conversation_reads:
+    description: >
+      The read side of the conversation view. QueryApi conversations,
+      conversation (head: origin, successors, delegation, traffic, claims),
+      conversation_turns (turns by citeable index window, structure and
+      provenance marks, no text), span_readers, exchange_turns and
+      span_points (View), conversation_text and part_text (Content), with
+      their routes. Backed by L1's exchange store (ExchangeStore,
+      ExchangeReads), L3's ConversationReads (transcript with the
+      carried-over flag, a per-turn index, traffic source, successors),
+      L4's ProvenanceReads (scan status, output spans of every origin,
+      matches by reader exchange, a span's readers) and L5's
+      TransmissionStore::holding.
+    entry_points:
+      - spec/types/interfaces/l8_surface/conversation.rs
+      - spec/types/interfaces/l3_reconstruction/conversations.rs
+      - spec/types/interfaces/l4_provenance/reads.rs
+      - spec/types/interfaces/l1_canonical/exchanges.rs
+    depends_on: [type_spec, query_surface, reconstruct, provenance, flow_store, surface_service]
+    doc: docs/features/conversation_reads.md
   query_surface:
     description: >
       The L8 contract the UI reads and acts through: callers from the
@@ -802,24 +826,34 @@ Features Index:
       reads run in one REPEATABLE READ snapshot and resolve agents,
       channels, node facts and the topic version (spec TopicCatalog) at
       query time, folding in Rust. Events the store decides go to a
-      transactional outbox, relayed after commit; traffic rows coalesce
-      into one window per drain for Changed::Traffic (a marked hook until
-      the follow-mode spec lands). consumer::run (group "topology") applies
+      transactional outbox, relayed after commit; each row is stamped with
+      its envelope id and time in a committed transaction before its first
+      publish (P7.3 W6, 0002_outbox_ids.sql), so a retried relay
+      republishes the same ids; traffic rows coalesce into one stamped row
+      per drain for Changed::Traffic (a marked hook until the follow-mode
+      spec lands). consumer::run (group "topology") applies
       TransmissionClassified, AccessRecorded, VerdictSet and the version
-      events to any EdgeStore, publishes EdgeUpdated before acking, and
-      recomputes the watermark every bucket width. Model-tested against
-      crosstalk-memory's InMemoryEdgeStore.
+      events to any EdgeStore, publishes EdgeUpdated (id derived from the
+      delivery with EventId::derive) before acking, and recomputes the
+      watermark every bucket width. The watermark is persisted and never
+      lowered across restarts. Model-tested against crosstalk-memory's
+      InMemoryEdgeStore.
     entry_points:
       - crates/topology/src/lib.rs
       - crates/topology/src/store/mod.rs
       - crates/topology/src/consumer.rs
       - crates/topology/src/outbox.rs
       - crates/topology/migrations/0001_topology.sql
+      - crates/topology/migrations/0002_outbox_ids.sql
     depends_on: [type_spec, store, memory, transport, channel_semantics]
     doc: docs/features/topology_store.md
   postgres_stores:
     description: >
-      Reviewed design (roadmap P7.3, PR #103, not implemented): detections that survive
+      Reviewed design (roadmap P7.3, PR #103; workstream S, the spec
+      changes, landed: EventId::derive, KeyedHasher::derive_key,
+      BusError::SpoolFull, AuditOutcome::Interrupted with AuditIntent and
+      AuditIntents, PgBus/SpoolingBus/PgFrontierSource docs, INV-1200 to
+      INV-1221; W1 to W9 not implemented): detections that survive
       a gateway restart. Surveys what is persisted today (serve runs Live
       on memory stores and MpscBus; the L3 to L7 Postgres stores exist but
       are unwired, and crosstalk migrate runs no layer migrations) and
@@ -836,9 +870,12 @@ Features Index:
       retention per store, and the restart semantics of /readyz, /healthz
       and the API. Includes the test strategy (reference-model agreement,
       restart equivalence, conformance on Postgres), the spec changes
-      proposed, the parallel workstreams and the nine recorded decisions.
+      (landed), the parallel workstreams and the nine recorded decisions.
     entry_points:
       - docs/features/postgres_stores.md
+      - spec/types/ids.rs
+      - spec/types/interfaces/l2_transport.rs
+      - spec/types/interfaces/l8_surface/audit.rs
       - crates/gateway/src/live/mod.rs
       - crates/store/src/migrate.rs
     depends_on: [store, gateway, transport, reconstruct, provenance, flow_store, flow_correlator, search_alerts, topology_store, surface_service, conformance]
@@ -1294,8 +1331,10 @@ Features Index:
       runs for whole values of 24 to 46 characters), resolves originated
       text against the index (hidden relays become ReaderOutput matches
       under stricter length and rare-token rules, boilerplate Common),
-      drops short matches that are template skeletons or that the origin
-      was given token for token in its own request, and
+      drops short matches that are template skeletons, that the origin
+      was given token for token in its own request, or that lie, with no
+      rare token, inside the text of another writer present in the read,
+      and
       picks carrier, kind, read range and matched bytes, leaving out hits
       the reader's nearer source explains (its own earlier output in the
       request, and with forwarding on its own direct read of a forward's
@@ -1321,6 +1360,7 @@ Features Index:
       - crates/provenance/src/consumer.rs
       - crates/provenance/src/scan/mod.rs
       - crates/provenance/src/scan/nearer.rs
+      - crates/provenance/src/scan/shadowed.rs
       - crates/provenance/src/segment/mod.rs
       - crates/provenance/src/decode/mod.rs
       - crates/provenance/src/fingerprint/mod.rs
