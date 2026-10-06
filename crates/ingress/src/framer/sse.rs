@@ -7,7 +7,8 @@
 //! - [`FrameEvent::FirstContent`] at the first message event
 //!   (`message_start`, `content_block_*`, `message_delta`, `message_stop`);
 //! - [`FrameEvent::Finished`] at `message_stop`, after which every byte is
-//!   ignored;
+//!   ignored, in the same chunk and in every later push: a second
+//!   `message_stop` or a trailing `error` event reports nothing;
 //! - [`FrameError::UpstreamErrorEvent`] at an `error` event;
 //! - [`FrameError::MalformedFrame`] at an event whose data is not JSON, whose
 //!   `event` field is not UTF-8, or that grows past the configured size, with
@@ -63,7 +64,13 @@ impl SseFramer {
     }
 
     /// Scan `chunk`, appending events; stop at `Finished` or the first error.
+    /// After `Finished` every byte is ignored, in this chunk and in every
+    /// later one, so the stream reports `Finished` at most once and no error
+    /// after it (`ingress.framer.events-prefix-ordered`).
     pub(super) fn scan(&mut self, chunk: &[u8], emitted: &mut Emitted) -> Result<(), FrameError> {
+        if self.progress == Progress::Finished {
+            return Ok(());
+        }
         let mut rest = chunk;
         while !rest.is_empty() {
             if self.after_cr {

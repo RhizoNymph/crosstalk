@@ -88,7 +88,9 @@ stream yields, offset included, are then the same however it is chunked
 
 - SSE (2xx `text/event-stream`): `FirstContent` at the first message event
   (`message_start`, `content_block_*`, `message_delta`, `message_stop`);
-  `Finished` at `message_stop`. `ping`, comments and unknown event types
+  `Finished` at `message_stop`, after which the framer reads nothing more
+  (a later `message_stop` or `error` event, in the same chunk or a later
+  one, reports nothing). `ping`, comments and unknown event types
   are skipped; an `error` event is `UpstreamErrorEvent`; data that is not
   JSON, a non-UTF-8 `event` field, or an event over
   `limits.sse_event_bytes` is `MalformedFrame` at the event's first byte.

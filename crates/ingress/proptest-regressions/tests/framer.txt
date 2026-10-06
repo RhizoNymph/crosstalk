@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 069cd22ac2b2fa9b04b89e621ad79c3082c327aa2ba66629604581900dd249b0 # shrinks to pieces = ["event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n", "event: error\ndata: {\"error\":{\"message\":\"x\"}}\n\n", "aaAa\n", "event: future_event\ndata: {}\n\n", "event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n", "  AAA00 aaa \n", "event: message_start\ndata: {\"type\":\"message_start\"}\n\n", "A0\n"], cuts = [3823227180157404380, 9280592204420511722, 1154208280455854135], json = false
