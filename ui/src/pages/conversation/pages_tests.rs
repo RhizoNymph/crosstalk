@@ -259,64 +259,149 @@ async fn exchanges_and_spans_redirect_to_their_turn() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn over_the_world_backend_the_pages_render_empty_states() {
+async fn over_the_world_backend_the_pages_render_its_conversations() {
+    use crosstalk_spec::interfaces::l8_surface::QueryApi;
+    use crosstalk_spec::interfaces::l8_surface::conversation::{
+        ConversationFilter, OriginLink, TurnIndex, TurnWindow,
+    };
     let (world_backend, in_process) =
         crate::backend::world::WorldBackend::start(crate::testing::SEED)
             .await
             .expect("world starts");
     let backend = AppBackend::World(world_backend);
-    // One of the world's own agents.
-    let agents = crosstalk_spec::interfaces::l8_surface::QueryApi::agents(
-        &backend,
-        &crate::testing::operator().caller(),
-        &crosstalk_spec::aggregates::agents::filter::AgentFilter::default(),
-        state().scope.window,
-        &crate::pages::common::paging::first(1u16),
-    )
-    .await
-    .expect("agents")
-    .value;
-    let agent = agents
-        .items()
-        .first()
-        .expect("the world has agents")
-        .profile
-        .id();
+    let caller = crate::testing::operator().caller();
+    // Every conversation the world recorded, one page.
+    let rows = backend
+        .conversations(
+            &caller,
+            &ConversationFilter::default(),
+            &crate::pages::common::paging::first(500u16),
+        )
+        .await
+        .expect("conversations")
+        .into_parts()
+        .0;
+    assert!(!rows.is_empty(), "the world records conversations");
+    let row = rows
+        .iter()
+        .find(|r| r.turns > 1)
+        .unwrap_or(&rows[0])
+        .clone();
+    let continued = rows
+        .iter()
+        .find(|r| !matches!(r.origin, OriginLink::Root))
+        .cloned()
+        .expect("the world records a fork or a compaction");
+    let first = backend
+        .conversation_turns(
+            &caller,
+            row.id,
+            &TurnWindow {
+                from: TurnIndex(0),
+                size: crate::pages::common::paging::size(1),
+            },
+        )
+        .await
+        .expect("turns")
+        .expect("the conversation")
+        .turns
+        .into_iter()
+        .next()
+        .expect("a first turn");
     let router = router_over_app(backend);
+
     let list = get_from(
         &router,
         &format!(
             "/agents/{}/conversations?{}",
-            agent.to_ulid(),
+            row.agent.to_ulid(),
             state().to_query()
         ),
     )
     .await;
     assert_eq!(list.status, StatusCode::OK, "{}", list.body);
     assert!(
-        list.body.contains("No conversations recorded"),
+        list.body.contains("data-conversation=\"true\""),
         "{}",
         list.body
     );
-    let conversation = get_from(&router, &page(ConversationId::from_ulid(1), "")).await;
-    assert_eq!(
-        conversation.status,
-        StatusCode::NOT_FOUND,
+    assert!(
+        list.body
+            .contains(&format!("/conversations/{}", row.id.to_ulid()))
+    );
+
+    let conversation = get_from(&router, &page(row.id, "")).await;
+    assert_eq!(conversation.status, StatusCode::OK, "{}", conversation.body);
+    assert!(
+        conversation.body.contains("data-turn=\"0\""),
         "{}",
         conversation.body
     );
-    let exchange = get_from(
+
+    let origin = get_from(&router, &page(continued.id, "")).await;
+    assert_eq!(origin.status, StatusCode::OK, "{}", origin.body);
+    let (wording, boundary) = match continued.origin {
+        OriginLink::Fork { .. } => ("forked from", "data-boundary=\"fork\""),
+        OriginLink::Compaction { .. } => ("compaction of", "data-boundary=\"compaction\""),
+        OriginLink::Root => unreachable!("a continued conversation"),
+    };
+    assert!(origin.body.contains(wording), "{}", origin.body);
+    assert!(origin.body.contains(boundary));
+
+    let placed = get_from(
         &router,
         &format!(
             "/exchanges/{}?{}",
-            crosstalk_spec::ids::ExchangeId::from_ulid(1).to_ulid(),
+            first.exchange.to_ulid(),
             state().to_query()
         ),
     )
     .await;
-    assert_eq!(exchange.status, StatusCode::NOT_FOUND, "{}", exchange.body);
+    assert_eq!(placed.status, StatusCode::SEE_OTHER, "{}", placed.body);
+    let location = placed.location.expect("location");
+    assert!(
+        location.starts_with(&format!("/conversations/{}?", row.id.to_ulid())),
+        "{location}"
+    );
+    assert!(location.contains("turn=0"));
+
+    let unknown = get_from(&router, &page(ConversationId::from_ulid(1), "")).await;
+    assert_eq!(unknown.status, StatusCode::NOT_FOUND, "{}", unknown.body);
     drop(router);
     in_process.shutdown().await;
+}
+
+#[tokio::test]
+async fn an_agent_without_conversations_shows_the_empty_state() {
+    // A registered agent that never sent traffic has no conversations.
+    let records = world().conversation_records();
+    let agent = world()
+        .scenario()
+        .cast
+        .identity
+        .agents()
+        .map(|a| a.id)
+        .find(|id| {
+            let canonical = world().scenario().cast.identity.canonical(*id);
+            canonical == *id
+                && records
+                    .records()
+                    .all(|r| world().scenario().cast.identity.canonical(r.agent) != canonical)
+        })
+        .expect("an agent without conversations");
+    let reply = get(&format!(
+        "/agents/{}/conversations?{}",
+        agent.to_ulid(),
+        state().to_query()
+    ))
+    .await;
+    assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+    assert!(
+        reply.body.contains("No conversations recorded"),
+        "{}",
+        reply.body
+    );
+    assert!(!reply.body.contains("data-conversation=\"true\""));
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
