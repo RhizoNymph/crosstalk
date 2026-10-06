@@ -1,0 +1,22 @@
+[invariant]
+id = "surface.conversation.output-spans"
+statement = "An output part's spans are exactly the non-Common spans L4 keeps for the turn's exchange located in that part, ordered by range start: Originated with its current SpanState, Forwarded with its forwarding status, Relayed with its RelaySource located; L4 keeps relayed spans with their source."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+An output's relayed spans show where copied text came from, so L4 must
+keep them as well as originated ones; a span on the wrong part or
+missing breaks the write side of the view.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_provenance::tests::reads::output_spans_keep_every_origin_in_output_order",
+    "crosstalk_surface::tests::conversations::output_spans_are_the_exchanges_spans",
+]
+integration = "crosstalk_provenance::integration::reads::pg_output_spans_keep_every_origin"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

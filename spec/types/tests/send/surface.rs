@@ -16,7 +16,10 @@ use crate::derived::flow::channel::policy::PolicyHistory;
 use crate::derived::flow::resource::ResourcePattern;
 use crate::derived::flow::transmission::Transmission;
 use crate::derived::flow::verdict::VerdictLog;
-use crate::ids::{AgentId, AlertId, AlertRuleId, ChannelId, ProjectionId, SinkId, TransmissionId};
+use crate::ids::{
+    AgentId, AlertId, AlertRuleId, ChannelId, ConversationId, ExchangeId, ProjectionId, SinkId,
+    SpanId, TransmissionId,
+};
 use crate::interfaces::l2_transport::{ConsumerGroup, DeadLetter};
 use crate::interfaces::l6_analysis::SearchResults;
 use crate::interfaces::l8_surface::actions::{ActionOutcome, OperatorAction};
@@ -25,6 +28,13 @@ use crate::interfaces::l8_surface::channel_traffic::{
     ChannelTransmissionFilter, ChannelTransmissionPage,
 };
 use crate::interfaces::l8_surface::channels::{ChannelName, ChannelRow, PromotionPreview};
+use crate::interfaces::l8_surface::conversation::text::{
+    ConversationText, PartText, TextLimit, TextSlice,
+};
+use crate::interfaces::l8_surface::conversation::turn::{Reader, TurnPage};
+use crate::interfaces::l8_surface::conversation::{
+    ConversationFilter, ConversationHead, ConversationRow, SpanPoint, TurnPoint, TurnWindow,
+};
 use crate::interfaces::l8_surface::errors::{ActionError, QueryError};
 use crate::interfaces::l8_surface::evidence::TransmissionEvidence;
 use crate::interfaces::l8_surface::excerpt::ExcerptWindow;
@@ -44,11 +54,13 @@ use crate::interfaces::l8_surface::permissions::Caller;
 use crate::interfaces::l8_surface::sinks::{AlertSink, SinkError, SinkInfo};
 use crate::interfaces::l8_surface::summary::{TransmissionPage, TransmissionSelection};
 use crate::interfaces::l8_surface::{AlertFilter, OperatorActions, Present, QueryApi};
+use crate::observed::message::PartRef;
 use crate::paging::{
     AgentList, AlertList, AlertRuleList, AuditList, ChannelList, ChannelTransmissionList,
     DeadLetterList, EdgeTransmissionList, ProjectionList, ResourceUseList, SearchList, TopicList,
     TransmissionList,
 };
+use crate::paging::{ConversationList, SpanReaderList};
 use crate::paging::{Page, PageRequest};
 use crate::support::{TimeWindow, Watermark};
 use std::collections::BTreeMap;
@@ -129,6 +141,68 @@ impl QueryApi for Dummy {
         _caller: &Caller,
         _ids: &IdBatch<AgentId>,
     ) -> Result<BTreeMap<AgentId, AgentName>, QueryError> {
+        match *self {}
+    }
+    async fn conversations(
+        &self,
+        _caller: &Caller,
+        _filter: &ConversationFilter,
+        _page: &PageRequest<ConversationList>,
+    ) -> Result<Page<ConversationRow, ConversationList>, QueryError> {
+        match *self {}
+    }
+    async fn conversation(
+        &self,
+        _caller: &Caller,
+        _id: ConversationId,
+    ) -> Result<Option<ConversationHead>, QueryError> {
+        match *self {}
+    }
+    async fn conversation_turns(
+        &self,
+        _caller: &Caller,
+        _id: ConversationId,
+        _window: &TurnWindow,
+    ) -> Result<Option<TurnPage>, QueryError> {
+        match *self {}
+    }
+    async fn span_readers(
+        &self,
+        _caller: &Caller,
+        _span: SpanId,
+        _page: &PageRequest<SpanReaderList>,
+    ) -> Result<Option<Page<Reader, SpanReaderList>>, QueryError> {
+        match *self {}
+    }
+    async fn exchange_turns(
+        &self,
+        _caller: &Caller,
+        _ids: &IdBatch<ExchangeId>,
+    ) -> Result<BTreeMap<ExchangeId, TurnPoint>, QueryError> {
+        match *self {}
+    }
+    async fn span_points(
+        &self,
+        _caller: &Caller,
+        _ids: &IdBatch<SpanId>,
+    ) -> Result<BTreeMap<SpanId, SpanPoint>, QueryError> {
+        match *self {}
+    }
+    async fn conversation_text(
+        &self,
+        _caller: &Caller,
+        _id: ConversationId,
+        _window: &TurnWindow,
+        _limit: TextLimit,
+    ) -> Result<Option<ConversationText>, QueryError> {
+        match *self {}
+    }
+    async fn part_text(
+        &self,
+        _caller: &Caller,
+        _part: PartRef,
+        _slice: TextSlice,
+    ) -> Result<Option<PartText>, QueryError> {
         match *self {}
     }
     async fn alert_rules(
@@ -383,6 +457,14 @@ fn query_api<T: QueryApi>(x: &T, never: &Dummy) {
     assert_send(x.agents(arg(never), arg(never), arg(never), arg(never)));
     assert_send(x.agent(arg(never), arg(never), arg(never)));
     assert_send(x.agent_names(arg(never), arg(never)));
+    assert_send(x.conversations(arg(never), arg(never), arg(never)));
+    assert_send(x.conversation(arg(never), arg(never)));
+    assert_send(x.conversation_turns(arg(never), arg(never), arg(never)));
+    assert_send(x.span_readers(arg(never), arg(never), arg(never)));
+    assert_send(x.exchange_turns(arg(never), arg(never)));
+    assert_send(x.span_points(arg(never), arg(never)));
+    assert_send(x.conversation_text(arg(never), arg(never), arg(never), arg(never)));
+    assert_send(x.part_text(arg(never), arg(never), arg(never)));
     assert_send(x.alert_rules(arg(never), arg(never), arg(never)));
     assert_send(x.alert_rule(arg(never), arg(never)));
     assert_send(x.sinks(arg(never)));

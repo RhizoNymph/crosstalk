@@ -1,0 +1,19 @@
+[invariant]
+id = "reconstruct.conversation.list-filters"
+statement = "ConversationReads::list keeps exactly the conversations whose stored agent is in query.agents (every agent when None), whose origin kind is in query.origins (every kind when empty) and whose traffic source query.replay admits."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+The agent page lists one cluster's conversations and the operator
+filters forks, compactions and replayed corpora; a filter applied after
+paging would leave short or empty pages with a next cursor.
+"""
+
+[evidence]
+unit = "crosstalk_reconstruct::tests::conversation_reads::list_keeps_exactly_what_the_query_admits"
+integration = "crosstalk_reconstruct::tests::pg_conversation_reads::pg_list_keeps_exactly_what_the_query_admits"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

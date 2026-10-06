@@ -1,0 +1,16 @@
+[invariant]
+id = "surface.conversation.delegated-from"
+statement = "ConversationHead::delegated_from is set iff a stored transmission routed Delegation(ParentToChild) holds a content match whose reader exchange is one of the conversation's turns, and names the one whose reader turn is earliest, with its parent span located."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+The spawned-by link joins a sub-agent's conversation to its parent's; a
+wrong link attributes a task to the wrong parent.
+"""
+
+[evidence]
+unit = "crosstalk_surface::tests::conversations::delegated_from_is_the_earliest_delegation_read"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

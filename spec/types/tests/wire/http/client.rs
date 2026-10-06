@@ -29,7 +29,10 @@ use crate::derived::flow::channel::policy::PolicyHistory;
 use crate::derived::flow::resource::{Host, ResourcePattern};
 use crate::derived::flow::transmission::Transmission;
 use crate::derived::flow::verdict::VerdictLog;
-use crate::ids::{AgentId, AlertId, AlertRuleId, ChannelId, ProjectionId, TransmissionId};
+use crate::ids::{
+    AgentId, AlertId, AlertRuleId, ChannelId, ConversationId, ExchangeId, MessageHash,
+    ProjectionId, SpanId, TransmissionId,
+};
 use crate::interfaces::l2_transport::{ConsumerGroup, DeadLetter};
 use crate::interfaces::l6_analysis::SearchResults;
 use crate::interfaces::l8_surface::audit::{AuditEntry, AuditFilter};
@@ -37,14 +40,22 @@ use crate::interfaces::l8_surface::channel_traffic::{
     ChannelTransmissionFilter, ChannelTransmissionPage,
 };
 use crate::interfaces::l8_surface::channels::{ChannelName, ChannelRow, PromotionPreview};
+use crate::interfaces::l8_surface::conversation::text::{
+    ConversationText, PartText, TextLimit, TextSlice,
+};
+use crate::interfaces::l8_surface::conversation::turn::{Reader, TurnPage};
+use crate::interfaces::l8_surface::conversation::{
+    ConversationFilter, ConversationHead, ConversationRow, SpanPoint, TurnIndex, TurnPoint,
+    TurnWindow,
+};
 use crate::interfaces::l8_surface::evidence::TransmissionEvidence;
 use crate::interfaces::l8_surface::excerpt::ExcerptWindow;
 use crate::interfaces::l8_surface::export::{
     Export, ExportDataset, ExportFormat, ExportRequest, ExportStep, ExportStream,
 };
 use crate::interfaces::l8_surface::http::bodies::{
-    EdgeTransmissionsBody, FitProjectionBody, GraphBody, OverviewBody, SearchBody, SeriesBody,
-    TransmissionsBody,
+    EdgeTransmissionsBody, FitProjectionBody, GraphBody, OverviewBody, PartTextBody, SearchBody,
+    SeriesBody, TransmissionsBody,
 };
 use crate::interfaces::l8_surface::http::request::check_body;
 use crate::interfaces::l8_surface::http::{
@@ -59,12 +70,13 @@ use crate::interfaces::l8_surface::summary::{TransmissionPage, TransmissionSelec
 use crate::interfaces::l8_surface::{
     AlertFilter, Caller, Permission, Present, QueryApi, QueryError, SinkInfo,
 };
+use crate::observed::message::PartRef;
 use crate::paging::{
     AgentList, AlertList, AlertRuleList, AuditList, ChannelList, ChannelTransmissionList,
-    DeadLetterList, EdgeTransmissionList, Page, PageRequest, ProjectionList, ResourceUseList,
-    SearchList, TopicList, TransmissionList,
+    ConversationList, DeadLetterList, EdgeTransmissionList, Page, PageRequest, PageSize,
+    ProjectionList, ResourceUseList, SearchList, SpanReaderList, TopicList, TransmissionList,
 };
-use crate::support::{NonBlank, TimeWindow};
+use crate::support::{Blake3, NonBlank, TimeWindow};
 
 /// No export is ever streamed by the table client.
 pub(super) enum NoRows {}
@@ -201,6 +213,86 @@ impl QueryApi for TableClient {
         ids: &IdBatch<AgentId>,
     ) -> Result<BTreeMap<AgentId, AgentName>, QueryError> {
         self.send(Route::AgentNames, |b| b.body(ids))
+    }
+
+    async fn conversations(
+        &self,
+        _: &Caller,
+        filter: &ConversationFilter,
+        page: &PageRequest<ConversationList>,
+    ) -> Result<Page<ConversationRow, ConversationList>, QueryError> {
+        self.send(Route::Conversations, |b| {
+            b.query("filter", filter).query("page", page)
+        })
+    }
+
+    async fn conversation(
+        &self,
+        _: &Caller,
+        id: ConversationId,
+    ) -> Result<Option<ConversationHead>, QueryError> {
+        self.send(Route::Conversation, |b| b.path("id", &id))
+    }
+
+    async fn conversation_turns(
+        &self,
+        _: &Caller,
+        id: ConversationId,
+        window: &TurnWindow,
+    ) -> Result<Option<TurnPage>, QueryError> {
+        self.send(Route::ConversationTurns, |b| {
+            b.path("id", &id).query("window", window)
+        })
+    }
+
+    async fn span_readers(
+        &self,
+        _: &Caller,
+        span: SpanId,
+        page: &PageRequest<SpanReaderList>,
+    ) -> Result<Option<Page<Reader, SpanReaderList>>, QueryError> {
+        self.send(Route::SpanReaders, |b| {
+            b.path("id", &span).query("page", page)
+        })
+    }
+
+    async fn exchange_turns(
+        &self,
+        _: &Caller,
+        ids: &IdBatch<ExchangeId>,
+    ) -> Result<BTreeMap<ExchangeId, TurnPoint>, QueryError> {
+        self.send(Route::ExchangeTurns, |b| b.body(ids))
+    }
+
+    async fn span_points(
+        &self,
+        _: &Caller,
+        ids: &IdBatch<SpanId>,
+    ) -> Result<BTreeMap<SpanId, SpanPoint>, QueryError> {
+        self.send(Route::SpanPoints, |b| b.body(ids))
+    }
+
+    async fn conversation_text(
+        &self,
+        _: &Caller,
+        id: ConversationId,
+        window: &TurnWindow,
+        limit: TextLimit,
+    ) -> Result<Option<ConversationText>, QueryError> {
+        self.send(Route::ConversationText, |b| {
+            b.path("id", &id)
+                .query("window", window)
+                .query("limit", &limit)
+        })
+    }
+
+    async fn part_text(
+        &self,
+        _: &Caller,
+        part: PartRef,
+        slice: TextSlice,
+    ) -> Result<Option<PartText>, QueryError> {
+        self.send(Route::PartText, |b| b.body(&PartTextBody { part, slice }))
     }
 
     async fn alert_rules(
@@ -566,6 +658,29 @@ pub(super) fn every_call(with_none: bool) -> Vec<(Route, EncodedRequest)> {
     let _ = ready(client.agents(c, &AgentFilter::default(), w, &page()));
     let _ = ready(client.agent(c, agent(ULID_A), w));
     let _ = ready(client.agent_names(c, &agents));
+    let conversation = id(ConversationId::from_ulid_text, ULID_A);
+    let turns = TurnWindow {
+        from: TurnIndex(20),
+        size: PageSize::new(20).expect("in range"),
+    };
+    let exchanges = IdBatch::new([id(ExchangeId::from_ulid_text, ULID_B)]).expect("one id");
+    let spans = IdBatch::new([id(SpanId::from_ulid_text, ULID_A)]).expect("one id");
+    let part = PartRef {
+        message: MessageHash::from_digest(Blake3::from_bytes([7; 32])),
+        index: 1,
+    };
+    let slice = TextSlice {
+        from: 8192,
+        limit: TextLimit::DEFAULT,
+    };
+    let _ = ready(client.conversations(c, &ConversationFilter::default(), &page()));
+    let _ = ready(client.conversation(c, conversation));
+    let _ = ready(client.conversation_turns(c, conversation, &turns));
+    let _ = ready(client.span_readers(c, id(SpanId::from_ulid_text, ULID_B), &page()));
+    let _ = ready(client.exchange_turns(c, &exchanges));
+    let _ = ready(client.span_points(c, &spans));
+    let _ = ready(client.conversation_text(c, conversation, &turns, TextLimit::DEFAULT));
+    let _ = ready(client.part_text(c, part, slice));
     let _ = ready(client.alert_rules(c, &AlertRuleFilter::default(), &page()));
     let _ = ready(client.alert_rule(c, rule));
     let _ = ready(client.sinks(c));

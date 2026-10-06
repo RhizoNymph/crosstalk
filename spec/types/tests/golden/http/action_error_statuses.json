@@ -401,6 +401,44 @@
     }
   },
   {
+    "status": 422,
+    "error": {
+      "type": "invalid_input",
+      "data": {
+        "type": "text_limit_out_of_range",
+        "data": {
+          "max": 65536,
+          "got": 0
+        }
+      }
+    }
+  },
+  {
+    "status": 422,
+    "error": {
+      "type": "invalid_input",
+      "data": {
+        "type": "part_without_text",
+        "data": {
+          "index": 2
+        }
+      }
+    }
+  },
+  {
+    "status": 422,
+    "error": {
+      "type": "invalid_input",
+      "data": {
+        "type": "slice_outside_text",
+        "data": {
+          "from": 9000,
+          "part_len": 8192
+        }
+      }
+    }
+  },
+  {
     "status": 400,
     "error": {
       "type": "invalid_input",

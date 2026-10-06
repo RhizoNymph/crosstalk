@@ -42,6 +42,15 @@
 //!   the request names one id twice (no state needed) and
 //!   `Conflict(MergeIntoSelf)` when it names two ids that the merge table
 //!   resolves to one agent.
+//! - A conversation read's stores (`ConversationReadError`,
+//!   `ProvenanceReadError`, `ExchangeStoreError`, `SpanIndexError`) map
+//!   store failures to `Store` and cursor errors to `InvalidCursor`. A
+//!   part text the request names that has no text, or a slice outside it
+//!   (`TextError`), is `InvalidInput`; the same cut failing on a part a
+//!   read model listed itself is a fault in the stored records, which the
+//!   surface reports as `Store` without this mapping.
+//! - A text limit outside its range (`InvalidTextLimit`) is
+//!   `InvalidInput(TextLimitOutOfRange)`.
 //! - An export whose plan holds more rows than allowed is
 //!   `Conflict(ExportTooLarge)`, from `ExportLimits::check` (not a store
 //!   error). A failure after an export has started is not a `QueryError`:
@@ -63,9 +72,13 @@ use crate::aggregates::filter::VersionUnavailable;
 use crate::aggregates::retention::PinError;
 use crate::batch::TooManyIds;
 use crate::derived::flow::channel::promotion::PromotionRefusal;
+use crate::interfaces::l1_canonical::exchanges::ExchangeStoreError;
 use crate::interfaces::l2_transport::{BlobError, BusError};
 use crate::interfaces::l3_reconstruction::ResolveError;
 use crate::interfaces::l3_reconstruction::agents::AgentReadError;
+use crate::interfaces::l3_reconstruction::conversations::ConversationReadError;
+use crate::interfaces::l4_provenance::SpanIndexError;
+use crate::interfaces::l4_provenance::reads::ProvenanceReadError;
 use crate::interfaces::l5_flow::transmissions::TransmissionStoreError;
 use crate::interfaces::l5_flow::verdicts::VerdictError;
 use crate::interfaces::l5_flow::{PromoteError, RegistryError};
@@ -75,6 +88,7 @@ use crate::interfaces::l6_analysis::{
 };
 use crate::interfaces::l7_topology::EdgeQueryError;
 use crate::interfaces::l8_surface::audit::AuditError;
+use crate::interfaces::l8_surface::conversation::text::{InvalidTextLimit, TextError};
 use crate::interfaces::l8_surface::evidence::{EvidenceError, EvidenceRecord, InvalidEvidence};
 use crate::interfaces::l8_surface::excerpt::{CutError, ExcerptError, InvalidWindow};
 use crate::interfaces::l8_surface::export::{ExportPlanError, UnsupportedFormat};
@@ -621,5 +635,73 @@ fn malformed(error: DecodeError) -> InputError {
     InputError::MalformedRequest {
         kind: error.kind,
         reason: error.reason,
+    }
+}
+
+/// For the conversation reads (`ConversationReads`).
+impl From<ConversationReadError> for QueryError {
+    fn from(error: ConversationReadError) -> Self {
+        match error {
+            ConversationReadError::Store { reason } => Self::Store { reason },
+            ConversationReadError::InvalidCursor => Self::InvalidCursor,
+        }
+    }
+}
+
+/// For the conversation reads' marks and `span_readers`
+/// (`ProvenanceReads`).
+impl From<ProvenanceReadError> for QueryError {
+    fn from(error: ProvenanceReadError) -> Self {
+        match error {
+            ProvenanceReadError::Store { reason } => Self::Store { reason },
+            ProvenanceReadError::InvalidCursor => Self::InvalidCursor,
+        }
+    }
+}
+
+/// For `span_points` and every span a conversation read locates
+/// (`SpanIndex::spans`).
+impl From<SpanIndexError> for QueryError {
+    fn from(error: SpanIndexError) -> Self {
+        match error {
+            SpanIndexError::Store { reason } => Self::Store { reason },
+        }
+    }
+}
+
+/// For the turns' exchange records (`ExchangeReads`).
+impl From<ExchangeStoreError> for QueryError {
+    fn from(error: ExchangeStoreError) -> Self {
+        match error {
+            ExchangeStoreError::Store { reason } => Self::Store { reason },
+            ExchangeStoreError::InvalidCursor => Self::InvalidCursor,
+        }
+    }
+}
+
+/// For `QueryApi::part_text`: the part or slice the request names. A cut
+/// of a part a read model listed itself (`conversation_text`) is not
+/// mapped here: it is a fault in the stored records, reported as `Store`.
+impl From<TextError> for QueryError {
+    fn from(error: TextError) -> Self {
+        match error {
+            TextError::Part(
+                NoPartText::NoSuchPart { index, .. } | NoPartText::NotText { index },
+            ) => Self::InvalidInput(InputError::PartWithoutText { index }),
+            TextError::Slice { from, part_len } => {
+                Self::InvalidInput(InputError::SliceOutsideText { from, part_len })
+            }
+        }
+    }
+}
+
+/// For `QueryApi::conversation_text`: a limit the surface could not build
+/// from the request, refused before anything is read.
+impl From<InvalidTextLimit> for QueryError {
+    fn from(error: InvalidTextLimit) -> Self {
+        Self::InvalidInput(InputError::TextLimitOutOfRange {
+            max: error.max,
+            got: error.got,
+        })
     }
 }

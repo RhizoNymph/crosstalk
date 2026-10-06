@@ -14,6 +14,7 @@ mod audit;
 mod channel_reads;
 mod channels;
 mod confirmation;
+mod conversation;
 mod encoding;
 mod events;
 mod evidence;

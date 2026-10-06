@@ -1,0 +1,9 @@
+{
+  "agent": null,
+  "origins": [
+    "root"
+  ],
+  "replay": {
+    "type": "exclude"
+  }
+}

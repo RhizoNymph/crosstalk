@@ -1,0 +1,19 @@
+[invariant]
+id = "reconstruct.conversation.successors-complete"
+statement = "ConversationReads::successors(id) is exactly the conversations whose origin is a Fork with parent id or a Compaction with predecessor id, oldest first by started_at then id."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+The head's continued-in links are the only way from a conversation to
+its forks and compactions; a missing one hides where the agent went
+next.
+"""
+
+[evidence]
+unit = "crosstalk_reconstruct::tests::conversation_reads::successors_are_exactly_the_conversations_naming_it"
+integration = "crosstalk_reconstruct::tests::pg_conversation_reads::pg_successors_agree_with_memory"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

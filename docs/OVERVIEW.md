@@ -436,11 +436,31 @@ Features Index:
       compaction), compaction boundaries, WebSocket increments and replayed traffic
       (labelled, filterable). Structure
       with View, text with Content; turns paged by citeable index windows.
-      Waits on proposed L8 conversation reads
-      (docs/handoff/conversation-view-spec.md, INV-1000..1029).
+      Reads through the L8 conversation reads (conversation_reads,
+      INV-1000..1029).
     entry_points: []
-    depends_on: [ui, query_surface, type_spec]
+    depends_on: [ui, query_surface, type_spec, conversation_reads]
     doc: docs/features/conversation_view.md
+  conversation_reads:
+    description: >
+      The read side of the conversation view. QueryApi conversations,
+      conversation (head: origin, successors, delegation, traffic, claims),
+      conversation_turns (turns by citeable index window, structure and
+      provenance marks, no text), span_readers, exchange_turns and
+      span_points (View), conversation_text and part_text (Content), with
+      their routes. Backed by L1's exchange store (ExchangeStore,
+      ExchangeReads), L3's ConversationReads (transcript with the
+      carried-over flag, a per-turn index, traffic source, successors),
+      L4's ProvenanceReads (scan status, output spans of every origin,
+      matches by reader exchange, a span's readers) and L5's
+      TransmissionStore::holding.
+    entry_points:
+      - spec/types/interfaces/l8_surface/conversation.rs
+      - spec/types/interfaces/l3_reconstruction/conversations.rs
+      - spec/types/interfaces/l4_provenance/reads.rs
+      - spec/types/interfaces/l1_canonical/exchanges.rs
+    depends_on: [type_spec, query_surface, reconstruct, provenance, flow_store, surface_service]
+    doc: docs/features/conversation_reads.md
   query_surface:
     description: >
       The L8 contract the UI reads and acts through: callers from the

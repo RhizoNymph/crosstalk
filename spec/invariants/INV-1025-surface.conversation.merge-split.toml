@@ -1,0 +1,16 @@
+[invariant]
+id = "surface.conversation.merge-split"
+statement = "Merges and unmerges change no stored conversation, turn, transcript entry, span or match, and every agent id is stored as recorded; every conversation read resolves agent ids through AgentDirectory on each read, so the read after a merge or unmerge follows it."
+kind = "domain"
+property = "metamorphic"
+requires = ["unit"]
+rationale = """
+Operators merge and unmerge agents while investigating; views must
+follow at once without rewriting history, as for every other read model.
+"""
+
+[evidence]
+unit = "crosstalk_surface::tests::conversations::conversation_reads_follow_merges_and_unmerges"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
