@@ -16,18 +16,26 @@
 //!    millisecond gets the last id plus one).
 //! 3. **Publish** `ExchangeCaptured` in an [`Envelope`] stamped `at`.
 //!
+//! Under [`Bodies::SkipStored`] a message body this ingester already
+//! stored is not encoded and put again: for a grow-only blob store (the
+//! spec's `BlobStore` has no delete; `Live`'s memory and filesystem stores
+//! never drop a body), since a conversation's request repeats its whole
+//! history on every exchange. [`Bodies::PutEvery`] (the default) puts
+//! every body of every exchange.
+//!
 //! Steps 2 and 3 run under one lock, so envelopes reach the bus's
 //! `publish` in strictly increasing id order however many ingests run at
 //! once; storing (step 1) runs concurrently. Logs carry ids, counts and
 //! outcomes, never bodies.
 
+use std::collections::{HashSet, VecDeque};
 use std::num::NonZeroU32;
 use std::sync::Arc;
 
 use crosstalk_canonical::StoreError;
 use crosstalk_spec::events::ingest::IngestEvent;
 use crosstalk_spec::events::{BusEvent, Envelope};
-use crosstalk_spec::ids::{EventId, SeededRandom, UlidGenerator};
+use crosstalk_spec::ids::{EventId, MessageHash, SeededRandom, UlidGenerator};
 use crosstalk_spec::interfaces::l1_canonical::NormalizedExchange;
 use crosstalk_spec::interfaces::l2_transport::{BlobStore, BusError, EventBus};
 use crosstalk_spec::observed::exchange::ExchangeOutcome;
@@ -97,6 +105,58 @@ struct Inner<B, E> {
     ids: Mutex<UlidGenerator<SeededRandom>>,
     stats: Arc<PipelineStats>,
     retry: PutRetry,
+    /// Message bodies already stored (`Bodies::SkipStored` only). Locked
+    /// only for a lookup or an insert, never across an await.
+    known: Option<std::sync::Mutex<KnownBodies>>,
+}
+
+/// Which message bodies an ingest puts.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Bodies {
+    /// Every body of every exchange.
+    #[default]
+    PutEvery,
+    /// Every body this ingester has not stored yet (it remembers the last
+    /// 2^20). Only for a blob store that never drops a body.
+    SkipStored,
+}
+
+/// How many stored message hashes an ingester remembers.
+const KNOWN_BODIES: usize = 1 << 20;
+
+/// The hashes of message bodies an ingester stored, the oldest forgotten
+/// first past a cap (a forgotten body is only put again).
+#[derive(Debug)]
+struct KnownBodies {
+    hashes: HashSet<MessageHash>,
+    order: VecDeque<MessageHash>,
+    cap: usize,
+}
+
+impl KnownBodies {
+    fn new(cap: usize) -> Self {
+        Self {
+            hashes: HashSet::new(),
+            order: VecDeque::new(),
+            cap,
+        }
+    }
+
+    fn contains(&self, hash: MessageHash) -> bool {
+        self.hashes.contains(&hash)
+    }
+
+    fn insert(&mut self, hash: MessageHash) {
+        if !self.hashes.insert(hash) {
+            return;
+        }
+        self.order.push_back(hash);
+        while self.order.len() > self.cap {
+            if let Some(oldest) = self.order.pop_front() {
+                self.hashes.remove(&oldest);
+            }
+        }
+    }
 }
 
 impl<B, E> Ingester<B, E>
@@ -113,6 +173,7 @@ where
         id_entropy: SeededRandom,
         retry: PutRetry,
         stats: Arc<PipelineStats>,
+        bodies: Bodies,
     ) -> Self {
         let ids = UlidGenerator::new(Arc::clone(&clock), id_entropy);
         Self {
@@ -123,6 +184,12 @@ where
                 ids: Mutex::new(ids),
                 stats,
                 retry,
+                known: match bodies {
+                    Bodies::PutEvery => None,
+                    Bodies::SkipStored => {
+                        Some(std::sync::Mutex::new(KnownBodies::new(KNOWN_BODIES)))
+                    }
+                },
             }),
         }
     }
@@ -243,12 +310,31 @@ where
         self.inner.retry
     }
 
+    fn known(&self) -> Option<std::sync::MutexGuard<'_, KnownBodies>> {
+        self.inner.known.as_ref().map(|known| {
+            known
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+        })
+    }
+
     async fn store(&self, exchange: &NormalizedExchange) -> Result<(), StoreError> {
         let inner = &self.inner;
         let mut attempt = 1;
         loop {
-            match crosstalk_canonical::store(&inner.blobs, exchange).await {
-                Ok(()) => return Ok(()),
+            let stored = crosstalk_canonical::store_unless(&inner.blobs, exchange, |hash| {
+                self.known().is_some_and(|known| known.contains(hash))
+            })
+            .await;
+            match stored {
+                Ok(()) => {
+                    if let Some(mut known) = self.known() {
+                        for message in &exchange.messages {
+                            known.insert(message.hash);
+                        }
+                    }
+                    return Ok(());
+                }
                 Err(error) if attempt < inner.retry.attempts.get() => {
                     inner.stats.bump(Counter::StoreRetries);
                     tracing::warn!(

@@ -152,7 +152,11 @@ observations containing `f` with `now - retention <= at`. `insert` stores no pos
 above the cutoff, and `lookup` returns no hit on one, including postings
 stored while it was below. `insert` and `lookup` refuse a call holding a
 fingerprint of a shard the node does not own, naming the first. Writes
-drop aged observations; `evict` drops a span's postings.
+drop aged observations; `evict` drops a span's postings. A count per
+fingerprint and the oldest observation time summarize the observations:
+while the oldest still counts at `now`, every observation does, and the
+frequency is the count (one map read); otherwise the observations are
+counted one by one. Aging out is skipped while the oldest still counts.
 
 **L5 registry (`flow::registry`).** `ChannelTable` holds channels, policy
 histories, resources (each on at most one channel, or on none), accesses
