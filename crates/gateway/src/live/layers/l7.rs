@@ -20,7 +20,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use crosstalk_api::in_process::Edges;
 use crosstalk_spec::aggregates::watermark::PipelineFrontier;
 use crosstalk_spec::events::{Envelope, Subject};
-use crosstalk_spec::ids::SeededRandom;
 use crosstalk_spec::interfaces::l7_topology::EdgeStore;
 use crosstalk_spec::support::Timestamp;
 use crosstalk_topology::consumer::{Outcome, SUBJECTS, handle};
@@ -50,11 +49,7 @@ impl Topology {
     pub fn new(ctx: &StageContext) -> Self {
         Self {
             edges: ctx.stores.edges.clone(),
-            announcer: BusAnnouncer::new(
-                ctx.stores.bus.clone(),
-                Arc::clone(&ctx.clock),
-                SeededRandom::new(ctx.seed ^ 0x7070),
-            ),
+            announcer: BusAnnouncer::new(ctx.stores.bus.clone()),
             bus: ctx.stores.bus.clone(),
             watermark: Arc::clone(&ctx.watermark),
         }
@@ -82,7 +77,7 @@ impl Stage for Topology {
     }
 
     async fn handle(&mut self, envelope: &Envelope) -> Result<(), StageError> {
-        match handle(&mut self.edges, &self.announcer, &envelope.event).await {
+        match handle(&mut self.edges, &self.announcer, envelope).await {
             Outcome::Ack => Ok(()),
             Outcome::Nack(reason) => Err(StageError::Retry { reason }),
         }

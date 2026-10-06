@@ -9,12 +9,28 @@
 //! fold of `topology.graph.matches-fold-model` and every series total
 //! against the graph's. The other tests pin one behaviour each.
 
+mod consumer;
+mod outbox;
 mod scenarios;
+
+use std::sync::Arc;
 
 use crosstalk_memory::model::HarnessConfig;
 use crosstalk_memory::model::topology::check_edge_store;
 
+use crosstalk_memory::model::build::ts;
+use crosstalk_memory::support::ManualClock;
+use crosstalk_spec::ids::SeededRandom;
+
+use crate::outbox::OutboxIds;
 use crate::tests::support::{PgSubject, database, small_pool};
+
+/// Outbox stamps from a fixed seed, at a clock reading `1_000 * seed` µs
+/// (so relays built with larger seeds stamp later).
+pub(crate) fn outbox_ids(seed: u64) -> OutboxIds {
+    let clock = ManualClock::at(ts(1_000_000 + 1_000 * seed));
+    OutboxIds::new(Arc::new(clock), SeededRandom::new(seed))
+}
 
 /// Run the edge store harness against this store, each case on its own
 /// runtime and pool over one test database, emptied between cases.
@@ -54,4 +70,14 @@ fn pg_matches_reference() {
             max_ops: 40,
         },
     );
+}
+
+/// topology.outbox.stable-envelope-id: the relay stopped at each crash
+/// point (after the stamp, after some publishes, after every publish and
+/// before the delete; dropped or failed), then a new relay: each staged
+/// event is in the log once, under the id stamped on its row before its
+/// first publish ([`outbox`]).
+#[tokio::test(flavor = "multi_thread")]
+async fn outbox_relay_publishes_each_event_once_under_its_stamped_id() {
+    outbox::every_crash_point_publishes_each_event_once().await;
 }

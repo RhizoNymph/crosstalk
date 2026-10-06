@@ -14,7 +14,8 @@ use crosstalk_spec::interfaces::l7_topology::{Activation, EdgeError, EdgeQueryEr
 use crosstalk_spec::paging::{EdgeTransmissionList, PageRequest, PageSize};
 use crosstalk_spec::support::Watermark;
 
-use crate::outbox::{Announce, AnnounceError, drain};
+use crate::integration::outbox_ids;
+use crate::outbox::{Announce, drain};
 use crate::tests::support::{contribution, database, edge_counts, frontier, graph, window, world};
 use crate::tests::{activate, buckets, count, refit};
 
@@ -25,8 +26,14 @@ struct Recorder {
 }
 
 impl Announce for Recorder {
-    async fn announce(&self, event: BusEvent) -> Result<(), AnnounceError> {
-        self.events.lock().expect("not poisoned").push(event);
+    async fn announce(
+        &self,
+        envelope: crosstalk_spec::events::Envelope,
+    ) -> Result<(), crosstalk_spec::interfaces::l2_transport::BusError> {
+        self.events
+            .lock()
+            .expect("not poisoned")
+            .push(envelope.event);
         Ok(())
     }
 }
@@ -351,7 +358,10 @@ async fn pg_outbox_relays_committed_events_in_order() {
     // Not later: nothing published.
     assert_eq!(world.store.advance_watermark(frontier(50)).await, Ok(None));
     let recorder = Recorder::default();
-    let removed = drain(db.pool(), &recorder).await.expect("drained");
+    let mut ids = outbox_ids(1);
+    let removed = drain(db.pool(), &mut ids, &recorder)
+        .await
+        .expect("drained");
     assert_eq!(removed, 7, "two traffic rows and five events");
     let events = std::mem::take(&mut *recorder.events.lock().expect("not poisoned"));
     let twenty = Watermark(ts(20));
@@ -370,7 +380,12 @@ async fn pg_outbox_relays_committed_events_in_order() {
         ]
     );
     assert_eq!(count(db.pool(), "outbox").await, 0);
-    assert_eq!(drain(db.pool(), &recorder).await.expect("drained"), 0);
+    assert_eq!(
+        drain(db.pool(), &mut ids, &recorder)
+            .await
+            .expect("drained"),
+        0
+    );
     db.close().await.expect("drop the database");
 }
 
