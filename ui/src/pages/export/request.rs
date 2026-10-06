@@ -4,7 +4,8 @@ use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::ids::ProjectionId;
 use crosstalk_spec::interfaces::l8_surface::Caller;
 use crosstalk_spec::interfaces::l8_surface::export::{
-    ExportDataset, ExportFormat, ExportRequest, ExportScope, InvalidExportRequest,
+    ExportDataset, ExportFormat, ExportRequest, ExportScope, ExportStates, InvalidExportRequest,
+    TransmissionScope,
 };
 
 use crate::error::UiError;
@@ -76,13 +77,16 @@ pub fn format_label(format: ExportFormat) -> &'static str {
 /// Validates a posted export form against the view state: the dataset over
 /// the view's window and filter, the filter pinned to the chosen topic
 /// version (a projection carries its own selection, verdicts the window
-/// alone), a format the backend writes (`writes`), and content only for a
-/// dataset with content columns. The request's one permission is checked
+/// alone), transmissions in `states` (the page URL's, `states::from_query`;
+/// the other datasets have no states), a format the backend writes
+/// (`writes`), and content only for a dataset with content columns and,
+/// for transmissions, only with confirmed states. The request's one permission is checked
 /// last, so a caller without Content asking for content or a projection is
 /// refused before anything is sent.
 pub fn parse(
     fields: &FormFields,
     state: &ViewState,
+    states: &ExportStates,
     caller: &Caller,
     writes: &[ExportFormat],
 ) -> Result<ExportRequest, UiError> {
@@ -103,7 +107,11 @@ pub fn parse(
         filter: state.scope.filter.pinned(version),
     };
     let dataset = match choice {
-        DatasetChoice::Transmissions => ExportDataset::Transmissions(scope.into()),
+        DatasetChoice::Transmissions => ExportDataset::Transmissions(TransmissionScope {
+            window: scope.window,
+            filter: scope.filter,
+            states: states.clone(),
+        }),
         DatasetChoice::Edges => ExportDataset::Edges(scope),
         DatasetChoice::Accesses => ExportDataset::Accesses(scope),
         DatasetChoice::Topics => ExportDataset::Topics(scope),
@@ -139,7 +147,6 @@ pub fn parse(
                 "content",
                 format!("{} exports have no content columns", choice.code()),
             ),
-            // The form exports the default (confirmed) states only.
             InvalidExportRequest::ContentWithUnconfirmedStates => invalid(
                 "content",
                 "unconfirmed transmissions have no content columns".to_owned(),
@@ -178,6 +185,7 @@ mod tests {
         let request = parse(
             &fields,
             &state,
+            &ExportStates::confirmed(),
             &caller(vec![Permission::View, Permission::Content]),
             JSONL,
         )
@@ -201,6 +209,7 @@ mod tests {
         let request = parse(
             &FormFields::default(),
             &state(),
+            &ExportStates::confirmed(),
             &caller(vec![Permission::View]),
             JSONL,
         )
@@ -228,6 +237,7 @@ mod tests {
                 ("projection", "01J9ZQ3W8D0000000000000001"),
             ]),
             &state(),
+            &ExportStates::confirmed(),
             &both,
             JSONL,
         )
@@ -241,6 +251,7 @@ mod tests {
         let request = parse(
             &FormFields::from_pairs(&[("dataset", "verdicts")]),
             &state(),
+            &ExportStates::confirmed(),
             &both,
             JSONL,
         )
@@ -257,6 +268,7 @@ mod tests {
         let field = |pairs: &[(&str, &str)], writes: &[ExportFormat]| match parse(
             &FormFields::from_pairs(pairs),
             &state(),
+            &ExportStates::confirmed(),
             &viewer,
             writes,
         ) {
@@ -284,6 +296,7 @@ mod tests {
             parse(
                 &FormFields::from_pairs(&[("content", "1")]),
                 &state(),
+                &ExportStates::confirmed(),
                 &viewer,
                 JSONL
             ),
@@ -296,11 +309,72 @@ mod tests {
                     ("projection", "01J9ZQ3W8D0000000000000001")
                 ]),
                 &state(),
+                &ExportStates::confirmed(),
                 &viewer,
                 JSONL
             ),
             forbidden,
             "a projection needs Content"
+        );
+    }
+
+    #[test]
+    fn transmissions_take_the_urls_states_and_other_datasets_ignore_them() {
+        use crosstalk_spec::interfaces::l8_surface::summary::TransmissionStateKind;
+        let viewer = caller(vec![Permission::View]);
+        let suspected = ExportStates::new(vec![
+            TransmissionStateKind::Suspected,
+            TransmissionStateKind::Confirmed,
+        ])
+        .expect("states");
+        let request =
+            parse(&FormFields::default(), &state(), &suspected, &viewer, JSONL).expect("request");
+        let ExportDataset::Transmissions(scope) = request.dataset() else {
+            panic!("transmissions");
+        };
+        assert_eq!(scope.states, suspected);
+        let edges = parse(
+            &FormFields::from_pairs(&[("dataset", "edges")]),
+            &state(),
+            &suspected,
+            &viewer,
+            JSONL,
+        )
+        .expect("request");
+        assert!(matches!(edges.dataset(), ExportDataset::Edges(_)));
+    }
+
+    #[test]
+    fn content_with_an_unconfirmed_state_is_a_field_error() {
+        use crosstalk_spec::interfaces::l8_surface::summary::TransmissionStateKind;
+        let both = caller(vec![Permission::View, Permission::Content]);
+        let unconfirmed =
+            ExportStates::new(vec![TransmissionStateKind::Discarded]).expect("states");
+        assert_eq!(
+            parse(
+                &FormFields::from_pairs(&[("content", "1")]),
+                &state(),
+                &unconfirmed,
+                &both,
+                JSONL
+            ),
+            Err(UiError::field(
+                "content",
+                "unconfirmed transmissions have no content columns"
+            ))
+        );
+        // Confirmed states alone, even an explicit set, may carry content.
+        let confirmed_only =
+            ExportStates::new(vec![TransmissionStateKind::Confirmed]).expect("states");
+        assert!(
+            parse(
+                &FormFields::from_pairs(&[("content", "1")]),
+                &state(),
+                &confirmed_only,
+                &both,
+                JSONL
+            )
+            .is_ok()
         );
     }
 }

@@ -21,8 +21,8 @@ use crosstalk_spec::support::{EmptyWindow, TimeWindow};
 
 use crate::backend::fixture::FixtureBackend;
 use crate::backend::fixture::clock::all_time;
-use crate::backend::fixture::export::digest::RowDigest;
 use crate::backend::fixture::world::{OPERATOR_ONCALL, OPERATOR_RESEARCHER};
+use crosstalk_surface::export::Blake3RowHasher;
 
 /// The seed every provisioned world is generated from.
 pub const SEED: u64 = 7;
@@ -47,7 +47,7 @@ impl FixtureHarness {
 
 impl Harness for FixtureHarness {
     type Backend = FixtureBackend;
-    type Hasher = RowDigest;
+    type Hasher = Blake3RowHasher;
 
     async fn provision(
         &self,
@@ -87,7 +87,7 @@ impl Harness for FixtureHarness {
         self.extent
     }
 
-    fn row_hasher(&self) -> RowDigest {
-        RowDigest::new()
+    fn row_hasher(&self) -> Blake3RowHasher {
+        Blake3RowHasher::new()
     }
 }
