@@ -19,4 +19,5 @@ mod routing;
 mod scenario;
 mod sim;
 pub(crate) mod sim_support;
+mod subscription;
 pub(crate) mod support;

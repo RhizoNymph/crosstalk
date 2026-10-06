@@ -18,7 +18,10 @@ to the gateway exactly as it would to `https://api.anthropic.com`.
 - Credential and account hashing with the spec's `KeyedHasher` (BLAKE3
   keyed with the deployment secret, from an environment variable, with the
   previous version's digests for exchanges that start before the rotation
-  overlap's configured end), the credential scheme rule, and harness
+  overlap's configured end), the credential scheme rule (a Bearer token
+  on the Anthropic API is an OAuth access token when its shape says so or
+  when `anthropic-beta` carries an `oauth-` value; see
+  [claude_code_oauth](claude_code_oauth.md)), and harness
   claims as sent.
 - Exchange ids from the spec's `UlidGenerator`, stamped with each
   exchange's start.
@@ -229,7 +232,7 @@ client ──HTTP/1.1──▶ Proxy::serve / serve_connection (hyper http1, no 
 | `src/config.rs` | Structured config, unknown fields refused | `IngressConfig` (`from_json`), `RouteConfig`, `UpstreamConfig`, `SecretsConfig`, `SecretRef`, `PreviousSecretRef` (with `overlap_ends`), `LimitsConfig` (`upstream_idle_timeout`), `CaptureConfig` |
 | `src/routing.rs` | `UpstreamRouter` | `Routes` (`new`, `resolve`), `Resolved`, `RoutePrefix`, `UpstreamBase`, `ConfigError` |
 | `src/credential.rs` | Raw credentials, secret loading into the spec's `KeyedHasher` | `RawCredential`, `load_secrets`, `SecretError` (`Missing`, `Malformed` with the spec's `InvalidSecret`, `Rotation` with its `InvalidRotation`) |
-| `src/identify.rs` | `ClientIdentifier` | `HeaderIdentifier` (`new`, `raw_credential`, `scheme`, `context` at a start time; `Clone`, sharing one `Arc<KeyedHasher>`), `CredentialSource`, `CREDENTIAL_HEADERS`, `without_credentials` |
+| `src/identify.rs` | `ClientIdentifier` | `HeaderIdentifier` (`new`, `raw_credential`, `scheme` with the `OauthCapability` the head carries, `context` at a start time; `Clone`, sharing one `Arc<KeyedHasher>`), `OauthCapability` (`of`), `CredentialSource`, `CREDENTIAL_HEADERS`, `without_credentials` |
 | `src/encoding.rs` | `content-encoding` and bounded decompression | `content_encoding`, `decode`, `EncodingError` |
 | `src/adapter/mod.rs`, `anthropic.rs` | `ProviderAdapter` for Anthropic Messages | `AnthropicAdapter`, `ANTHROPIC_VERSION`, `NoTap` |
 | `src/framer/mod.rs`, `sse.rs`, `json.rs` | `ResponseFramer` | `AnthropicFramer` (`for_response`, `kind`), `FramerKind` (`for_head`), `SseFramer`, `JsonFramer` |
@@ -287,6 +290,9 @@ Passing (every evidence key reviewed): INV-1, 5, 6, 7, 8, 9, 10, 12, 13,
 14, 15, 16, 17, 19, 20, 21, 22, 24, 25, 26, 27, 32, 33, 34, 36, 40, 41, 42,
 43, 384, 385, 386, 387, 388, 389, `ingress.capture.response-bounded`, and
 the new `ingress.credential.previous-digests-within-overlap` (INV-816).
+INV-1156 (`ingress.credential.oauth-capability-marks-oauth`) and INV-1158
+(`ingress.credential.absent-end-to-end`) are covered with
+[claude_code_oauth](claude_code_oauth.md).
 INV-37 was already satisfied by the spec.
 
 Partly: INV-18 (unit yes; the fuzz target does not exist), INV-23 and
