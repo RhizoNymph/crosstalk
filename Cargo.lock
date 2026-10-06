@@ -647,6 +647,7 @@ dependencies = [
  "crosstalk-provenance",
  "crosstalk-reconstruct",
  "crosstalk-spec",
+ "crosstalk-store",
  "crosstalk-surface",
  "crosstalk-transport",
  "serde_json",

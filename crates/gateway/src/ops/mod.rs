@@ -253,9 +253,11 @@ impl std::fmt::Debug for PgOps {
     }
 }
 
-/// `/readyz`'s `capture` for a spool's state, and whether it blocks.
+/// `/readyz`'s `capture` for a spool's state, and whether it blocks. The
+/// spool counts as full while the last capture was refused full and the
+/// spool has not drained back to `direct` since.
 fn capture_text(stats: &SpoolStats, refusing: bool) -> (String, bool) {
-    if refusing && stats.records > 0 {
+    if refusing && stats.state != SpoolState::Direct {
         return ("dropping: spool full".to_owned(), true);
     }
     match &stats.state {

@@ -18,5 +18,5 @@ unit = "crosstalk_gateway::live::tests::serve_seeds_id_generators_from_entropy"
 integration = "crosstalk_e2e::restart::minted_ids_never_collide_after_restart"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }
 integration = { agent = "false", human = "false" }

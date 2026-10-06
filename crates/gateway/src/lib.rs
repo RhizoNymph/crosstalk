@@ -45,4 +45,8 @@ pub mod store;
 pub mod tasks;
 
 #[cfg(test)]
+mod dst;
+#[cfg(test)]
+mod integration;
+#[cfg(test)]
 mod tests;

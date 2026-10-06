@@ -55,6 +55,12 @@ use crate::store::lock::PipelineLock;
 use crate::store::migrations;
 use crate::tasks::Tasks;
 
+/// Where `serve`'s Postgres-mode id generators draw from: OS entropy, so
+/// an id minted after a restart never repeats a persisted one
+/// (`surface.ids.unique-across-restart`). Tests pass a fixed seed to
+/// `Live::start_pg` instead.
+pub const SERVE_IDS: PgIds = PgIds::Entropy;
+
 /// How long the tasks wait between two looks at the database.
 const RETRY: Duration = Duration::from_secs(2);
 
@@ -105,7 +111,9 @@ pub struct StopHandle<T> {
 }
 
 impl<T> StopHandle<T> {
-    async fn stop(self) -> Option<T> {
+    /// Tell the task to stop and wait for what it returns (`None` when it
+    /// failed).
+    pub async fn stop(self) -> Option<T> {
         let _ = self.stop.send(());
         match self.task.await {
             Ok(value) => Some(value),
@@ -371,7 +379,7 @@ async fn run_pipeline(start: PipelineStart, mut stop: oneshot::Receiver<()>) -> 
                 gate: start.gate.clone(),
                 pipeline: Some(Arc::clone(&start.pipeline)),
                 secret: Arc::clone(&start.secret),
-                ids: PgIds::Entropy,
+                ids: SERVE_IDS,
                 retry: SerializableRetry::default(),
                 status: status.clone(),
             },
@@ -517,7 +525,7 @@ async fn host_api(start: &ApiStart) -> Result<ApiSurface, StartError> {
         blobs: LiveBlobs::Fs(start.blobs.clone()),
         clock: Arc::clone(&start.clock),
         secret: Arc::clone(&start.secret),
-        ids: PgIds::Entropy,
+        ids: SERVE_IDS,
         settings: PgSettings {
             bucket_width: options.bucket_width,
             timing: options.timing,

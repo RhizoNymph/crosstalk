@@ -186,6 +186,51 @@ pub struct PgParts {
     pub status: StatusReporter,
 }
 
+/// Why [`PgParts::open`] did not build the parts.
+#[derive(Debug, thiserror::Error)]
+pub enum PgPartsError {
+    #[error("starting the postgres bus: {0:?}")]
+    Bus(crosstalk_transport::StartError),
+    #[error("opening the publish spool: {0}")]
+    Spool(crosstalk_transport::SpoolError),
+}
+
+impl PgParts {
+    /// The parts over `pool` (migrated) for a process that captures only
+    /// through [`Live::pipeline`] (no proxy): the bus with `bus` settings
+    /// on `clock`, the spool in `spool` behind its gate, and a fresh
+    /// status. For tests and harnesses; `serve` builds its own (the
+    /// capture side starts before the database answers).
+    pub async fn open(
+        pool: PgPool,
+        clock: Arc<dyn crosstalk_spec::support::Clock>,
+        bus: crosstalk_transport::PgBusConfig,
+        spool: crosstalk_transport::SpoolConfig,
+        secret: Arc<KeyedHasher>,
+        ids: PgIds,
+    ) -> Result<Self, PgPartsError> {
+        let bus = PgBus::new(pool.clone(), clock, bus).map_err(PgPartsError::Bus)?;
+        let gate = Gate::closed();
+        let spool = crosstalk_transport::SpoolingBus::open(
+            crate::spool::Gated::new(bus.clone(), gate.clone()),
+            spool,
+        )
+        .await
+        .map_err(PgPartsError::Spool)?;
+        Ok(Self {
+            pool,
+            bus,
+            spool,
+            gate,
+            pipeline: None,
+            secret,
+            ids,
+            retry: SerializableRetry::default(),
+            status: StatusReporter::new(super::recovery::PipelineStatus::waiting()),
+        })
+    }
+}
+
 /// The groups whose pending deliveries can still reach a bucket.
 const UPSTREAM: [Slot; 5] = [
     Slot::L3Reconstruct,

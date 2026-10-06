@@ -104,6 +104,9 @@ pub struct PipelineStatus {
     pub lock: LockState,
     pub phase: PipelinePhase,
     pub report: RecoveryReport,
+    /// Every recovery step entered so far, in order (a retried start
+    /// repeats them).
+    pub steps: Vec<RecoveryStep>,
 }
 
 impl PipelineStatus {
@@ -114,6 +117,7 @@ impl PipelineStatus {
             lock: LockState::NotTaken,
             phase: PipelinePhase::WaitingForDatabase,
             report: RecoveryReport::default(),
+            steps: Vec::new(),
         }
     }
 
@@ -198,10 +202,17 @@ impl StatusReporter {
     }
 
     pub fn phase(&self, phase: PipelinePhase) {
-        if let PipelinePhase::Recovering(step) = &phase {
-            tracing::info!(step = step.label(), "recovery step");
-        }
-        self.update(|status| status.phase = phase);
+        let step = match &phase {
+            PipelinePhase::Recovering(step) => {
+                tracing::info!(step = step.label(), "recovery step");
+                Some(*step)
+            }
+            _ => None,
+        };
+        self.update(|status| {
+            status.steps.extend(step);
+            status.phase = phase;
+        });
     }
 
     pub fn snapshot(&self) -> PipelineStatus {
@@ -216,6 +227,15 @@ pub struct StatusReader(watch::Receiver<PipelineStatus>);
 impl StatusReader {
     pub fn snapshot(&self) -> PipelineStatus {
         self.0.borrow().clone()
+    }
+
+    /// Wait until the status satisfies `ready`; `None` when the reporter
+    /// is gone first.
+    pub async fn wait_until(
+        &mut self,
+        ready: impl FnMut(&PipelineStatus) -> bool,
+    ) -> Option<PipelineStatus> {
+        self.0.wait_for(ready).await.ok().map(|status| status.clone())
     }
 }
 
