@@ -435,7 +435,7 @@ Features Index:
     depends_on: [ui, query_surface, type_spec]
     doc: docs/features/follow_mode.md
   conversation_view:
-    status: in progress
+    status: implemented
     description: >
       Operator page for one agent's conversation, turn by turn: inputs of
       any role in request order and outputs, with provenance marks (text
