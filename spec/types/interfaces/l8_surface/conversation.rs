@@ -43,7 +43,7 @@ use crate::observed::agent::ClaimSet;
 use crate::wire::WireRequest;
 
 pub use crate::interfaces::l3_reconstruction::conversations::{
-    ReplayFilter, TurnIndex, TurnPoint, TurnWindow,
+    ExchangePlacement, ReplayFilter, TurnIndex, TurnPoint, TurnWindow,
 };
 pub use crate::observed::client::{CorpusId, TrafficSource};
 pub use crate::observed::conversation::OriginKind;

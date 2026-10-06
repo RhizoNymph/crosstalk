@@ -30,8 +30,8 @@ use crate::interfaces::l8_surface::conversation::turn::{
 };
 use crate::interfaces::l8_surface::conversation::{
     ConversationFilter, ConversationHead, ConversationRow, ConversationTraffic, CorpusId,
-    DelegationLink, OriginKind, OriginLink, ReplayFilter, SpanPoint, Successor, SuccessorKind,
-    TrafficSource, TurnIndex, TurnPoint, TurnWindow,
+    DelegationLink, ExchangePlacement, OriginKind, OriginLink, ReplayFilter, SpanPoint, Successor,
+    SuccessorKind, TrafficSource, TurnIndex, TurnPoint, TurnWindow,
 };
 use crate::interfaces::l8_surface::http::bodies::PartTextBody;
 use crate::interfaces::l8_surface::summary::TransmissionStateKind;
@@ -658,8 +658,19 @@ fn part_text_refuses_a_slice_outside_its_part() {
 
 #[test]
 fn locate_and_readers_goldens() {
-    let turns = BTreeMap::from([(exchange(ULID_B), coder_turn())]);
+    let turns = BTreeMap::from([(
+        exchange(ULID_B),
+        ExchangePlacement {
+            agent: coder(),
+            conversation: coder_turn().conversation,
+            turn: coder_turn().turn,
+        },
+    )]);
     assert_golden(AREA, "exchange_turns", &turns);
+    assert_rejected::<ExchangePlacement>(
+        r#"{"conversation": "01J9Z3M2C5D6E7F8G9H0J1K2M3", "turn": 3}"#,
+        "missing field `agent`",
+    );
     let points = BTreeMap::from([(span(ULID_C), planner_span())]);
     assert_golden(AREA, "span_points", &points);
     let unthreaded = SpanPoint {

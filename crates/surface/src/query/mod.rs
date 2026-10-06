@@ -6,6 +6,7 @@
 //! | [`channels`], [`channel_rows`] | `channel`, `policy_history`, `channels`, `channel_names`, `promotion_preview`, `channel_resources` |
 //! | [`channel_traffic`] | `channel_transmissions` |
 //! | [`agents`] | `agents`, `agent`, `agent_names` |
+//! | [`conversations`] | `conversations`, `conversation`, `conversation_turns`, `span_readers`, `exchange_turns`, `span_points`, `conversation_text`, `part_text` |
 //! | [`alerts`] | `alert_rules`, `alert_rule`, `sinks`, `dead_letters`, `alerts` (shown only), `alert` |
 //! | [`topology`] | `watermark`, `present`, `topology`, `overview`, `channel_topology`, `edge_transmissions`, `series` |
 //! | [`topics`] | `topic_versions`, `topic_sizes`, `topic_lineage`, `topics` |
@@ -22,11 +23,13 @@ mod channel_rows;
 mod channel_traffic;
 mod channels;
 pub(crate) mod content;
+mod conversations;
 mod evidence;
 mod projections;
 pub(crate) mod topics;
 mod topology;
 
+use crosstalk_spec::interfaces::l8_surface::conversation::ExchangePlacement;
 use std::collections::BTreeMap;
 
 use crosstalk_spec::aggregates::access::{BipartiteGraph, ResourceUsePage};
@@ -47,7 +50,10 @@ use crosstalk_spec::derived::flow::channel::policy::PolicyHistory;
 use crosstalk_spec::derived::flow::resource::ResourcePattern;
 use crosstalk_spec::derived::flow::transmission::Transmission;
 use crosstalk_spec::derived::flow::verdict::VerdictLog;
-use crosstalk_spec::ids::{AgentId, AlertId, AlertRuleId, ChannelId, ProjectionId, TransmissionId};
+use crosstalk_spec::ids::{
+    AgentId, AlertId, AlertRuleId, ChannelId, ConversationId, ExchangeId, ProjectionId, SpanId,
+    TransmissionId,
+};
 use crosstalk_spec::interfaces::l2_transport::{ConsumerGroup, DeadLetter};
 use crosstalk_spec::interfaces::l6_analysis::SearchResults;
 use crosstalk_spec::interfaces::l8_surface::audit::{AuditEntry, AuditFilter};
@@ -55,6 +61,13 @@ use crosstalk_spec::interfaces::l8_surface::channel_traffic::{
     ChannelTransmissionFilter, ChannelTransmissionPage,
 };
 use crosstalk_spec::interfaces::l8_surface::channels::{ChannelName, ChannelRow, PromotionPreview};
+use crosstalk_spec::interfaces::l8_surface::conversation::text::{
+    ConversationText, PartText, TextLimit, TextSlice,
+};
+use crosstalk_spec::interfaces::l8_surface::conversation::turn::{Reader, TurnPage};
+use crosstalk_spec::interfaces::l8_surface::conversation::{
+    ConversationFilter, ConversationHead, ConversationRow, SpanPoint, TurnWindow,
+};
 use crosstalk_spec::interfaces::l8_surface::evidence::TransmissionEvidence;
 use crosstalk_spec::interfaces::l8_surface::excerpt::ExcerptWindow;
 use crosstalk_spec::interfaces::l8_surface::export::{Export, ExportRequest};
@@ -66,10 +79,11 @@ use crosstalk_spec::interfaces::l8_surface::overview::OverviewCounts;
 use crosstalk_spec::interfaces::l8_surface::sinks::SinkInfo;
 use crosstalk_spec::interfaces::l8_surface::summary::{TransmissionPage, TransmissionSelection};
 use crosstalk_spec::interfaces::l8_surface::{AlertFilter, Caller, Present, QueryApi, QueryError};
+use crosstalk_spec::observed::message::PartRef;
 use crosstalk_spec::paging::{
     AgentList, AlertList, AlertRuleList, AuditList, ChannelList, ChannelTransmissionList,
-    DeadLetterList, EdgeTransmissionList, Page, PageRequest, ProjectionList, ResourceUseList,
-    SearchList, TopicList, TransmissionList,
+    ConversationList, DeadLetterList, EdgeTransmissionList, Page, PageRequest, ProjectionList,
+    ResourceUseList, SearchList, SpanReaderList, TopicList, TransmissionList,
 };
 use crosstalk_spec::support::TimeWindow;
 
@@ -160,6 +174,77 @@ impl<S: SurfaceStores> QueryApi for Surface<S> {
         ids: &IdBatch<AgentId>,
     ) -> Result<BTreeMap<AgentId, AgentName>, QueryError> {
         self.agent_names_query(caller, ids).await
+    }
+
+    async fn conversations(
+        &self,
+        caller: &Caller,
+        filter: &ConversationFilter,
+        page: &PageRequest<ConversationList>,
+    ) -> Result<Page<ConversationRow, ConversationList>, QueryError> {
+        self.conversations_query(caller, filter, page).await
+    }
+
+    async fn conversation(
+        &self,
+        caller: &Caller,
+        id: ConversationId,
+    ) -> Result<Option<ConversationHead>, QueryError> {
+        self.conversation_query(caller, id).await
+    }
+
+    async fn conversation_turns(
+        &self,
+        caller: &Caller,
+        id: ConversationId,
+        window: &TurnWindow,
+    ) -> Result<Option<TurnPage>, QueryError> {
+        self.conversation_turns_query(caller, id, window).await
+    }
+
+    async fn span_readers(
+        &self,
+        caller: &Caller,
+        span: SpanId,
+        page: &PageRequest<SpanReaderList>,
+    ) -> Result<Option<Page<Reader, SpanReaderList>>, QueryError> {
+        self.span_readers_query(caller, span, page).await
+    }
+
+    async fn exchange_turns(
+        &self,
+        caller: &Caller,
+        ids: &IdBatch<ExchangeId>,
+    ) -> Result<BTreeMap<ExchangeId, ExchangePlacement>, QueryError> {
+        self.exchange_turns_query(caller, ids).await
+    }
+
+    async fn span_points(
+        &self,
+        caller: &Caller,
+        ids: &IdBatch<SpanId>,
+    ) -> Result<BTreeMap<SpanId, SpanPoint>, QueryError> {
+        self.span_points_query(caller, ids).await
+    }
+
+    async fn conversation_text(
+        &self,
+        caller: &Caller,
+        id: ConversationId,
+        window: &TurnWindow,
+        limit: TextLimit,
+    ) -> Result<Option<ConversationText>, QueryError> {
+        self.conversation_text_query(caller, id, window, limit)
+            .await
+    }
+
+    async fn part_text(
+        &self,
+        caller: &Caller,
+        part: PartRef,
+        slice: TextSlice,
+    ) -> Result<Option<PartText>, QueryError> {
+        self.part_text_query(caller, part, slice).await
     }
 
     async fn alert_rules(

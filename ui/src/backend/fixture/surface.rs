@@ -3,6 +3,17 @@
 //! then reads under the state's lock through [`super::queries`], or acts
 //! through [`super::actions`] and publishes what changed to the feed.
 
+use crosstalk_spec::ids::{ConversationId, ExchangeId, SpanId};
+use crosstalk_spec::interfaces::l8_surface::conversation::ExchangePlacement;
+use crosstalk_spec::interfaces::l8_surface::conversation::text::{
+    ConversationText, PartText, TextLimit, TextSlice,
+};
+use crosstalk_spec::interfaces::l8_surface::conversation::turn::{Reader, TurnPage};
+use crosstalk_spec::interfaces::l8_surface::conversation::{
+    ConversationFilter, ConversationHead, ConversationRow, SpanPoint, TurnWindow,
+};
+use crosstalk_spec::observed::message::PartRef;
+use crosstalk_spec::paging::{ConversationList, SpanReaderList};
 use std::collections::BTreeMap;
 
 use crosstalk_spec::aggregates::access::{BipartiteGraph, ResourceUsePage};
@@ -388,6 +399,93 @@ impl QueryApi for FixtureBackend {
     ) -> Result<Option<Watermarked<AgentDetail>>> {
         require(caller, Permission::View)?;
         self.read(|ctx| queries::agents::one(ctx, id, window)).await
+    }
+
+    // The fixture world records no conversations yet (phase B of the
+    // conversation view seeds them): every conversation read is empty,
+    // after the read's permission check.
+
+    async fn conversations(
+        &self,
+        caller: &Caller,
+        _filter: &ConversationFilter,
+        page: &PageRequest<ConversationList>,
+    ) -> Result<Page<ConversationRow, ConversationList>> {
+        require(caller, Permission::View)?;
+        if page.after.is_some() {
+            return Err(QueryError::InvalidCursor);
+        }
+        Page::last(page.size, Vec::new()).map_err(|error| QueryError::Store {
+            reason: format!("{error:?}"),
+        })
+    }
+
+    async fn conversation(
+        &self,
+        caller: &Caller,
+        _id: ConversationId,
+    ) -> Result<Option<ConversationHead>> {
+        require(caller, Permission::View)?;
+        Ok(None)
+    }
+
+    async fn conversation_turns(
+        &self,
+        caller: &Caller,
+        _id: ConversationId,
+        _window: &TurnWindow,
+    ) -> Result<Option<TurnPage>> {
+        require(caller, Permission::View)?;
+        Ok(None)
+    }
+
+    async fn span_readers(
+        &self,
+        caller: &Caller,
+        _span: SpanId,
+        _page: &PageRequest<SpanReaderList>,
+    ) -> Result<Option<Page<Reader, SpanReaderList>>> {
+        require(caller, Permission::View)?;
+        Ok(None)
+    }
+
+    async fn exchange_turns(
+        &self,
+        caller: &Caller,
+        _ids: &IdBatch<ExchangeId>,
+    ) -> Result<BTreeMap<ExchangeId, ExchangePlacement>> {
+        require(caller, Permission::View)?;
+        Ok(BTreeMap::new())
+    }
+
+    async fn span_points(
+        &self,
+        caller: &Caller,
+        _ids: &IdBatch<SpanId>,
+    ) -> Result<BTreeMap<SpanId, SpanPoint>> {
+        require(caller, Permission::View)?;
+        Ok(BTreeMap::new())
+    }
+
+    async fn conversation_text(
+        &self,
+        caller: &Caller,
+        _id: ConversationId,
+        _window: &TurnWindow,
+        _limit: TextLimit,
+    ) -> Result<Option<ConversationText>> {
+        require(caller, Permission::Content)?;
+        Ok(None)
+    }
+
+    async fn part_text(
+        &self,
+        caller: &Caller,
+        _part: PartRef,
+        _slice: TextSlice,
+    ) -> Result<Option<PartText>> {
+        require(caller, Permission::Content)?;
+        Ok(None)
     }
 
     async fn agent_names(

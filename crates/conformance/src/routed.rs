@@ -7,6 +7,7 @@
 //!   operator, since the surface derives the caller from the credential,
 //!   never from the argument.
 
+use crosstalk_spec::interfaces::l8_surface::conversation::ExchangePlacement;
 use std::collections::BTreeMap;
 
 use crosstalk_spec::aggregates::access::{BipartiteGraph, ResourceUsePage};
@@ -28,7 +29,10 @@ use crosstalk_spec::derived::flow::channel::policy::PolicyHistory;
 use crosstalk_spec::derived::flow::resource::ResourcePattern;
 use crosstalk_spec::derived::flow::transmission::Transmission;
 use crosstalk_spec::derived::flow::verdict::VerdictLog;
-use crosstalk_spec::ids::{AgentId, AlertId, AlertRuleId, ChannelId, ProjectionId, TransmissionId};
+use crosstalk_spec::ids::{
+    AgentId, AlertId, AlertRuleId, ChannelId, ConversationId, ExchangeId, ProjectionId, SpanId,
+    TransmissionId,
+};
 use crosstalk_spec::interfaces::l2_transport::{ConsumerGroup, DeadLetter};
 use crosstalk_spec::interfaces::l6_analysis::SearchResults;
 use crosstalk_spec::interfaces::l8_surface::audit::{AuditEntry, AuditFilter};
@@ -36,6 +40,13 @@ use crosstalk_spec::interfaces::l8_surface::channel_traffic::{
     ChannelTransmissionFilter, ChannelTransmissionPage,
 };
 use crosstalk_spec::interfaces::l8_surface::channels::{ChannelName, ChannelRow, PromotionPreview};
+use crosstalk_spec::interfaces::l8_surface::conversation::text::{
+    ConversationText, PartText, TextLimit, TextSlice,
+};
+use crosstalk_spec::interfaces::l8_surface::conversation::turn::{Reader, TurnPage};
+use crosstalk_spec::interfaces::l8_surface::conversation::{
+    ConversationFilter, ConversationHead, ConversationRow, SpanPoint, TurnWindow,
+};
 use crosstalk_spec::interfaces::l8_surface::evidence::TransmissionEvidence;
 use crosstalk_spec::interfaces::l8_surface::excerpt::ExcerptWindow;
 use crosstalk_spec::interfaces::l8_surface::export::{Export, ExportRequest};
@@ -51,10 +62,11 @@ use crosstalk_spec::interfaces::l8_surface::{
     ActionError, ActionOutcome, AlertFilter, Caller, OperatorAction, OperatorActions, QueryApi,
     QueryError, SinkInfo,
 };
+use crosstalk_spec::observed::message::PartRef;
 use crosstalk_spec::paging::{
     AgentList, AlertList, AlertRuleList, AuditList, ChannelList, ChannelTransmissionList,
-    DeadLetterList, EdgeTransmissionList, Page, PageRequest, ProjectionList, ResourceUseList,
-    SearchList, TopicList, TransmissionList,
+    ConversationList, DeadLetterList, EdgeTransmissionList, Page, PageRequest, ProjectionList,
+    ResourceUseList, SearchList, SpanReaderList, TopicList, TransmissionList,
 };
 use crosstalk_spec::support::TimeWindow;
 
@@ -100,6 +112,19 @@ impl<R: Route> QueryApi for Routed<R> {
         fn agent(&self, caller: &Caller, id: AgentId, window: TimeWindow)
             -> Option<Watermarked<AgentDetail>>;
         fn agent_names(&self, caller: &Caller, ids: &IdBatch<AgentId>) -> BTreeMap<AgentId, AgentName>;
+        fn conversations(&self, caller: &Caller, filter: &ConversationFilter, page: &PageRequest<ConversationList>)
+            -> Page<ConversationRow, ConversationList>;
+        fn conversation(&self, caller: &Caller, id: ConversationId) -> Option<ConversationHead>;
+        fn conversation_turns(&self, caller: &Caller, id: ConversationId, window: &TurnWindow)
+            -> Option<TurnPage>;
+        fn span_readers(&self, caller: &Caller, span: SpanId, page: &PageRequest<SpanReaderList>)
+            -> Option<Page<Reader, SpanReaderList>>;
+        fn exchange_turns(&self, caller: &Caller, ids: &IdBatch<ExchangeId>)
+            -> BTreeMap<ExchangeId, ExchangePlacement>;
+        fn span_points(&self, caller: &Caller, ids: &IdBatch<SpanId>) -> BTreeMap<SpanId, SpanPoint>;
+        fn conversation_text(&self, caller: &Caller, id: ConversationId, window: &TurnWindow, limit: TextLimit)
+            -> Option<ConversationText>;
+        fn part_text(&self, caller: &Caller, part: PartRef, slice: TextSlice) -> Option<PartText>;
         fn alert_rules(&self, caller: &Caller, filter: &AlertRuleFilter, page: &PageRequest<AlertRuleList>)
             -> Page<AlertRuleDef, AlertRuleList>;
         fn alert_rule(&self, caller: &Caller, id: AlertRuleId) -> Option<AlertRuleDef>;

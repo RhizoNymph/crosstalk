@@ -7,6 +7,7 @@
 
 use crosstalk_spec::ids::mint::UlidExhausted;
 use crosstalk_spec::interfaces::l3_reconstruction::agents::AgentReadError;
+use crosstalk_spec::interfaces::l3_reconstruction::conversations::ConversationReadError;
 use crosstalk_spec::interfaces::l3_reconstruction::lifecycle::AgentLifecycleError;
 use crosstalk_spec::interfaces::l3_reconstruction::{ResolveError, ThreadError};
 use crosstalk_store::{DbFailure, SerializableError, StoreError, classify};
@@ -77,6 +78,12 @@ impl StoreReason for AgentLifecycleError {
 }
 
 impl StoreReason for AgentReadError {
+    fn store(reason: String) -> Self {
+        Self::Store { reason }
+    }
+}
+
+impl StoreReason for ConversationReadError {
     fn store(reason: String) -> Self {
         Self::Store { reason }
     }

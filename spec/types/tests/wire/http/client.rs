@@ -5,6 +5,7 @@
 //! recorded request resolves back to its route and carries exactly the
 //! table's arguments, and that every query route is called by its method.
 
+use crate::interfaces::l8_surface::conversation::ExchangePlacement;
 use std::collections::{BTreeMap, HashSet};
 use std::sync::Mutex;
 
@@ -45,8 +46,7 @@ use crate::interfaces::l8_surface::conversation::text::{
 };
 use crate::interfaces::l8_surface::conversation::turn::{Reader, TurnPage};
 use crate::interfaces::l8_surface::conversation::{
-    ConversationFilter, ConversationHead, ConversationRow, SpanPoint, TurnIndex, TurnPoint,
-    TurnWindow,
+    ConversationFilter, ConversationHead, ConversationRow, SpanPoint, TurnIndex, TurnWindow,
 };
 use crate::interfaces::l8_surface::evidence::TransmissionEvidence;
 use crate::interfaces::l8_surface::excerpt::ExcerptWindow;
@@ -260,7 +260,7 @@ impl QueryApi for TableClient {
         &self,
         _: &Caller,
         ids: &IdBatch<ExchangeId>,
-    ) -> Result<BTreeMap<ExchangeId, TurnPoint>, QueryError> {
+    ) -> Result<BTreeMap<ExchangeId, ExchangePlacement>, QueryError> {
         self.send(Route::ExchangeTurns, |b| b.body(ids))
     }
 

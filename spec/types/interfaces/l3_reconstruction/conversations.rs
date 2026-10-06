@@ -67,6 +67,32 @@ pub struct TurnPoint {
     pub turn: TurnIndex,
 }
 
+/// Where one threaded exchange sits: the agent its turn was attributed
+/// to, its conversation and its turn. On the wire
+/// `{"agent": "01J…", "conversation": "01J…", "turn": 3}`.
+///
+/// `ConversationReads::locate` returns the agent as recorded; the
+/// surface's `exchange_turns` returns it resolved through
+/// `AgentDirectory::canonical` at the read
+/// (`surface.conversation.exchange-placement`), never stored resolved.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct ExchangePlacement {
+    pub agent: AgentId,
+    pub conversation: ConversationId,
+    pub turn: TurnIndex,
+}
+
+impl ExchangePlacement {
+    /// The conversation and turn.
+    pub fn point(&self) -> TurnPoint {
+        TurnPoint {
+            conversation: self.conversation,
+            turn: self.turn,
+        }
+    }
+}
+
 /// Turns `from .. from + size`. A request: `{"from": 0, "size": 20}`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", deny_unknown_fields)]
@@ -285,13 +311,15 @@ pub trait ConversationReads {
         window: &TurnWindow,
     ) -> impl Future<Output = Result<Option<TurnSlice>, ConversationReadError>> + Send;
 
-    /// For each exchange of `ids` that has been threaded, the conversation
-    /// and turn it is. Unthreaded and unknown ids are absent, so the map's
-    /// keys are a subset of `ids`.
+    /// For each exchange of `ids` that has been threaded, the turn it is:
+    /// its conversation, its index and the agent the turn was attributed
+    /// to, as recorded. Unthreaded and unknown ids are absent, so the
+    /// map's keys are a subset of `ids`.
     fn locate(
         &self,
         ids: &IdBatch<ExchangeId>,
-    ) -> impl Future<Output = Result<BTreeMap<ExchangeId, TurnPoint>, ConversationReadError>> + Send;
+    ) -> impl Future<Output = Result<BTreeMap<ExchangeId, ExchangePlacement>, ConversationReadError>>
+    + Send;
 
     /// The last turn of `parent` whose history lies wholly inside its first
     /// `shared_prefix` non-system messages: the greatest turn whose

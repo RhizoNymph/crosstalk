@@ -222,7 +222,7 @@ use channels::{ChannelName, ChannelRow, PromotionPreview};
 use conversation::text::{ConversationText, PartText, TextLimit, TextSlice};
 use conversation::turn::{Reader, TurnPage};
 use conversation::{
-    ConversationFilter, ConversationHead, ConversationRow, SpanPoint, TurnPoint, TurnWindow,
+    ConversationFilter, ConversationHead, ConversationRow, ExchangePlacement, SpanPoint, TurnWindow,
 };
 use evidence::TransmissionEvidence;
 use excerpt::ExcerptWindow;
@@ -482,15 +482,17 @@ pub trait QueryApi {
     ) -> impl Future<Output = Result<Option<Page<Reader, SpanReaderList>>, QueryError>> + Send;
 
     /// View. For each exchange of `ids` that has been threaded, keyed by
-    /// that id, the conversation and turn it is. Unthreaded and unknown ids
-    /// are left out. Bounded as `agent_names` is: more than
-    /// [`IdBatch::MAX`] distinct ids is refused before the call as
-    /// `InvalidInput(TooManyIds)`.
+    /// that id, where it sits ([`conversation::ExchangePlacement`]): its
+    /// turn's agent, resolved through `AgentDirectory::canonical` at the
+    /// read (never stored resolved), its conversation and its turn.
+    /// Unthreaded and unknown ids are left out. Bounded as `agent_names`
+    /// is: more than [`IdBatch::MAX`] distinct ids is refused before the
+    /// call as `InvalidInput(TooManyIds)`.
     fn exchange_turns(
         &self,
         caller: &Caller,
         ids: &IdBatch<ExchangeId>,
-    ) -> impl Future<Output = Result<BTreeMap<ExchangeId, TurnPoint>, QueryError>> + Send;
+    ) -> impl Future<Output = Result<BTreeMap<ExchangeId, ExchangePlacement>, QueryError>> + Send;
 
     /// View. For each span of `ids` that `SpanIndex::spans` holds, keyed by
     /// that id, where it sits: its author (canonical at the read), its

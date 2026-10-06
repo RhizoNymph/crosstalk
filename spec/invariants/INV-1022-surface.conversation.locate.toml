@@ -1,6 +1,6 @@
 [invariant]
 id = "surface.conversation.locate"
-statement = "exchange_turns maps an exchange to (c, i) iff turn i of conversation c is that exchange; span_points maps a span to its recorded exchange, that exchange's turn when it is threaded, its recorded location, and AgentDirectory::canonical of its recorded author at the read."
+statement = "exchange_turns maps an exchange to ExchangePlacement { agent, conversation: c, turn: i } iff turn i of conversation c is that exchange, with agent the agent that turn was attributed to as resolved through AgentDirectory::canonical at the read (never stored resolved), and leaves out unknown and never-threaded exchanges; span_points maps a span to its recorded exchange, that exchange's turn when it is threaded, its recorded location, and AgentDirectory::canonical of its recorded author at the read."
 kind = "domain"
 property = "postcondition"
 requires = ["unit", "integration"]

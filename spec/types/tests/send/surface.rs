@@ -28,12 +28,13 @@ use crate::interfaces::l8_surface::channel_traffic::{
     ChannelTransmissionFilter, ChannelTransmissionPage,
 };
 use crate::interfaces::l8_surface::channels::{ChannelName, ChannelRow, PromotionPreview};
+use crate::interfaces::l8_surface::conversation::ExchangePlacement;
 use crate::interfaces::l8_surface::conversation::text::{
     ConversationText, PartText, TextLimit, TextSlice,
 };
 use crate::interfaces::l8_surface::conversation::turn::{Reader, TurnPage};
 use crate::interfaces::l8_surface::conversation::{
-    ConversationFilter, ConversationHead, ConversationRow, SpanPoint, TurnPoint, TurnWindow,
+    ConversationFilter, ConversationHead, ConversationRow, SpanPoint, TurnWindow,
 };
 use crate::interfaces::l8_surface::errors::{ActionError, QueryError};
 use crate::interfaces::l8_surface::evidence::TransmissionEvidence;
@@ -178,7 +179,7 @@ impl QueryApi for Dummy {
         &self,
         _caller: &Caller,
         _ids: &IdBatch<ExchangeId>,
-    ) -> Result<BTreeMap<ExchangeId, TurnPoint>, QueryError> {
+    ) -> Result<BTreeMap<ExchangeId, ExchangePlacement>, QueryError> {
         match *self {}
     }
     async fn span_points(

@@ -11,6 +11,13 @@
 //! `0003_seen_messages`) are written in the same transaction; it also
 //! forgets the cluster's sightings older than the retention behind the
 //! exchange. [`PgConversations::forget_seen`] sweeps every agent's.
+//!
+//! The same transaction records the call's turn and, for a new
+//! conversation, its traffic source and origin columns (migration
+//! `0004_conversation_reads`); [`reads`] serves the spec's
+//! `ConversationReads` from them.
+
+mod reads;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -26,6 +33,7 @@ use sqlx::{PgConnection, PgPool};
 use super::config::ThreadConfig;
 use super::history::{ChainHash, Entry};
 use super::plan::{Extension, Planned, Target, ThreadReads, Write, plan};
+use super::reads::{Cursors, corpus_of, origin_text, outcome_text};
 use super::store::{
     ConversationStore, ResponseKey, StoredOrigin, StoredOutcome, ThreadInput, TranscriptEntry,
 };
@@ -94,8 +102,24 @@ fn stored_origin(origin: ConversationOrigin) -> StoredOrigin {
 type HeadRow = (String, i32, Vec<u8>, Option<Vec<u8>>, i64);
 
 /// A transcript row: ordinal, message, role, exchange, history index,
-/// output.
-type EntryRow = (i32, Vec<u8>, String, String, Option<i32>, bool);
+/// output, carried over.
+type EntryRow = (i32, Vec<u8>, String, String, Option<i32>, bool, bool);
+
+/// The transcript entry a row holds.
+fn entry_of(row: &EntryRow) -> Result<TranscriptEntry, CodecError> {
+    let (ordinal, message, role, exchange, index, output, carried_over) = row;
+    Ok(TranscriptEntry {
+        ordinal: count_of("conversation_entries.ordinal", *ordinal)?,
+        message: message_hash("conversation_entries.message", message)?,
+        role: role_of(role)?,
+        exchange: id_of("conversation_entries.exchange", exchange)?,
+        history_index: index
+            .map(|index| count_of("conversation_entries.history_index", index))
+            .transpose()?,
+        output: *output,
+        carried_over: *carried_over,
+    })
+}
 
 fn ids(members: &[AgentId]) -> Vec<String> {
     members.iter().map(|id| id_text(*id)).collect()
@@ -390,6 +414,50 @@ async fn see(
 }
 
 /// Record `write` for `input`.
+/// Record the call's turn of `conversation` (`id`), whose entries start at
+/// ordinal `start`, and count it on the conversation.
+async fn record_turn(
+    conn: &mut PgConnection,
+    input: &ThreadInput,
+    write: &Write,
+    id: &str,
+    start: i32,
+) -> Result<(), TxFailure> {
+    let (turns,): (i32,) =
+        sqlx::query_as("SELECT turns FROM reconstruct.conversations WHERE id = $1 FOR UPDATE")
+            .bind(id)
+            .fetch_one(&mut *conn)
+            .await?;
+    let history_end = i32::try_from(write.history_len).map_err(|_| CodecError::Encode {
+        reason: "history length beyond the stored range".to_owned(),
+    })?;
+    sqlx::query(
+        "INSERT INTO reconstruct.conversation_turns \
+         (conversation, turn, exchange, first_ordinal, entries, agent, started_at, outcome, \
+          history_end) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+    )
+    .bind(id)
+    .bind(turns)
+    .bind(id_text(input.exchange))
+    .bind(start)
+    .bind(count(write.appended.len())?)
+    .bind(id_text(input.agent))
+    .bind(micros(input.at)?)
+    .bind(outcome_text(write.outcome.kind()))
+    .bind(history_end)
+    .execute(&mut *conn)
+    .await?;
+    sqlx::query(
+        "UPDATE reconstruct.conversations SET turns = turns + 1, last_turn_at = $2 WHERE id = $1",
+    )
+    .bind(id)
+    .bind(micros(input.at)?)
+    .execute(&mut *conn)
+    .await?;
+    Ok(())
+}
+
 async fn apply(
     conn: &mut PgConnection,
     input: &ThreadInput,
@@ -413,8 +481,9 @@ async fn apply(
         } => {
             sqlx::query(
                 "INSERT INTO reconstruct.conversations \
-                 (id, agent, origin, history_len, head, last_system, updated) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7)",
+                 (id, agent, origin, history_len, head, last_system, updated, source, \
+                  replay_corpus, origin_kind, origin_of, started_at, last_turn_at, turns) \
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $12, 0)",
             )
             .bind(&id)
             .bind(id_text(agent))
@@ -423,6 +492,11 @@ async fn apply(
             .bind(&head)
             .bind(&last_system)
             .bind(updated)
+            .bind(json(&input.source)?)
+            .bind(corpus_of(&input.source))
+            .bind(origin_text(origin.kind()))
+            .bind(origin.source().map(id_text))
+            .bind(micros(input.at)?)
             .execute(&mut *conn)
             .await?;
             match base {
@@ -430,8 +504,9 @@ async fn apply(
                 Some((parent, k)) => {
                     let copied = sqlx::query(
                         "INSERT INTO reconstruct.conversation_entries \
-                         (conversation, ordinal, message, role, exchange, history_index, chain, output) \
-                         SELECT $1, ordinal, message, role, exchange, history_index, chain, output \
+                         (conversation, ordinal, message, role, exchange, history_index, chain, output, \
+                          carried_over) \
+                         SELECT $1, ordinal, message, role, exchange, history_index, chain, output, false \
                          FROM reconstruct.conversation_entries \
                          WHERE conversation = $2 AND ordinal <= ( \
                              SELECT ordinal FROM reconstruct.conversation_entries \
@@ -477,6 +552,7 @@ async fn apply(
         let mut indexes: Vec<Option<i32>> = Vec::with_capacity(write.appended.len());
         let mut chains: Vec<Option<Vec<u8>>> = Vec::with_capacity(write.appended.len());
         let mut outputs = Vec::with_capacity(write.appended.len());
+        let mut carried = Vec::with_capacity(write.appended.len());
         for (offset, new) in write.appended.iter().enumerate() {
             ordinals.push(start + count(offset)?);
             messages.push(hash_bytes(&new.entry.message));
@@ -496,13 +572,16 @@ async fn apply(
                 }
             }
             outputs.push(new.output);
+            carried.push(new.carried_over);
         }
         sqlx::query(
             "INSERT INTO reconstruct.conversation_entries \
-             (conversation, ordinal, message, role, exchange, history_index, chain, output) \
-             SELECT $1, o, m, r, $2, h, c, out \
-             FROM UNNEST($3::integer[], $4::bytea[], $5::text[], $6::integer[], $7::bytea[], $8::boolean[]) \
-             AS t(o, m, r, h, c, out)",
+             (conversation, ordinal, message, role, exchange, history_index, chain, output, \
+              carried_over) \
+             SELECT $1, o, m, r, $2, h, c, out, co \
+             FROM UNNEST($3::integer[], $4::bytea[], $5::text[], $6::integer[], $7::bytea[], \
+                         $8::boolean[], $9::boolean[]) \
+             AS t(o, m, r, h, c, out, co)",
         )
         .bind(&id)
         .bind(id_text(input.exchange))
@@ -512,9 +591,11 @@ async fn apply(
         .bind(indexes)
         .bind(chains)
         .bind(outputs)
+        .bind(carried)
         .execute(&mut *conn)
         .await?;
     }
+    record_turn(conn, input, write, &id, start).await?;
     sqlx::query(
         "INSERT INTO reconstruct.thread_records (exchange, conversation, outcome) VALUES ($1, $2, $3)",
     )
@@ -545,6 +626,7 @@ pub struct PgConversations {
     pool: PgPool,
     retry: SerializableRetry,
     config: ThreadConfig,
+    cursors: Cursors,
 }
 
 impl PgConversations {
@@ -555,7 +637,15 @@ impl PgConversations {
             pool,
             retry: SerializableRetry::default(),
             config: ThreadConfig::default(),
+            cursors: Cursors::default(),
         }
+    }
+
+    /// The same store, its list cursors tagged with `key`: every node
+    /// serving one list shares it.
+    pub fn with_cursor_key(mut self, key: [u8; 32]) -> Self {
+        self.cursors = Cursors { key };
+        self
     }
 
     /// Use `config` for every threading call.
@@ -652,25 +742,14 @@ impl ConversationStore for PgConversations {
     async fn transcript(&self, id: ConversationId) -> Result<Vec<TranscriptEntry>, ThreadError> {
         let read = async {
             let rows: Vec<EntryRow> = sqlx::query_as(
-                "SELECT ordinal, message, role, exchange, history_index, output \
+                "SELECT ordinal, message, role, exchange, history_index, output, carried_over \
                  FROM reconstruct.conversation_entries WHERE conversation = $1 ORDER BY ordinal",
             )
             .bind(id_text(id))
             .fetch_all(&self.pool)
             .await?;
             rows.iter()
-                .map(|(ordinal, message, role, exchange, index, output)| {
-                    Ok(TranscriptEntry {
-                        ordinal: count_of("conversation_entries.ordinal", *ordinal)?,
-                        message: message_hash("conversation_entries.message", message)?,
-                        role: role_of(role)?,
-                        exchange: id_of("conversation_entries.exchange", exchange)?,
-                        history_index: index
-                            .map(|index| count_of("conversation_entries.history_index", index))
-                            .transpose()?,
-                        output: *output,
-                    })
-                })
+                .map(entry_of)
                 .collect::<Result<Vec<_>, CodecError>>()
                 .map_err(TxFailure::from)
         };

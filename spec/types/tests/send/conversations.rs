@@ -1,6 +1,7 @@
 //! The conversation reads' store traits: L1's exchange store, L3's
 //! conversation reads and L4's provenance reads.
 
+use crate::interfaces::l3_reconstruction::conversations::ExchangePlacement;
 use std::collections::BTreeMap;
 
 use crate::batch::IdBatch;
@@ -11,7 +12,7 @@ use crate::interfaces::l1_canonical::exchanges::{
 };
 use crate::interfaces::l3_reconstruction::conversations::{
     ConversationQuery, ConversationReadError, ConversationReads, StoredConversation, TurnIndex,
-    TurnPoint, TurnSlice, TurnWindow,
+    TurnSlice, TurnWindow,
 };
 use crate::interfaces::l4_provenance::reads::{
     ProvenanceReadError, ProvenanceReads, ReaderPage, ScanStatus, StoredSpan,
@@ -78,7 +79,7 @@ impl ConversationReads for Dummy {
     async fn locate(
         &self,
         _ids: &IdBatch<ExchangeId>,
-    ) -> Result<BTreeMap<ExchangeId, TurnPoint>, ConversationReadError> {
+    ) -> Result<BTreeMap<ExchangeId, ExchangePlacement>, ConversationReadError> {
         match *self {}
     }
     async fn branch_turn(

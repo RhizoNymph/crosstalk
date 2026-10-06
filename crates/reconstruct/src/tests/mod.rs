@@ -3,11 +3,13 @@
 
 mod consumer;
 mod consumer_props;
+mod conversation_reads;
 mod dst;
 mod evidence;
 mod fixtures;
 mod pg;
 mod pg_agents;
+mod pg_conversation_reads;
 mod pg_props;
 mod pg_threads;
 mod placement;

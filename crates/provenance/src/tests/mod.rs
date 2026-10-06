@@ -9,6 +9,7 @@ mod decode;
 mod fingerprint;
 pub(crate) mod fixtures;
 mod match_quality;
+pub(crate) mod reads;
 pub(crate) mod scenarios;
 mod segment;
 mod short;

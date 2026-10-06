@@ -12,10 +12,17 @@ use axum::http::header::LOCATION;
 use axum::response::Response;
 use crosstalk_spec::aggregates::filter::TopicVersionSelector;
 use crosstalk_spec::aggregates::topic::TopicModelVersion;
-use crosstalk_spec::ids::{AgentId, AlertId, AlertRuleId, ChannelId, ProjectionId, TransmissionId};
+use crosstalk_spec::batch::IdBatch;
+use crosstalk_spec::ids::{
+    AgentId, AlertId, AlertRuleId, ChannelId, ConversationId, ExchangeId, ProjectionId, SpanId,
+    TransmissionId,
+};
 use crosstalk_spec::interfaces::l2_transport::ConsumerGroup;
+use crosstalk_spec::interfaces::l8_surface::conversation::TurnWindow;
+use crosstalk_spec::interfaces::l8_surface::conversation::text::TextLimit;
 use crosstalk_spec::interfaces::l8_surface::http::bodies::{
-    EdgeTransmissionsBody, FitProjectionBody, GraphBody, OverviewBody, SearchBody, SeriesBody,
+    EdgeTransmissionsBody, FitProjectionBody, GraphBody, OverviewBody, PartTextBody, SearchBody,
+    SeriesBody,
 };
 use crosstalk_spec::interfaces::l8_surface::http::{PathArg, Route};
 use crosstalk_spec::interfaces::l8_surface::{Caller, QueryError};
@@ -74,6 +81,44 @@ pub(super) async fn query<S: Surface>(
             ok(route, &s.agent(c, id, window).await?)
         }
         Route::AgentNames => ok(route, &s.agent_names(c, &checked::id_batch(i)?).await?),
+        Route::Conversations => ok(
+            route,
+            &s.conversations(c, &i.query("filter")?, &i.query("page")?)
+                .await?,
+        ),
+        Route::Conversation => {
+            let id: ConversationId = path(i)?;
+            ok(route, &s.conversation(c, id).await?)
+        }
+        Route::ConversationTurns => {
+            let id: ConversationId = path(i)?;
+            ok(
+                route,
+                &s.conversation_turns(c, id, &i.query("window")?).await?,
+            )
+        }
+        Route::SpanReaders => {
+            let id: SpanId = path(i)?;
+            ok(route, &s.span_readers(c, id, &i.query("page")?).await?)
+        }
+        Route::ExchangeTurns => {
+            let ids: IdBatch<ExchangeId> = checked::id_batch(i)?;
+            ok(route, &s.exchange_turns(c, &ids).await?)
+        }
+        Route::SpanPoints => {
+            let ids: IdBatch<SpanId> = checked::id_batch(i)?;
+            ok(route, &s.span_points(c, &ids).await?)
+        }
+        Route::ConversationText => {
+            let id: ConversationId = path(i)?;
+            let window: TurnWindow = i.query("window")?;
+            let limit: TextLimit = i.query("limit")?;
+            ok(route, &s.conversation_text(c, id, &window, limit).await?)
+        }
+        Route::PartText => {
+            let PartTextBody { part, slice } = i.body()?;
+            ok(route, &s.part_text(c, part, slice).await?)
+        }
         Route::AlertRules => ok(
             route,
             &s.alert_rules(c, &i.query("filter")?, &i.query("page")?)

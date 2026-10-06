@@ -283,6 +283,13 @@ fn input(error: &InputError) -> String {
         InputError::UnsupportedFormat { format } => {
             format!("the gateway does not write {format:?} exports")
         }
+        InputError::TextLimitOutOfRange { max, got } => {
+            format!("a text limit of {got} bytes is outside 1 to {max}")
+        }
+        InputError::PartWithoutText { index } => format!("part {index} has no text"),
+        InputError::SliceOutsideText { from, part_len } => {
+            format!("byte {from} is not a character start within the part's {part_len} bytes")
+        }
         InputError::MalformedRequest { reason, .. } => {
             format!("the request could not be read: {reason}")
         }
