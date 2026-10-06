@@ -13,4 +13,6 @@ pub mod query;
 pub mod sections;
 
 #[cfg(test)]
+mod links_tests;
+#[cfg(test)]
 mod tests;
