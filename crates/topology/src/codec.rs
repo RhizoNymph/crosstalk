@@ -16,7 +16,7 @@ use crosstalk_spec::aggregates::topic::TopicModelVersion;
 use crosstalk_spec::derived::flow::access::AccessKind;
 use crosstalk_spec::derived::flow::transmission::Route;
 use crosstalk_spec::derived::flow::verdict::Verdict;
-use crosstalk_spec::ids::{AgentId, ChannelId, ResourceId, TopicId, TransmissionId};
+use crosstalk_spec::ids::{AgentId, ChannelId, EventId, ResourceId, TopicId, TransmissionId};
 use crosstalk_spec::support::{TimeWindow, Timestamp};
 
 /// A value that does not fit its column, or a column that does not decode.
@@ -116,6 +116,7 @@ macro_rules! id_codec {
 
 id_codec!(agent, stored_agent, AgentId, "agent");
 id_codec!(channel, stored_channel, ChannelId, "channel");
+id_codec!(event, stored_event, EventId, "event");
 id_codec!(resource, stored_resource, ResourceId, "resource");
 id_codec!(topic, stored_topic, TopicId, "topic");
 id_codec!(

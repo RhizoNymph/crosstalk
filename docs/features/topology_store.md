@@ -23,14 +23,21 @@ TimescaleDB), sqlx with runtime-checked queries (decision D2).
 - The transactional outbox and its relay. They publish the events the store
   decides after commit: `TopicVersionActivated`, `WatermarkAdvanced`,
   `Changed::Watermark`, and coalesced traffic changes (the
-  `Changed::Traffic` hook).
+  `Changed::Traffic` hook). Each row is stamped with its envelope id and
+  time once, before its first publish (`0002_outbox_ids.sql`,
+  `topology.outbox.stable-envelope-id`), so a relay retried after a crash
+  republishes the same ids (P7.3, workstream W6 of
+  [postgres_stores](postgres_stores.md)).
 - The topology consumer (group `topology`), generic over the spec
-  `EdgeStore`, `FrontierSource` and an `Announce` publisher.
+  `EdgeStore`, `FrontierSource` and an `Announce` publisher. The
+  `EdgeUpdated` a delivery causes has an id derived from the delivery's
+  (`EventId::derive`, `transport.consumer.derived-envelope-ids`).
 
 ## Non-scope
 
-- `PgFrontierSource` (the transport's delivery tables and the proxy's
-  in-flight registry). The consumer takes any `FrontierSource`.
+- `PgFrontierSource` (the transport's delivery tables, L5's shard ticks,
+  the proxy's in-flight registry and the publish spool). It lives in the
+  gateway (P7.3 W8). The consumer takes any `FrontierSource`.
 - `WatermarkRead` for readers outside L7. That is a cache of
   `WatermarkAdvanced`, which the wiring step builds from the bus.
 - Wiring the consumer and relay into the gateway (`pipeline::Pipeline`).
@@ -45,7 +52,9 @@ TimescaleDB), sqlx with runtime-checked queries (decision D2).
 
 ```text
 bus ── group "topology" ──▶ consumer::run
-  TransmissionClassified ─▶ apply ─ Ok(key) ─▶ Announce EdgeUpdated(key) ─▶ ack
+  TransmissionClassified ─▶ apply ─ Ok(key) ─▶ Announce Envelope {
+                              id: EventId::derive(delivery id, "edge-updated", 0),
+                              at: delivery at, EdgeUpdated(key) } ─▶ ack
                               │        Refit: then activate(version)
                               ├ SelfEdge | VersionNotRetained ─▶ ack
                               └ LateContribution (logged at error) | Store ─▶ nack
@@ -58,8 +67,11 @@ bus ── group "topology" ──▶ consumer::run
 PgEdgeStore write (READ COMMITTED):
   state row FOR SHARE (apply) | FOR UPDATE (activate, drop_version, advance_watermark)
   rows + outbox rows ─▶ COMMIT ─▶ Wake::poke (capacity-1 channel)
-OutboxRelay::run ─▶ drain: advisory lock, rows by seq, Announce, delete
-  traffic rows ─▶ one hull window per batch ─▶ traffic_notification (HOOK)
+OutboxRelay::run(announcer, OutboxIds, poll) ─▶ drain, batch by batch:
+  txn A (advisory lock): unstamped traffic rows ─▶ the last one holds their hull
+                         every unstamped row ─▶ envelope_id, at (OutboxIds) ─▶ COMMIT
+  txn B (advisory lock): stamped rows by seq ─▶ Announce(Envelope { id, at, event })
+                         (traffic: traffic_notification, HOOK) ─▶ DELETE published ─▶ COMMIT
 
 PgEdgeStore read (REPEATABLE READ READ ONLY, one snapshot):
   watermark + dropped versions ─▶ TopicCatalog history ─▶ resolve version
@@ -157,9 +169,27 @@ self-edge or a late contribution. After commit the store pokes the relay
 through a capacity-1 channel, so a burst of commits wakes it once. The
 relay also polls.
 
-Each drain reads up to 512 rows in seq order. It publishes the events in
-order, then coalesces every traffic row of the batch into one window that
-covers them all. That window goes to `outbox::traffic_notification`.
+Each drain works in batches of up to 512 rows, in two transactions under
+the drain's advisory lock:
+
+1. **Stamp.** Among the unstamped rows, it coalesces the traffic rows into
+   the last of them, whose window becomes the hull of all of them (the
+   others are deleted). It then stamps every unstamped row with an
+   envelope id and time from `OutboxIds` (the injected clock and a ULID
+   generator, so ids increase with seq), and commits.
+2. **Publish.** It reads the stamped rows in seq order and announces each
+   as `Envelope { id, at, event }`. A traffic row's event is
+   `outbox::traffic_notification(window)`. It deletes the rows it
+   published and commits. A failed announce stops the batch; the rows from
+   there on stay, stamped.
+
+A stamped row is never re-stamped or merged again. A drain that fails or is
+dropped between the stamp and the delete leaves the rows stamped, and the
+next drain republishes them under the same ids (each event lands once in a
+bus log that is idempotent on ids, such as `PgBus`). The publish
+transaction holds the lock while it publishes, so drains never interleave
+and events reach the bus in commit order. Rows staged before
+`0002_outbox_ids.sql` are unstamped and get stamped by the next drain.
 
 **HOOK:** `traffic_notification` returns `None` until the follow-mode
 spec batch adds `Changed::Traffic(TimeWindow)`. It then returns
@@ -172,6 +202,7 @@ deletes, the notification covers every committed change.
 | File | Role | Key exports |
 | --- | --- | --- |
 | `crates/topology/migrations/0001_topology.sql` | The `topology` schema: state, versions, contributions, refit records, partitioned edge and access buckets, accesses, verdicts, cursors, outbox | — |
+| `crates/topology/migrations/0002_outbox_ids.sql` | Outbox stamps: `envelope_id` (ULID text), `at` (micros), set together (`outbox_stamped`) | — |
 | `crates/topology/src/lib.rs` | Crate doc, modules | — |
 | `crates/topology/src/codec.rs` | Spec values as columns and back (ULID text, bigint micros, route JSON, op and verdict codes) | `CodecError`, encoders and decoders |
 | `crates/topology/src/env.rs` | What reads consult from other layers | `TopologyEnv`, `Env { catalog, directory, nodes }`, `EnvAliases`, `default_agent`, `default_channel` |
@@ -183,12 +214,12 @@ deletes, the notification covers every committed change.
 | `crates/topology/src/store/edge_store.rs` | `impl EdgeStore for PgEdgeStore` | — |
 | `crates/topology/src/store/partition.rs` | On-demand range partitions | `PartitionSpan`, `Partitions`, `Bucketed` |
 | `crates/topology/src/store/error.rs` | Failures and their mapping to `EdgeError` / `EdgeQueryError` | `DbError`, `Failed` |
-| `crates/topology/src/outbox.rs` | Outbox, relay, publisher | `Announce`, `AnnounceError`, `BusAnnouncer`, `OutboxRelay` (`run`), `drain`, `Wake`, `traffic_notification` (hook), `RelayError` |
-| `crates/topology/src/consumer.rs` | The topology consumer | `GROUP`, `SUBJECTS`, `group`, `ConsumerSettings`, `run`, `handle`, `recompute`, `Outcome` |
+| `crates/topology/src/outbox.rs` | Outbox, stamping relay, publisher | `Announce` (`announce(Envelope)`), `BusAnnouncer` (`new(bus)`), `OutboxIds` (`new(clock, entropy)`), `StampError`, `OutboxRelay` (`run(announcer, ids, poll)`), `drain(pool, &mut ids, announcer)`, `Wake`, `traffic_notification` (hook), `RelayError` |
+| `crates/topology/src/consumer.rs` | The topology consumer | `GROUP`, `SUBJECTS`, `group`, `EDGE_UPDATED`, `edge_updated`, `ConsumerSettings`, `run`, `handle(store, announcer, &Envelope)`, `recompute`, `Outcome` |
 | `crates/topology/src/tests/` | Fixed-input tests, shared support (`PgSubject` for the model harness) | — |
-| `crates/topology/src/integration/` | The model test against `InMemoryEdgeStore`, and one-behaviour Postgres scenarios | — |
+| `crates/topology/src/integration/` | The model test against `InMemoryEdgeStore`, one-behaviour Postgres scenarios, the outbox relay's crash points (`outbox`), the consumer across a restart (`consumer`) | `outbox_ids` (test helper) |
 | `crates/topology/src/props/` | Proptest properties against Postgres (graph, series, versions) | — |
-| `crates/topology/src/dst/` | Paused-time consumer tests over `MpscBus` and the reference store | — |
+| `crates/topology/src/dst/` | Paused-time consumer tests over `MpscBus` and the reference store; `restart`: seeded watermark advances with restarts over Postgres | — |
 
 ## Invariants and constraints
 
@@ -207,7 +238,12 @@ deletes, the notification covers every committed change.
   (`topology.retention.*`).
 - Events the store decides are in the outbox exactly when their change
   committed. They are published after commit, in commit order, at least
-  once.
+  once, each under one envelope id fixed in a committed transaction before
+  its first publish (`topology.outbox.stable-envelope-id`).
+- Every envelope the consumer publishes is a function of the delivery:
+  `EdgeUpdated`'s id is `EventId::derive(delivery id, "edge-updated", 0)`
+  and its time the delivery's (`transport.consumer.derived-envelope-ids`).
+  No id is minted at publish time anywhere in the crate.
 - The consumer acks a contribution only after its apply committed and its
   `EdgeUpdated` published. It acks self-edges and dropped versions. It
   recomputes the watermark at least once per bucket width
@@ -225,12 +261,21 @@ deletes, the notification covers every committed change.
 - `integration`: the model test (32 cases of up to 40 operations) and
   Postgres scenarios: redelivery, concurrency, immediate reads,
   monotonicity, the drill-down against the graph, drops, the outbox order,
-  and the watermark across a restart.
+  and the watermark across a restart. `integration::outbox`: the relay
+  stopped after the stamp, after some publishes and after every publish
+  (dropped or failed), then a new relay: each event once in the log under
+  its stamp; uncommitted rows are never stamped or published; traffic rows
+  coalesce once. `integration::consumer`: a delivery applied by a process
+  that died before publishing is counted once by the next process, which
+  publishes the derived `EdgeUpdated`.
 - `props` (and `tests::verdict_props`): 37 properties, 10 cases each,
   every case on a fresh store.
 - `dst`: the consumer under paused time. These cover a self-edge acked
   once, a crash between apply and publish, `EdgeUpdated` never before its
-  apply, and the recompute cadence.
+  apply, the recompute cadence, and redeliveries republishing the same
+  derived envelope. `dst::restart` (Postgres): seeded advances and
+  restarts never lower the watermark, a restarted store reads the
+  persisted one, and the relayed `WatermarkAdvanced` events increase.
 
 Every database test passes with a skip line when `TEST_DATABASE_URL` is
 unset.

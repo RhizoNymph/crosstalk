@@ -13,6 +13,15 @@
 //! every bucket width  ─▶ FrontierSource::frontier ─▶ advance_watermark
 //! ```
 //!
+//! **Envelope ids.** The `EdgeUpdated` a delivery causes is published as
+//! `Envelope { id: EventId::derive(delivery id, EDGE_UPDATED, 0), at:
+//! delivery's at }`: a function of the delivery alone, so a redelivery
+//! republishes the same envelope, which the bus and every consumer
+//! deduplicate (`transport.consumer.derived-envelope-ids`). The events the
+//! store decides (`TopicVersionActivated`, `WatermarkAdvanced`, ...) go
+//! through its outbox, whose relay stamps them once
+//! ([`crate::outbox`]).
+//!
 //! A delivery is acked only after everything it causes is done: the apply
 //! committed and, for an applied contribution, `EdgeUpdated` published. A
 //! failure before that is nacked, so the bus redelivers it; every store
@@ -29,9 +38,11 @@
 use std::num::NonZeroU64;
 use std::time::Duration;
 
+use crosstalk_spec::aggregates::edge::EdgeKey;
 use crosstalk_spec::events::detect::DetectEvent;
 use crosstalk_spec::events::insight::{ClassificationCause, InsightEvent};
-use crosstalk_spec::events::{BusEvent, Subject};
+use crosstalk_spec::events::{BusEvent, Envelope, Subject};
+use crosstalk_spec::ids::EventId;
 use crosstalk_spec::interfaces::l2_transport::{ConsumerGroup, Subscription};
 use crosstalk_spec::interfaces::l7_topology::{
     AccessContribution, EdgeContribution, EdgeError, EdgeStore, FrontierSource,
@@ -51,6 +62,20 @@ pub const SUBJECTS: [Subject; 5] = [
     Subject::VerdictSet,
     Subject::AccessRecorded,
 ];
+
+/// The label of the `EdgeUpdated` a delivery causes, for
+/// [`EventId::derive`]. Each delivery causes at most one, ordinal 0.
+pub const EDGE_UPDATED: &str = "edge-updated";
+
+/// The envelope of the `EdgeUpdated` for `key` that the delivery `cause`
+/// causes: its id derived from the delivery's, its time the delivery's.
+pub fn edge_updated(cause: &Envelope, key: EdgeKey) -> Envelope {
+    Envelope {
+        id: EventId::derive(cause.id, EDGE_UPDATED, 0),
+        at: cause.at,
+        event: BusEvent::Insight(InsightEvent::EdgeUpdated(key)),
+    }
+}
 
 /// The group as the bus names it.
 pub fn group() -> ConsumerGroup {
@@ -127,7 +152,7 @@ pub async fn run<S, E, F, A>(
                     }
                 };
                 let event = delivery.envelope.id.ulid_text();
-                match handle(&mut store, &announcer, &delivery.envelope.event).await {
+                match handle(&mut store, &announcer, &delivery.envelope).await {
                     Outcome::Ack => {
                         if let Err(error) = subscription.ack(delivery.id).await {
                             tracing::warn!(group = GROUP, event = %event, error = ?error, "ack failed; the bus will redeliver");
@@ -169,14 +194,14 @@ pub async fn recompute<E: EdgeStore, F: FrontierSource>(store: &mut E, frontier:
     }
 }
 
-/// Handle one event: what the store must do for it, and whether the
-/// delivery can be acked.
+/// Handle one delivered envelope: what the store must do for its event,
+/// and whether the delivery can be acked.
 pub async fn handle<E: EdgeStore, A: Announce>(
     store: &mut E,
     announcer: &A,
-    event: &BusEvent,
+    envelope: &Envelope,
 ) -> Outcome {
-    match event {
+    match &envelope.event {
         BusEvent::Insight(InsightEvent::TransmissionClassified {
             cause,
             transmission,
@@ -197,7 +222,7 @@ pub async fn handle<E: EdgeStore, A: Announce>(
                 classification: classification.clone(),
                 cause: *cause,
             };
-            classified(store, announcer, &contribution).await
+            classified(store, announcer, envelope, &contribution).await
         }
         BusEvent::Insight(InsightEvent::TopicVersionReady {
             version,
@@ -248,15 +273,13 @@ pub async fn handle<E: EdgeStore, A: Announce>(
 async fn classified<E: EdgeStore, A: Announce>(
     store: &mut E,
     announcer: &A,
+    cause: &Envelope,
     contribution: &EdgeContribution,
 ) -> Outcome {
     let version = contribution.classification.version;
     match store.apply(contribution).await {
         Ok(key) => {
-            if let Err(error) = announcer
-                .announce(BusEvent::Insight(InsightEvent::EdgeUpdated(key)))
-                .await
-            {
+            if let Err(error) = announcer.announce(edge_updated(cause, key)).await {
                 return nack("publish EdgeUpdated", &error);
             }
         }
