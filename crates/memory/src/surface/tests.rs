@@ -4,8 +4,9 @@
 use crosstalk_spec::aggregates::alert::{Alert, AlertState, AlertSubject};
 use crosstalk_spec::ids::{AlertId, ConfigHash};
 use crosstalk_spec::interfaces::l8_surface::audit::{
-    AuditAuthor, AuditBody, AuditEntry, AuditError, AuditFilter, AuditLog, AuditOutcome,
-    AuditSubject, ConfigChange, ConfigOutcome, ConfigRecord, OperatorRecord,
+    AuditAuthor, AuditBody, AuditEntry, AuditError, AuditFilter, AuditIntent, AuditIntents,
+    AuditLog, AuditOutcome, AuditSubject, ConfigChange, ConfigOutcome, ConfigRecord,
+    OperatorRecord,
 };
 use crosstalk_spec::interfaces::l8_surface::operators::{
     AccessConfig, AccessMode, CallerError, InvalidAccessConfig, OperatorConfig, OperatorLoadError,
@@ -397,4 +398,87 @@ async fn fake_sink_records_and_fails_on_demand() {
     sink_double.deliver(&alert).await.unwrap();
     assert_eq!(sink_double.delivered(), vec![alert.clone(), alert]);
     assert_eq!(sink_double.id(), sink(1));
+}
+
+fn acknowledge_intent(n: u64, at: u64, alert: AlertId) -> AuditIntent {
+    let caller = CallerSnapshot::new(operator(1), PermissionSet::ALL).unwrap();
+    AuditIntent::new(
+        audit_id(n),
+        ts(at),
+        caller,
+        OperatorAction::Acknowledge { alert },
+    )
+    .unwrap()
+}
+
+#[tokio::test]
+async fn intent_completed_with_its_entry_leaves_nothing_to_recover() {
+    // surface.audit.no-silent-effect
+    let mut log = InMemoryAuditLog::new();
+    let intent = acknowledge_intent(1, 10, AlertId::from_ulid(raw(1)));
+    log.intend(&intent).await.unwrap();
+    log.intend(&intent).await.unwrap();
+    // The intent reserves its id: no plain entry may take it.
+    let squatter = config_entry(1, 10, ConfigChange::SetAccessMode(AccessMode::Trusted));
+    assert_eq!(
+        log.append(squatter).await,
+        Err(AuditError::IdReused(audit_id(1)))
+    );
+    // Nothing is listed until the call's entry is.
+    assert!(log.entries().is_empty());
+    let entry = intent
+        .entry(AuditOutcome::Succeeded(ActionOutcome::Applied))
+        .unwrap();
+    log.complete(entry.clone()).await.unwrap();
+    assert_eq!(log.entries(), vec![entry]);
+    assert_eq!(log.recover_interrupted().await, Ok(Vec::new()));
+    // Its id is now the entry's.
+    assert_eq!(
+        log.intend(&intent).await,
+        Err(AuditError::IdReused(audit_id(1)))
+    );
+}
+
+#[tokio::test]
+async fn leftover_intents_are_recovered_as_interrupted_oldest_first() {
+    // surface.audit.no-silent-effect
+    let mut log = InMemoryAuditLog::new();
+    let alert = AlertId::from_ulid(raw(1));
+    let later = acknowledge_intent(1, 30, alert);
+    let earlier = acknowledge_intent(2, 20, alert);
+    log.intend(&later).await.unwrap();
+    log.intend(&earlier).await.unwrap();
+    assert_eq!(
+        log.recover_interrupted().await,
+        Ok(vec![audit_id(2), audit_id(1)])
+    );
+    assert_eq!(
+        log.entries(),
+        vec![later.interrupted(), earlier.interrupted()]
+    );
+    assert_eq!(log.recover_interrupted().await, Ok(Vec::new()));
+}
+
+#[tokio::test]
+async fn completion_must_record_the_intended_call() {
+    let mut log = InMemoryAuditLog::new();
+    let intent = acknowledge_intent(1, 10, AlertId::from_ulid(raw(1)));
+    log.intend(&intent).await.unwrap();
+    let other = acknowledge_intent(1, 10, AlertId::from_ulid(raw(2)));
+    assert_eq!(
+        log.intend(&other).await,
+        Err(AuditError::IdReused(audit_id(1)))
+    );
+    let wrong = other
+        .entry(AuditOutcome::Succeeded(ActionOutcome::Applied))
+        .unwrap();
+    assert_eq!(
+        log.complete(wrong).await,
+        Err(AuditError::IdReused(audit_id(1)))
+    );
+    // Without an intent, complete is append.
+    let plain = config_entry(2, 10, ConfigChange::SetAccessMode(AccessMode::Trusted));
+    log.complete(plain.clone()).await.unwrap();
+    assert_eq!(log.entries(), vec![plain]);
+    assert_eq!(log.recover_interrupted().await, Ok(vec![audit_id(1)]));
 }

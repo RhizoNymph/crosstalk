@@ -587,6 +587,28 @@ for the control flow.
   on it, and the deployment's role gets no such grant (the spec's
   `AuditLog` contract). `OperatorStore::load` diffs, stores the directory
   and appends the config entries in one transaction (INV-543, INV-555).
+- **W7 status: implemented** (`feat/pg-w7-surface`). `crosstalk_surface::pg`
+  has `PgAuditLog` (`AuditLog` + `AuditIntents`), `PgOperatorStore` and
+  `PgSinkRegistry` over `0001_surface.sql`; `InMemoryAuditLog` implements
+  `AuditIntents` (the reference), and `crosstalk_memory::model::surface`
+  gains `check_audit_intents` and `check_sink_registry`. Since `act` lives
+  in `crosstalk-surface`, W7 also moved it to the intent flow
+  (`SurfaceStores::Audit: AuditIntents`) and added
+  `Surface::recover_interrupted` and `Surface::with_secret` (cursor key
+  derived under `crosstalk.cursor.v1.surface`); W8 only calls them.
+  Deviations from the sketch above: `audit` stores the author as
+  `by_operator` (operator ULID text, `NULL` for config) instead of an
+  `author` JSON column, and a trigger refuses `UPDATE`/`DELETE` on `audit`
+  and `audit_subjects`; `action_intents.intent` holds the `AuditIntent`
+  wire JSON; `operator_directory` stores `{"mode", "operators"}` (the
+  directory has no wire form; it is rebuilt through two
+  `OperatorDirectory::load`s and checked); `sinks` has one `info` column
+  (`SinkInfo` wire JSON). The audit cursor key is derived under
+  `crosstalk.cursor.v1.audit`. W8 wires `PgAuditLog::new(pool, retry,
+  &secret)`, `PgOperatorStore::new(pool, retry,
+  SeededRandom::from_entropy())`, `PgSinkRegistry::configure(pool, retry,
+  sinks)` (or `open` for the API role), runs `crosstalk_surface::pg::run_migrations`
+  in `migrate`, and calls `recover_interrupted` before serving.
 - `NodeCache`: rebuilt at start (`NodeFeeder::rebuild` over `AgentReads`
   and `ChannelReads`), then kept current from the bus as now.
 - The live feed log: memory. A restart starts a new epoch. A client that

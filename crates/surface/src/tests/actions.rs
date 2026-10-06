@@ -751,3 +751,86 @@ async fn self_merge_never_reaches_act() {
     );
     assert_eq!(fixture.audit_entries().await.len(), before);
 }
+
+/// INV-1218: a call whose process stops after its effect and before its
+/// entry leaves an intent; the next start records it as `Interrupted`,
+/// dated when it was accepted, with the caller and action, once. A call
+/// that finished leaves nothing to recover.
+#[tokio::test]
+async fn interrupted_call_is_recorded_at_start() {
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    use crosstalk_spec::ids::SeededRandom;
+    use crosstalk_spec::interfaces::l8_surface::audit::INTERRUPTED_REASON;
+
+    let fixture = fixture_at_accepted().await;
+    let scene = fixture.scene().await;
+    let caller = fixture.caller(Who::Governor).await;
+    let finished = OperatorAction::SetPolicy {
+        channel: scene.c1,
+        policy: PolicyKind::Unsanctioned,
+        note: None,
+    };
+    assert_eq!(
+        fixture.surface.act(&caller, finished).await,
+        Ok(ActionOutcome::Applied)
+    );
+    assert_eq!(fixture.surface.recover_interrupted().await, Ok(Vec::new()));
+
+    // The effect lands in the registry, then the publish hangs and the
+    // process stops: the call's future is dropped mid-flight.
+    let action = OperatorAction::SetPolicy {
+        channel: scene.c1,
+        policy: PolicyKind::Sanctioned,
+        note: Some("stopped".to_owned()),
+    };
+    fixture.world.bus.delay_publishes(Duration::from_secs(3600));
+    let stopped = tokio::time::timeout(
+        Duration::from_millis(50),
+        fixture.surface.act(&caller, action.clone()),
+    )
+    .await;
+    assert!(stopped.is_err(), "the call must still be in flight");
+    fixture.world.bus.delay_publishes(Duration::ZERO);
+    let before = fixture.operator_entries().await;
+    assert!(
+        before.iter().all(|(_, record)| *record.action() != action),
+        "no entry before recovery"
+    );
+
+    // A new process over the same stores.
+    let restarted = crate::Surface::new(
+        fixture.world.clone(),
+        Arc::new(fixture.clock.clone()),
+        super::world::config(),
+        SeededRandom::new(7),
+        fixture.feed.clone(),
+    );
+    let recovered = match restarted.recover_interrupted().await {
+        Ok(recovered) => recovered,
+        Err(error) => panic!("recover: {error:?}"),
+    };
+    assert_eq!(recovered.len(), 1);
+    let entries = fixture.audit_entries().await;
+    let Some(entry) = entries.iter().find(|entry| entry.id == recovered[0]) else {
+        panic!("no entry for the interrupted call");
+    };
+    assert_eq!(entry.at, accepted());
+    let crosstalk_spec::interfaces::l8_surface::audit::AuditBody::Operator(record) = &entry.body
+    else {
+        panic!("not an operator entry: {entry:?}");
+    };
+    assert_eq!(*record.caller(), CallerSnapshot::of(&caller));
+    assert_eq!(*record.action(), action);
+    assert_eq!(*record.outcome(), AuditOutcome::Interrupted);
+    assert_eq!(
+        record.outcome().result(),
+        Err(ActionError::Store {
+            reason: INTERRUPTED_REASON.to_owned()
+        })
+    );
+    assert_eq!(fixture.operator_entries().await.len(), before.len() + 1);
+    // Recovery is idempotent.
+    assert_eq!(restarted.recover_interrupted().await, Ok(Vec::new()));
+}
