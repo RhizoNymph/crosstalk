@@ -414,7 +414,7 @@ Features Index:
     depends_on: [ui, query_surface, type_spec]
     doc: docs/features/follow_mode.md
   conversation_view:
-    status: design
+    status: in progress
     description: >
       Operator page for one agent's conversation, turn by turn: inputs of
       any role in request order and outputs, with provenance marks (text
@@ -423,9 +423,11 @@ Features Index:
       compaction), compaction boundaries, WebSocket increments and replayed traffic
       (labelled, filterable). Structure
       with View, text with Content; turns paged by citeable index windows.
-      Waits on proposed L8 conversation reads
+      Reads the spec's conversation reads
       (docs/handoff/conversation-view-spec.md, INV-1000..1029).
-    entry_points: []
+    entry_points:
+      - ui/src/pages/conversation/mod.rs
+      - ui/src/backend/fixture/world/conversations/mod.rs
     depends_on: [ui, query_surface, type_spec]
     doc: docs/features/conversation_view.md
   query_surface:

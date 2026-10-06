@@ -1,9 +1,15 @@
 # Conversation view
 
-Status: **design**. Nothing here is implemented. Phase B (implementation)
-starts once `feat/ui` has been migrated onto `staging` and the spec has the
-conversation reads proposed in `docs/handoff/conversation-view-spec.md`.
-Until then no UI code is written against the older spec on this branch.
+Status: **in progress** on `feat/ui-conversation` (from `staging`). Built:
+the fixture's conversations ([Fixture data](#fixture-data)), the page query
+keys and windows, the view model and turn components, and the entry links
+from the agent page, the topology drawer and the evidence page. Waiting on
+the spec's conversation reads (crosstalk-impl's `feat/conversation-reads`,
+stage A: the `QueryApi` methods and read models, INV-1000..1029): the
+pages, the fixture's implementation of those reads and the world and http
+backends' "needs a newer gateway" state follow when it is on staging. The
+proposal it implements is `docs/handoff/conversation-view-spec.md`
+(revision 3); where the landed spec differs, the spec wins.
 
 An operator page showing one agent's conversation turn by turn: what each
 exchange read and wrote, and **where text came from and where it went**:
@@ -217,25 +223,63 @@ other page; the fixture backend implements the new methods over seeded
 conversations. If the spec addition lands in a different shape, this
 section and the model module change, not the layout.
 
-## Files (planned, Phase B)
+## Fixture data
+
+The fixture's traffic generator knows exchanges only as ids on content
+matches and spans only as locations, so `backend/fixture/world/conversations/`
+threads that traffic into conversations once, after the world is
+generated (`World::conversations`, shared like `blobs`; a replay's copy
+keeps the turns started by its cutoff):
+
+- a **reader turn** per reader exchange: its inputs are the messages the
+  copies arrived in (`ContentMatch::read_at`, bodies in `Blobs`, dropped
+  where retention dropped them), its output a generated reply (with a tool
+  call when the next turn reads a tool result, and sometimes a quote of what
+  it read, recorded as a relayed span), or for a `ReaderOutput` match the
+  output the copy was found in;
+- a **writer turn** per originated span, a little before its first read:
+  its output is the message the span sits in;
+- conversations per agent split at a three-hour gap, 24 turns or a
+  delegated task (which opens the child's conversation), each opening with
+  a generated system prompt and user task; protocol, transport and model
+  follow the agent's real harness family, and each turn carries one of the
+  agent's recorded harness claims;
+- named cases (`Conversations::cases`): a fork sharing its parent's first
+  two turns, a compaction carrying two messages over, a Codex conversation
+  whose first increment continues a response the gateway never saw, a
+  system turn in a second request, a failed exchange with a partial
+  output, one self-hosted (or pi) agent's conversations replayed from the
+  `agentdojo-workspace` corpus, and one turn still waiting for its scan.
+
+Generated messages are canonical (`Message::new`) and unique (each names
+its exchange or conversation). One simplification: the generator stores
+each copy found in a reader's output as its own message, but an exchange
+has one output, so copies beyond the first are listed among that turn's
+inputs as assistant messages.
+
+## Files
 
 | File | Role |
 | --- | --- |
-| `ui/src/pages/conversation/mod.rs` | `#[page("/conversations/{id}")]`, path param, `load`, head and window rendering |
-| `ui/src/pages/conversation/query.rs` | page keys: `turn`, `hl`, `rcursor`; window arithmetic (`window_start(turn) = turn / 20 * 20`) |
-| `ui/src/pages/conversation/model.rs` | `TurnView`, `MessageView`, `PartView`, `MarkView` built from `Turn` + optional `TurnText`; route and carrier labels shared with `transmission/model.rs` |
-| `ui/src/pages/conversation/sections.rs` | head, turn, boundary, part and mark components |
-| `ui/src/pages/conversation/text.rs` | text with highlighted ranges; the `part_text` "show more" shard |
-| `ui/src/pages/conversation/list.rs` | `#[page("/agents/{id}/conversations")]` |
-| `ui/src/pages/conversation/locate.rs` | `/exchanges/{id}` and `/spans/{id}` redirects |
-| `ui/src/pages/conversation/tests.rs` | router tests (below) |
-| `ui/src/pages/common/links.rs` | `conversation_url`, `exchange_url`, `span_url` (added) |
-| `ui/src/backend/fixture/world/conversations.rs` | seeded conversations and turns derived from the fixture's exchanges, spans and matches |
-| `ui/src/backend/fixture/queries/conversations.rs` | the fixture's `QueryApi` conversation methods |
-| `ui/src/pages/mod.rs` | module registration only |
-| `ui/src/pages/agents/detail.rs`, `transmission/sections.rs`, `topology/drawer/mod.rs` | one link each |
+| `ui/src/backend/fixture/world/conversations/mod.rs` | `Conversations` (records, exchange → turn index, span records, relayed spans, generated bodies, pending scans, `Cases`), `ConversationRecord`, `TurnRecord`, `Entry`, `Ending`, `SpanRecord`, `RelayedSpan`, `Conversations::at` |
+| `ui/src/backend/fixture/world/conversations/build.rs` | `build(&World)`: threading the traffic and making the named cases |
+| `ui/src/backend/fixture/world/conversations/messages.rs` | generated system prompts, tasks, replies, summaries, system turns and partial replies |
+| `ui/src/backend/fixture/world/conversations/tests.rs` | the overlay's laws: every reader exchange and origin span is a turn of its agent, time order, no message twice, each case, replay cutoff, determinism |
+| `ui/src/pages/conversation/query.rs` | page keys `turn`, `hl`, `rcursor`, `origin`, `replay`; `Window` (twenty turns from a multiple of twenty) |
+| `ui/src/pages/conversation/model.rs` | the view model (`HeadView`, `TurnView`, `MessageView`, `PartView`, `MarkView`, …) and `segments`, which cuts a part's text at its marks |
+| `ui/src/pages/conversation/sections.rs` | head, window links, turn, boundary, part, text and mark components |
+| `ui/src/pages/conversation/tests.rs`, `links_tests.rs` | component rendering from view models; the entry links |
+| `ui/src/pages/common/links.rs` | `agent_conversations_url`, `conversation_url`, `exchange_url`, `span_url` |
+| `ui/src/pages/agents/detail.rs`, `topology/drawer/{mod,model}.rs`, `transmission/{model,sections}.rs` | the entry links: "Conversations" on the agent header and drawer agent panel; "in sender's / reader's conversation" on each evidence match |
+| `ui/src/pages/mod.rs`, `backend/fixture/world/mod.rs` | module registration; `World::conversations` |
 
-Tests (Phase B): a router test per route (status, canonical redirect,
+Still to come with the spec's reads: the pages (`mod.rs` for
+`/conversations/{id}`, `list.rs`, `locate.rs` for the redirects), the
+fixture's implementation of the reads in `backend/fixture/queries/`, their
+forwarding in `backend/dispatch.rs`, and the world and http backends'
+"needs a newer gateway" state.
+
+Tests still to come with the pages: a router test per route (status, canonical redirect,
 422 per bad key), View-only rendering has no text and does not call the
 text read (`caller_with(&[Permission::View])`), Content rendering
 highlights each mark, window arithmetic and `turn` past the end, alias
