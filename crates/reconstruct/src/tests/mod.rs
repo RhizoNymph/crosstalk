@@ -4,12 +4,15 @@
 mod consumer;
 mod consumer_props;
 mod conversation_reads;
+mod cursor_keys;
 mod dst;
 mod evidence;
 mod fixtures;
 mod pg;
 mod pg_agents;
 mod pg_conversation_reads;
+mod pg_outbox;
+mod pg_placement;
 mod pg_props;
 mod pg_threads;
 mod placement;

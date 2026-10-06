@@ -1,0 +1,18 @@
+[invariant]
+id = "flow.checkpoint.incompatible-refuses-start"
+statement = "A flow consumer whose stored checkpoint is in a snapshot format the binary does not read, was taken with another shard count, lacks a shard or does not decode, fails to restore with FlowRestoreError::IncompatibleSnapshot, naming crosstalk migrate --reset-correlator, and never starts from empty or partial shards."
+kind = "coordination"
+requires = ["unit"]
+rationale = """
+Decision Q2 of postgres_stores.md: an upgrade that changes the snapshot
+encoding must not silently drop the pairings pending at the checkpoint.
+Refusing to start makes the loss an operator's explicit choice (the reset
+writes empty shards at the latest tick and loses them knowingly). A changed
+shard count hashes media to other shards, so it is refused the same way.
+"""
+
+[evidence]
+unit = "crosstalk_flow::dst::checkpoint::an_incompatible_checkpoint_refuses_to_restore"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

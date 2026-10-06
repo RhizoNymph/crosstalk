@@ -1,0 +1,22 @@
+[invariant]
+id = "flow.consumer.acks-after-checkpoint"
+statement = "A durable flow consumer acks a bus delivery only after a checkpoint of its shards that covers the delivery is stored, and takes no checkpoint while a step waits in its queue."
+kind = "coordination"
+requires = ["unit"]
+rationale = """
+The correlator's state since the last checkpoint is lost in a crash. A
+delivery acked before a checkpoint covered it would never be redelivered,
+and its evidence would be gone. A checkpoint taken while a step waits (a
+store write done, its event not yet published) would cover an input whose
+effects are not all stored, and the delivery acked on it would never redo
+them.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_flow::dst::checkpoint::a_durable_run_acks_only_checkpointed_deliveries",
+    "crosstalk_flow::dst::checkpoint::a_checkpoint_waits_for_an_empty_queue",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

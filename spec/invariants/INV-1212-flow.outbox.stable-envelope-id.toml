@@ -13,7 +13,7 @@ republishes the same id and the bus deduplicates it
 """
 
 [evidence]
-integration = "crosstalk_flow::integration::outbox_relay_publishes_each_event_once_under_its_stamped_id"
+integration = "crosstalk_flow::integration::outbox::outbox_relay_publishes_each_event_once_under_its_stamped_id"
 
 [evidence-review]
 integration = { agent = "false", human = "false" }

@@ -17,5 +17,5 @@ unit = "crosstalk_surface::tests::actions::interrupted_call_is_recorded_at_start
 integration = "crosstalk_surface::integration::pg_leftover_intent_recovered_as_interrupted"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }
 integration = { agent = "false", human = "false" }

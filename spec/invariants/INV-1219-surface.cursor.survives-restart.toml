@@ -17,5 +17,5 @@ unit = "crosstalk_surface::tests::cursor::cursor_keyed_from_the_secret_resolves_
 integration = "crosstalk_e2e::restart::cursors_resolve_after_restart"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }
 integration = { agent = "false", human = "false" }

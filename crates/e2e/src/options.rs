@@ -69,6 +69,7 @@ pub fn flow() -> Result<FlowConfig, OptionsError> {
         content_retention_ms: FlowConfig::default().content_retention_ms,
         shards: 1,
         tick_ms: 50,
+        ..FlowConfig::default()
     })
 }
 

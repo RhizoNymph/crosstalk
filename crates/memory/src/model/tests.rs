@@ -82,6 +82,23 @@ fn operator_store_agrees_with_reference() {
 }
 
 #[test]
+fn audit_intents_agree_with_reference() {
+    // surface.audit.no-silent-effect, and the log against itself
+    let result = super::surface::check_audit_intents(harness(), || async {
+        crate::surface::audit::InMemoryAuditLog::new()
+    });
+    assert_eq!(result, Ok(()));
+}
+
+#[test]
+fn sink_registry_agrees_with_reference() {
+    let result = super::surface::check_sink_registry(harness(), |sinks| async move {
+        crate::surface::sinks::InMemorySinkRegistry::new(sinks)
+    });
+    assert_eq!(result, Ok(()));
+}
+
+#[test]
 fn every_store_is_send_and_sync() {
     use crate::analysis::aliases::StaticDirectory;
     use crate::analysis::fakes::FakeEmbedder;

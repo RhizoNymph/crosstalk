@@ -81,7 +81,37 @@ pub fn populate(world: &World, state: &mut State, plan: &ChannelPlan) -> Result<
     agents(world, state)?;
     triage(world, state)?;
     verdicts(world, state)?;
-    refused(world, state, plan)
+    refused(world, state, plan)?;
+    interrupted(world, state)
+}
+
+/// One call the log shows interrupted: the researcher acknowledging an
+/// open alert while the gateway restarted, so no outcome was recorded
+/// (`AuditOutcome::Interrupted`, as `AuditIntents::recover_interrupted`
+/// appends it at start). The acknowledgement did not take: the alert is
+/// still open, which is what an operator finds on checking it.
+fn interrupted(world: &World, state: &mut State) -> Result<(), GenError> {
+    let at = ago(6 * HOUR);
+    let Some(alert) = state
+        .alerts
+        .iter()
+        .filter(|a| matches!(a.state, AlertState::Open) && a.raised_at < at)
+        .map(|a| a.id)
+        .min()
+    else {
+        return Ok(());
+    };
+    let record = OperatorRecord::new(
+        caller(world, OPERATOR_RESEARCHER)?,
+        OperatorAction::Acknowledge { alert },
+        AuditOutcome::Interrupted,
+    )
+    .map_err(|e| GenError::invalid("OperatorRecord", e))?;
+    state
+        .audit
+        .operator(&mut state.mint, at, record)
+        .map_err(|e| GenError::invalid("operator audit entry", e))?;
+    Ok(())
 }
 
 /// The operator decisions in the channels' policy histories, and the

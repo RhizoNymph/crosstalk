@@ -4,7 +4,7 @@
 //!
 //! **Cursors** are `<last conversation id>_<tag>`, where the tag is a keyed
 //! BLAKE3 over the store's cursor key, the query's binding
-//! ([`binding`]: its agents, origins and replay filter) and the id. A
+//! (`binding`: its agents, origins and replay filter) and the id. A
 //! cursor this store did not issue, or issued for another query, fails the
 //! tag check and is `InvalidCursor`. A merge or unmerge between two pages
 //! changes the agents the surface passes, so the next page is

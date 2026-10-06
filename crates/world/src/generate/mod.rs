@@ -17,8 +17,9 @@ pub mod states;
 pub mod times;
 pub mod topics;
 pub mod traffic;
+pub mod wire;
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use crosstalk_spec::ids::{ChannelId, TransmissionId};
@@ -46,6 +47,8 @@ pub struct Generated {
     pub traffic: Traffic,
     /// Old transmissions whose sender's or reader's bodies are dropped.
     pub dropped: Vec<(TransmissionId, BodySide)>,
+    /// The exchanges behind the confirmed transmissions, as captured.
+    pub wire: wire::Wire,
 }
 
 /// Generates the world of `seed` at `anchor`, its declared channels under
@@ -69,7 +72,28 @@ pub fn generate(
         plan: &plan,
         topics: &topics,
     })?;
-    let dropped = retention::drop_old_bodies(&times, &traffic.transmissions, &mut traffic.blobs);
+    // A stream of its own, so the wire's ids never shift the world's.
+    let mut wire_mint = Mint::new(seed, "wire", Arc::new(WorldClock::Fixed(anchor)));
+    let retained: BTreeSet<TransmissionId> = retention::chosen(&times, &traffic.transmissions)
+        .into_iter()
+        .map(|(record, _)| record.id())
+        .collect();
+    let mut wire = wire::build(
+        wire::Inputs {
+            seed,
+            cast: &cast,
+            traffic: &traffic,
+            scope: config.wire,
+            always: &retained,
+        },
+        &mut wire_mint,
+    )?;
+    let dropped = retention::drop_old_bodies(
+        &times,
+        &traffic.transmissions,
+        &mut traffic.blobs,
+        &mut wire.dropped,
+    );
     Ok(Generated {
         seed,
         times,
@@ -78,5 +102,6 @@ pub fn generate(
         topics,
         traffic,
         dropped,
+        wire,
     })
 }

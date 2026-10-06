@@ -56,10 +56,11 @@ only. `crosstalk-memory`, `crosstalk-sim`, `crosstalk-testkit` and
 - **Shard routing across nodes.** The index refuses misrouted fingerprints
   (`WrongShard`), and the scanner only sends fingerprints this node owns. A
   multi-node fan-out of lookups is not built.
-- **The spec read traits for L4 records on Postgres** (`SpanIndex`, a
-  later `ProvenanceReads`). The records and the indexes they need exist
-  (see [Tables](#tables-and-indexes)); the memory store implements
-  `SpanIndex` (below).
+- **Composing the Postgres stores into `serve`.** `PgProvenanceStore`
+  serves `SpanIndex`, `ProvenanceReads` and `ProvenanceStore::started_at`;
+  the gateway's L4 stage still runs over the memory store and keeps its
+  own map of exchange starts until P7.3's W8 switches it
+  ([postgres_stores.md](postgres_stores.md)).
 - **Coverage-guided fuzzing** (`fuzz` evidence) and the
   `span-state-written-only-by-advance` lint.
 
@@ -159,9 +160,13 @@ watermark.
   2b. **The spread rule and skeleton matches** (INV-1094, INV-1150,
      `SpreadRule`). For each hit fingerprint, the originating agents are
      the agents of its live postings' spans and of their copies in other
-     outputs (spans relayed from them, `ProvenanceStore::relays`), at any
-     time within retention; its holders are those originations and
-     copies. A fingerprint held by at least `spread.agents` (4) distinct
+     outputs (spans relayed from them, and spans recorded as coinciding
+     with them, `ProvenanceStore::relays`), at any time within retention;
+     for a hit on a coinciding span, also, one hop, the originations and
+     copies of the spans it coincides with
+     (`ProvenanceStore::coincident_sources`; sources of sources are not
+     followed). Its holders, for the rarity bound, are the hit spans' own
+     originations and copies. A fingerprint held by at least `spread.agents` (4) distinct
      agents is boilerplate for short runs unless it is distinctive: one of
      the whole tokens its k-gram covers in the read (`fingerprint::token`:
      a normalized alphanumeric run of 4 or more characters, or holding a
@@ -333,8 +338,19 @@ watermark.
     copies and matched reads (`Propagated` hits). Two agents filling one
     sentence template with the same words write 64 characters or more
     alike (24 bench false matches, rarest tokens seen in 7 to 74 texts).
-    Otherwise the stretch is still `Relayed(Span(s))` and no match is
-    made. Other carriers keep no length floor. A broadcast (one writer,
+    Otherwise no match is made, and the stretch is `Relayed(Span(s))`
+    when it holds a rare token (an unobserved copy) or the rare token is
+    not required. **Coincident template stretches**
+    (`provenance.span.coincident-template-originated`): a stretch on
+    another agent's span with no rare token is a coincidence, not a copy.
+    It stays the writer's `Originated` text, and the commit records a
+    `Coincidence` (its span, each other agent's hit span inside it) in
+    `span_coincidences` (migration 0003), so the spread rule still counts
+    it as a copy. A stretch that also matches the writer's own earlier
+    span stays relayed to it. On the bench (run 20261006T062146Z) whole
+    pages of template sentences were relayed piece by piece to earlier
+    fills; their writers had almost nothing indexed and 3 verbatim reads
+    matched nobody. Other carriers keep no length floor. A broadcast (one writer,
     many later copies) keeps matching that writer however many copies
     there are: the spread rule never applies, and each copy and read
     raises the bound. **Tradeoff (flagged for decision):** an unobserved
@@ -399,6 +415,13 @@ over any spec `BlobStore`).
 
 **`record_exchange(&Exchange)`.** Records the exchange's start, request
 hashes and output, with status `Pending`.
+
+**`started_at(exchange)`.** The recorded start (`ProvenanceStore::started_at`),
+`None` when the exchange was never recorded. It is a read of the record
+alone, kept when the request lists are pruned, so a stage that stamps a
+delta's extracted accesses with it loses nothing across a restart over
+Postgres (the `ExchangeCaptured` acked before the crash is not
+redelivered).
 
 **`process(&ConversationDelta)`** goes by the exchange's status:
 
@@ -473,7 +496,38 @@ Migrations `crates/provenance/migrations/0001_provenance.sql` and
 | `observed` | fingerprint, observation, time | primary key (fingerprint, observation); observation; (fingerprint, at) |
 
 `PgFingerprintIndex` agrees with `crosstalk-memory`'s
-`MemoryFingerprintIndex` (the model-based harness runs both). Each write is
+`MemoryFingerprintIndex` (the model-based harness runs both).
+
+**Model agreement under the match rules**
+(`provenance.store.pg-agrees-with-memory`, `integration::rules`). Each rule
+scenario runs from one seed over the memory index and store, then over
+`PgFingerprintIndex` and `PgProvenanceStore` (one shared pool, tables
+emptied and the index sequence restarted between scenarios), checking the
+rule's outcome on both. The two runs must leave identical transcripts:
+every turn's outcome with its envelopes, every exchange's record, start,
+scan status, spans (final states, hit counts, index sequences) and
+matches, `SpanIndex::spans` for every span, and the index watermark.
+Covered: the spread rule and skeletons, inherited fragments (page names
+the orchestrator gave, copies of given secrets, whole deliveries, replies
+from words seen apart), the reader-output floor and rare-token bound
+(including the bound raised by reads), own-output replays (SALT `get_log`,
+AgentDojo `send_money`, per-run), forwards with direct reads (now and
+earlier), forwards of the reader's own text and their expiry, shadowed
+fragments with the secret and no-writer controls, context k-grams and
+short-span hashes. `integration::restart` adds the token observations'
+retention (frequencies at the retention boundary and after expiry, no
+observation row left).
+
+**Restart** (`provenance.restart.decisions-durable`,
+`integration::restart`): a new engine on new pools over the same database
+replays every scanned delta with the first delivery's envelopes, reads
+every recorded start, and scans an exchange captured before the restart.
+The consumer's envelope ids are derived from the delta's exchange and the
+record announced (`span_event_id`, `match_id`), so a redelivery, a
+republish of the delta under a new envelope id, or a delivery to a
+restarted consumer publishes the same ids
+(`dst::redelivery_republishes_the_same_envelope_ids`,
+`transport.consumer.derived-envelope-ids`). Each write is
 one transaction that first deletes observations outside retention. The
 boilerplate cutoff is a correlated count, on insert and on lookup.
 `PgProvenanceStore` writes each commit in one transaction with row locks,
@@ -551,7 +605,8 @@ spans `commit_scan` wrote: `record` adds nothing, `spans` returns the
 originated spans (any state whose origin is `Originated`) and the
 forwarded spans (`Relayed` from an input) as recorded, leaving out spans
 relayed from another span, common spans and unknown ids. `Live`'s evidence
-feeder reads through it. `PgProvenanceStore` does not yet.
+feeder reads through it. `PgProvenanceStore` answers the same through
+`store/reads.rs`.
 
 ## Files
 
@@ -572,16 +627,18 @@ feeder reads through it. `PgProvenanceStore` does not yet.
 | `src/engine.rs` | Processing, replay, eviction | `Provenance`, `Processed`, `EngineError`, `envelopes`, `exchange_record` |
 | `src/consumer.rs` | The bus consumer | `GROUP`, `SUBJECTS`, `subscribe`, `run`, `ConsumerSettings`, `ConsumerStats` |
 | `src/span.rs` | Deterministic ids | `span_id`, `span_event_id`, `match_id` |
-| `src/store/{mod,memory,pg}.rs` | L4's records | `ProvenanceStore`, `MemoryProvenanceStore`, `PgProvenanceStore`, `ExchangeRecord`, `ScanStatus`, `ScanFailure`, `SpanRecord` (`committed`, `indexed_at`), `Forwarding`, `Relay`, `StoredMatch`, `ScanCommit`, `MessageScan`, `MIGRATIONS`, `migrate` |
+| `src/store/{mod,memory,pg}.rs` | L4's records | `ProvenanceStore` (with `started_at`), `MemoryProvenanceStore`, `PgProvenanceStore`, `ExchangeRecord`, `ScanStatus`, `ScanFailure`, `SpanRecord` (`committed`, `indexed_at`), `Forwarding`, `Relay`, `StoredMatch`, `ScanCommit`, `MessageScan`, `MIGRATIONS`, `migrate` |
 | `src/index/{mod,pg}.rs` | The Postgres fingerprint index | `PgFingerprintIndex` |
 | `src/semantic.rs` | The semantic stub | `DisabledSemanticMatcher` |
 | `src/pg.rs` | Shared Postgres conversions | — |
 | `migrations/0001_provenance.sql` | The schema | — |
 | `migrations/0002_forwarded_spans.sql` | A forwarded span's indexing columns; spans by relay source (the spread rule's copies) | — |
+| `migrations/0003_span_coincidences.sql` | Coincident template stretches: (span, source), by source (the spread rule's copies) | — |
 | `src/tests/` | Unit tests, scenarios, fixtures, AgentDojo | evidence `crosstalk_provenance::tests::*` |
 | `src/props/` | Property tests and the scenario generator | evidence `crosstalk_provenance::props::*` |
 | `src/dst.rs` | Simulations of the consumer | evidence `crosstalk_provenance::dst::*` |
-| `src/integration/` | Postgres tests (gated on `TEST_DATABASE_URL`) | evidence `crosstalk_provenance::integration::*` |
+| `src/integration/` | Postgres tests (gated on `TEST_DATABASE_URL`): index, engine, reads; `rules.rs` the match rules against the memory model (`transcript`, `agree!`); `restart.rs` restart replay, `started_at`, token-observation retention | evidence `crosstalk_provenance::integration::*`; `pg_world_on`, `PgWorld`, `truncate` |
+| `src/tests/started.rs` | `started_at` on any store | `started_at_is_the_recorded_start` |
 
 ## Invariants and constraints
 
@@ -621,6 +678,10 @@ feeder reads through it. `PgProvenanceStore` does not yet.
   boundaries. Decoded reads map back to the bytes as they arrived.
 - Every time is an argument: the exchange's start for scans, the injected
   clock for eviction.
+- The Postgres store and index agree with the memory reference on every
+  match rule (`provenance.store.pg-agrees-with-memory`, INV-X), and a
+  restart over them loses no decision or start
+  (`provenance.restart.decisions-durable`, INV-X).
 - Span states change only through `SpanState::advance`.
 - No `unwrap` or `expect` outside tests, except one commented infallible
   default.
@@ -665,6 +726,32 @@ feeder reads through it. `PgProvenanceStore` does not yet.
   channel names): the rule reads them as the victim's own relay, the
   converter as a delivery. Bench replays: headline 1.000 / 1.000 and
   boilerplate 0.893 (133 correct, 16 false), both unchanged.
+- **Bench run 20261006T062146Z** (boilerplate, staging 690d124): 3
+  missed labels (recall 0.939), each a whole wiki page of template
+  sentences read verbatim; 8090af0 replays alike. Fixed by coincident
+  template stretches (above), measured release `ct-eval replay` and live
+  runs (base = integration/impl a69a524; tuned on 062146Z only):
+
+  | run | before | after |
+  | --- | --- | --- |
+  | 062146Z (tuning) | 0.939 (46/49), precision 0.854 (123 / 21) | 1.000 (49/49), 0.875 (182 / 26) |
+  | 184212Z headline (held out) | 1.000 / 1.000 | 1.000 / 1.000 |
+  | 020835Z headline (held out) | 1.000 / 1.000 | 1.000 / 1.000 |
+  | 061545Z headline (held out) | 1.000 / 1.000 | 1.000 / 1.000 |
+  | 184633Z boilerplate (held out) | 1.000, 0.893 (133 / 16) | 1.000, 0.909 (169 / 17) |
+  | 021639Z boilerplate (held out) | 1.000, 0.914 (160 / 15) | 1.000, 0.940 (252 / 16) |
+  | SALT `--limit 53`, live, forwarding off | 0.854 / 0.955, 164 false | 0.855 / 0.956, 164 false |
+  | swarm-traces, live | 1.000 / 1.000 | 1.000 / 1.000 |
+
+  One more `ReaderOutput` false match on each held-out boilerplate run (a
+  73- and a 91-character coincident sentence); no new channel false match
+  on held-out runs. **Tradeoff:** a slot fill only one writer chose is
+  now indexed under it and matched where read
+  (`a_template_sentence_with_a_unique_slot_fill_matches_its_writer`);
+  before it sat between relays or straddled a relay's end and was posted
+  under nobody. `template_skeleton_with_other_slot_words_is_not_matched`
+  had a writer share the read's own slot fill; its world now uses another
+  fill, so the read shares only skeleton.
 - **Bench run 20261006T021639Z** (boilerplate, staging 8090af0, 135
   negative controls): 7 `Channel` / `ToolResult` / `Exact` false matches
   of 32 to 46 bytes besides the 15 `ReaderOutput` ones. Each is a short

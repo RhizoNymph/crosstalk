@@ -9,6 +9,7 @@
 pub mod agents;
 pub mod alerts;
 pub mod channels;
+pub mod conversations;
 pub mod evidence;
 pub mod graph;
 pub mod linked;
@@ -46,6 +47,7 @@ use crosstalk_spec::interfaces::l8_surface::QueryError;
 
 use super::store::State;
 use super::world::World;
+use super::world::conversations::Conversations;
 
 /// Fails with `Forbidden` unless the caller holds `permission`.
 pub fn require(caller: &Caller, permission: Permission) -> Result<()> {
@@ -69,6 +71,10 @@ pub struct Ctx<'a> {
     verdicts: HashMap<TransmissionId, Verdict>,
     /// Each canonical channel's cross-agent traffic at this read.
     traffic: HashMap<ChannelId, CrossTraffic>,
+    /// Where this read's conversations come from: built on first use by
+    /// the backend ([`Ctx::with_conversations`]). `None` for a context that
+    /// reads none.
+    conversations: Option<&'a (dyn Fn() -> Result<std::sync::Arc<Conversations>> + Sync + 'a)>,
 }
 
 impl<'a> Ctx<'a> {
@@ -103,9 +109,31 @@ impl<'a> Ctx<'a> {
             members,
             verdicts,
             traffic: HashMap::new(),
+            conversations: None,
         };
         ctx.traffic = ctx.tally_traffic();
         ctx
+    }
+
+    /// This context reading its conversations through `source`, which
+    /// builds them on first use.
+    pub fn with_conversations(
+        mut self,
+        source: &'a (dyn Fn() -> Result<std::sync::Arc<Conversations>> + Sync + 'a),
+    ) -> Self {
+        self.conversations = Some(source);
+        self
+    }
+
+    /// The conversations as this read sees them (a replay's, cut at its
+    /// present).
+    pub fn conversations(&self) -> Result<std::sync::Arc<Conversations>> {
+        match self.conversations {
+            Some(source) => source(),
+            None => Err(QueryError::Store {
+                reason: "this read has no conversations".to_owned(),
+            }),
+        }
     }
 
     /// `CrossTraffic::tally` per canonical channel over the transmissions

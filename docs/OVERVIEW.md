@@ -36,7 +36,8 @@ Overview:
     has its extractors, correlator and consumer (flow_extract,
     flow_correlator) and its Postgres stores (flow_store); L7 has its
     Postgres edge store and bus consumer (topology_store); L6 has its
-    remote adapters (analysis) and Postgres search and alerts
+    remote adapters (analysis) and Postgres search, alerts, topic
+    catalog and projection store, plus the classification step
     (search_alerts).
     The L8 surface service
     (crosstalk-surface: QueryApi, OperatorActions, LiveFeed, export and
@@ -55,8 +56,10 @@ Overview:
     invariants are tested with (sim). crosstalk-testkit holds the builders,
     the synthetic Anthropic corpus and the fake upstream and client
     (testkit). crosstalk-transport has the in-process bus (MpscBus) with
-    consumer groups, retries, dead letters and envelope dedup, and the
-    content-addressed blob store (FsBlobStore, MemoryBlobStore)
+    consumer groups, retries, dead letters and envelope dedup, the
+    durable Postgres bus (PgBus, pg_bus) and the on-disk publish spool in
+    front of it (SpoolingBus, publish_spool), not yet wired into serve,
+    and the content-addressed blob store (FsBlobStore, MemoryBlobStore)
     (transport). crosstalk-canonical has the Anthropic Messages
     normalizer (L1): pure functions from a RawExchange to a
     NormalizedExchange (media bytes included), with streaming reassembly,
@@ -419,34 +422,40 @@ Features Index:
     depends_on: []
     doc: docs/features/type_spec.md
   follow_mode:
-    status: design
+    status: slim subset built; the rest designed and deferred
     description: >
-      Keeping UI views live as a gateway produces data. A follow=<span>
-      page key resolves on every render to the window ending at the
-      present (rounded up to a bucket) and is pinned into today's citeable
-      from/to URLs for everything below the page; the provisional tail
-      after the watermark is marked. Pages refresh by a server re-render
-      that Topcoat merges into the DOM, triggered by a tracked signal that
-      <ct-live> sets (replacing the dev-hook region swap), so the WebGL
-      elements keep their nodes and update in place (topology keeps node
-      positions and places new nodes with fixed-node ForceAtlas2; the time
-      brush stays anchored right). Includes the spec gap list (the present,
-      the bucket width, a coalesced traffic event, channel events for
-      traffic-driven listing changes, data revisions, projection
-      extensions), the fixture's controllable clock and deterministic
-      trickle, the testing strategy and a parallel implementation plan.
+      Keeping UI views live as a gateway produces data. Built: a
+      follow=<span> page key (presets 1h, 6h, 1d, 7d; exclusive with
+      from/to) that resolves on every render to [align_up(now) − span,
+      align_up(now)) from the request's present, with the URL never
+      rewritten; / and /topology follow the last day by default and show a
+      follow bar ("Following the last 1 d · Pin", or "Follow" when pinned)
+      and a "provisional after" header label; every other page redirects a
+      followed URL to its pinned window, and data routes and shards refuse
+      follow. A followed page refreshes through <ct-live> on its watch
+      tokens, watermark events and a 30 s timer, paused while the tab is
+      hidden; the region swap keeps the topology's graph and brush
+      (data-live-keep), which take a window-only data-src change as a slide
+      and merge in place. Deferred: head/traffic events, data-rev,
+      fixed-node ForceAtlas2 re-layout, topic-version announcements, follow
+      on explore and lists, the fixture's manual clock and trickle, the spec
+      gap list, and replacing the dev-hook region swap with signal-driven
+      re-renders.
     entry_points:
+      - ui/src/url/follow.rs
       - ui/src/url/view_state.rs
       - ui/src/pages/view.rs
-      - ui/src/components/live.rs
-      - ui/src/data/live.rs
-      - ui/elements/src/live/element.ts
+      - ui/src/components/follow.rs
+      - ui/src/data/query.rs
+      - ui/elements/src/live/follow.ts
+      - ui/elements/src/live/refresh.ts
+      - ui/elements/src/shared/slide.ts
       - ui/elements/src/shared/element.ts
       - ui/elements/src/topology/element.ts
     depends_on: [ui, query_surface, type_spec]
     doc: docs/features/follow_mode.md
   conversation_view:
-    status: design
+    status: implemented
     description: >
       Operator page for one agent's conversation, turn by turn: inputs of
       any role in request order and outputs, with provenance marks (text
@@ -457,7 +466,9 @@ Features Index:
       with View, text with Content; turns paged by citeable index windows.
       Reads through the L8 conversation reads (conversation_reads,
       INV-1000..1029).
-    entry_points: []
+    entry_points:
+      - ui/src/pages/conversation/mod.rs
+      - ui/src/backend/fixture/world/conversations/mod.rs
     depends_on: [ui, query_surface, type_spec, conversation_reads]
     doc: docs/features/conversation_view.md
   conversation_reads:
@@ -472,13 +483,16 @@ Features Index:
       carried-over flag, a per-turn index, traffic source, successors),
       L4's ProvenanceReads (scan status, output spans of every origin,
       matches by reader exchange, a span's readers) and L5's
-      TransmissionStore::holding.
+      TransmissionStore::holding. The world backend (crosstalk_api::world)
+      serves them from the world's wire traffic run through L1, L3
+      threading and L4 provenance (WorldLayers, world::record).
     entry_points:
       - spec/types/interfaces/l8_surface/conversation.rs
       - spec/types/interfaces/l3_reconstruction/conversations.rs
       - spec/types/interfaces/l4_provenance/reads.rs
       - spec/types/interfaces/l1_canonical/exchanges.rs
-    depends_on: [type_spec, query_surface, reconstruct, provenance, flow_store, surface_service]
+      - crates/api/src/world/conversations.rs
+    depends_on: [type_spec, query_surface, reconstruct, provenance, flow_store, surface_service, world]
     doc: docs/features/conversation_reads.md
   query_surface:
     description: >
@@ -676,9 +690,11 @@ Features Index:
       group): every QueryApi method with its permission checked first,
       watermark-first reads, paging and a keyed-MAC cursor for
       transmission rows by id, typed errors through the spec's From
-      impls; OperatorActions::act (one store write stamped with the
-      caller and the accept time, then exactly one OperatorRecord whose
-      AuditOutcome inverts to the returned result) and Surface::request;
+      impls; OperatorActions::act (a write-ahead AuditIntent, one store
+      write stamped with the caller and the accept time, then exactly one
+      OperatorRecord whose AuditOutcome inverts to the returned result,
+      appended as the intent is removed; Surface::recover_interrupted
+      records leftover intents as Interrupted at start) and Surface::request;
       the live feed (a writer task owning the epoch's log, bounded
       per-stream buffers that end lagging streams, resume and resync,
       heartbeats, session ends, a bus consumer that appends before it
@@ -702,13 +718,20 @@ Features Index:
       (SpanIndex); an opt-in in-process projection fitter
       (ProjectionFitting::Deterministic, FakeLayoutFitter) fits queued jobs.
       Rows by id and a channel's transmissions read topics from
-      TopicCatalog::assignments under the page's version. The HTTP server (P7.1) is http_server.
+      TopicCatalog::assignments under the page's version. L8's Postgres
+      stores (P7.3 W7, crosstalk_surface::pg, schema surface): PgAuditLog
+      (AuditLog + AuditIntents, append-only trigger, cursors keyed from the
+      deployment secret), PgOperatorStore (directory and config entries in
+      one transaction) and PgSinkRegistry; Surface::with_secret derives the
+      surface's cursor key from the secret so cursors survive a restart.
+      The HTTP server (P7.1) is http_server.
     entry_points:
       - crates/surface/src/lib.rs
       - crates/surface/src/service.rs
       - crates/surface/src/stores.rs
       - crates/surface/src/query/mod.rs
       - crates/surface/src/actions/mod.rs
+      - crates/surface/src/pg/mod.rs
       - crates/surface/src/live/mod.rs
       - crates/surface/src/export/mod.rs
       - crates/surface/src/nodes/mod.rs
@@ -807,14 +830,20 @@ Features Index:
       transactional outbox relayed to an EventSink after commit (at least
       once). The directory caches supersessions for the synchronous
       canonical(); ShardKey keys correlator shards by canonical channel and
-      PgShardTicks keeps the shards' tick checkpoints. Model-tested against
+      PgShardTicks reads the shards' tick records, which only the
+      consumer's checkpoint writes (PgFlowDurability, migration
+      0003_restart: recording order, access resolutions, tool calls, held
+      writes, checkpoints). PgExtractionLedger keeps the extraction step's
+      ledger (0004_extract_ledger). Model-tested against
       crosstalk-memory's reference stores with the reference harnesses'
       proptest strategies.
     entry_points:
       - crates/flow/src/store/mod.rs
       - crates/flow/src/store/registry/mod.rs
       - crates/flow/src/store/transmissions.rs
+      - crates/flow/src/store/restart.rs
       - crates/flow/migrations/0001_flow_store.sql
+      - crates/flow/migrations/0003_restart.sql
     depends_on: [store, memory, channel_semantics]
     doc: docs/features/flow_store.md
   topology_store:
@@ -857,7 +886,11 @@ Features Index:
       changes, landed: EventId::derive, KeyedHasher::derive_key,
       BusError::SpoolFull, AuditOutcome::Interrupted with AuditIntent and
       AuditIntents, PgBus/SpoolingBus/PgFrontierSource docs, INV-1200 to
-      INV-1221; W1 to W9 not implemented): detections that survive
+      INV-1221; W1, transport, implemented: PgBus, SpoolingBus, DbLink,
+      see pg_bus and publish_spool; W4, flow, implemented: checkpoints with
+      deferred acks, held writes, access recording order, the extraction
+      step and its ledger in crosstalk-flow, stamped outbox, see
+      flow_correlator, flow_store and flow_extract): detections that survive
       a gateway restart. Surveys what is persisted today (serve runs Live
       on memory stores and MpscBus; the L3 to L7 Postgres stores exist but
       are unwired, and crosstalk migrate runs no layer migrations) and
@@ -925,13 +958,15 @@ Features Index:
       routes) with a loader that checks each case against its metadata; a
       hyper fake upstream that replays cases with paced event streams and
       stalls, disconnects, withholds or fails on command and records what
-      it received; and a hyper fake harness client that collects responses
-      chunk by chunk.
+      it received; a hyper fake harness client that collects responses
+      chunk by chunk; and DbLink, a loopback TCP relay to the test database
+      that a test cuts and restores to simulate an outage.
     entry_points:
       - crates/testkit/src/lib.rs
       - crates/testkit/src/corpus/anthropic.rs
       - crates/testkit/src/upstream/mod.rs
       - crates/testkit/src/client.rs
+      - crates/testkit/src/db_link.rs
       - crates/testkit/corpus/README.md
     depends_on: [type_spec, workspace]
     doc: docs/features/testkit.md
@@ -967,6 +1002,51 @@ Features Index:
       - crates/transport/src/blob/memory.rs
     depends_on: [type_spec, wire_contract, workspace]
     doc: docs/features/transport.md
+  pg_bus:
+    description: >
+      PgBus (crosstalk-transport pg module, P7.3 workstream W1): the
+      durable single-node EventBus on Postgres, schema transport (events
+      log idempotent on envelope id, groups with admitted_through,
+      deliveries ready/held/delayed, dead letters). MpscBus's group
+      semantics (checked by a conformance suite run over both buses);
+      publishes commit in seq order under a transaction advisory lock;
+      next admits, makes due delays ready and takes a row FOR UPDATE SKIP
+      LOCKED in one transaction, waking on LISTEN/NOTIFY or a poll; ack
+      deadlines in a reaper task; delays from the injected clock;
+      recover_held returns a stopped process's held deliveries with the
+      attempt counted; group_stats for the frontier; prune for 7-day
+      retention behind the slowest group; DrainTarget for the spool. Not
+      yet built by serve (W8).
+    entry_points:
+      - crates/transport/src/pg/mod.rs
+      - crates/transport/src/pg/subscription.rs
+      - crates/transport/migrations/0001_bus.sql
+      - crates/transport/src/conformance/mod.rs
+      - crates/transport/src/integration/mod.rs
+    depends_on: [transport, store, postgres_stores]
+    doc: docs/features/pg_bus.md
+  publish_spool:
+    description: >
+      SpoolingBus (crosstalk-transport spool module, P7.3 workstream W1,
+      decision Q5): an EventBus decorator that appends what its inner bus
+      cannot take (Disconnected) to fsynced, checksummed segments on disk
+      and drains them in publish order, under their own ids, when the
+      inner bus answers (one batch transaction, then an atomically
+      replaced cursor). States Direct, Spooling, Draining, Corrupt change
+      under the publish mutex, so nothing overtakes the backlog. A torn
+      last record is truncated at open, any other bad record stops
+      draining; bounded by max_bytes (SpoolFull, never waits); LOCK per
+      directory; oldest_at for the frontier; discard_corrupt for the
+      operator. Unit, seeded DST with crashes, and integration tests over
+      PgBus through testkit's DbLink. Not yet built by serve (W8).
+    entry_points:
+      - crates/transport/src/spool/mod.rs
+      - crates/transport/src/spool/log.rs
+      - crates/transport/src/spool/drain.rs
+      - crates/transport/src/dst/spool.rs
+      - crates/testkit/src/db_link.rs
+    depends_on: [transport, pg_bus, testkit, postgres_stores]
+    doc: docs/features/publish_spool.md
   memory:
     description: >
       crosstalk-memory, the in-memory reference implementation of every
@@ -1302,16 +1382,18 @@ Features Index:
       (evidence::scope, ready for per-corpus replay scoping); PgAgents,
       every L3 agent store trait on Postgres (merge log with exact unmerges,
       vetoes, renames, resolve, lifecycle, claims, activity, reads; an
-      outbox; an in-process directory cache), model-tested against
+      outbox whose relay stamps each row with its envelope id and time
+      before the first publish, INV-1211; an in-process directory cache;
+      list cursor keys derived from the deployment secret), model-tested against
       crosstalk-memory; ConversationThreader over MemoryConversations or
-      PgConversations (prefix chains, forks, compaction from summary
+      PgConversations (both serve ExchangePlacements; prefix chains, forks, compaction from summary
       turns, WebSocket increment resolution scoped by upstream and identity
       scope, system turns anywhere, every message kept in order under an
       ordinal, a per-agent seen-message set within a configured retention
       that keeps history replayed from another conversation out of a
       delta's new inputs, INV-1100); and the reconstruct consumer (ExchangeCaptured in;
-      AgentSeen and ConversationDelta out under envelope ids derived from
-      the exchange). Replays AI Village's Claude Code stream and lmcache's
+      ConversationDelta out under an envelope id derived from the
+      exchange; AgentSeen staged by the agent store's create or attach). Replays AI Village's Claude Code stream and lmcache's
       interleaved re-runs as ignored fixture tests.
     entry_points:
       - crates/reconstruct/src/lib.rs
@@ -1334,7 +1416,9 @@ Features Index:
       prompt and the output (k-grams, plus exact hashes of short token
       runs for whole values of 24 to 46 characters), resolves originated
       text against the index (hidden relays become ReaderOutput matches
-      under stricter length and rare-token rules, boilerplate Common),
+      under stricter length and rare-token rules, boilerplate Common, and
+      a stretch on another agent's span with no rare token stays the
+      writer's own, recorded as a coincidence the spread rule still counts),
       drops short matches that are template skeletons, that the origin
       was given token for token in its own request, or that lie, with no
       rare token, inside the text of another writer present in the read,
@@ -1355,7 +1439,10 @@ Features Index:
       SpanRelayed and ContentMatched; PgFingerprintIndex model-tested
       against crosstalk-memory's reference; L4's records (exchanges with
       per-exchange and per-message scan status, spans by id, matches by
-      reader message and by origin span) in memory and on Postgres; a
+      reader message and by origin span, and each exchange's start, read
+      back by the L4 stage so a restart loses none) in memory and on
+      Postgres, the Postgres pair model-tested against the memory one
+      under every match rule and across a restart; a
       semantic matcher stub until P6.2. Validated on AgentDojo: 9948 of
       9949 exposed injection slots matched.
     entry_points:
@@ -1491,7 +1578,7 @@ Features Index:
       - crates/conformance/src/scenario/mod.rs
       - crates/conformance/src/suite.rs
       - ui/src/backend/fixture/conformance/mod.rs
-      - crates/api/src/world.rs
+      - crates/api/src/world/mod.rs
       - crates/api/tests/conformance.rs
       - crates/client/tests/conformance.rs
     depends_on: [query_surface, read_models, export, channel_semantics, type_spec, world, http_api, surface_service]
@@ -1517,11 +1604,18 @@ Features Index:
       channel, an unconfirmed and a hidden channel). The feature doc lists the divergences from the UI fixture and
       the gap list: fixture reads no store or spec trait answers. Origin
       spans are recorded through L4's SpanIndex (WorldStores::Spans).
+      World::seed_with_wire also returns the wire traffic (generate/wire):
+      the exchanges behind every confirmed transmission as L1 captured
+      them, under the world's own exchange ids and bodies, in sessions
+      with pauses, compactions, forks, failed attempts and tool calls,
+      which crosstalk_api::world threads (L3) and scans (L4) into the
+      conversation reads.
     entry_points:
       - crates/world/src/lib.rs
       - crates/world/src/seed.rs
       - crates/world/src/stores.rs
       - crates/world/src/generate/mod.rs
+      - crates/world/src/generate/wire/mod.rs
       - crates/world/src/assemble/mod.rs
       - crates/world/src/run/mod.rs
       - crates/world/tests/support/mod.rs
@@ -1552,7 +1646,9 @@ Features Index:
       the gateway's URL). The UI declares no traits of its own: the
       clock, bucket width, export formats and rule version come from
       QueryApi::present (app::present, once per request), and where a
-      default view ends from AppBackend::view_end.
+      default view ends from AppBackend::view_end. The overview and the
+      topology follow the present by default (follow=1d, see follow_mode);
+      every other page shows a pinned window.
       Built from the workspace root into deploy/ui.Dockerfile and
       deploy/ui.demo.Dockerfile with its Topcoat asset bundle.
     entry_points:
@@ -1717,14 +1813,34 @@ Features Index:
       execute_bash and str_replace_editor are known tools. Each write
       carries its outcome (Delivered, Rejected, Unknown), judged in one
       place per tool and, for git, curl/wget and gh/glab, from the
-      command's output; reads need a delivered result; a write's locators
-      never depend on its result. ConversationContext learns the
-      persistent shell's directory and clones from shell calls. Builds the
+      command's output, and accesses of commands the output shows skipped
+      or failed (a failed cd before &&, command not found, a reader's
+      missing operand) are refuted; a push's or pull's printed To/From
+      remote wins over the clone binding; reads need a delivered result; a
+      write's locators never depend on its result. ConversationContext is
+      the conversation's shell state (ShellState: the persistent shell's
+      directory, including configured persistent_shells such as the AI
+      Village's bash, cd -, the home directory once an output shows it
+      with ~ places tracked home-relative until then, clones by remote
+      name, bounded), learnt from shell calls and their output; the
+      gateway's extraction step keeps one per agent and conversation and
+      records no read of a result without text. Builds the
       stored AccessOp with the write's spans (originated, forwarded from an
-      input, plus self-relayed sources; none for an Unseen payload).
+      input, plus self-relayed sources; none for an Unseen payload). The
+      extraction step itself now lives here (extract::step::ExtractionStep,
+      P7.3 W4): generic over an ExtractionLedger (MemoryExtractionLedger,
+      PgExtractionLedger), a span reader and a message reader; each delta is
+      computed on an overlay, handed to the flow consumer (FlowInputs), and
+      only then committed with extract_done, so a redelivered delta yields
+      the same inputs or nothing. The gateway's L4 stage calls it over the
+      memory ledger.
     entry_points:
       - crates/flow/src/extract/mod.rs
+      - crates/flow/src/extract/step/mod.rs
+      - crates/flow/src/extract/step/ledger.rs
       - crates/flow/src/extract/context.rs
+      - crates/flow/src/extract/bash/state.rs
+      - crates/flow/src/extract/bash/evidence.rs
       - crates/flow/src/extract/outcome.rs
       - crates/flow/src/extract/mcp/config.rs
       - crates/flow/src/extract/spans.rs
@@ -1764,13 +1880,26 @@ Features Index:
       queue with retries. Time is only input event times and ticks of the
       injected clock, so replayed corpora settle on the replay clock. Its
       input from extraction is a local type until the spec has an event
-      for it.
+      for it. Restart durability (P7.3 W4): a FlowDurability port (Volatile,
+      MemoryDurability, PgFlowDurability) keeps held writes, tool calls and
+      each access's resolved medium as they are taken; a durable consumer
+      checkpoints its shards (only when its queue is empty) with their tick
+      records in one transaction and acks a delivery only once a checkpoint
+      covers it; restore loads the checkpoint (an incompatible one is a
+      start error naming --reset-correlator), the held writes and re-feeds
+      the inputs recorded after it in their recorded media. Envelope ids are
+      derived from the events. The extraction step hands its inputs over
+      through FlowInputs (DurableInputs waits for them to be stored). A
+      restart DST compares crashed-and-restored runs with uninterrupted ones.
     entry_points:
       - crates/flow/src/correlate/windowed.rs
       - crates/flow/src/correlate/pairing.rs
       - crates/flow/src/consumer/mod.rs
       - crates/flow/src/consumer/shards.rs
       - crates/flow/src/consumer/apply.rs
+      - crates/flow/src/consumer/restore.rs
+      - crates/flow/src/consumer/durability.rs
+      - crates/flow/src/dst/mod.rs
     depends_on: [type_spec, channel_semantics, memory, sim, testkit, transport]
     doc: docs/features/flow_correlator.md
   search_alerts:
@@ -1784,12 +1913,26 @@ Features Index:
       AlertReads in SERIALIZABLE transactions with an outbox published after
       commit; RuleEvaluator is AlertRuleEval for every rule kind; AlertsStage
       is the alerts consumer group, built like the gateway pipeline's
-      stages. Model-tested against crosstalk-memory's harnesses.
+      stages. P7.3 W5 adds PgTopicCatalog (TopicCatalog, TopicLifecycle,
+      TopicAssignments; version numbers from a counter row, drops freeze
+      sizes and delete assignments in one transaction, the one publisher of
+      TopicVersionDropped), PgProjectionStore (ProjectionStore: jobs as
+      ProjectionInfo JSON, SKIP LOCKED claims under leases, frames as
+      bytea), the outbox relay with stable envelope ids (rows stamped in a
+      committed transaction before the first publish, republished under
+      the same id; INV-1213), and classify::Classifier, the analyze
+      consumer's classification step (decision saved before any effect and
+      replayed on redelivery, envelope id EventId::derive of the delivery),
+      for W8 to wire in place of the gateway's classifier. Model-tested
+      against crosstalk-memory's harnesses.
     entry_points:
       - crates/analysis/src/search/mod.rs
       - crates/analysis/src/alerts/mod.rs
       - crates/analysis/src/alerts/eval/mod.rs
       - crates/analysis/src/alerts/consumer.rs
+      - crates/analysis/src/topics/mod.rs
+      - crates/analysis/src/projections/mod.rs
+      - crates/analysis/src/classify/mod.rs
       - crates/analysis/src/pg/mod.rs
     depends_on: [type_spec, store, memory, gateway]
     doc: docs/features/search_alerts.md

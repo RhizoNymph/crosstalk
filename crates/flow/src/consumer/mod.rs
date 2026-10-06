@@ -25,8 +25,19 @@
 //! before the event announcing it is published, and the correlator sees
 //! its inputs in arrival order. A step that fails transiently stays at the
 //! head of the queue and is retried before anything else; a permanent
-//! failure is logged and dropped. Bus deliveries are acked once their
-//! steps are queued: what the correlator absorbed is never redelivered.
+//! failure is logged and dropped.
+//!
+//! **Durability** ([`FlowDurability`]). A volatile consumer (memory mode)
+//! acks each bus delivery once its steps ran. A durable one keeps held
+//! writes and tool calls in its store as it takes them, and acks a
+//! delivery only once a checkpoint of its shards covers it
+//! ([`FlowConsumer::checkpoint`], every `Settings::checkpoint_every` or
+//! once `Settings::max_unacked` deliveries wait). After a restart
+//! [`FlowConsumer::restore`] loads the checkpoint and the held writes and
+//! re-feeds the accesses and tool calls recorded after it; the bus
+//! redelivers what was not acked (`flow.consumer.restore-equivalent`).
+//! Everything it publishes carries an envelope id derived from the event
+//! ([`publish`]), so a repeat lands on the id the bus already holds.
 //!
 //! **Time.** Every window closes on ticks, and a tick's time is read from
 //! the injected `Clock`: under replay that is the replay clock, so corpus
@@ -34,43 +45,57 @@
 //! time. [`FlowConsumer::tick`] drives a tick directly.
 
 mod apply;
+pub mod checkpoint;
+pub mod durability;
 pub mod error;
 pub mod held;
 pub mod input;
 pub mod publish;
 mod resources;
+mod restore;
 pub mod settings;
 pub mod shards;
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;
 
 use std::collections::VecDeque;
 use std::sync::Arc;
 
 use crosstalk_spec::derived::flow::access::Access;
+use crosstalk_spec::derived::flow::resource::Locator;
 use crosstalk_spec::derived::flow::transmission::Transmission;
 use crosstalk_spec::derived::provenance::matching::ContentMatch;
 use crosstalk_spec::events::detect::DetectEvent;
 use crosstalk_spec::events::ingest::IngestEvent;
 use crosstalk_spec::events::{BusEvent, Subject};
-use crosstalk_spec::ids::{AgentId, ChannelId, ExchangeId, ResourceId, SeededRandom};
-use crosstalk_spec::interfaces::l2_transport::{ConsumerGroup, EventBus, Subscription};
+use crosstalk_spec::ids::{AccessId, AgentId, ChannelId, ExchangeId, ResourceId};
+use crosstalk_spec::interfaces::l2_transport::{ConsumerGroup, DeliveryId, EventBus, Subscription};
 use crosstalk_spec::interfaces::l3_reconstruction::agents::AgentReads;
 use crosstalk_spec::interfaces::l5_flow::ChannelRegistry;
 use crosstalk_spec::interfaces::l5_flow::channels::ChannelTraffic;
 use crosstalk_spec::interfaces::l5_flow::transmissions::TransmissionStore;
 use crosstalk_spec::support::{Clock, Timestamp};
-use tokio::sync::mpsc;
 use tokio::time::MissedTickBehavior;
 
+pub use self::checkpoint::{
+    Checkpoint, CheckpointError, FlowRestoreError, Incompatible, SNAPSHOT_FORMAT, ShardSnapshot,
+    StoredCheckpoint,
+};
+pub use self::durability::{
+    DurabilityError, FlowDurability, MemoryDurability, Recorded, Recovered, Resolved, Volatile,
+};
 pub use self::error::StepError;
 pub use self::held::HeldWrites;
-pub use self::input::{Extracted, Observed, ReadResult, WriteCall};
-pub use self::publish::{PublishError, Publisher};
+pub use self::input::{
+    DurableInputs, Extracted, ExtractedBatch, FlowInputs, InputSource, NotDurable, Observed,
+    ReadResult, ToolCalled, WriteCall,
+};
+pub use self::publish::{PublishError, Publisher, envelope_id};
+pub use self::restore::{Checkpointed, Restored};
 pub use self::settings::{FlowConfig, InvalidFlowConfig, Settings};
 pub use self::shards::Shards;
-use crate::correlate::pairing::WriteOutcome;
+use crate::correlate::pairing::{self, WriteOutcome};
 use crate::correlate::{Decided, Kin, MediumKey};
 
 /// The consumer group the flow consumer reads with.
@@ -99,18 +124,42 @@ pub struct FlowDeps<R, T, A, B> {
     /// For `Delegation`: each agent's canonical agent and parent.
     pub agents: A,
     pub bus: B,
-    /// Ticks and envelope times: the replay clock under replay.
+    /// Ticks, checkpoint times and envelope times: the replay clock under
+    /// replay.
     pub clock: Arc<dyn Clock>,
-    /// Seeds envelope ids: `SeededRandom::from_entropy` in the gateway, a
-    /// fixed seed under simulation.
-    pub entropy: SeededRandom,
 }
 
 /// One unit of the consumer's work.
 #[derive(Debug, Clone, PartialEq)]
 enum Step {
     Read(Observed<ReadResult>),
-    Write(Observed<WriteCall>, WriteOutcome),
+    /// A write with its outcome; `held` when it was released from the held
+    /// writes, whose stored row goes once its access is recorded.
+    Write {
+        write: Observed<WriteCall>,
+        outcome: WriteOutcome,
+        held: bool,
+    },
+    /// Hold a write until its result or its settle time.
+    Hold(Observed<WriteCall>),
+    /// A held write's result arrived.
+    Release {
+        access: AccessId,
+        outcome: WriteOutcome,
+    },
+    /// A released write's access is recorded: drop its stored hold.
+    Unhold(AccessId),
+    /// A tool call: recorded, then named in every shard.
+    ToolCalled(ToolCalled),
+    /// A tool call recorded before a restart, named again.
+    ToolNamed(ToolCalled),
+    /// An access recorded before a restart, after the checkpoint: taken
+    /// again exactly as when it was first recorded.
+    Refeed {
+        access: Access,
+        locator: Locator,
+        resolved: Resolved,
+    },
     Correlate(Access, Option<ChannelId>),
     Content(ContentMatch),
     Exchange(ExchangeId, Timestamp),
@@ -129,8 +178,8 @@ enum Step {
     Publish(BusEvent),
 }
 
-/// The flow consumer.
-pub struct FlowConsumer<R, T, A, B> {
+/// The flow consumer, keeping what survives a restart in `D`.
+pub struct FlowConsumer<R, T, A, B, D = Volatile> {
     settings: Settings,
     registry: R,
     transmissions: T,
@@ -140,27 +189,44 @@ pub struct FlowConsumer<R, T, A, B> {
     shards: Shards,
     held: HeldWrites,
     backlog: VecDeque<Step>,
+    durability: D,
 }
 
-impl<R, T, A, B> FlowConsumer<R, T, A, B>
+impl<R, T, A, B> FlowConsumer<R, T, A, B, Volatile>
 where
     R: ChannelRegistry + ChannelTraffic + Send + Sync,
     T: TransmissionStore + Send + Sync,
     A: AgentReads + Send + Sync,
     B: EventBus + Send + Sync,
 {
+    /// A volatile consumer: nothing it holds survives the process.
     pub fn new(settings: Settings, deps: FlowDeps<R, T, A, B>) -> Self {
+        Self::with_durability(settings, deps, Volatile)
+    }
+}
+
+impl<R, T, A, B, D> FlowConsumer<R, T, A, B, D>
+where
+    R: ChannelRegistry + ChannelTraffic + Send + Sync,
+    T: TransmissionStore + Send + Sync,
+    A: AgentReads + Send + Sync,
+    B: EventBus + Send + Sync,
+    D: FlowDurability,
+{
+    /// A consumer keeping its held writes, tool calls and checkpoints in
+    /// `durability`. A durable one is [`FlowConsumer::restore`]d before it
+    /// takes any input.
+    pub fn with_durability(settings: Settings, deps: FlowDeps<R, T, A, B>, durability: D) -> Self {
         let FlowDeps {
             registry,
             transmissions,
             agents,
             bus,
             clock,
-            entropy,
         } = deps;
         Self {
             shards: Shards::new(settings.timing, settings.content_retention, settings.shards),
-            publisher: Publisher::new(bus, Arc::clone(&clock), entropy),
+            publisher: Publisher::new(bus, Arc::clone(&clock)),
             settings,
             registry,
             transmissions,
@@ -168,6 +234,7 @@ where
             clock,
             held: HeldWrites::default(),
             backlog: VecDeque::new(),
+            durability,
         }
     }
 
@@ -185,6 +252,14 @@ where
 
     pub fn held_writes(&self) -> &HeldWrites {
         &self.held
+    }
+
+    pub fn durability(&self) -> &D {
+        &self.durability
+    }
+
+    pub fn settings(&self) -> &Settings {
+        &self.settings
     }
 
     /// Steps waiting for a retry.
@@ -232,58 +307,95 @@ where
 
     /// One input from the extraction step.
     pub async fn handle_extracted(&mut self, input: Extracted) {
+        self.queue(Self::step_of(input));
+        self.drain().await;
+    }
+
+    /// A batch from the extraction step, in order: `Ok` once every step
+    /// it caused ran, so its accesses, held writes and tool calls are
+    /// stored; `Backlogged` when a step failed transiently and waits in
+    /// the queue (the caller retries its delta; every input is
+    /// idempotent here).
+    pub async fn handle_batch(&mut self, inputs: Vec<Extracted>) -> Result<(), NotDurable> {
+        for input in inputs {
+            self.queue(Self::step_of(input));
+        }
+        self.drain().await;
+        match self.backlog.is_empty() {
+            true => Ok(()),
+            false => Err(NotDurable::Backlogged),
+        }
+    }
+
+    fn step_of(input: Extracted) -> Step {
         match input {
-            Extracted::Read(read) => self.queue(Step::Read(read)),
+            Extracted::Read(read) => Step::Read(read),
             Extracted::Write {
                 write,
                 outcome: Some(outcome),
-            } => self.queue(Step::Write(write, outcome)),
+            } => Step::Write {
+                write,
+                outcome,
+                held: false,
+            },
             Extracted::Write {
                 write,
                 outcome: None,
-            } => self.held.hold(write, self.settings.timing),
-            Extracted::WriteResult { access, outcome } => match self.held.release(access) {
-                Some(write) => self.queue(Step::Write(write, outcome)),
-                None => {
-                    tracing::debug!(access = %access.ulid_text(), "result for a write not held; ignored");
-                }
-            },
+            } => Step::Hold(write),
+            Extracted::WriteResult { access, outcome } => Step::Release { access, outcome },
             Extracted::ToolCall {
                 agent,
                 call,
                 name,
                 at,
-            } => self.shards.tool_named(agent, &call, &name, at),
+            } => Step::ToolCalled(ToolCalled {
+                agent,
+                call,
+                name,
+                at,
+            }),
         }
-        self.drain().await;
     }
 
     /// A tick at `now`: release the writes whose settle window closed (as
     /// `Unknown`), then close windows and expire suspicions up to `now`.
     pub async fn tick(&mut self, now: Timestamp) {
         for (write, outcome) in self.held.settle(now) {
-            self.queue(Step::Write(write, outcome));
+            self.queue(Step::Write {
+                write,
+                outcome,
+                held: true,
+            });
         }
         self.queue(Step::Tick(now));
         self.drain().await;
     }
 
-    /// Consume `subscription` and `extracted`, ticking every
+    /// Consume `subscription` and `inputs`, ticking every
     /// `Settings::tick_every` on the injected clock, until the bus shuts
-    /// down. The consumer stays usable afterwards (its stores and shards
-    /// can be read).
-    pub async fn run<S: Subscription>(
+    /// down. A volatile consumer acks each delivery once its steps ran; a
+    /// durable one keeps them unacked until a checkpoint covers them
+    /// (every `Settings::checkpoint_every`, or once
+    /// `Settings::max_unacked` wait). Batches waiting on their durability
+    /// are answered once their steps ran. The consumer stays usable
+    /// afterwards (its stores and shards can be read).
+    pub async fn run<S: Subscription, I: InputSource>(
         &mut self,
         mut subscription: S,
-        mut extracted: mpsc::Receiver<Extracted>,
+        mut inputs: I,
     ) {
+        let durable = self.durability.survives_restart();
         tracing::info!(
             group = GROUP,
             shards = self.shards.count(),
+            durable,
             "flow consumer started"
         );
         let mut ticker = tokio::time::interval(self.settings.tick_every);
         ticker.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        let mut checkpoints = tokio::time::interval(self.settings.checkpoint_every);
+        checkpoints.set_missed_tick_behavior(MissedTickBehavior::Delay);
+        let mut unacked: Vec<DeliveryId> = Vec::new();
         let mut inputs_open = true;
         loop {
             tokio::select! {
@@ -292,8 +404,11 @@ where
                     let now = self.clock.now();
                     self.tick(now).await;
                 }
-                input = extracted.recv(), if inputs_open => match input {
-                    Some(input) => self.handle_extracted(input).await,
+                _ = checkpoints.tick(), if durable => {
+                    self.checkpoint_and_ack(&mut subscription, &mut unacked).await;
+                }
+                batch = inputs.recv(), if inputs_open => match batch {
+                    Some(batch) => self.answer(batch).await,
                     None => inputs_open = false,
                 },
                 next = subscription.next() => match next {
@@ -302,20 +417,62 @@ where
                         tracing::warn!(group = GROUP, error = ?error, "undecodable delivery skipped");
                     }
                     Some(Ok(delivery)) => {
-                        let event = delivery.envelope.id.ulid_text();
                         self.handle_event(&delivery.envelope.event).await;
-                        if let Err(error) = subscription.ack(delivery.id).await {
+                        if durable {
+                            unacked.push(delivery.id);
+                            if unacked.len() >= self.settings.max_unacked.get() {
+                                self.checkpoint_and_ack(&mut subscription, &mut unacked).await;
+                            }
+                        } else if let Err(error) = subscription.ack(delivery.id).await {
+                            let event = delivery.envelope.id.ulid_text();
                             tracing::warn!(group = GROUP, event = %event, error = ?error, "ack failed; the bus will redeliver");
                         }
                     }
                 },
             }
         }
+        if durable {
+            self.checkpoint_and_ack(&mut subscription, &mut unacked)
+                .await;
+        }
         tracing::info!(
             group = GROUP,
             backlog = self.backlog.len(),
+            unacked = unacked.len(),
             "flow consumer stopped"
         );
+    }
+
+    /// Handle `batch` and answer whoever waits on it.
+    pub async fn answer(&mut self, batch: ExtractedBatch) {
+        let ExtractedBatch { inputs, reply } = batch;
+        let outcome = self.handle_batch(inputs).await;
+        if let Some(reply) = reply
+            && reply.send(outcome).is_err()
+        {
+            tracing::debug!(group = GROUP, "nobody waits for the batch's answer");
+        }
+    }
+
+    /// Checkpoint, then ack every delivery the checkpoint covers. A
+    /// checkpoint that cannot be taken now leaves them for the next.
+    async fn checkpoint_and_ack<S: Subscription>(
+        &mut self,
+        subscription: &mut S,
+        unacked: &mut Vec<DeliveryId>,
+    ) {
+        match self.checkpoint().await {
+            Ok(_) => {
+                for id in unacked.drain(..) {
+                    if let Err(error) = subscription.ack(id).await {
+                        tracing::warn!(group = GROUP, error = ?error, "ack failed; the bus will redeliver what the checkpoint holds");
+                    }
+                }
+            }
+            Err(error) => {
+                tracing::warn!(group = GROUP, error = %error, unacked = unacked.len(), "checkpoint not taken; its deliveries stay unacked");
+            }
+        }
     }
 
     fn queue(&mut self, step: Step) {
@@ -347,7 +504,57 @@ where
     async fn execute(&mut self, step: Step) -> Result<Vec<Step>, StepError> {
         match step {
             Step::Read(read) => self.record_read(read).await,
-            Step::Write(write, outcome) => self.record_write(write, outcome).await,
+            Step::Write {
+                write,
+                outcome,
+                held,
+            } => {
+                let id = write.id;
+                let mut steps = self.record_write(write, outcome).await?;
+                if held {
+                    steps.insert(0, Step::Unhold(id));
+                }
+                Ok(steps)
+            }
+            Step::Hold(write) => {
+                if !self.held.contains(write.id) {
+                    let settles_at = pairing::write_settles_at(self.settings.timing, write.at);
+                    self.durability.hold(&write, settles_at).await?;
+                    self.held.hold(write, self.settings.timing);
+                }
+                Ok(Vec::new())
+            }
+            Step::Release { access, outcome } => match self.held.release(access) {
+                Some(write) => Ok(vec![Step::Write {
+                    write,
+                    outcome,
+                    held: true,
+                }]),
+                None => {
+                    tracing::debug!(access = %access.ulid_text(), "result for a write not held; ignored");
+                    Ok(Vec::new())
+                }
+            },
+            Step::Unhold(access) => {
+                self.durability.release(access).await?;
+                Ok(Vec::new())
+            }
+            Step::ToolCalled(call) => {
+                self.durability.tool_called(&call).await?;
+                self.shards
+                    .tool_named(call.agent, &call.call, &call.name, call.at);
+                Ok(Vec::new())
+            }
+            Step::ToolNamed(call) => {
+                self.shards
+                    .tool_named(call.agent, &call.call, &call.name, call.at);
+                Ok(Vec::new())
+            }
+            Step::Refeed {
+                access,
+                locator,
+                resolved,
+            } => self.refeed(access, locator, resolved).await,
             Step::Correlate(access, channel) => Ok(decisions(self.shards.access(&access, channel))),
             Step::Content(content) => {
                 self.refresh_kin(content.origin_agent()).await;

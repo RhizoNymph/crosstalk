@@ -1771,15 +1771,22 @@ sessions per run):
 | `demo-swarm/headline` | channel / tool_result / exact recall | ≥ 0.95 | 1.000 (54 / 54) |
 | `demo-swarm/headline` | channel / tool_result / exact precision | ≥ 0.95 | 1.000 |
 | `demo-swarm/headline` | negative-control violations, reason `reread` | ≤ 0 | 0 (31 discarded predictions dismissed) |
-| `demo-swarm/boilerplate` | `fp_per_1k` | ≤ 130 | 89.1 (22 / 247), 20261006T021639Z |
+| `demo-swarm/boilerplate` | `fp_per_1k` | ≤ 115 | 64.8–107.4 over four boilerplate runs replayed at 21a8bcf (was ≤ 130) |
 | `demo-swarm/boilerplate` | overall recall | ≥ 0.95 | 1.000 (50 / 50) |
-| `demo-swarm/boilerplate` | overall precision | ≥ 0.80 | 0.883 |
+| `demo-swarm/boilerplate` | overall precision | ≥ 0.86 | 0.875–0.940 over the same runs (was ≥ 0.80) |
 
-The boilerplate run's 22 false positives are 15 unobserved/reader_output
-template sentences, accepted with `reader_output.min_chars = 64`, and 7
-channel/exact. One false positive moves the rate by about 4 per 1k, and
-Poisson noise on 22 is about ±19 per 1k, so the ceiling sits about two
-standard deviations above the measured rate. The first bench
+The boilerplate bounds are calibrated on the spread of every saved
+boilerplate run replayed at integration/impl 21a8bcf (after the L4
+shadowed-fragments and verbatim-template fixes): 20261005T184633Z (0.909, 67.2
+per 1k), 20261006T021639Z (0.940, 64.8), 20261006T062146Z (0.875, 107.4) and
+the fresh node0 run 20261006T212129Z (0.927, 68.5), all at recall 1.000. The
+false positives are mostly unobserved/reader_output template sentences,
+accepted with `reader_output.min_chars = 64`. The ceiling (115) and the
+precision floor (0.86) sit just outside the worst run, so run-to-run variance
+on the same code passes. A first attempt calibrated on one run (105 / 0.88)
+failed 062146Z. Run 20261005T155320Z predates the `scenario` header field, so
+it scores as headline although its traffic is the templated generator (0.939
+precision on replay); it is not a headline calibration case. The first bench
 (20261005T155320Z, before L4 match quality and unique sessions) scored
 precision 0.175 and is kept above for history only. Each agent's system
 prompt carries `[style:<scenario>]`,
@@ -2444,12 +2451,17 @@ Reading it:
   k = 24", which a log re-encoded on the way often is; live finds 0.485.
   The reference's precision falls from 0.664 to 0.583 here only because
   its 2,638 correct predictions of forwarding labels moved to their row.
-- **SALT, forwarding on** finds 0.967 of the forwarding row, and raises
-  overall recall to 0.920 (more originated deliveries match once the
+- **SALT, forwarding on** finds 0.967 of the forwarding row at c3cd7f2, and
+  raises overall recall to 0.920 (more originated deliveries match once the
   forwarded runs around them are indexed), but precision falls to 0.144:
   44,529 `direct / tool_result / decoded` false positives, each peer's own
   `inspect_database` / `get_log` read matching a forward of the same
-  schema or log.
+  schema or log. **Superseded:** the reader's nearer source (INV-1154,
+  `provenance.match.forward-direct-read`) no longer matches a forward on
+  content the reader had already read itself. With forwarding on, the
+  forwarding row is now 0.885, overall recall 0.894 and precision 0.882
+  (7f8a2fb, the a2a-transmission-bench parity baseline). The forwarding-on
+  gate is set just below, at 0.86.
 - **Forwarding elsewhere.** No effect on AgentDojo, swarm-traces or
   cipher; τ² gains 0.004 recall for 9.6 more FP / 1k; wiki gains 3
   (`--demo`) and 2 (`--max-agents 100`) labels; splice and the SWE
@@ -2488,7 +2500,7 @@ construction gate at 0.92; AgentDojo keyed-tool precision (all classes)
 new at 0.94; swarm-traces decoded recall 0.95 → 0.98; wiki channel recall
 0.58 → 0.65; swe-splice channel recall 0.90 → 0.97; open-swe and lmcache
 `fp_per_1k` ceilings new at 30 and 150. τ² stays as it was (a sample
-here). Forwarding on: one gate, SALT forwarding-row recall at least 0.94
+here). Forwarding on: one gate, SALT forwarding-row recall at least 0.86 (was 0.94 before INV-1154)
 (`forwarding = "on"`, `Gates::for_run`); the headline gates do not apply
 to that configuration, and the forwarding row is not gated with
 forwarding off (it is a known miss there).
@@ -2616,7 +2628,7 @@ pass; 0.65 before that; not tuned on the whole export), swe-splice
 (channel recall 0.97, precision 0.99), and the open-swe and lmcache
 backgrounds (`fp_per_1k` at most 30 and 150). All of them apply to the
 shipped configuration only (forwarding off); one gate, the SALT
-forwarding row's recall (at least 0.94), applies only to `--forwarding
+forwarding row's recall (at least 0.86 since INV-1154), applies only to `--forwarding
 on` runs. Left ungated on purpose:
 
 - **cipher**: 0.245, dominated by payloads under L4's shingle inside a

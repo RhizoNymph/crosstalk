@@ -47,20 +47,6 @@ impl RecordingBus {
             })
             .collect()
     }
-
-    /// Every `AgentSeen` published.
-    pub(crate) fn seen(&self) -> Vec<(EventId, BusEvent)> {
-        self.envelopes()
-            .into_iter()
-            .filter(|envelope| {
-                matches!(
-                    envelope.event,
-                    BusEvent::Ingest(IngestEvent::AgentSeen { .. })
-                )
-            })
-            .map(|envelope| (envelope.id, envelope.event))
-            .collect()
-    }
 }
 
 /// A subscription that never delivers.

@@ -108,6 +108,7 @@ pub fn flow_config(timing: CorrelationTiming) -> Result<FlowConfig, BackendError
         content_retention_ms: FlowConfig::default().content_retention_ms,
         shards: 1,
         tick_ms: TICK_MS,
+        ..FlowConfig::default()
     })
 }
 

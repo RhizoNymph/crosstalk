@@ -1,0 +1,18 @@
+[invariant]
+id = "transport.retention.prune-keeps-unfinished"
+statement = "PgBus::prune deletes a log entry only when no consumer group still has it pending or not yet admitted, no dead letter names it, and its time is older than the retention."
+kind = "coordination"
+requires = ["integration"]
+rationale = """
+The log is every group's queue and the replay source of every dead
+letter. Pruning an entry a group has not acked, or one a dead letter
+names, would lose a delivery the bus promised (transport.durability.pg-publish-persisted)
+or make a replay impossible. Retention (decision Q6, 7 days) bounds the
+log only behind the slowest group.
+"""
+
+[evidence]
+integration = "crosstalk_transport::integration::pg_prune_never_drops_an_unacked_event"
+
+[evidence-review]
+integration = { agent = "false", human = "false" }

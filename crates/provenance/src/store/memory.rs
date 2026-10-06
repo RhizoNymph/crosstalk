@@ -14,8 +14,9 @@ use crosstalk_spec::interfaces::l4_provenance::{IndexedSpan, SpanIndex, SpanInde
 use crosstalk_spec::support::Timestamp;
 
 use super::{
-    Committed, ExchangeRecord, Forwarding, MessageScan, ProvenanceStore, ProvenanceStoreError,
-    Relay, ScanCommit, ScanFailure, ScanStatus, ScannedAs, SpanRecord, StoredMatch,
+    Coincidence, Committed, ExchangeRecord, Forwarding, MessageScan, ProvenanceStore,
+    ProvenanceStoreError, Relay, ScanCommit, ScanFailure, ScanStatus, ScannedAs, SpanRecord,
+    StoredMatch,
 };
 
 #[derive(Debug, Default)]
@@ -27,8 +28,11 @@ struct Tables {
     matches: Vec<StoredMatch>,
     scanned: BTreeSet<(MessageHash, ExchangeId, ScannedAs)>,
     sequence: u64,
-    /// The spans relayed from each span.
+    /// Copies of each span: spans relayed from it, and spans holding a
+    /// coincident template stretch of it.
     relayed_from: BTreeMap<SpanId, Vec<SpanId>>,
+    /// Every recorded coincidence.
+    coincidences: BTreeSet<Coincidence>,
 }
 
 /// L4's records in memory.
@@ -54,6 +58,11 @@ impl MemoryProvenanceStore {
     /// Every stored span (tests).
     pub fn all_spans(&self) -> Vec<SpanRecord> {
         self.lock().spans.values().cloned().collect()
+    }
+
+    /// Every recorded coincidence (tests).
+    pub fn all_coincidences(&self) -> Vec<Coincidence> {
+        self.lock().coincidences.iter().copied().collect()
     }
 
     /// Every stored match (tests).
@@ -129,6 +138,14 @@ impl ProvenanceStore for MemoryProvenanceStore {
         Ok(self.lock().exchanges.get(&id).cloned())
     }
 
+    async fn started_at(&self, id: ExchangeId) -> Result<Option<Timestamp>, ProvenanceStoreError> {
+        Ok(self
+            .lock()
+            .exchanges
+            .get(&id)
+            .map(|(record, _)| record.started_at))
+    }
+
     async fn spans(&self, ids: &[SpanId]) -> Result<Vec<SpanRecord>, ProvenanceStoreError> {
         let tables = self.lock();
         Ok(ids
@@ -160,6 +177,20 @@ impl ProvenanceStore for MemoryProvenanceStore {
             .collect();
         relays.sort_by_key(|relay| (relay.source, relay.at, relay.agent));
         Ok(relays)
+    }
+
+    async fn coincident_sources(
+        &self,
+        spans: &[SpanId],
+    ) -> Result<Vec<Coincidence>, ProvenanceStoreError> {
+        let tables = self.lock();
+        let wanted: BTreeSet<SpanId> = spans.iter().copied().collect();
+        Ok(tables
+            .coincidences
+            .iter()
+            .filter(|coincidence| wanted.contains(&coincidence.span))
+            .copied()
+            .collect())
     }
 
     async fn span(&self, id: SpanId) -> Result<Option<SpanRecord>, ProvenanceStoreError> {
@@ -263,6 +294,7 @@ impl ProvenanceStore for MemoryProvenanceStore {
         if *status != ScanStatus::Pending {
             return Ok(Committed::AlreadyScanned);
         }
+        commit.check_coincidences()?;
         let mut ids = Vec::with_capacity(commit.spans.len());
         for (ordinal, span) in commit.spans.iter().enumerate() {
             ids.push(span.id);
@@ -280,6 +312,16 @@ impl ProvenanceStore for MemoryProvenanceStore {
                     commit.forwarding,
                 ),
             );
+        }
+        for coincidence in &commit.coincidences {
+            if !tables.coincidences.insert(*coincidence) {
+                continue;
+            }
+            tables
+                .relayed_from
+                .entry(coincidence.source)
+                .or_default()
+                .push(coincidence.span);
         }
         tables.by_exchange.insert(commit.exchange, ids);
         for stored in &commit.matches {

@@ -11,7 +11,11 @@
  * the sigma instance, camera, positions, selection and hover are kept.
  * Edges whose traffic rose, and new nodes, pulse (`flash.ts`). The page's
  * `[data-topology-stat]` elements (agents, edges, transmissions, watermark)
- * are kept current from the same payload.
+ * are kept current from the same payload; the watermark reads "provisional
+ * after" while it is before the page's window end (`data-window-end`).
+ *
+ * A `data-src` that only moves `from`/`to` (a followed window sliding,
+ * `shared/slide.ts`) is merged the same way, so the layout is kept.
  */
 
 import { createEdgeCurveProgram } from '@sigma/edge-curve';
@@ -177,19 +181,26 @@ export class TopologyElement extends PayloadElement<TopologyPayload> {
     this.#draw();
   }
 
-  override connectedCallback(): void {
-    super.connectedCallback();
+  protected override attached(): void {
     this.#live.start(this.dataset.live ?? '');
   }
 
-  override disconnectedCallback(): void {
+  protected override detached(): void {
     this.#live.stop();
     this.#refetch?.abort();
     this.#refetch = null;
-    super.disconnectedCallback();
   }
 
-  async #liveTick(): Promise<void> {
+  protected override readonly slideKeys = ['from', 'to'];
+
+  protected override slide(): boolean {
+    if (this.#renderer === null || this.#graph === null) return false;
+    void this.#liveTick(true);
+    return true;
+  }
+
+  /** Refetches `data-src` and merges it; `slid` when the window moved. */
+  async #liveTick(slid = false): Promise<void> {
     const src = this.dataset.src?.trim() ?? '';
     if (src === '') return;
     this.#refetch?.abort();
@@ -206,7 +217,16 @@ export class TopologyElement extends PayloadElement<TopologyPayload> {
       return;
     }
     const payload = result.value;
-    if (this.emptyMessage(payload) !== null) return;
+    const empty = this.emptyMessage(payload);
+    if (empty !== null) {
+      // A quiet stretch keeps the drawing; a window that moved past every
+      // edge says so.
+      if (slid) {
+        this.unmount();
+        this.showStatus('empty', empty);
+      }
+      return;
+    }
     if (this.#renderer === null || this.#graph === null) {
       this.hideStatus();
       this.mount(payload);
@@ -325,7 +345,12 @@ export class TopologyElement extends PayloadElement<TopologyPayload> {
       );
     }
     for (const target of document.querySelectorAll<HTMLElement>('[data-topology-stat]')) {
-      const value = values[target.dataset.topologyStat ?? ''];
+      const stat = target.dataset.topologyStat ?? '';
+      const windowEnd = Date.parse(target.dataset.windowEnd ?? '');
+      const value =
+        stat === 'watermark' && windowEnd > Date.parse(payload.watermark)
+          ? `provisional after ${formatUtc(payload.watermark)} UTC`
+          : values[stat];
       if (value !== undefined && target.textContent !== value) target.textContent = value;
     }
   }

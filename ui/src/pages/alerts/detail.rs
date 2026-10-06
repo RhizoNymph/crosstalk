@@ -22,7 +22,7 @@ use crate::components::{
     data_table, empty_state, error_panel, flash_banner, href, kind_badge, page_header,
 };
 use crate::error::UiError;
-use crate::pages::audit::entry::{EntryView, OutcomeView, entry_view};
+use crate::pages::audit::entry::{EntryView, OutcomeView, entry_view, interrupted_badge};
 use crate::pages::common::action::{Failure, done, perform, require, settled, status_of};
 use crate::pages::common::flash::{Flash, flash};
 use crate::pages::common::form::FormFields;
@@ -248,6 +248,7 @@ async fn alert_page(
                                         match entry.outcome {
                                             OutcomeView::Applied { .. } => <span class="text-xs text-emerald-700 dark:text-emerald-400">"applied"</span>,
                                             OutcomeView::Unchanged => <span class="text-xs text-zinc-500">"unchanged"</span>,
+                                            OutcomeView::Interrupted => interrupted_badge(),
                                             OutcomeView::Rejected(reason) => <span class="text-xs text-red-700 dark:text-red-400">"rejected: " (reason)</span>,
                                             OutcomeView::Forbidden(missing) => <span class="text-xs text-red-700 dark:text-red-400">"forbidden: needs " (crate::error::permission_name(missing))</span>,
                                         }
@@ -356,5 +357,40 @@ mod tests {
         assert_eq!(reply.status, StatusCode::NOT_FOUND);
         let reply = get(&format!("/alerts/rules?{q}")).await;
         assert_eq!(reply.status, StatusCode::OK, "the rules page still wins");
+    }
+
+    #[tokio::test]
+    async fn an_interrupted_acknowledgement_shows_in_the_history_and_the_alert_stays_open() {
+        use crate::pages::audit::entry::INTERRUPTED_LABEL;
+        use crosstalk_spec::interfaces::l8_surface::OperatorAction;
+        use crosstalk_spec::interfaces::l8_surface::audit::{AuditBody, AuditOutcome};
+        let interrupted: Vec<AlertId> = crate::pages::audit::page::tests::every_entry()
+            .await
+            .into_iter()
+            .filter_map(|entry| match entry.body {
+                AuditBody::Operator(record) if record.outcome() == &AuditOutcome::Interrupted => {
+                    match record.action() {
+                        OperatorAction::Acknowledge { alert } => Some(*alert),
+                        _ => None,
+                    }
+                }
+                _ => None,
+            })
+            .collect();
+        let [alert] = interrupted.as_slice() else {
+            panic!("one interrupted acknowledgement: {interrupted:?}");
+        };
+        let reply = get(&format!(
+            "/alerts/{}?{}",
+            alert.to_ulid(),
+            state().to_query()
+        ))
+        .await;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        assert!(reply.body.contains(INTERRUPTED_LABEL), "{}", reply.body);
+        assert!(
+            reply.body.contains(">Acknowledge</button>"),
+            "the acknowledgement did not take: the alert is still open"
+        );
     }
 }

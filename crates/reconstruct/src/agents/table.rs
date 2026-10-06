@@ -20,8 +20,8 @@ use crosstalk_spec::events::ingest::IngestEvent;
 use crosstalk_spec::ids::{AgentId, MergeId, OperatorId};
 use crosstalk_spec::interfaces::l3_reconstruction::ResolveError;
 use crosstalk_spec::observed::agent::{
-    Agent, AgentLabel, AgentState, ClaimSet, MergeAuthor, MergeRecord, MergeRequest, MergeVeto,
-    Reversal,
+    Agent, AgentLabel, AgentState, ClaimSet, IdentityEvidence, MergeAuthor, MergeRecord,
+    MergeRequest, MergeVeto, Reversal,
 };
 use crosstalk_spec::support::{Change, Timestamp};
 
@@ -71,6 +71,25 @@ pub(crate) fn changed(ids: impl IntoIterator<Item = AgentId>) -> Vec<BusEvent> {
         .collect::<BTreeSet<_>>()
         .into_iter()
         .map(|id| BusEvent::Changed(Changed::Agent(id)))
+        .collect()
+}
+
+/// `AgentSeen` for each of `items`, newly attributed to `agent`, in order:
+/// staged in the write that attributes them, so a redelivery never finds
+/// the evidence held and its announcement lost
+/// (`reconstruct.agent-seen.once-per-evidence`).
+pub(crate) fn seen<'a>(
+    agent: AgentId,
+    items: impl IntoIterator<Item = &'a IdentityEvidence>,
+) -> Vec<BusEvent> {
+    items
+        .into_iter()
+        .map(|evidence| {
+            BusEvent::Ingest(IngestEvent::AgentSeen {
+                agent,
+                evidence: evidence.clone(),
+            })
+        })
         .collect()
 }
 

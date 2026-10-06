@@ -371,3 +371,157 @@ async fn the_configured_fetch_tools_are_extracted() {
         .await;
     assert_eq!(reads(&out), vec![(ExchangeId::from_ulid(10), page())]);
 }
+
+impl Step {
+    /// [`Step::delta`] for `agent`, without a system prompt.
+    async fn delta_of(
+        &mut self,
+        agent: AgentId,
+        exchange: u128,
+        conversation: u128,
+        inputs: Vec<MessageBody>,
+        output: Option<MessageBody>,
+    ) -> Vec<Extracted> {
+        let mut new_inputs = Vec::new();
+        for input in inputs {
+            new_inputs.push(self.put(input).await);
+        }
+        let output = match output {
+            Some(body) => Some(self.put(body).await),
+            None => None,
+        };
+        let delta = ConversationDelta {
+            exchange: ExchangeId::from_ulid(exchange),
+            agent,
+            conversation: ConversationId::from_ulid(conversation),
+            new_inputs,
+            new_system: None,
+            output,
+        };
+        let at = Timestamp::from_micros(u64::try_from(exchange).unwrap_or(0) * 1_000_000);
+        self.extraction
+            .delta(&delta, at)
+            .await
+            .unwrap_or_else(|error| panic!("delta: {error}"));
+        let mut out = Vec::new();
+        while let Ok(input) = self.extracted.try_recv() {
+            out.push(input);
+        }
+        out
+    }
+}
+
+fn bash(id: &str, command: &str) -> ToolCall {
+    tool_call(id, "bash", json!({ "command": command }))
+}
+
+/// The written locators of the held writes in `out`.
+fn held_locators(out: &[Extracted]) -> Vec<Locator> {
+    out.iter()
+        .filter_map(|input| match input {
+            Extracted::Write {
+                write,
+                outcome: None,
+            } => Some(write.locator.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// `01KXE46805TY443EM5HE3VE2YF`: the result of a `glab api … | jq` that
+/// printed nothing (and the empty result of a turn's second call) has no
+/// text to locate a read at, so no read is recorded; the same call with
+/// text is read (`flow.extract.read-locates-its-result`).
+#[tokio::test]
+async fn a_result_without_text_is_no_read() {
+    let mut step = Step::new(ExtractConfig::default());
+    step.delta(
+        10,
+        100,
+        vec![],
+        Some(calls(vec![get("call_1"), get("call_2")])),
+    )
+    .await;
+    let empty = MessageBody::Tool(NonEmpty::new(ToolResult {
+        call_id: ToolCallId("call_2".to_owned()),
+        content: Vec::new(),
+        outcome: ToolOutcome::Success,
+    }));
+    let out = step
+        .delta(11, 100, vec![result("call_1", ""), empty], None)
+        .await;
+    assert_eq!(reads(&out), vec![]);
+    step.delta(12, 100, vec![], Some(calls(vec![get("call_3")])))
+        .await;
+    let out = step
+        .delta(13, 100, vec![result("call_3", "the relay index")], None)
+        .await;
+    assert_eq!(reads(&out), vec![(ExchangeId::from_ulid(13), page())]);
+}
+
+/// Each result teaches its agent's context in its conversation: the clone
+/// and directory one call made name the next call's file, for that agent
+/// only (`flow.extract.shell-state-from-observed`).
+#[tokio::test]
+async fn results_teach_the_agents_own_context() {
+    let config = ExtractConfig::from_json(r#"{ "persistent_shells": ["bash"] }"#)
+        .unwrap_or_else(|error| panic!("config: {error}"));
+    let mut step = Step::new(config);
+    let other = AgentId::from_ulid(2);
+    let clone =
+        "git clone https://gitlab.com/ai-village-agents/village/atlas.git /w/atlas && cd /w/atlas";
+    step.delta_of(AGENT, 10, 100, vec![], Some(calls(vec![bash("c1", clone)])))
+        .await;
+    let out = step
+        .delta_of(
+            AGENT,
+            11,
+            100,
+            vec![result("c1", "Cloning into '/w/atlas'...")],
+            Some(calls(vec![bash("c2", "echo done >> NOTES.md")])),
+        )
+        .await;
+    assert_eq!(
+        held_locators(&out),
+        vec![Locator::File {
+            host: Some(Host(
+                "gitlab.com/ai-village-agents/village/atlas".to_owned()
+            )),
+            path: "/NOTES.md".to_owned(),
+        }]
+    );
+    let out = step
+        .delta_of(
+            other,
+            12,
+            100,
+            vec![],
+            Some(calls(vec![bash("c3", "echo done >> NOTES.md")])),
+        )
+        .await;
+    assert_eq!(
+        held_locators(&out),
+        vec![Locator::Opaque {
+            tool: ToolName("bash".to_owned()),
+            key: "NOTES.md".to_owned(),
+        }],
+        "another agent's shell knows no directory"
+    );
+    let out = step
+        .delta_of(
+            AGENT,
+            13,
+            100,
+            vec![result("c2", "")],
+            Some(calls(vec![bash("c4", "git push")])),
+        )
+        .await;
+    assert_eq!(
+        held_locators(&out),
+        vec![Locator::Repository {
+            host: Host("gitlab.com".to_owned()),
+            owner: "ai-village-agents/village".to_owned(),
+            name: "atlas".to_owned(),
+        }]
+    );
+}

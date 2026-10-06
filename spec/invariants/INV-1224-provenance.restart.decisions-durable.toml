@@ -1,0 +1,28 @@
+[invariant]
+id = "provenance.restart.decisions-durable"
+statement = "A new engine over the same Postgres records and index replays every delta already scanned with the envelopes the first delivery published, answers ProvenanceStore::started_at for every exchange recorded before it started (also after the request lists are pruned), and scans a delta whose exchange was recorded before the restart as it would have been scanned before it."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+P7.3: a process killed and started again over the same database ends in
+the state of one never interrupted. L4's only in-process state outside
+the stores was the stage's map of exchange starts, which stamps a delta's
+extracted accesses; reading the start from provenance.exchanges keeps it
+across a restart (an ExchangeCaptured acked before the crash is never
+redelivered). The token and k-gram caches are read-through and rebuilt
+lazily. Replay by scan status (Indexed returns the stored outcome) keeps
+the envelope ids, so the bus deduplicates the republish
+(transport.consumer.derived-envelope-ids).
+"""
+
+[evidence]
+unit = "crosstalk_provenance::tests::started_at_is_the_recorded_start"
+integration = [
+    "crosstalk_provenance::integration::restart::pg_started_at_is_the_recorded_start",
+    "crosstalk_provenance::integration::restart::pg_engine_restart_replays_and_reads_starts",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "true", human = "false" }

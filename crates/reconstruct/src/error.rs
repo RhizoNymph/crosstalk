@@ -33,6 +33,8 @@ pub enum StorageFailure {
     MissingBody { hash: String },
     #[error("the blob store failed: {reason}")]
     Blobs { reason: String },
+    #[error("outbox not published: {0}")]
+    Sink(#[from] crate::publish::SinkError),
     #[error("stored conversations disagree: {reason}")]
     Inconsistent { reason: String },
 }

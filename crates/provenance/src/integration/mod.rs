@@ -6,6 +6,8 @@
 mod engine;
 mod index;
 mod reads;
+mod restart;
+mod rules;
 
 use std::time::Duration;
 
@@ -13,7 +15,46 @@ use crosstalk_store::{Layer, Migrations, TestDb};
 use sqlx::PgPool;
 use sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 
-use crate::store::MIGRATIONS;
+use crate::config::ProvenanceConfig;
+use crate::index::PgFingerprintIndex;
+use crate::semantic::DisabledSemanticMatcher;
+use crate::store::{MIGRATIONS, PgProvenanceStore};
+use crate::tests::fixtures::World;
+
+/// A world over Postgres.
+pub type PgWorld = World<PgFingerprintIndex, DisabledSemanticMatcher, PgProvenanceStore>;
+
+/// A world whose index and records share `pool`.
+pub fn pg_world_on(pool: PgPool, config: ProvenanceConfig) -> PgWorld {
+    let index = PgFingerprintIndex::new(pool.clone(), config.index().clone());
+    World::over(
+        config,
+        index,
+        DisabledSemanticMatcher,
+        PgProvenanceStore::new(pool),
+    )
+}
+
+/// Empty every L4 table and restart the index sequence, so the next
+/// world starts as on a freshly migrated database.
+pub async fn truncate(pool: &PgPool) {
+    let emptied = sqlx::query(
+        "TRUNCATE provenance.exchanges, provenance.exchange_requests, \
+         provenance.scanned_messages, provenance.spans, provenance.matches, \
+         provenance.postings, provenance.observations, provenance.observed CASCADE",
+    )
+    .execute(pool)
+    .await;
+    if let Err(error) = emptied {
+        panic!("tables not emptied: {error}");
+    }
+    let restarted = sqlx::query("ALTER SEQUENCE provenance.index_seq RESTART")
+        .execute(pool)
+        .await;
+    if let Err(error) = restarted {
+        panic!("index sequence not restarted: {error}");
+    }
+}
 
 /// A migrated test database, or `None` (skipped) when none is configured.
 pub async fn database(test: &str) -> Option<TestDb> {

@@ -11,7 +11,7 @@ use crosstalk_spec::interfaces::l8_surface::{AlertFilter, AlertStateKind, Caller
 use topcoat::context::Cx;
 
 use crate::app::backend;
-use crate::components::{format_bytes, format_time, href};
+use crate::components::{format_bytes, href};
 use crate::error::UiError;
 use crate::pages::alerts::model::AlertRow;
 use crate::pages::common::action::require;
@@ -39,7 +39,8 @@ pub struct Tile {
 #[derive(Debug, Clone, PartialEq)]
 pub struct Overview {
     pub tiles: Vec<Tile>,
-    pub watermark: Option<String>,
+    /// The overview counts' watermark, when they loaded.
+    pub watermark: Option<crosstalk_spec::support::Timestamp>,
     pub edges: Result<Vec<(EdgeItem, String)>, UiError>,
     pub alerts: Result<Vec<AlertRow>, UiError>,
 }
@@ -124,7 +125,7 @@ pub async fn load(cx: &Cx, caller: &Caller, state: &ViewState) -> Result<Overvie
         .overview(caller, state.scope.window, &filter)
         .await
         .map_err(UiError::from);
-    let watermark = counts.as_ref().ok().map(|c| format_time(c.watermark.at()));
+    let watermark = counts.as_ref().ok().map(|c| c.watermark.at());
     let tiles = tiles(&counts, state);
     let open_filter = AlertFilter {
         states: vec![AlertStateKind::Open],

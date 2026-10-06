@@ -85,6 +85,8 @@ pub async fn matches_section(matches: Option<Vec<MatchView>>, reader: String) ->
                                     <span class="rounded border border-zinc-300 px-1.5 py-0.5 font-mono text-[11px] dark:border-zinc-700">(m.kind)</span>
                                     <span class="text-zinc-500">(m.carrier)</span>
                                     <span class="ml-auto tabular-nums text-zinc-500">(m.matched) " matched"</span>
+                                    <a class=(LINK) href=(m.sender_turn) data-sender-turn="true">"in sender's conversation"</a>
+                                    <a class=(LINK) href=(m.reader_turn) data-reader-turn="true">"in reader's conversation"</a>
                                 </div>
                                 <div class="grid gap-3 md:grid-cols-2">
                                     excerpt(title: "Sender originated", who: m.sender.name, quote: m.origin)

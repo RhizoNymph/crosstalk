@@ -4,11 +4,15 @@
 //!
 //! Ids are minted at a time the caller passes (a merge's `at`, an
 //! exchange's start), never at a clock reading.
+//!
+//! The stores' list cursor keys are derived from the deployment secret
+//! ([`cursor_key`]), one label per list, so a cursor issued before a
+//! restart still resolves after it (`surface.cursor.survives-restart`).
 
 use std::sync::{Mutex, PoisonError};
 
 use crosstalk_spec::ids::mint::{RandomSource, UlidExhausted, UlidGenerator};
-use crosstalk_spec::ids::{EntityId, EventId, ExchangeId};
+use crosstalk_spec::ids::{EntityId, EventId, ExchangeId, KeyedHasher};
 use crosstalk_spec::support::{Blake3, Timestamp};
 
 /// A source of ids of type `I`, stamped with the time of what they name.
@@ -72,4 +76,18 @@ pub fn derived_event_id(exchange: ExchangeId, kind: &str, salt: &[u8]) -> EventI
     random[6..].copy_from_slice(&digest.as_bytes()[..10]);
     let random = u128::from_be_bytes(random);
     EventId::from_ulid((millis << RANDOM_BITS) | random)
+}
+
+/// The label `PgAgents`' list cursor key is derived under.
+pub const AGENTS_CURSOR_LABEL: &str = "crosstalk.cursor.v1.agents";
+
+/// The label the conversation stores' list cursor key is derived under.
+pub const CONVERSATIONS_CURSOR_LABEL: &str = "crosstalk.cursor.v1.conversations";
+
+/// The cursor key for the list `label` names, derived from `secret`'s
+/// current version (`KeyedHasher::derive_key`): the same on every start and
+/// every node with that secret, different per label. A rotation changes it,
+/// invalidating outstanding cursors (decision Q4 of postgres_stores.md).
+pub fn cursor_key(secret: &KeyedHasher, label: &'static str) -> [u8; 32] {
+    *secret.derive_key(label).as_bytes()
 }

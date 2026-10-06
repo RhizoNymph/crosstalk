@@ -175,8 +175,11 @@ impl Shell {
         };
         let mut after = self.context.clone();
         after.observe(&CONFIG, &call(PERSISTENT_SHELL, &expanded), Some(&result));
+        // The extractor's context now learns a printed remote itself, so
+        // whether the command ran outside a known clone is the context's
+        // before it.
         if let Some(dir) = after.cwd().cloned()
-            && after.repos().locate(&dir).is_none()
+            && self.context.repos().locate(&dir).is_none()
             && let Some(repo) = printed_remote(&expanded, output)
         {
             let mut before = self.context.clone();

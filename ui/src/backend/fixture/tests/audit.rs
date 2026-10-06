@@ -318,3 +318,38 @@ async fn a_live_clock_stamps_actions_after_the_data_and_reports_the_present() {
         "{before:?} <= {at:?} <= {after:?}"
     );
 }
+
+#[tokio::test]
+async fn the_log_records_one_interrupted_call_whose_effect_did_not_apply() {
+    use crosstalk_spec::aggregates::alert::AlertState;
+    use crosstalk_spec::interfaces::l8_surface::OperatorAction;
+    let b = &shared();
+    let interrupted: Vec<_> = audited(b, &AuditFilter::default())
+        .await
+        .into_iter()
+        .filter_map(|entry| match entry.body {
+            AuditBody::Operator(record) if record.outcome() == &AuditOutcome::Interrupted => {
+                Some((entry.at, record))
+            }
+            _ => None,
+        })
+        .collect();
+    let [(at, record)] = interrupted.as_slice() else {
+        panic!("one interrupted call, not {}", interrupted.len());
+    };
+    assert_eq!(*at, ago(6 * super::super::clock::HOUR));
+    assert_eq!(record.caller().operator(), OPERATOR_RESEARCHER);
+    let OperatorAction::Acknowledge { alert } = record.action() else {
+        panic!("an acknowledgement: {:?}", record.action());
+    };
+    let alert = b
+        .alert(&researcher(), *alert)
+        .await
+        .expect("alert")
+        .expect("the alert exists");
+    assert_eq!(
+        alert.state,
+        AlertState::Open,
+        "the acknowledgement did not take"
+    );
+}

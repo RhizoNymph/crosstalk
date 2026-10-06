@@ -317,6 +317,7 @@ delegated-from, traffic-counts.
 | `crates/surface/src/stores.rs` | `SurfaceStores::{Exchanges, Conversations, Provenance}` |
 | `crates/surface/src/query/conversations/{mod,turns,marks,text}.rs` | the eight methods |
 | `crates/api/src/in_process/reads.rs` | `ConversationStores` (`MemoryStores<B, R = Unrecorded>`), `InProcess::start_with_reads` |
+| `crates/api/src/world/conversations.rs` | The world backend's conversation stores (`WorldLayers`: `MemoryExchanges`, `MemoryConversations`, `MemoryProvenanceStore`), filled by `record`: the world's wire traffic through L1's `ExchangeStore::put`, L3's `ConversationThreader` and L4's `Provenance` engine, as the gateway's stages run them (see "The world backend") |
 | `crates/api/src/http/dispatch.rs`, `crates/client/src/query.rs`, `crates/conformance/src/routed.rs` | routes, client methods, forwarding |
 | `crates/gateway/src/live/{stage,mod}.rs`, `layers/l3.rs` | `LayerStores` (exchanges, conversations, provenance) shared by the stages and the surface |
 | `ui/src/backend/{dispatch,fixture/surface}.rs`, `ui/src/error.rs` | forwarding; the fixture answers empty after the permission check (phase B seeds it) |
@@ -327,4 +328,60 @@ Tests: `crosstalk_reconstruct::tests::{conversation_reads,pg_conversation_reads}
 `crosstalk_memory::flow::verdicts::tests::holding_finds_the_transmission_holding_each_match`,
 `crosstalk_surface::tests::conversations` (over `tests::conversation_fakes`),
 `crosstalk_gateway::live::tests::an_ingested_exchange_reads_back_as_a_conversation_turn`,
-and the api route cases and client calls for every new route.
+and the api route cases and client calls for every new route; the world
+backend end to end in `crates/api/tests/world_conversations.rs`.
+
+## The world backend
+
+`crosstalk_api::world::seed_world` (the UI's world backend, the
+conformance harnesses) serves real conversation reads: it starts
+`InProcess::start_with_reads` over `WorldLayers` and, after
+`World::seed_with_wire`, runs every exchange of the world's wire traffic
+([world.md](world.md), "Wire traffic") through the live gateway's code
+paths, oldest first:
+
+```text
+ExchangeStore::put(StoredExchange)             L1
+Provenance::record_exchange(exchange)          L4 (scan pending)
+ConversationThreader::thread(exchange, agent)  L3 (MemoryConversations, clusters via ReadsMembers(MemoryAgents))
+Provenance::process(outcome.delta())           L4 (MemoryFingerprintIndex, ProvenanceConfig::default,
+                                                   semantic matching disabled, as the gateway)
+```
+
+So threading (starts, extensions, forks, compactions with carried-over
+messages, failed attempts), turns, scan status, spans, matches and
+readers are what L3 and L4 decide, not built by hand. Differences from
+the gateway, by design:
+
+- Attribution is the world's: each exchange is threaded under
+  `WireExchange::agent`; the consumer's evidence resolution, activity
+  and claims writes are skipped (the seed states agents and claims).
+  Threading runs after the seed, so clusters are read with every merge
+  applied (an alias's conversations thread with its target's).
+- Nothing is published: the deltas and L4's events reach no consumer,
+  since the world states L5's transmissions itself.
+- L3 and L4 read bodies through `CaptureBlobs` (the surface's blob store
+  plus `Wire::dropped`), as at capture; the surface reads the blob store
+  alone, so a body retention dropped shows `BodyDropped` on a turn L4
+  indexed.
+- Inbound marks carry no `TransmissionMark`: the world's transmissions
+  hold the world's own minted origin spans, not L4's span ids, so
+  `TransmissionStore::holding` finds none of L4's matches; and
+  `span_points` of a world span (the evidence page's) is absent. The
+  exchanges are shared: `exchange_turns` places every confirmed match's
+  reader exchange, and a channel transmission's write and read access
+  exchanges, in the agents' conversations.
+- Deterministic per seed: conversation ids are minted from the seed at
+  each exchange's start; the same seed gives the same rows and turns.
+- Scope and cost (`WorldOptions::conversations`): by default
+  `Recorded(WireScope::Since(anchor - 1 day))`, the last day's
+  transmissions and the retention-dropped ones, about 2,500 exchanges for
+  seed 7 (224 starts, 72 forks, 136 compactions), recorded in about 50 s
+  in a debug build; `Recorded(WireScope::All)` is the whole week (about
+  14,500 exchanges, about 60 s in a release build, far longer in debug);
+  `Unrecorded` skips it (the conformance harnesses, which read no
+  conversation). L4's cost per exchange grows with the store:
+  `MemoryProvenanceStore`'s match and scan lookups
+  (`exchange_matches`, `matches_in_message`, `matches_of_span`,
+  `message_scans`) scan every row.
+

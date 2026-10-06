@@ -45,6 +45,12 @@ take it as a dev-dependency only. It depends on `crosstalk-spec`,
   never creates for it), dropped bodies, impersonators, registered agents.
 - **Clock** (`WorldClock`): the spec `Clock`, fixed at the anchor for tests
   or moving on from it in real time for serving.
+- **Wire traffic** (`generate/wire/`, `Wire`, `World::seed_with_wire`):
+  the exchanges behind every confirmed transmission as L1 captured them
+  (spec `Exchange`s attributed to the world's agents), with the bodies only
+  the wire carries and the bodies retention dropped after capture, so a
+  host can thread (L3) and scan (L4) them into real conversations
+  (`crosstalk_api::world` does; see "Wire traffic" below).
 
 ## Non-scope
 
@@ -56,7 +62,10 @@ take it as a dev-dependency only. It depends on `crosstalk-spec`,
   on `integration/impl`). The world does not compose them yet; once the
   suite lands, its seeder and this world should share the scenario
   vocabulary.
-- Wire-level traffic (exchanges through ingress and canonicalization).
+- Ingress and canonicalization: the wire traffic is generated as
+  captured exchanges, never as HTTP bytes through a normalizer.
+- Threading and scanning the wire traffic: a host runs L3 and L4 over it
+  (the world crate depends on the spec only).
 - Computing what the pipeline computes (correlation, fingerprints, topic
   fits, layouts): the world states the results and writes them.
 
@@ -73,7 +82,9 @@ World::seed(&mut stores)
                     (the registry assigns their ids; traffic is routed by them)
   2. generate       Mint (one-shot seeded UlidGenerator per id, at the entity's time)
                     cast → channel plan → topic model → traffic (states, matches,
-                    bodies encoded with the spec's encoding) → dropped bodies
+                    bodies encoded with the spec's encoding) → wire traffic
+                    (own "wire" id stream) → dropped bodies (their bytes kept
+                    in Wire::dropped)
   3. assemble       Script of Step { at, Op }:
                     config (directory load, config entries, sink deliveries, model)
                     agents (create, establish, merge/unmerge, rename, claims, activity)
@@ -89,7 +100,7 @@ World::seed(&mut stores)
                     → sorted by time, stable among equal times
   4. run            Runner: one trait call per op; Ledger keeps store-assigned ids
                     (merges, rules, alerts), lineages, and an alert book
-  → Scenario
+  → Scenario                      (seed_with_wire: Scenario and Wire)
 ```
 
 **Ordering.** Steps sort by time; among equal times, the order assembly
@@ -171,6 +182,70 @@ every write is given its time; nothing reads a clock while seeding.
 | Verdicts (one withdrawn), sinks, audit history with two refused calls, four dead letters, four projection jobs | `assemble/transmissions.rs`, `config.rs`, `surface.rs` | `JobKey::*` |
 | Dropped bodies, sender side and reader side | `generate/retention.rs` | `Scenario::dropped` |
 | Channel semantics: a single-agent scratch resource on no channel, an S3 handoff listed unconfirmed (suspected traffic only), a channel hidden by a merge (its traffic all within `cx1` once `al1` merged into it) | `generate/traffic.rs`, `drafts.rs`, `assemble/channels.rs` | `Scenario::lone_resource`, `ChannelKey::Scratch` (never stored), `S3Handoff`, `SelfNotes` |
+
+## Wire traffic
+
+`generate::wire::build` turns the confirmed transmissions into the
+exchanges their agents sent, deterministic per seed (one SplitMix stream
+`wire`, one per agent, and a mint stream `wire` of its own, so the
+world's other ids never shift).
+
+```text
+needs::events         per content match of a confirmed transmission:
+                        Send  the sender's exchange; response = the origin span's body
+                              (a channel's first match: the write access's exchange id
+                              and time; otherwise minted 2 min..3 h before the read,
+                              later matches a second apart)
+                        Read  the match's reader exchange at the opening; it carries
+                              the reader copies by carrier: tool results, user turns
+                              (all copies in one exchange), the system prompt or the
+                              response (one exchange per copy, later ones minted a
+                              second apart)
+sessions::Sessions    per agent, oldest first, full-history requests:
+                        request = [system] ++ history ++ new inputs
+                        pause > 90 min      → new session (L3 Starts)
+                        12 completed turns  → compaction: [summary turn with Claude
+                                              Code's preamble] ++ the last 2 messages
+                        5%, ≥ 3 replies     → fork: history cut after an earlier reply
+                        3% of sends         → a failed attempt (529) first, retried
+                        a tool result       → a tool-call turn just before it
+→ Wire { exchanges (oldest first, one agent's in send order), bodies, dropped }
+```
+
+- **Ids and bodies are the world's.** A channel transmission's sender
+  exchange is its write access's, its reader exchange its read access's
+  (and every match's `reader_exchange`), and the bodies are the world's
+  origin and reader bodies, so a transmission's evidence and the
+  conversation turns that sent and read it name the same exchanges and
+  bytes. Everything else (system prompts, the operator's numbered
+  prompts, the agents' status replies, tool calls, summary turns) is
+  generated from short templates disjoint from the theme templates, so
+  the only text one agent's inputs share with another's outputs is what
+  the transmissions carried (and the bodies' shared filler, which L4's
+  boilerplate rules handle).
+- **Attribution is stated.** `WireExchange::agent` is the world's agent
+  (as attributed then: an alias keeps its id after its merge). The
+  `ClientContext` follows the agent's family and evidence (route,
+  upstream, credential, account, harness session and agent ids, its own
+  harness claim or, for an impersonator, Claude Code's), but a host
+  threads under `agent` rather than resolving the evidence again.
+- **Dropped bodies.** Content retention drops some of the world's bodies
+  after capture: `Wire::dropped` keeps their bytes for the host's L3 and
+  L4 (which read them at capture time); the seed never writes them, so
+  the surface shows them dropped.
+- **Not written by the seed.** `World::seed` writes the world's own
+  bodies; the wire's own bodies come with `Wire::bodies` for the host to
+  put.
+- **Scope** (`WireScope`, `WorldConfig::wire`, `World::with_wire`):
+  `All` (default) carries every confirmed transmission, about 14,500
+  exchanges for seed 7 (1,045 starts, 332 forks, 801 compactions once
+  threaded); `Since(at)` only those opened at or after `at`, plus the
+  ones retention drops a side of (so dropped bodies show). The seed's
+  writes are the same whatever the scope.
+- **Filler.** A body's filler is words drawn by a stream seeded from its
+  layout and its core text (it was one fixed paragraph cycled), so no two
+  bodies share a run of filler and L4 matches only the text the
+  transmissions carried.
 
 ## Divergences from the UI fixture
 
@@ -303,6 +378,10 @@ the semantics rule out (see divergence 2).
   first projection claim to hand out the planned job).
 - **Operator actions are audited** as `OperatorActions::act` records them:
   the directory's `Caller`, the action, `AuditOutcome::of` its result.
+- **The wire is the transmissions' traffic.** Every confirmed match is
+  sent (its origin body a response of its sender) before it is read in
+  its own reader exchange; every body an exchange names is the world's,
+  the wire's own, or a dropped one the wire keeps.
 - **Test support only.** A dev-dependency of other crates (architecture
   test, `TestSupport::World`).
 
@@ -321,8 +400,9 @@ the semantics rule out (see divergence 2).
 | `crates/world/src/scenario.rs` | Role handles | `Scenario`, `ChannelKey`, `MergeKey`, `RuleKey`, `JobKey`, `BodySide` |
 | `crates/world/src/rng.rs`, `text/` | SplitMix64; message templates and codecs (ported verbatim) | `Rng`, `Theme`, `paragraph`, `sentence` |
 | `crates/world/src/generate/` | Generation: `times`, `agents`, `drafts`, `channels`, `topics`, `traffic`, `states`, `evidence`, `bodies`, `retention`, `rules` | `generate`, `Generated`, `Cast`, `ChannelPlan`, `TopicModel`, `Traffic`, `TxRecord`, `Blobs` |
+| `crates/world/src/generate/wire/` | Wire traffic: `needs` (the exchanges each confirmed match needs), `sessions` (per-agent full-history sessions), `messages` (generated bodies, `SUMMARY_PREAMBLE`) | `Wire`, `WireExchange`, `build`, `SESSION_GAP`, `MAX_TURNS` |
 | `crates/world/src/script/` | The script's ops and ordering | `Script`, `Step`, `Op`, `AlertKey`, `RuleRef` |
 | `crates/world/src/assemble/` | Generated data to steps: `config`, `agents`, `channels` (placement and discovery), `transmissions`, `alerts`, `surface` | `assemble`, `Assembled`, `Placement`, `Seeding`, `promotion` |
 | `crates/world/src/run/` | The runner: one module per area of writes; the ledger and alert book | (crate) `Runner`, `Ledger` |
 | `crates/world/tests/support/` | The memory stores as `WorldStores` (with transport's blob store and the bus's dead letters), one shared seeded world per binary, whole-list reads | `MemoryWorld`, `seed`, `shared`, `run`, `read::*` |
-| `crates/world/tests/*.rs` | Scenario tests through the read traits: `agents`, `channels`, `insight`, `history`; `generation` (the generated data, no stores) | — |
+| `crates/world/tests/*.rs` | Scenario tests through the read traits: `agents`, `channels`, `insight`, `history`; `generation` (the generated data, no stores); `wire` (the wire traffic: determinism, order, bodies, sends before reads, world ids, session shapes) | — |

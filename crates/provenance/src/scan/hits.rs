@@ -23,6 +23,10 @@ pub struct LiveSpans {
     records: HashMap<SpanId, SpanRecord>,
     /// Copies of the live spans in other outputs: (exchange start, agent).
     relays: HashMap<SpanId, Vec<(Timestamp, AgentId)>>,
+    /// For a live span holding coincident template stretches, its sources'
+    /// originations and copies, one hop (`Coincidence`): the holders a hit
+    /// on the source would have counted.
+    coincident: HashMap<SpanId, Vec<(Timestamp, AgentId)>>,
 }
 
 impl LiveSpans {
@@ -42,6 +46,7 @@ impl LiveSpans {
         Self {
             records,
             relays: HashMap::new(),
+            coincident: HashMap::new(),
         }
     }
 
@@ -55,6 +60,46 @@ impl LiveSpans {
                     .push((relay.at, relay.agent));
             }
         }
+    }
+
+    /// Add, for each coincidence of a live span, its source's indexing and
+    /// copies made at or before `now` (`sources` are the sources' records,
+    /// `relays` their copies). One hop: a source's own coincidences are not
+    /// followed.
+    pub fn add_coincident(
+        &mut self,
+        coincidences: &[crate::store::Coincidence],
+        sources: &[SpanRecord],
+        relays: &[crate::store::Relay],
+        now: Timestamp,
+    ) {
+        for coincidence in coincidences {
+            if !self.records.contains_key(&coincidence.span) {
+                continue;
+            }
+            let held = self.coincident.entry(coincidence.span).or_default();
+            if let Some(source) = sources
+                .iter()
+                .find(|record| record.span.id == coincidence.source)
+                && let Some(at) = source.indexed_at().filter(|at| *at <= now)
+            {
+                held.push((at, source.span.agent));
+            }
+            held.extend(
+                relays
+                    .iter()
+                    .filter(|relay| relay.source == coincidence.source && relay.at <= now)
+                    .map(|relay| (relay.at, relay.agent)),
+            );
+        }
+    }
+
+    /// The originations and copies of the spans `span` coincides with, one
+    /// hop: agents that hold its text for the spread rule's agent count
+    /// (`provenance.match.cross-agent-spread`). They are not its own
+    /// copies, so they never raise a rarity bound.
+    pub fn coincident_holders(&self, span: SpanId) -> &[(Timestamp, AgentId)] {
+        self.coincident.get(&span).map_or(&[], Vec::as_slice)
     }
 
     /// Where and by whom `span` was originated or copied: its own indexing,
@@ -79,6 +124,9 @@ impl LiveSpans {
         self.records.extend(other.records);
         for (span, relays) in other.relays {
             self.relays.entry(span).or_default().extend(relays);
+        }
+        for (span, held) in other.coincident {
+            self.coincident.entry(span).or_default().extend(held);
         }
     }
 }
@@ -129,25 +177,34 @@ pub fn spread_boilerplate(
     live: &LiveSpans,
     rule: SpreadRule,
 ) -> BTreeMap<Fingerprint, usize> {
-    let mut found: BTreeMap<Fingerprint, (BTreeSet<SpanId>, Vec<AgentId>)> = BTreeMap::new();
+    // The agents count a hit span's originations and copies and, one hop,
+    // those of the spans it coincides with; the holders (for the rarity
+    // bound) count its own originations and copies only.
+    let mut found: BTreeMap<Fingerprint, Spread> = BTreeMap::new();
     for hit in hits {
-        let (spans, agents) = found.entry(hit.fingerprint).or_default();
+        let (spans, holders, agents) = found.entry(hit.fingerprint).or_default();
         if spans.insert(hit.span) {
+            let own = live.originations(hit.span);
+            agents.extend(own.iter().map(|(_, agent)| *agent));
             agents.extend(
-                live.originations(hit.span)
-                    .into_iter()
-                    .map(|(_, agent)| agent),
+                live.coincident_holders(hit.span)
+                    .iter()
+                    .map(|(_, agent)| *agent),
             );
+            holders.extend(own.into_iter().map(|(_, agent)| agent));
         }
     }
     found
         .into_iter()
-        .filter_map(|(fingerprint, (_, agents))| {
-            let distinct: BTreeSet<&AgentId> = agents.iter().collect();
-            (distinct.len() >= rule.agents()).then_some((fingerprint, agents.len()))
+        .filter_map(|(fingerprint, (_, holders, agents))| {
+            (agents.len() >= rule.agents()).then_some((fingerprint, holders.len()))
         })
         .collect()
 }
+
+/// One fingerprint's hit spans, holders (for the rarity bound) and
+/// agents (for the agent count).
+type Spread = (BTreeSet<SpanId>, Vec<AgentId>, BTreeSet<AgentId>);
 
 /// `extents` merged into disjoint sorted intervals.
 pub fn merge(mut extents: Vec<(u32, u32)>) -> Vec<(u32, u32)> {

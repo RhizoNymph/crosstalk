@@ -158,14 +158,28 @@ impl SpanRecord {
 }
 
 /// A copy of an indexed span in another output: a span classified
-/// `Relayed(RelaySource::Span(source))`, the agent whose output holds it,
-/// and its exchange's start. The spread rule counts copies as
+/// `Relayed(RelaySource::Span(source))`, or an `Originated` span holding a
+/// coincident template stretch of it ([`Coincidence`]), the agent whose
+/// output holds it, and its exchange's start. The spread rule counts copies as
 /// originations (`provenance.match.cross-agent-spread`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Relay {
     pub source: SpanId,
     pub agent: AgentId,
     pub at: Timestamp,
+}
+
+/// A coincident template stretch
+/// (`provenance.span.coincident-template-originated`): the writer's
+/// `Originated` span `span` holds a stretch matching the earlier span
+/// `source` of another agent with no token rare for `source`'s holders. The
+/// stretch is the writer's own for matching and a copy of `source` for the
+/// spread rule: [`ProvenanceStore::relays`] lists it among `source`'s
+/// copies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Coincidence {
+    pub span: SpanId,
+    pub source: SpanId,
 }
 
 /// A stored content match. Its id is its envelope's.
@@ -190,11 +204,32 @@ pub struct ScanCommit {
     pub spans: Vec<Span>,
     /// The matches, in scan order.
     pub matches: Vec<StoredMatch>,
+    /// Coincident template stretches of `spans`: each names an `Originated`
+    /// span of this commit and the earlier span it coincides with.
+    pub coincidences: Vec<Coincidence>,
     /// Every message the delta listed and how it was scanned.
     pub messages: Vec<(MessageHash, ScannedAs)>,
     /// Whether forwarded spans are indexed (`ProvenanceConfig::forwarding`):
     /// their forwarding is recorded pending only then.
     pub forwarding: bool,
+}
+
+impl ScanCommit {
+    /// Refuse a coincidence whose span is not an `Originated` span of this
+    /// commit, or that names itself as its source.
+    pub fn check_coincidences(&self) -> Result<(), ProvenanceStoreError> {
+        for coincidence in &self.coincidences {
+            let originated = self.spans.iter().any(|span| {
+                span.id == coincidence.span && matches!(span.state, SpanState::Originated)
+            });
+            if !originated || coincidence.span == coincidence.source {
+                return Err(ProvenanceStoreError::Coincidence {
+                    coincidence: *coincidence,
+                });
+            }
+        }
+        Ok(())
+    }
 }
 
 /// What a commit did.
@@ -219,6 +254,9 @@ pub enum ProvenanceStoreError {
     UnknownExchange { exchange: ExchangeId },
     #[error("span transition refused: {0:?}")]
     Transition(IllegalTransition),
+    /// A commit's coincidence names no `Originated` span of that commit.
+    #[error("coincidence {coincidence:?} names no originated span of its commit")]
+    Coincidence { coincidence: Coincidence },
 }
 
 impl ProvenanceStoreError {
@@ -244,6 +282,15 @@ pub trait ProvenanceStore {
         id: ExchangeId,
     ) -> impl Future<Output = Result<Option<(ExchangeRecord, ScanStatus)>, ProvenanceStoreError>> + Send;
 
+    /// When the exchange started (its `ExchangeCaptured` record), `None`
+    /// when not recorded. A read of the record alone, kept after
+    /// [`ProvenanceStore::prune`]: the stage that extracts a delta stamps it
+    /// with this time, so a restarted process loses no start.
+    fn started_at(
+        &self,
+        id: ExchangeId,
+    ) -> impl Future<Output = Result<Option<Timestamp>, ProvenanceStoreError>> + Send;
+
     /// The stored spans among `ids` (unknown ids left out), in `ids` order.
     fn spans(
         &self,
@@ -251,12 +298,21 @@ pub trait ProvenanceStore {
     ) -> impl Future<Output = Result<Vec<SpanRecord>, ProvenanceStoreError>> + Send;
 
     /// Every stored span relayed from one of `sources`
-    /// (`Relayed(RelaySource::Span(s))`), with its agent and its
-    /// exchange's start, by source then time.
+    /// (`Relayed(RelaySource::Span(s))`) or coinciding with it
+    /// ([`Coincidence`]), with its agent and its exchange's start, by
+    /// source then time (then agent).
     fn relays(
         &self,
         sources: &[SpanId],
     ) -> impl Future<Output = Result<Vec<Relay>, ProvenanceStoreError>> + Send;
+
+    /// The coincidences recorded for `spans` ([`Coincidence`]): for each of
+    /// them that holds a coincident template stretch, the earlier spans it
+    /// coincides with, by span then source.
+    fn coincident_sources(
+        &self,
+        spans: &[SpanId],
+    ) -> impl Future<Output = Result<Vec<Coincidence>, ProvenanceStoreError>> + Send;
 
     /// One stored span: its exchange, message, part and range.
     fn span(

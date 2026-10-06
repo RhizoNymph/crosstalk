@@ -35,6 +35,7 @@ mod medium;
 pub mod pairing;
 pub mod retention;
 pub mod route;
+pub(crate) mod snapshot;
 mod windowed;
 
 pub(crate) use ids::Derive;
@@ -42,7 +43,9 @@ pub use key::MediumKey;
 pub use kinship::{Kin, Kinship};
 pub use medium::Medium;
 pub use retention::{ContentRetention, DEFAULT_CONTENT_RETENTION, InvalidRetention};
-pub use windowed::{Decided, MediumEvidence, ReadPart, UNKNOWN_TOOL, WindowedCorrelator};
+pub use windowed::{
+    CorrelatorState, Decided, MediumEvidence, ReadPart, UNKNOWN_TOOL, WindowedCorrelator,
+};
 
 #[cfg(test)]
 pub(crate) mod tests;

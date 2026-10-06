@@ -23,6 +23,13 @@ pub struct Settings {
     /// reads the injected clock, which a replay drives, so windows close on
     /// the clock's time, never on wall time.
     pub tick_every: Duration,
+    /// How often a durable consumer checkpoints its shards (and then acks
+    /// the deliveries the checkpoint covers), in elapsed time. The flow
+    /// group's ack timeout must exceed it.
+    pub checkpoint_every: Duration,
+    /// A durable consumer also checkpoints once this many deliveries wait
+    /// for their ack.
+    pub max_unacked: NonZeroUsize,
 }
 
 /// The `flow` section of a config document. Durations in milliseconds.
@@ -41,6 +48,10 @@ pub struct FlowConfig {
     pub shards: usize,
     #[serde(default = "defaults::tick_ms")]
     pub tick_ms: u64,
+    #[serde(default = "defaults::checkpoint_ms")]
+    pub checkpoint_ms: u64,
+    #[serde(default = "defaults::checkpoint_unacked")]
+    pub checkpoint_unacked: usize,
 }
 
 mod defaults {
@@ -72,6 +83,16 @@ mod defaults {
     pub fn tick_ms() -> u64 {
         1_000
     }
+
+    /// Ten seconds between checkpoints: the longest a delivery waits for
+    /// its ack, against a settle window of minutes.
+    pub fn checkpoint_ms() -> u64 {
+        10_000
+    }
+
+    pub fn checkpoint_unacked() -> usize {
+        512
+    }
 }
 
 impl Default for FlowConfig {
@@ -83,6 +104,8 @@ impl Default for FlowConfig {
             content_retention_ms: defaults::content_retention_ms(),
             shards: defaults::shards(),
             tick_ms: defaults::tick_ms(),
+            checkpoint_ms: defaults::checkpoint_ms(),
+            checkpoint_unacked: defaults::checkpoint_unacked(),
         }
     }
 }
@@ -98,6 +121,10 @@ pub enum InvalidFlowConfig {
     ZeroShards,
     #[error("tick_ms must be at least 1")]
     ZeroTick,
+    #[error("checkpoint_ms must be at least 1")]
+    ZeroCheckpoint,
+    #[error("checkpoint_unacked must be at least 1")]
+    ZeroUnacked,
 }
 
 impl TryFrom<FlowConfig> for Settings {
@@ -117,11 +144,18 @@ impl TryFrom<FlowConfig> for Settings {
         if config.tick_ms == 0 {
             return Err(InvalidFlowConfig::ZeroTick);
         }
+        if config.checkpoint_ms == 0 {
+            return Err(InvalidFlowConfig::ZeroCheckpoint);
+        }
+        let max_unacked =
+            NonZeroUsize::new(config.checkpoint_unacked).ok_or(InvalidFlowConfig::ZeroUnacked)?;
         Ok(Self {
             timing,
             content_retention,
             shards,
             tick_every: Duration::from_millis(config.tick_ms),
+            checkpoint_every: Duration::from_millis(config.checkpoint_ms),
+            max_unacked,
         })
     }
 }

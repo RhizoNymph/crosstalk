@@ -19,6 +19,8 @@ layer crates take it only as a dev-dependency (`docs/features/workspace.md`).
   fails on command, and records what it received (`upstream`).
 - A fake harness client that sends a corpus request and collects the
   response with chunk arrival times (`client`).
+- `DbLink`, a cuttable loopback TCP relay to the test database, for
+  database-outage tests (`db_link`).
 
 ## Non-scope
 
@@ -151,6 +153,19 @@ arrival time since the request was sent, then a `BodyEnd`: `Complete`,
 `Aborted` (the connection failed mid-body) or `Stalled` (nothing for the
 idle timeout). `send` collects everything into a `CollectedResponse`.
 
+### Database link
+
+`DbLink::start(host, port)` resolves the server, listens on
+`127.0.0.1:0` and relays every accepted connection to it with
+`copy_bidirectional`. A test points its pool at `DbLink::host()` and
+`DbLink::port()` (it takes them from the test database's
+`PgConnectOptions`; the link never sees the URL or its credentials).
+`cut()` resets every relayed connection (zero linger, so the client sees
+a reset at once) and resets every new one as soon as it is accepted;
+`restore()` relays new connections again; dropping the link cuts it for
+good. The server is never stopped, so other tests sharing it are not
+affected. The transport crate's spool integration tests use it.
+
 ### Comparisons
 
 `ReceivedRequest::differences_from(&CorpusRequest)` and
@@ -188,6 +203,7 @@ ignoring `http::NOT_RECORDED`.
 | `src/upstream/script.rs` | Replies and routes | `Script` (`route`, `case`, `cases`, `fallback`), `Route` (`new`, `of`, `matches`), `Reply` (`from_response`, `from_case`, `json`, `error`, `header`, `paced`, `with_fault`, `body`), `Pacing` (`IMMEDIATE`, `every`), `Fault` (`Stall`, `Disconnect`, `NoResponse`), `Framing`, `error_type` |
 | `src/upstream/body.rs` | The served body and its feeder (private) | `ReplyBody`, `BodyCut`, `reply_body` |
 | `src/client.rs` | The fake harness | `HarnessClient` (`new`, `prefix`, `idle_timeout`, `send`, `open`), `ResponseStream` (`status`, `headers`, `next`, `collect`), `Next`, `ReceivedChunk`, `BodyEnd`, `CollectedResponse` (`events`, `differences_from`), `ClientError` |
+| `src/db_link.rs` | The cuttable database relay | `DbLink` (`start`, `host`, `port`, `addr`, `upstream`, `cut`, `restore`, `is_cut`) |
 | `src/tests/` | Builder validity, corpus loading and refusals, SSE framing, upstream round trips and faults | — |
 | `corpus/README.md` | The corpus: synthetic status, formats, cases, how to add redacted captures | — |
 | `corpus/anthropic/messages/*/` | 15 cases | — |

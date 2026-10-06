@@ -15,5 +15,5 @@ unit = "crosstalk_transport::spool::tests::append_past_the_bound_is_spool_full"
 integration = "crosstalk_e2e::spool::full_spool_refuses_and_proxy_still_forwards"
 
 [evidence-review]
-unit = { agent = "false", human = "false" }
+unit = { agent = "true", human = "false" }
 integration = { agent = "false", human = "false" }

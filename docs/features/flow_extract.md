@@ -58,8 +58,22 @@ so locator equality is resource identity.
   delivered result.
 - The spans a write carries, from L4's spans, and the stored `AccessOp`.
 - The conversation context: the working directory stated in a system
-  prompt, and what it learns from shell calls (the persistent shell's
-  directory, clones and remotes).
+  prompt, and the conversation's shell as its calls and results show it
+  (`bash::state::ShellState`): the directory of a persistent shell (Claude
+  Code's `Bash`, OpenHands' `execute_bash`, and configured
+  `persistent_shells` such as the AI Village's `bash`), the previous one
+  (`cd -`), the home directory once an output shows it, and clones by
+  remote name, learnt from `git clone`/`remote`/`config` and from the
+  remote a push or pull prints. One per agent and conversation, kept by
+  the extraction step's ledger.
+- The extraction step (`extract::step`, moved here from the gateway): each
+  conversation delta's tool calls and results as the flow consumer's
+  `Extracted` inputs, over a ledger (memory or Postgres) that commits a
+  delta's changes only once the consumer holds its inputs durably.
+- Which commands of a shell call ran, from the failures its output shows
+  and the script's `&&`/`||`/`;`/`|` joins (`bash::evidence`): accesses of
+  skipped commands, and reads of operands a reader could not open, are
+  refuted.
 
 ## Non-scope
 
@@ -84,7 +98,22 @@ so locator equality is resource identity.
   result shows (writes are decided from the call,
   `flow.extract.write-locators-from-call`); `gh` and `glab` `graphql`.
 - Exit statuses: a shell result's outcome is the wire's flag and, for the
-  known commands, their output's text.
+  known commands, their output's text; a command's success is never
+  inferred (except a `cd` whose stderr reaches the output), only the
+  failures bash and the file readers print.
+- Shell control flow past lists and subshells: `if`/`else`, loops and
+  functions are read as plain commands (both branches of an `if` are
+  taken as run); `set -e`, `pipefail` and `CDPATH` are not modelled.
+- After a `cd` the output shows failed, a later command joined by `;`
+  names its paths as if the `cd` had moved (the call's locators,
+  `flow.extract.write-locators-from-call`); only the context the call
+  leaves stays where it was.
+- A push whose output prints another remote than the bound one: its write
+  is `Rejected` on the bound repository, and the push to the printed one
+  is not recorded for that call (writes are held from the call); the
+  binding it teaches makes the next one right.
+- Another user's home (`~bob/x`) and the home of a file tool's `~/x`
+  path, which stays `Opaque` as written.
 - Unicode normalization (NFC) of keys and titles.
 - Symlinks: path resolution is lexical (`flow.resource.path-normalization`).
 
@@ -96,7 +125,9 @@ flow consumer, per conversation, in order
   for each tool call (and its result once it arrives):
     ToolExtractors::new(&config, &context)
       .extract_classified(call, result)  ─────────────────────────────┐
-    context.observe(&config, call, result)   learns cwd, clones        │
+    context.observe(&config, call, result)   bash::after: the shell    │
+                                             the call leaves (cwd,     │
+                                             home, remotes)            │
                                                                        │
 extract_classified                                                     │
   catalog::identify(name, config) ─▶ KnownTool                         │
@@ -109,16 +140,22 @@ extract_classified                                                     │
      file::candidates      path arg ─▶ resource::file_locator          │
      fetch::candidates     url ─▶ tool_url_locator ─▶ http::candidates │
      http::tool_candidates method ─▶ op; url ─▶ tool_url_locator ─▶ site?
-     bash::run             lex::Script::lex ─▶ commands::Shell::run    │
+     bash::candidates      lex::Script::lex (joins, subshell depth,    │
+                             home words) ─▶ commands::Shell::run under │
+                             Evidence::assumed (every command ran):    │
                              redirects, cat/tee/sed, net (curl/wget ─▶ │
                              HttpRequest ─▶ http::candidates),         │
-                             git (clones bound in the shell state;     │
+                             git (clones bound by remote name;         │
                              push/pull/fetch/clone ─▶ RepoId::locator),│
                              forge (gh/glab threads, api ─▶ HTTP)      │
-                           each shell access tagged with the command   │
-                           whose output judges it (CommandRule)        │
+                           each access tagged with its command (Found) │
+                           and the command rule judging it             │
+                           with the output: evidence::Evidence::read   │
+                             refutes skipped/failed ones; transfers::  │
+                             correct (To/From lines)                   │
      mcp::candidates       ArgPath ─▶ KeyCanon | url | file locator    │
   each candidate:                                                      │
+     refuted (and a result) ─▶ Rejected; else                          │
      outcome::judge(tool, candidate.rule, result)  one place           │
      Write ─▶ ExtractedOp::Write { outcome, payload }                  │
      Read  ─▶ ExtractedOp::Read if delivered (not Rejected), else      │
@@ -126,7 +163,7 @@ extract_classified                                                     │
   dedupe ─▶ Vec<Classified> ◀──────────────────────────────────────────┘
   ResourceExtractor::extract ─▶ Classified::into_spec ─▶ ExtractedAccess
 
-consumer (gateway extract layer), per access:
+consumer (extract::step, run by the composer's L4 stage), per access:
   spans::write_spans(call part, writer, L4 spans, source agent)  ─▶ Vec<SpanId>
     WritePayload::Unseen (git push) ─▶ no spans
   spans::access_op(op, call part, result part, spans)             ─▶ AccessOp
@@ -156,7 +193,8 @@ the writer's spans located in the call's part:
 | --- | --- | --- |
 | an absolute path | `File { host, path }` | `.`/`..`/`//`/trailing `/` resolved lexically; host from the context (`None` locally) |
 | a relative path | `File` under the cwd | resolved against the stated cwd, or the shell's tracked one |
-| a relative path, no cwd; `~/x`; `C:\x` | `Opaque { tool, key }` | the path as written (`flow.resource.relative-path-opaque`) |
+| a relative path, no cwd; `~/x` of a file tool; `C:\x` | `Opaque { tool, key }` | the path as written (`flow.resource.relative-path-opaque`) |
+| a shell's `~/x`, `$HOME/x` (and relative paths from a home-relative directory) | the absolute path's locator once the home is known; before, a file of the known clone it is in (bound under the home, `Place::Home`), else nothing for a `~` word and `Opaque` as written for a relative path | `bash::state::ShellState::place` |
 | a file in a known clone | `File { host: Some(<repo id>), path: <path in repo> }` | `RepoBindings::locate`, longest root |
 | a URL | `Url { scheme, host, path, query }` | scheme/host lower case, IDNA, default port and fragment and user info dropped, dot segments resolved, percent-encoding normalized, query parameters sorted, empty query none |
 | a URL whose host IDNA or host parsing refuses (`http://xn--/path`) | `Opaque { tool: "<url>", key }`, never `Url` | the raw text trimmed, scheme and host part lower case, user info and fragment dropped; nothing else (no port, path or query normalization). Only IDNA, domain-character and IPv4/IPv6 errors on `scheme://…` text; other parse errors stay errors (`resource::url::INVALID_HOST_URL_TOOL`) |
@@ -189,8 +227,8 @@ Collection: `https://github.com/agentvillage/atlas/issues` or `/pulls`.
 
 | Command | Access | Locator | Payload | Judged by |
 | --- | --- | --- | --- | --- |
-| `git push [<remote>]` (not `-n`/`--dry-run`) | write | the remote operand if a URL or path, else the clone's bound repository | `Unseen`: no spans | `GitPush` |
-| `git pull`, `git fetch [<remote>]` (`--all`: the bound one) | read | as for push | | `GitTransfer` |
+| `git push [<remote>]` (not `-n`/`--dry-run`) | write | the remote operand if a URL or path, else that remote of the clone (by name; none: `origin`, else the clone's latest bound remote); a name the clone has not bound names nothing | `Unseen`: no spans | `GitPush`; `Rejected` when the output's `To` lines name another repository (`flow.extract.printed-remote-wins`) |
+| `git pull`, `git fetch [<remote>]` (`--all`: the default) | read | as for push; the one repository its `From` lines print wins | | `GitTransfer` |
 | `git clone <remote>`, `gh repo clone`, `glab repo clone` | read (and the directory is bound) | the remote | | `GitTransfer` |
 | `gh issue\|pr`, `glab issue\|mr` `create` | write | the collection | the call's arguments (title, body) | `ForgeCli` |
 | … `comment`, `note`, `edit`, `update`, `review` | write | the thread of the number or URL operand, else the collection | the call's arguments | `ForgeCli` |
@@ -261,23 +299,126 @@ A call of a configured HTTP tool whose arguments carry `url` and `method`:
   `ExtractError::Arguments`. `WebFetch` is not an HTTP tool and stays
   read-only.
 
+### Which commands ran
+
+`bash::evidence::Evidence::read(script, output)` judges each command of a
+call (`flow.extract.shell-skipped-command-no-access`):
+
+| Output line | Command it fails |
+| --- | --- |
+| `[bash: [line N: ]]cd: <dir>: No such file or directory` (`Not a directory`, `Permission denied`), zsh `cd: no such file or directory: <dir>`, dash `can't cd to <dir>`; for `cd ~/x`, the expanded `/home/u/x` (which also shows the home) | the `cd` to `<dir>`; `too many arguments`, `OLDPWD not set` the script's only `cd` |
+| `[…: ]<name>: command not found`, zsh `command not found: <name>` | the command running `<name>` |
+| `cat: <f>: No such file or directory` (`Is a directory`, …), `head`/`tail: cannot open '<f>' for reading`, `sed: can't read <f>: …`, `[bat error]: '<f>': …` | that reader, for operand `<f>` only |
+
+A `cd` with no failure shown whose stderr reaches the output (no `2>`,
+`&>`) and which surely ran succeeded; `true`/`:` succeed, `false` fails;
+anything else is unknown. The list's status is that of the last command
+that ran; after `&&` a command runs when it succeeded, is skipped when it
+failed, may have run when unknown (and is kept); `||` the reverse; `;`,
+`&`, newlines and parentheses always run; a pipeline's commands run as its
+first does. A failure shown for a command that may have run proves it
+ran. An access of a skipped command, or a reader's read of an operand it
+could not open, is refuted: no read, a `Rejected` write at the call's
+locator.
+
 ### The conversation context
 
-`ConversationContext::observe` learns from a shell call whose result
-arrived without an error, after it is extracted:
+`ConversationContext` is the conversation's shell (`ShellState`) and its
+file host. `ConversationContext::observe` learns from a shell call whose
+result arrived without an error, after it is extracted, through
+`bash::after` (the interpreter run again under the output's evidence, so a
+skipped command changes nothing and a failed `cd` does not move):
 
-- clones: `git clone <remote> [<dir>]` (default directory: the remote's
-  last segment as written), `gh repo clone <owner/repo> [<dir>]`,
-  `git remote add|set-url`, and the remote a lone `git remote -v`,
-  `git remote get-url` or `git config --get remote.<n>.url` prints, each
-  bound to the directory it ran in (`git -C` honoured);
+- clones, by remote name: `git clone <remote> [<dir>]` (`origin`, or
+  `-o <name>`; default directory: the remote's last segment as written),
+  `gh repo clone <owner/repo> [<dir>]`, `git remote add|set-url <name>`,
+  the remotes a lone `git remote -v` prints (every name),
+  `git remote get-url <name>` or `git config --get remote.<name>.url`,
+  each bound to the directory it ran in (`git -C` honoured); and the
+  remote a lone push (`To <url>`) or pull/fetch (`From <url>`) printed,
+  bound as the remote it named (`origin` when none) at the root of the
+  clone it ran in, or at its directory when that is in no known clone
+  (`flow.extract.printed-remote-wins`). A clone's files are its
+  `origin`'s (else its latest bound remote's). At most `MAX_BINDINGS`
+  (256) remotes are kept, oldest dropped first;
+- the home directory, only from output: a lone `echo ~`/`echo $HOME`
+  answered by one path line, a lone `pwd` run under the home answered by
+  one path line ending in its place there, a failed `cd ~/x`'s expanded
+  path. Until then `cd ~/x`, `~/x` operands and `$HOME/x` are places under
+  an unknown home (`Place::Home`); learning it makes every such place
+  absolute (`ShellState::learn_home`);
 - the directory: for a tool whose shell persists (Claude Code `Bash`,
-  OpenHands `execute_bash`), the
-  directory the last command left the shell in, unknown after a `cd` it
-  cannot follow; Claude Code's "Shell cwd was reset to <dir>" wins.
+  OpenHands `execute_bash`, configured `persistent_shells`), the
+  directory the last command left the shell in (`cd`, `cd` with no
+  operand or `cd ~` to the home, `cd -` to the previous one, relative
+  `cd`s from where it is; a `cd` inside parentheses only moves its
+  subshell), unknown after a `cd` it cannot follow; a lone `pwd` after the
+  last `cd`, from an unknown directory, answered by one path line, sets
+  it; Claude Code's "Shell cwd was reset to <dir>" wins. A shell that does
+  not persist keeps its stated directory but learns the rest.
 
-Within one call the shell interpreter applies its own `cd`s and clones as
-it goes (`git clone … && cat repo/README.md` reads the repository file).
+The state is a function of the calls and results observed, in order
+(`flow.extract.shell-state-from-observed`): nothing is read from the
+environment, and no home is invented. Within one call the interpreter
+applies its own `cd`s and clones as it goes (`git clone … && cat
+repo/README.md` reads the repository file). A changed system prompt keeps
+what the context learnt (`ConversationContext::restate` only fills an
+unknown directory).
+
+### The extraction step and its ledger
+
+`extract::step::ExtractionStep<L, S, M>` is the step the gateway ran in
+`live/layers/extract.rs`, carried over unchanged (same pairing of results
+with calls, same contexts per agent and conversation, same access-id and
+delivery digests, domain strings included). It is generic over three
+ports, so `crosstalk-flow` depends on no other layer crate:
+
+- `ExtractionLedger` (`step::ledger`): what the step remembers between
+  deltas: contexts by (agent, conversation); pending calls by (agent, call
+  id), one per conversation, in the order made (`PendingCall`: the
+  conversation, the call-time context, the call, its held writes); history
+  calls by (conversation, call id); delivered results (`DeliveryKey`:
+  agent and BLAKE3 digest); and the exchanges whose delta committed
+  (`done`). `MemoryExtractionLedger` (the reference) and
+  `store::PgExtractionLedger` (migration `0004_extract_ledger.sql`)
+  implement it.
+- `SpanReader` (`exchange_spans`, `span_agent`) and `MessageReader`
+  (`message`): provenance's spans and the message bodies. The gateway
+  adapts `MemoryProvenanceStore` and `BlobMessages<LiveBlobs>`; W8 adapts
+  `PgProvenanceStore`.
+
+```text
+delta(delta, at, flow: impl FlowInputs)
+  ledger.done(exchange)? ─▶ AlreadyDone (nothing handed over)
+  extract(delta, at): every read and change through Working (a per-delta
+      overlay: reads see the delta's own changes; the ledger is untouched)
+      ─▶ (Vec<Extracted>, LedgerChanges)
+  flow.deliver(inputs)          Err(NotDurable) ─▶ ExtractStepError::Flow, nothing committed
+  ledger.commit(LedgerCommit { exchange, at, changes })   one transaction:
+      contexts (stamped at), pending lists rewritten whole, history put/taken,
+      delivered (stamped at, latest kept), extract_done(exchange, at)
+  ─▶ Extracted { inputs }
+expire(now, keep): delivered, contexts and done marks stamped before now - keep
+```
+
+The seam with L4 (`docs/features/postgres_stores.md`, "L5: flow
+checkpoint and restore"): the caller acks its delta only after `delta`
+returns `Ok`. A crash before the commit leaves the ledger as it was, so the
+redelivered delta extracts the same inputs (derived access ids), which the
+consumer takes idempotently; a crash after it finds the delta done. A
+failed message or span read also leaves the ledger untouched (the gateway's
+in-memory step had already changed its maps by then). The gateway's
+memory mode delivers into an `UnboundedSender<Extracted>`, which confirms
+at once; W8 wires the consumer's durable reply and calls `expire` on the
+L4 stage's tick with the content retention.
+
+Stored forms: a `ConversationContext` (with its `ShellState`, `Place`,
+`AbsolutePath`, `RepoBindings`, `RepoId`) is JSON, checked on the way back
+in (a non-canonical path, a home-relative place in a shell that knows its
+home, a repository id its locator does not name, more than `MAX_BINDINGS`
+or duplicate bindings are refused). A `ToolCall` has no serde form in the
+spec, so it is stored as the canonical encoding of an assistant message
+holding just that call (`ledger::stored_call`), decoded back exactly.
 
 ## Files
 
@@ -291,24 +432,37 @@ it goes (`git clone … && cat repo/README.md` reads the repository file).
 | `extract/outcome.rs` | result judging, per known tool and known shell command | `ContentRule`, `content_rule`, `CommandRule` (`judge`), `judge`, `write_outcome`, `read_delivered`, `result_text` |
 | `extract/catalog.rs` | known tools | `KnownTool`, `FileTool`, `FetchTool`, `ShellTool`, `HttpTool`, `McpTool`, `FILE_TOOLS`, `FETCH_TOOLS`, `SHELL_TOOLS`, `identify`, `mcp_name` |
 | `extract/args.rs` | arguments | `Args`, `ArgPath` (JSON Pointer), `ArgError`, `InvalidArgPath` |
-| `extract/context.rs` | per-conversation context | `ConversationContext` (`from_system_prompt`, `scope`, `bind_repo`, `observe`), `stated_cwd` |
+| `extract/context.rs` | per-conversation context | `ConversationContext` (`from_system_prompt`, `restate`, `shell`, `scope`, `bind_repo`, `observe`), `stated_cwd` |
+| `extract/bash/state.rs` | the shell's state and its transitions | `ShellState` (`new`, `cwd`, `absolute_cwd`, `previous`, `home`, `repos`, `place`, `cd`, `set_cwd`, `bind`, `learn_home`, `normalized`), `CdTarget` |
+| `extract/bash/evidence.rs` | which commands ran, from the output | `Evidence` (`assumed`, `read`, `step`, `refutes`, `home`), `Step`, `Ran`, `Status` |
+| `extract/bash/transfers.rs` | the remote a push or pull prints | `Printed` (`scan`), `correct`, `learn` |
 | `extract/error.rs` | `From` into the spec's `ExtractError` | |
 | `extract/file.rs` | file tools | `candidates` |
 | `extract/fetch.rs` | fetch tools | `candidates` |
 | `extract/http.rs` | HTTP requests and HTTP tools | `Method`, `HttpRequest`, `candidates`, `tool_candidates`, `form_fields`, `BODY_KEYS` |
-| `extract/bash/mod.rs` | shell tools | `candidates`, `run` |
-| `extract/bash/lex.rs` | shell lexer | `Script` (`lex`, `from_argv`), `Command`, `Word`, `Redirect`, `RedirectOp`, `LexError` |
-| `extract/bash/commands.rs` | shell interpreter | `Shell`, `ShellState`, `ShellRun` |
+| `extract/bash/mod.rs` | shell tools | `candidates` (with the output: refuted and corrected), `after` (the shell a call leaves) |
+| `extract/bash/lex.rs` | shell lexer | `Script` (`lex`, `from_argv`), `Command` (`join`, `depth`), `Join`, `Word` (`home`), `Redirect`, `RedirectOp`, `LexError` |
+| `extract/bash/commands.rs` | shell interpreter | `Shell`, `ShellRun`, `Found`, `Transfer`, `TransferKind`, `RemoteRef`, `RemoteQuery`, `Print`, `program` |
 | `extract/bash/net.rs` | `curl`, `wget` | |
 | `extract/bash/git.rs` | `git`: clones, remotes, `show`, `push`/`pull`/`fetch`/`clone` | |
 | `extract/bash/forge.rs` | `gh`, `glab`: `repo clone`, issue and pull/merge request commands, `api` | |
 | `extract/bash/options.rs` | getopt-style splitting | `Options`, `OptSpec` |
 | `extract/mcp/mod.rs` | configured MCP tools | `candidates` |
 | `extract/mcp/config.rs` | the configuration | `ExtractConfig` (`from_json`, `new`, `with_http_tools`, `with_fetch_tools`, `with_sites`, `rule`, `http_tools`, `fetch_tools`), `McpServerConfig`, `McpToolRule`, `McpAccessRule`, `McpResource`, `RuleOp`, `RefusalMarker`, `ConfigError` (`HttpAndFetch` among them), `DEFAULT_HTTP_TOOLS` |
-| `extract/resource/path.rs` | paths | `AbsolutePath`, `WrittenPath`, `FileScope`, `file_locator`, `absolute_locator`, `PathError` |
+| `extract/resource/path.rs` | paths | `AbsolutePath` (`join`, `join_within`, `under`, `strip_suffix`), `Place` (`Absolute`, `Home`; `join`, `contains`, `resolve_home`), `WrittenPath`, `FileScope`, `file_locator`, `absolute_locator`, `PathError` |
 | `extract/resource/url.rs` | URLs | `url_locator` (an invalid host as `Opaque`), `INVALID_HOST_URL_TOOL`, `tool_url_locator` (a bare host as `https://`), `url_text`, `scan_urls`, `UrlError` |
 | `extract/resource/key.rs` | MCP keys | `KeyCanon`, `KeyError` |
-| `extract/resource/repo.rs` | repositories and their threads | `RepoId` (`parse`, `forge`, `locator`, `forge_parts`, `file`), `ForgeRepo` (`thread`, `collection`), `ForgeStyle`, `ThreadKind`, `RepoBindings` |
+| `extract/resource/repo.rs` | repositories and their threads | `RepoId` (`parse`, `forge`, `locator`, `forge_parts`, `file`), `ForgeRepo` (`thread`, `collection`), `ForgeStyle`, `ThreadKind`, `RepoBindings` (`bind`, `bind_remote`, `locate`, `locate_place`, `root_of`, `remote`, `resolve_home`), `ORIGIN`, `MAX_BINDINGS` |
+| `extract/tests/shell_state.rs` | the village's shell shapes: commands that never ran, printed remotes, persistent state | |
+| `extract/step/mod.rs` | the extraction step: per agent and conversation contexts, observed after each result; a call's result extracted in its call-time context; no read of a result without text; the commit protocol | `ExtractionStep` (`new`, `ledger`, `delta`, `extract`, `expire`), `DeltaOutcome`, `ExtractStepError` |
+| `extract/step/ledger.rs` | the ledger port, its memory implementation and stored tool calls | `ExtractionLedger`, `MemoryExtractionLedger` (`state`), `LedgerState`, `LedgerCommit`, `LedgerChanges`, `PendingCall`, `DeliveryKey`, `LedgerError` |
+| `extract/step/ports.rs` | spans and message bodies | `SpanReader`, `MessageReader`, `PortError` |
+| `extract/step/working.rs` | one delta's overlay over the ledger | `Working` (crate) |
+| `extract/step/keys.rs` | access ids, delivery digests (pinned) | |
+| `extract/step/tests/` | the gateway's step cases on the memory ledger (`cases`), the commit protocol (`protocol`), context serde (`serde`), Postgres against memory (`pg`) over generated delta sequences (`script`) | |
+| `store/ledger.rs`, `migrations/0004_extract_ledger.sql` | the ledger on Postgres | `PgExtractionLedger` (`new`, `state`) |
+| `crates/gateway/src/live/layers/extract.rs` | adapter: the step over the memory ledger, the live blob store and provenance store, into the flow consumer's channel | `Extraction`, `ExtractStepError` (re-exported) |
+| `crates/eval/extract/ai-village.json` | the village's extractor configuration (`persistent_shells: ["bash"]`), for `ct-eval run --extract-config` | |
 | `extract/sites/mod.rs` | site rules | `SitesConfig`, `MediaWikiSite`, `HostPattern`, `SitePath`, `SiteAccess` |
 | `extract/sites/mediawiki.rs` | MediaWiki | `apply`, `canonical_title`, `page_locator` |
 | `extract/sites/github.rs` | GitHub: repositories, files, threads, Pages | `apply` |
@@ -360,6 +514,7 @@ JSON, in the spec's conventions (snake_case keys, enums tagged
   ],
   "http_tools": ["http_request", "fetch", "web_fetch", "curl"],
   "fetch_tools": ["get_webpage"],
+  "persistent_shells": ["bash"],
   "sites": {
     "mediawiki": [
       { "hosts": ["*.wikipedia.org"], "article_path": "/wiki/", "script_path": "/w/",
@@ -389,6 +544,11 @@ JSON, in the spec's conventions (snake_case keys, enums tagged
   (`flow.extract.fetch-tools-configured`, INV-1113). The gateway reads
   this configuration from its config's `extract` section
   (`LiveConfig::extract`); the eval from `ct-eval run --extract-config`.
+- `persistent_shells`: default none. Names of shell tools whose harness
+  keeps one shell per conversation (the AI Village's `bash`), besides the
+  built-in Claude Code `Bash` and OpenHands `execute_bash`: a `cd` moves
+  where the next call starts. Empty names are refused. OpenCode's and pi's
+  `bash` do not persist, so the name is not persistent by default.
 - `sites`: default the Wikimedia projects (`/wiki/`, `/w/`, capital links,
   mobile hosts folded), Wiktionary (no capital links), Fandom
   (`script_path` `/`), and GitHub on. Giving `mediawiki` replaces the
@@ -442,7 +602,22 @@ JSON, in the spec's conventions (snake_case keys, enums tagged
   `flow.route.shared-public-content-stays-suspected` (INV-1087, the
   correlator's), `flow.extract.openhands-tools` (INV-1088).
 - A write's locators and payloads are a function of the call alone; only
-  its outcome reads the result (INV-1084).
+  its outcome reads the result (INV-1084), including a refuted one.
+- New (INV-X): `flow.extract.shell-skipped-command-no-access` (an access of
+  a command the output shows skipped, or a reader's operand it shows
+  failing, is no read and a `Rejected` write; INV-1085's statement amended
+  to say refutation comes first), `flow.extract.printed-remote-wins` (the
+  `To`/`From` remote of a lone push or pull wins over the binding),
+  `flow.extract.shell-state-from-observed` (the shell state is replayable,
+  home-normalized once the home is known, never invents a home, bounded,
+  per agent), `flow.extract.read-locates-its-result` (the gateway's: a
+  read names a result part of its exchange with text).
+- The extraction ledger changes only in `ExtractionLedger::commit`, once
+  per delta, after the flow side confirmed the delta's inputs; a delta
+  whose exchange is marked done hands nothing over. The Postgres ledger
+  agrees with the memory one on every generated delta sequence
+  (`extract::step::tests::pg`), and a refused delta retried hands over
+  what an unrefused run does (`extract::step::tests::protocol`).
 - A write whose content is not in the call (`WritePayload::Unseen`)
   carries no spans: a read of its resource is co-access evidence only.
 - Eval spec invariants tested here:

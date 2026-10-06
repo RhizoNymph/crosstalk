@@ -25,29 +25,93 @@ use crosstalk_spec::observed::message::{
     AssistantPart, MessageBody, SystemPart, Text, ToolCallId, ToolOutcome, ToolResult,
     ToolResultContent, UserPart,
 };
-use crosstalk_spec::support::{NonEmpty, Timestamp};
+use crosstalk_spec::support::{Blake3, NonEmpty, Timestamp};
 
-/// Plain ASCII prose the filler is cut from, so every byte is a character
-/// boundary.
-const FILLER: &str = "Earlier in this exchange the agent listed the files it had open, \
-summarised the last test run and noted two follow-ups for the next session. \
-The build passed on the second attempt after the cache was cleared. \
-Nothing in this part of the context relates to the matched text. \
-The operator asked for a short status update and a list of open questions. \
-Logs from the previous step were trimmed to the last hundred lines. ";
+use crate::rng::Rng;
 
-/// `len` bytes of filler, starting `seed` bytes into the source.
+/// Plain ASCII words the filler is drawn from, so every byte is a
+/// character boundary.
+const WORDS: &[&str] = &[
+    "agent",
+    "listed",
+    "files",
+    "open",
+    "summary",
+    "test",
+    "run",
+    "noted",
+    "follow",
+    "session",
+    "build",
+    "passed",
+    "second",
+    "attempt",
+    "cache",
+    "cleared",
+    "context",
+    "operator",
+    "asked",
+    "status",
+    "update",
+    "questions",
+    "logs",
+    "previous",
+    "step",
+    "trimmed",
+    "lines",
+    "branch",
+    "merged",
+    "review",
+    "pending",
+    "config",
+    "checked",
+    "values",
+    "output",
+    "draft",
+    "plan",
+    "tasks",
+    "queue",
+    "worker",
+    "retry",
+    "timer",
+    "notes",
+    "table",
+    "rows",
+    "column",
+    "index",
+    "query",
+    "result",
+    "schema",
+    "field",
+    "module",
+    "import",
+    "export",
+    "script",
+    "shell",
+    "path",
+    "folder",
+    "commit",
+    "diff",
+    "patch",
+    "ticket",
+    "comment",
+    "thread",
+];
+
+/// `len` bytes of filler: words drawn from [`WORDS`] by a stream seeded
+/// with `seed`, so two bodies share no run of filler (a reader's filler
+/// never matches a sender's).
 fn filler(seed: u64, len: u32) -> String {
-    let source = FILLER.as_bytes();
-    let start = usize::try_from(seed % source.len() as u64).unwrap_or(0);
     let len = usize::try_from(len).unwrap_or(0);
-    source
-        .iter()
-        .cycle()
-        .skip(start)
-        .take(len)
-        .map(|b| char::from(*b))
-        .collect()
+    let mut rng = Rng::new(seed);
+    let mut text = String::with_capacity(len + 16);
+    while text.len() < len {
+        text.push_str(rng.pick(WORDS).copied().unwrap_or("note"));
+        text.push_str(if rng.chance(0.1) { ". " } else { " " });
+    }
+    // ASCII: any byte offset is a character boundary.
+    text.truncate(len);
+    text
 }
 
 /// Which role's message holds the text, and so which part kind.
@@ -87,8 +151,16 @@ pub struct StoredBody {
 }
 
 impl StoredBody {
+    /// The filler's seed: the layout and the core's text, so bodies with
+    /// different cores get different filler.
     fn seed(&self) -> u64 {
-        u64::from(self.before) ^ (u64::from(self.after) << 16) ^ u64::from(self.part)
+        let digest = Blake3::of(self.core.as_bytes());
+        let mut core = [0u8; 8];
+        core.copy_from_slice(&digest.as_bytes()[..8]);
+        u64::from_be_bytes(core)
+            ^ u64::from(self.before)
+            ^ (u64::from(self.after) << 16)
+            ^ (u64::from(self.part) << 32)
     }
 
     /// The text of part `part`: what a location's range indexes.
@@ -204,6 +276,11 @@ impl Blobs {
     /// Content retention: the body is never stored. Whether it was held.
     pub fn drop_body(&mut self, hash: MessageHash) -> bool {
         self.bodies.remove(&hash).is_some()
+    }
+
+    /// Content retention, keeping the dropped body: what was held.
+    pub fn take_body(&mut self, hash: MessageHash) -> Option<Encoded> {
+        self.bodies.remove(&hash)
     }
 
     /// Every body still held, by hash.

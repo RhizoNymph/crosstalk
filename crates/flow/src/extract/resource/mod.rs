@@ -26,7 +26,9 @@ pub mod repo;
 pub mod url;
 
 pub use key::{KeyCanon, KeyError};
-pub use path::{AbsolutePath, FileScope, PathError, WrittenPath, absolute_locator, file_locator};
+pub use path::{
+    AbsolutePath, FileScope, PathError, Place, WrittenPath, absolute_locator, file_locator,
+};
 pub use repo::{ForgeRepo, ForgeStyle, RepoBindings, RepoId, ThreadKind};
 pub use url::{
     INVALID_HOST_URL_TOOL, UrlError, scan_urls, tool_url_locator, url_locator, url_text,

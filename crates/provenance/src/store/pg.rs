@@ -21,8 +21,9 @@ use sqlx::postgres::PgRow;
 use sqlx::{PgConnection, PgPool, Row};
 
 use super::{
-    Committed, ExchangeRecord, Forwarding, MessageScan, ProvenanceStore, ProvenanceStoreError,
-    Relay, ScanCommit, ScanFailure, ScanStatus, ScannedAs, SpanRecord, StoredMatch,
+    Coincidence, Committed, ExchangeRecord, Forwarding, MessageScan, ProvenanceStore,
+    ProvenanceStoreError, Relay, ScanCommit, ScanFailure, ScanStatus, ScannedAs, SpanRecord,
+    StoredMatch,
 };
 use crate::pg::{
     Failure, OutOfRange, failure, hash_bytes, hash_from, horizon, id_bytes, id_from, time_from,
@@ -546,6 +547,15 @@ impl ProvenanceStore for PgProvenanceStore {
         Ok(Some((record, status_from(&row)?)))
     }
 
+    async fn started_at(&self, id: ExchangeId) -> Result<Option<Timestamp>, ProvenanceStoreError> {
+        let started_at: Option<i64> =
+            sqlx::query_scalar("SELECT started_at FROM provenance.exchanges WHERE exchange = $1")
+                .bind(id_bytes(id))
+                .fetch_optional(&self.pool)
+                .await?;
+        Ok(started_at.map(time_from).transpose()?)
+    }
+
     async fn spans(&self, ids: &[SpanId]) -> Result<Vec<SpanRecord>, ProvenanceStoreError> {
         let keys: Vec<Vec<u8>> = ids.iter().copied().map(id_bytes).collect();
         let query = concat!(
@@ -565,10 +575,16 @@ impl ProvenanceStore for PgProvenanceStore {
     async fn relays(&self, sources: &[SpanId]) -> Result<Vec<Relay>, ProvenanceStoreError> {
         let keys: Vec<Vec<u8>> = sources.iter().copied().map(id_bytes).collect();
         let rows = sqlx::query(
-            "SELECT s.relay_span, s.agent, e.started_at FROM provenance.spans s \
+            "SELECT copies.source AS relay_span, s.agent, e.started_at FROM ( \
+               SELECT relay_span AS source, span FROM provenance.spans \
+                 WHERE relay_span = ANY($1::bytea[]) \
+               UNION ALL \
+               SELECT source, span FROM provenance.span_coincidences \
+                 WHERE source = ANY($1::bytea[]) \
+             ) copies \
+             JOIN provenance.spans s ON s.span = copies.span \
              JOIN provenance.exchanges e ON e.exchange = s.exchange \
-             WHERE s.relay_span = ANY($1::bytea[]) \
-             ORDER BY s.relay_span, e.started_at, s.agent",
+             ORDER BY copies.source, e.started_at, s.agent",
         )
         .bind(keys)
         .fetch_all(&self.pool)
@@ -582,6 +598,30 @@ impl ProvenanceStore for PgProvenanceStore {
                     source: id_from(&source)?,
                     agent: id_from(&agent)?,
                     at: time_from(at)?,
+                })
+            })
+            .collect()
+    }
+
+    async fn coincident_sources(
+        &self,
+        spans: &[SpanId],
+    ) -> Result<Vec<Coincidence>, ProvenanceStoreError> {
+        let keys: Vec<Vec<u8>> = spans.iter().copied().map(id_bytes).collect();
+        let rows = sqlx::query(
+            "SELECT span, source FROM provenance.span_coincidences \
+             WHERE span = ANY($1::bytea[]) ORDER BY span, source",
+        )
+        .bind(keys)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.iter()
+            .map(|row| {
+                let span: Vec<u8> = row.try_get("span")?;
+                let source: Vec<u8> = row.try_get("source")?;
+                Ok(Coincidence {
+                    span: id_from(&span)?,
+                    source: id_from(&source)?,
                 })
             })
             .collect()
@@ -714,8 +754,19 @@ impl ProvenanceStore for PgProvenanceStore {
             Some(ScanStatus::Pending) => {}
             Some(_) => return Ok(Committed::AlreadyScanned),
         }
+        commit.check_coincidences()?;
         for (ordinal, span) in commit.spans.iter().enumerate() {
             insert_span(&mut tx, span, ordinal, commit.forwarding).await?;
+        }
+        for coincidence in &commit.coincidences {
+            sqlx::query(
+                "INSERT INTO provenance.span_coincidences (span, source) VALUES ($1, $2) \
+                 ON CONFLICT DO NOTHING",
+            )
+            .bind(id_bytes(coincidence.span))
+            .bind(id_bytes(coincidence.source))
+            .execute(&mut *tx)
+            .await?;
         }
         for stored in &commit.matches {
             match advance_span(

@@ -28,7 +28,7 @@ use crosstalk_spec::interfaces::l6_analysis::{
     AlertRuleStore, Embedder, ProjectionStore, SearchIndex, TopicCatalog,
 };
 use crosstalk_spec::interfaces::l7_topology::EdgeStore;
-use crosstalk_spec::interfaces::l8_surface::audit::AuditLog;
+use crosstalk_spec::interfaces::l8_surface::audit::AuditIntents;
 use crosstalk_spec::interfaces::l8_surface::export::ExportSource;
 use crosstalk_spec::interfaces::l8_surface::operators::OperatorStore;
 use crosstalk_spec::interfaces::l8_surface::sinks::SinkRegistry;
@@ -95,8 +95,9 @@ pub trait SurfaceStores: Send + Sync + 'static {
     type Alerts: AlertReads + AlertActions + AlertRuleStore + Clone + Send + Sync + 'static;
     /// L7's edge store.
     type Edges: EdgeStore + Send + Sync + 'static;
-    /// The append-only audit log.
-    type Audit: AuditLog + Clone + Send + Sync + 'static;
+    /// The append-only audit log, with the write-ahead intents operator
+    /// actions record before their effect.
+    type Audit: AuditIntents + Clone + Send + Sync + 'static;
     /// The operator directory.
     type Operators: OperatorStore + Send + Sync + 'static;
     /// The configured alert sinks.

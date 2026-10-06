@@ -2,6 +2,11 @@
 //! pools for the memory crate's model harnesses (which run each case on a
 //! runtime of their own), and fixed keys.
 
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, PoisonError};
+
+use crosstalk_spec::events::Envelope;
+use crosstalk_spec::ids::EventId;
 use crosstalk_spec::ids::mint::{SeededRandom, UlidGenerator};
 use crosstalk_spec::support::{Clock, Timestamp};
 use crosstalk_store::{DatabaseUrl, SerializableRetry, TestDb};
@@ -58,7 +63,9 @@ pub async fn truncate(pool: &PgPool) -> Result<(), sqlx::Error> {
     sqlx::query(
         "TRUNCATE analysis.search_docs, analysis.search_embeddings, analysis.search_verdicts, \
          analysis.search_model, analysis.search_dropped_models, analysis.outbox, \
-         analysis.alerts, analysis.alert_rules, analysis.alert_rule_state, analysis.alert_verdicts",
+         analysis.alerts, analysis.alert_rules, analysis.alert_rule_state, analysis.alert_verdicts, \
+         analysis.topic_catalog, analysis.topic_versions, analysis.topics, analysis.topic_lineage, \
+         analysis.topic_assignments, analysis.projection_jobs, analysis.projection_frames",
     )
     .execute(pool)
     .await?;
@@ -90,15 +97,82 @@ pub fn off_runtime<T: Send + 'static>(harness: impl FnOnce() -> T + Send + 'stat
     })
 }
 
-/// A sink that takes every event and keeps none.
+/// A sink that takes every event and keeps none. Every envelope gets the
+/// same id: nothing reads them.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct DiscardSink;
 
 impl super::EventSink for DiscardSink {
-    async fn publish(
-        &self,
-        _events: Vec<crosstalk_spec::events::BusEvent>,
-    ) -> Result<(), super::SinkError> {
+    fn stamp(&self) -> Result<(EventId, Timestamp), super::SinkError> {
+        Ok((EventId::from_ulid(1), Timestamp::from_micros(0)))
+    }
+
+    async fn publish(&self, _envelope: Envelope) -> Result<(), super::SinkError> {
+        Ok(())
+    }
+}
+
+/// A sink that stamps from a seeded generator at the epoch clock and
+/// records every envelope it takes, refusing every publish while `refuse`
+/// is set.
+#[derive(Debug, Clone)]
+pub struct RecordingSink {
+    ids: Arc<Mutex<UlidGenerator<SeededRandom>>>,
+    published: Arc<Mutex<Vec<Envelope>>>,
+    refuse: Arc<AtomicBool>,
+    stamps: Arc<AtomicU64>,
+}
+
+impl RecordingSink {
+    pub fn new(seed: u64) -> Self {
+        Self {
+            ids: Arc::new(Mutex::new(ids(seed))),
+            published: Arc::default(),
+            refuse: Arc::default(),
+            stamps: Arc::default(),
+        }
+    }
+
+    /// Refuse (or accept again) every later publish.
+    pub fn refuse(&self, refuse: bool) {
+        self.refuse.store(refuse, Ordering::SeqCst);
+    }
+
+    /// Every envelope taken so far, in order.
+    pub fn published(&self) -> Vec<Envelope> {
+        self.published
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
+    /// How many envelope ids it minted.
+    pub fn stamps(&self) -> u64 {
+        self.stamps.load(Ordering::SeqCst)
+    }
+}
+
+impl super::EventSink for RecordingSink {
+    fn stamp(&self) -> Result<(EventId, Timestamp), super::SinkError> {
+        self.stamps.fetch_add(1, Ordering::SeqCst);
+        let at = Timestamp::from_micros(1_000 * (self.stamps.load(Ordering::SeqCst) + 1));
+        let id = self
+            .ids
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .mint_at(at)
+            .map_err(super::SinkError::Ids)?;
+        Ok((id, at))
+    }
+
+    async fn publish(&self, envelope: Envelope) -> Result<(), super::SinkError> {
+        if self.refuse.load(Ordering::SeqCst) {
+            return Err(super::SinkError::Closed);
+        }
+        self.published
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(envelope);
         Ok(())
     }
 }

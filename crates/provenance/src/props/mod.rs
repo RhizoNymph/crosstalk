@@ -288,10 +288,10 @@ proptest! {
                 let span = originate(&mut world, a, &crate::tests::fixtures::sentence(&format!("s{n}")), 1).await;
                 hits.push(SemanticHit { span: span.span.id, read_range: range, score: Similarity::new(*score).expect("score") });
             }
-            let World { engine, store, messages, ids, config } = world;
+            let World { engine, store, messages, ids, config, ran } = world;
             let index = engine.into_index();
             let engine = crate::engine::Provenance::new(&config, index, store.clone(), FakeSemantic::returning(hits), messages.clone());
-            let mut world = World { engine, store, messages, ids, config };
+            let mut world = World { engine, store, messages, ids, config, ran };
             let ran = world.run(Turn::new(b, at(2)).input(user_text(read))).await;
             for stored in world.matches_of(ran.exchange) {
                 if let MatchKind::Semantic(score) = stored.content.kind() {
@@ -617,7 +617,9 @@ fn reader_output_match_absent_from_inputs() {
 
 /// `provenance.span.originated-absent-from-inputs`: an originated span
 /// shares no fingerprint with the exchange's inputs, raw or decoded, nor
-/// with any span indexed before it.
+/// with any span indexed before it, except another agent's span it is
+/// recorded to coincide with (a coincident template stretch,
+/// `provenance.span.coincident-template-originated`).
 #[test]
 fn originated_span_not_fingerprint_matchable_in_inputs() {
     scenario_property(|outcome| {
@@ -635,6 +637,13 @@ fn originated_span_not_fingerprint_matchable_in_inputs() {
                 );
             }
             for earlier in outcome.indexed_before(record.span.exchange) {
+                if earlier.span.agent != record.span.agent
+                    && outcome
+                        .coincidences
+                        .contains(&(record.span.id, earlier.span.id))
+                {
+                    continue;
+                }
                 let theirs = outcome.span_fingerprints(&earlier.span);
                 assert!(
                     fingerprints.is_disjoint(&theirs),

@@ -1,14 +1,17 @@
-//! The correlator shards' tick checkpoints (`flow.shard_ticks`).
+//! The correlator shards' tick checkpoints (`flow.shard_ticks`), read.
 //!
 //! Each shard records the last tick it processed; L7's frontier reads the
 //! earliest of them as `PipelineFrontier::ticked_through` (`l5_flow`,
-//! "Timing"). A checkpoint only moves forward: a redelivered or reordered
-//! older tick leaves it where it is.
+//! "Timing"). A record only moves forward. Its one writer is the
+//! checkpoint ([`super::PgFlowDurability`]), which writes it in the
+//! transaction that stores the shard's snapshot, so it never names a tick
+//! the stored state has not run (`flow.checkpoint.ticks-with-state`,
+//! INV-1216).
 
 use crosstalk_spec::support::Timestamp;
 use sqlx::PgPool;
 
-use super::codec::{micros, timestamp};
+use super::codec::timestamp;
 use super::directory::ShardIndex;
 use super::error::FlowStoreError;
 
@@ -21,21 +24,6 @@ pub struct PgShardTicks {
 impl PgShardTicks {
     pub fn new(pool: PgPool) -> Self {
         Self { pool }
-    }
-
-    /// Shard `shard` processed the tick at `at`: its checkpoint becomes
-    /// `at` unless it is already later.
-    pub async fn record(&self, shard: ShardIndex, at: Timestamp) -> Result<(), FlowStoreError> {
-        sqlx::query(
-            "INSERT INTO flow.shard_ticks (shard, ticked_through) VALUES ($1, $2) \
-             ON CONFLICT (shard) DO UPDATE \
-             SET ticked_through = GREATEST(flow.shard_ticks.ticked_through, EXCLUDED.ticked_through)",
-        )
-        .bind(i32::from(shard.0))
-        .bind(micros("shard_ticks.ticked_through", at)?)
-        .execute(&self.pool)
-        .await?;
-        Ok(())
     }
 
     /// The checkpoint of `shard`; `None` before its first tick.

@@ -8,7 +8,7 @@ use topcoat::context::Cx;
 use topcoat::router::{page, query_params};
 use topcoat::view::{View, view};
 
-use super::entry::{EntryView, OutcomeView, entry_view};
+use super::entry::{EntryView, OutcomeView, entry_view, interrupted_badge};
 use super::query::{AuditQuery, CONFIG, RawAuditQuery, author_code};
 use super::subject::{subject_code, subject_link};
 use crate::app::{backend, caller};
@@ -50,6 +50,8 @@ pub enum OutcomeCell {
     Unchanged,
     Rejected(String),
     Forbidden(String),
+    /// The call began; what came of it is unknown.
+    Interrupted,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -104,6 +106,7 @@ pub fn audit_row(
                 .collect(),
         },
         OutcomeView::Unchanged => OutcomeCell::Unchanged,
+        OutcomeView::Interrupted => OutcomeCell::Interrupted,
         OutcomeView::Rejected(reason) => OutcomeCell::Rejected(reason),
         OutcomeView::Forbidden(missing) => {
             OutcomeCell::Forbidden(format!("needs {}", permission_name(missing)))
@@ -315,6 +318,7 @@ async fn audit_get(cx: &Cx) -> Result<impl View> {
                                             }
                                         },
                                         OutcomeCell::Unchanged => <span class="text-xs text-zinc-500">"unchanged"</span>,
+                                        OutcomeCell::Interrupted => interrupted_badge(),
                                         OutcomeCell::Rejected(reason) => <span class="text-xs text-red-700 dark:text-red-400">"rejected: " (reason)</span>,
                                         OutcomeCell::Forbidden(missing) => <span class="text-xs text-red-700 dark:text-red-400">"forbidden: " (missing)</span>,
                                     }
@@ -330,7 +334,7 @@ async fn audit_get(cx: &Cx) -> Result<impl View> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use crosstalk_spec::ids::{AlertRuleId, ChannelId, MergeId, OperatorId};
     use crosstalk_spec::interfaces::l8_surface::{
         ActionError, ActionOutcome, ConflictKind, OperatorAction,
@@ -517,5 +521,48 @@ mod tests {
         let reply = get(&format!("/audit?{q}&op=nobody")).await;
         assert_eq!(reply.status, StatusCode::UNPROCESSABLE_ENTITY);
         assert!(reply.body.contains("op: expected 26 characters"));
+    }
+
+    /// Every audit entry of the harness world, newest first.
+    pub async fn every_entry() -> Vec<crosstalk_spec::interfaces::l8_surface::audit::AuditEntry> {
+        use crosstalk_spec::interfaces::l8_surface::QueryApi;
+        use crosstalk_spec::interfaces::l8_surface::audit::AuditFilter;
+        use crosstalk_spec::paging::PageRequest;
+        let caller = crate::testing::operator().caller();
+        let mut after = None;
+        let mut out = Vec::new();
+        loop {
+            let page = crate::testing::world()
+                .audit(
+                    &caller,
+                    &AuditFilter::default(),
+                    &PageRequest {
+                        size: crate::pages::common::paging::size(100),
+                        after,
+                    },
+                )
+                .await
+                .expect("audit");
+            let (items, next) = page.into_parts();
+            out.extend(items);
+            match next {
+                Some(next) => after = Some(next),
+                None => return out,
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn an_interrupted_entry_reads_as_outcome_unknown() {
+        use super::super::entry::{INTERRUPTED_LABEL, INTERRUPTED_TITLE};
+        let reply = get(&format!("/audit?{}&span=all", state().to_query())).await;
+        assert_eq!(reply.status, StatusCode::OK, "{}", reply.body);
+        assert!(reply.body.contains(INTERRUPTED_LABEL), "the label");
+        assert!(reply.body.contains(INTERRUPTED_TITLE), "the tooltip");
+        assert!(reply.body.contains("bg-amber-100"), "its own badge");
+        assert!(
+            !reply.body.contains("rejected: interrupted"),
+            "not shown as a rejection"
+        );
     }
 }

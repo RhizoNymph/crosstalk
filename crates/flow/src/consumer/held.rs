@@ -29,6 +29,16 @@ impl HeldWrites {
         self.held.entry(write.id).or_insert((write, settles_at));
     }
 
+    /// Whether `access` is held.
+    pub fn contains(&self, access: AccessId) -> bool {
+        self.held.contains_key(&access)
+    }
+
+    /// Hold `write` until `settles_at`, as a restore found it held.
+    pub fn restore(&mut self, write: Observed<WriteCall>, settles_at: Timestamp) {
+        self.held.entry(write.id).or_insert((write, settles_at));
+    }
+
     /// The held write `access`, released by its result; `None` when it is
     /// not held (never, or already released).
     pub fn release(&mut self, access: AccessId) -> Option<Observed<WriteCall>> {

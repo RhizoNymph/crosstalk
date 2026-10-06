@@ -80,6 +80,7 @@ pub(crate) mod tests {
             },
             weighting: Weighting::Transmissions,
             graph: GraphMode::Agents,
+            follow: None,
         }
     }
 

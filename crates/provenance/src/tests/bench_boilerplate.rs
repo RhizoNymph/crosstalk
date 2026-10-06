@@ -34,7 +34,7 @@ fn real() -> ProvenanceConfig {
 }
 
 /// The swarm's system prompt for `agent`.
-fn system(agent: usize, focus: &str) -> String {
+pub(crate) fn system(agent: usize, focus: &str) -> String {
     format!(
         "You are agent-{agent:03}, a research agent on a team of 20 agents. Your focus is \
          {focus}. The team shares a wiki at http://wiki:8090/pages/<name>: read pages with \
@@ -44,7 +44,7 @@ fn system(agent: usize, focus: &str) -> String {
 }
 
 /// The orchestrator's write task for `page` on `label`.
-fn write_task(page: &str, label: &str) -> String {
+pub(crate) fn write_task(page: &str, label: &str) -> String {
     format!(
         "Please write up your current findings on {label} in the team wiki, page `{page}`.\n\n\
          [task:write page={page} topic=7 base=http://wiki:8090]"
@@ -52,7 +52,7 @@ fn write_task(page: &str, label: &str) -> String {
 }
 
 /// The orchestrator's read task for `page`.
-fn read_task(page: &str) -> String {
+pub(crate) fn read_task(page: &str) -> String {
     format!(
         "Before you continue, read the wiki page `{page}` and tell me what matters for us.\n\n\
          [task:read page={page} base=http://wiki:8090]"
@@ -90,13 +90,13 @@ async fn write_page(
         .await;
 }
 
-const PAGES: [(&str, &str); 3] = [
+pub(crate) const PAGES: [(&str, &str); 3] = [
     ("queue-backpressure-39", "queue backpressure"),
     ("incident-review-19", "the incident review"),
     ("schema-migration-12", "the schema migration"),
 ];
 
-const BODY: &str = "I would keep shed load as is and revisit consumer lag after the next \
+pub(crate) const BODY: &str = "I would keep shed load as is and revisit consumer lag after the next \
      release. Reducing consumer lag by 62% should be enough for the next quarter.";
 
 /// `provenance.match.inherited-fragment-dropped`, bench user-turn matches
@@ -365,7 +365,7 @@ async fn chatter(world: &mut World, vocabulary: &[&str], texts: usize, at_second
 }
 
 /// The generator's words for search ranking and its sentence templates.
-const VOCABULARY: [&str; 24] = [
+pub(crate) const VOCABULARY: [&str; 24] = [
     "search",
     "ranking",
     "query",
@@ -393,7 +393,7 @@ const VOCABULARY: [&str; 24] = [
 ];
 
 /// The bench's sentence, one template filled with the topic's words.
-const TEMPLATE_SENTENCE: &str =
+pub(crate) const TEMPLATE_SENTENCE: &str =
     "For search ranking, query rewrite matters more than embedding drift at our current scale.";
 
 /// `provenance.match.reader-output-rare-token`, bench reader-output

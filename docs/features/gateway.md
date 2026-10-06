@@ -460,8 +460,18 @@ Surface<LiveStores>: crosstalk-api's InProcess::start_with over the same stores,
   history call no observed output made yields reads only. A result the
   agent was already delivered (same call and result content, any
   conversation) is not read again (`flow.extract.replayed-result-read-once`,
-  INV-1111). The step runs under `LiveConfig::extract`, the gateway
-  config's `extract` section.
+  INV-1111). Each agent has its own `ConversationContext` per
+  conversation: started from the first system prompt (a changed one only
+  fills an unknown directory), and taught by every result in request
+  order, read or not (`ConversationContext::observe`: the shell's
+  directory, home and clone remotes,
+  `flow.extract.shell-state-from-observed`). A call made in an output is
+  extracted again with its result in the context it was made in, so its
+  held writes line up. A result whose part has no text (an empty output)
+  yields no read (`flow.extract.read-locates-its-result`); its held
+  writes are still released. The step runs under `LiveConfig::extract`,
+  the gateway config's `extract` section (its `persistent_shells` names a
+  harness's persistent shell tool, such as the AI Village's `bash`).
 - **L5.** `crosstalk_flow::consumer::FlowConsumer` over the shared
   registry (`MemoryChannels`), `MemoryVerdicts` and `MemoryAgents`, on its
   own task: commands first (a tick drains the queued extracted inputs,

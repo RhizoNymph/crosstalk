@@ -10,13 +10,24 @@
  * that swaps `[data-live-region]` elements inside `replace` keeps the
  * page's signals and re-binds whatever the new markup holds.
  *
+ * An element marked `data-live-keep` with an `id` survives the swap: its
+ * node takes the place of its fresh copy, and then the fresh copy's
+ * attributes, so the swap reaches it as attribute changes. The graph and
+ * the brush of a followed topology keep their drawing that way, and take a
+ * new `data-src` that only moves the window as a slide (`shared/slide.ts`).
+ * The node leaves the document and comes back within the swap, which
+ * `PayloadElement` rides out without tearing down.
+ *
  * A refresh is skipped (and the element asks the user to reload instead)
  * when the runtime does not answer, the response is not the page, a region
  * is missing from it, or a region holds input the user is editing.
  */
 
+import { attributeChanges } from '../shared/slide.ts';
+
 const RUNTIME_EVENT = 'topcoat:dev-runtime:v1';
 export const REGION_ATTRIBUTE = 'data-live-region';
+export const KEEP_ATTRIBUTE = 'data-live-keep';
 
 interface PageRuntime {
   request(signal: AbortSignal): Promise<Response>;
@@ -71,6 +82,27 @@ function pageRuntime(): PageRuntime | null {
   return detail.runtime ?? null;
 }
 
+/** Old nodes to keep, each with the fresh copy whose place it takes. */
+function keptNodes(regions: readonly Element[], fresh: readonly Element[]): [Element, Element][] {
+  const kept: [Element, Element][] = [];
+  for (const copy of fresh.flatMap((f) => [...f.querySelectorAll(`[${KEEP_ATTRIBUTE}][id]`)])) {
+    const selector = `#${CSS.escape(copy.id)}[${KEEP_ATTRIBUTE}]`;
+    const old = regions.map((r) => r.querySelector(selector)).find((e) => e !== null);
+    if (old !== undefined && old !== null && old.tagName === copy.tagName) kept.push([old, copy]);
+  }
+  return kept;
+}
+
+/** Gives `node` exactly the attributes of `copy`. */
+function adopt(node: Element, copy: Element): void {
+  const changes = attributeChanges(
+    [...node.attributes].map((a) => [a.name, a.value] as const),
+    [...copy.attributes].map((a) => [a.name, a.value] as const),
+  );
+  for (const name of changes.remove) node.removeAttribute(name);
+  for (const [name, value] of changes.set) node.setAttribute(name, value);
+}
+
 /** Renders the page again and swaps every live region of the document. */
 export async function refreshRegions(signal: AbortSignal): Promise<RefreshOutcome> {
   const regions = [...document.querySelectorAll(`[${REGION_ATTRIBUTE}]`)];
@@ -103,8 +135,16 @@ export async function refreshRegions(signal: AbortSignal): Promise<RefreshOutcom
   }
   // Re-checked after the request: the user may have started typing.
   if (regions.some(isEditing)) return needsReload('you are editing a form on this page');
+  const kept = keptNodes(
+    regions,
+    swaps.map(([, fresh]) => fresh),
+  );
   runtime.replace(() => {
+    for (const [node, copy] of kept) copy.replaceWith(node);
     for (const [region, fresh] of swaps) region.replaceWith(fresh);
+    // Connected again, so the element sees the changes; before the
+    // runtime hydrates, so it binds the fresh render's bindings.
+    for (const [node, copy] of kept) adopt(node, copy);
   });
   return { kind: 'refreshed' };
 }

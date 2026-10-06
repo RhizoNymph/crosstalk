@@ -426,7 +426,6 @@ async fn a_failed_step_is_retried_in_order() {
             agents: stores.agents.clone(),
             bus: bus.clone(),
             clock: Arc::new(ManualClock::at(T0)),
-            entropy: crosstalk_spec::ids::SeededRandom::new(1),
         },
     );
     flow.handle_extracted(Extracted::Write {

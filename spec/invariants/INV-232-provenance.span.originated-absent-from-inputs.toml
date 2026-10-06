@@ -1,6 +1,6 @@
 [invariant]
 id = "provenance.span.originated-absent-from-inputs"
-statement = "A span classified Originated shares no below-cutoff fingerprint with any of the exchange's inputs, in raw or decoded form, or with another agent's indexed span."
+statement = "A span classified Originated shares no below-cutoff fingerprint with any of the exchange's inputs, in raw or decoded form, or with another agent's indexed span, except a span the store records as coinciding with it: a coincident template stretch, which holds no token rare for that span's holders (provenance.span.coincident-template-originated)."
 kind = "domain"
 property = "postcondition"
 requires = ["property"]
@@ -12,7 +12,12 @@ count: an agent that decodes a base64 payload it was handed has relayed it,
 not written it. Text matching another agent's indexed span but no visible
 input was received through a channel the gateway cannot see; it is
 classified Relayed with RelaySource::Span naming that span (and also
-reported as a ReaderOutput match), never Originated. Fingerprints above the
+reported as a ReaderOutput match), never Originated, unless it holds no
+token rare for that span's holders: then it is a coincident template fill,
+not a copy, and stays Originated with a recorded coincidence (bench run
+20261006T062146Z: whole wiki pages of template sentences relayed piece by
+piece to earlier fills left their writer nothing indexed, and a verbatim
+read of the page matched nobody). Fingerprints above the
 frequency cutoff are boilerplate and do not disqualify a span. Segmenter
 sees only the exchange's messages, so the index check happens when the
 draft is resolved against FingerprintIndex::lookup before classification is

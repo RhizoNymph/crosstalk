@@ -14,8 +14,40 @@ use super::repo::RepoBindings;
 /// An absolute POSIX path with `.`, `..`, repeated and trailing `/`
 /// resolved. Only [`AbsolutePath::parse`] and [`AbsolutePath::join`] make
 /// one, so every value is canonical: two equal paths name one file.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
+#[serde(try_from = "String", into = "String")]
 pub struct AbsolutePath(String);
+
+/// Why stored text is not an [`AbsolutePath`]: only a canonical path (one
+/// [`AbsolutePath::parse`] leaves unchanged) is read back.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum StoredPathError {
+    #[error(transparent)]
+    Invalid(#[from] PathError),
+    #[error("{0:?} is not a canonical path")]
+    NotCanonical(String),
+}
+
+impl TryFrom<String> for AbsolutePath {
+    type Error = StoredPathError;
+
+    fn try_from(text: String) -> Result<Self, Self::Error> {
+        let path = Self::parse(&text)?;
+        if path.0 == text {
+            Ok(path)
+        } else {
+            Err(StoredPathError::NotCanonical(text))
+        }
+    }
+}
+
+impl From<AbsolutePath> for String {
+    fn from(path: AbsolutePath) -> Self {
+        path.0
+    }
+}
 
 /// Why text is not a path a locator can be made from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
@@ -76,6 +108,48 @@ impl AbsolutePath {
         Self(path)
     }
 
+    /// `relative` resolved against this directory, lexically, unless a
+    /// `..` would climb above it: `None` then, and for an absolute
+    /// `relative`. Used under a home directory whose own path is unknown,
+    /// where climbing out of it names an unknown place.
+    pub fn join_within(&self, relative: &str) -> Option<Self> {
+        check(relative).ok()?;
+        if relative.starts_with('/') {
+            return None;
+        }
+        let mut segments: Vec<&str> = self.segments().collect();
+        for segment in relative.split('/') {
+            match segment {
+                "" | "." => {}
+                ".." => {
+                    segments.pop()?;
+                }
+                name => segments.push(name),
+            }
+        }
+        Some(Self::root().join_checked(&segments.join("/")))
+    }
+
+    /// The path with `prefix`'s segments in front: `/a` under `/home/u` is
+    /// `/home/u/a`.
+    pub fn under(&self, prefix: &AbsolutePath) -> Self {
+        prefix.join_checked(self.0.trim_start_matches('/'))
+    }
+
+    /// This path less `suffix`'s trailing segments, when it ends with
+    /// them: `/home/u/a` less `/a` is `/home/u`. A root `suffix` gives the
+    /// path itself.
+    pub fn strip_suffix(&self, suffix: &AbsolutePath) -> Option<Self> {
+        if suffix.as_str() == "/" {
+            return Some(self.clone());
+        }
+        let rest = self.0.strip_suffix(suffix.as_str())?;
+        if rest.is_empty() {
+            return Some(Self::root());
+        }
+        (!rest.ends_with('/')).then(|| Self(rest.to_owned()))
+    }
+
     fn segments(&self) -> impl Iterator<Item = &str> {
         self.0.split('/').filter(|segment| !segment.is_empty())
     }
@@ -103,6 +177,87 @@ fn check(text: &str) -> Result<(), PathError> {
         return Err(PathError::Nul);
     }
     Ok(())
+}
+
+/// A directory or file a shell names: an absolute path, or a path under
+/// the home directory while the home directory's own path is not known
+/// (`~/repo` is `Home("/repo")`, `~` is `Home("/")`). A shell state that
+/// knows its home holds no `Home` place
+/// ([`crate::extract::bash::state::ShellState`]).
+#[derive(
+    Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, serde::Serialize, serde::Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum Place {
+    Absolute(AbsolutePath),
+    Home(AbsolutePath),
+}
+
+impl Place {
+    /// `relative` from this place; `None` when it climbs out of an
+    /// unknown home.
+    pub fn join(&self, relative: &str) -> Option<Self> {
+        match self {
+            Self::Absolute(path) => path.join(relative).ok().map(Self::Absolute),
+            Self::Home(path) => path.join_within(relative).map(Self::Home),
+        }
+    }
+
+    pub fn absolute(&self) -> Option<&AbsolutePath> {
+        match self {
+            Self::Absolute(path) => Some(path),
+            Self::Home(_) => None,
+        }
+    }
+
+    /// The place with the home directory known: a `Home` place becomes
+    /// absolute under `home`.
+    pub fn resolve_home(self, home: &AbsolutePath) -> Self {
+        match self {
+            Self::Home(path) => Self::Absolute(path.under(home)),
+            absolute @ Self::Absolute(_) => absolute,
+        }
+    }
+
+    /// `path` relative to this place, when this place is an ancestor of
+    /// it (or it), as an absolute path inside this place.
+    pub fn contains(&self, path: &Place) -> Option<AbsolutePath> {
+        let (root, path) = match (self, path) {
+            (Self::Absolute(root), Self::Absolute(path)) | (Self::Home(root), Self::Home(path)) => {
+                (root, path)
+            }
+            (Self::Absolute(_), Self::Home(_)) | (Self::Home(_), Self::Absolute(_)) => return None,
+        };
+        if root.as_str() == "/" {
+            return Some(path.clone());
+        }
+        let rest = path.as_str().strip_prefix(root.as_str())?;
+        if rest.is_empty() {
+            return Some(AbsolutePath::root());
+        }
+        rest.starts_with('/')
+            .then(|| AbsolutePath::parse(rest).ok())
+            .flatten()
+    }
+
+    /// The written form a `Home` place is keyed by when it is no file of
+    /// a known clone: `~/a/b` (`~` for the home itself).
+    pub fn home_key(path: &AbsolutePath) -> String {
+        if path.as_str() == "/" {
+            "~".to_owned()
+        } else {
+            format!("~{path}")
+        }
+    }
+}
+
+impl fmt::Display for Place {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Absolute(path) => path.fmt(f),
+            Self::Home(path) => f.write_str(&Self::home_key(path)),
+        }
+    }
 }
 
 /// How a path was written, which decides how it is keyed.

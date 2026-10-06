@@ -24,8 +24,9 @@ use sqlx::PgPool;
 
 use super::support::{TestResult, at, db, drain, ensure, registry, same};
 use crate::store::PgChannelRegistry;
+use crate::store::outbox::ChannelSink;
 
-type Registry = PgChannelRegistry<MemoryAgents>;
+type Registry = PgChannelRegistry<MemoryAgents, ChannelSink>;
 
 fn seed_transmission(n: u8) -> TransmissionId {
     TransmissionId::from_ulid(0xF1A0_0000 | u128::from(n))
