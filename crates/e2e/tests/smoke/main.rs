@@ -7,6 +7,8 @@
 //! - [`pipeline`]: the composition ingests it; bodies stored, every
 //!   exchange published.
 //! - [`serve`]: `serve --role all` on ephemeral ports, read back over HTTP.
+//! - [`subscription`]: the relay on Claude Pro/Max logins, a token refresh
+//!   included.
 //! - [`surface`]: the surface's view of it. The assertions that need L3 to
 //!   L7 consuming the pipeline's bus are ignored until `Live` composes them.
 
@@ -15,5 +17,6 @@ mod extract;
 mod pipeline;
 mod scenario;
 mod serve;
+mod subscription;
 mod support;
 mod surface;

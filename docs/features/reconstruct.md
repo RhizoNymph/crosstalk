@@ -220,6 +220,7 @@ stable per-corpus API key.
 | `src/consumer/{mod,attribute}.rs` | The bus consumer | `ReconstructConsumer`, `ConsumerParts`, `Handled`, `ConsumeError`, `run`, `group`, `subjects`, `GROUP`, `attribute`, `derive_parent`, `corroborated` |
 | `crates/reconstruct/migrations/000{1,2,3}_*.sql` | Schema `reconstruct`: agents, conversations, seen messages | — |
 | `src/tests/` | Tests by area (paths below) | — |
+| `src/tests/refresh.rs` | A rotating (OAuth) credential refreshed inside one harness session keeps the agent and its conversation; two sessions on one token are two agents (INV-1157, [claude_code_oauth](claude_code_oauth.md)) | — |
 
 ## Tests
 
