@@ -27,7 +27,7 @@ use crate::config::{
     IndexSettings, InheritedFragments, ProvenanceConfig, ShadowedFragments, SpreadRule,
 };
 
-fn real() -> ProvenanceConfig {
+pub(super) fn real() -> ProvenanceConfig {
     ProvenanceConfig::default()
         .with_index(IndexSettings::single_node(50, RETENTION).expect("valid index settings"))
 }
@@ -74,7 +74,7 @@ const VACUUM_V2: &str = "Open question: does dead tuples interact with autovacuu
 
 /// Every word of the pages, written in shifting order by three other
 /// agents: on the bench, the topic's words are in dozens of texts.
-async fn chatter(world: &mut World, pages: &[&str]) {
+pub(super) async fn chatter(world: &mut World, pages: &[&str]) {
     let mut words: Vec<String> = pages
         .iter()
         .flat_map(|page| page.split(|c: char| !c.is_alphanumeric() && c != '-'))
@@ -100,14 +100,14 @@ async fn chatter(world: &mut World, pages: &[&str]) {
 
 /// A writer's turn: its narration and the page it puts, with no input
 /// holding the page (the bench's writers never read the page they put).
-async fn put_page(
+pub(super) async fn put_page(
     world: &mut World,
     writer: AgentId,
     n: usize,
     page: &str,
     body: &str,
     seconds: u64,
-) {
+) -> super::fixtures::Ran {
     let call = tool_call(
         &format!("toolu_w{n}"),
         "http_request",
@@ -126,11 +126,16 @@ async fn put_page(
                 )))
                 .output(assistant(vec![AssistantPart::Text(Text(narration)), call])),
         )
-        .await;
+        .await
 }
 
 /// The origin agents of `reader`'s matches on reading `page` at `seconds`.
-async fn read_page(world: &mut World, reader: AgentId, page: &str, seconds: u64) -> Vec<AgentId> {
+pub(super) async fn read_page(
+    world: &mut World,
+    reader: AgentId,
+    page: &str,
+    seconds: u64,
+) -> Vec<AgentId> {
     let read = world
         .run(Turn::new(reader, at(seconds)).input(tool_result("toolu_r", page)))
         .await;

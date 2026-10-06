@@ -28,7 +28,7 @@ use std::fmt;
 
 use crosstalk_spec::derived::flow::resource::{Host, Locator};
 
-use super::path::AbsolutePath;
+use super::path::{AbsolutePath, Place};
 
 /// A repository's canonical identity. Only [`RepoId::parse`] and
 /// [`RepoId::forge`] make one.
@@ -238,42 +238,114 @@ impl fmt::Display for RepoId {
     }
 }
 
-/// Which local directories are clones of which repositories. A later
-/// binding of the same directory replaces the earlier one; a path is in
-/// the clone whose root is its longest ancestor.
+/// The name of a clone's remote (`origin`).
+pub const ORIGIN: &str = "origin";
+
+/// How many clone remotes a context keeps: the oldest binding is dropped
+/// past it, so a long conversation's state stays bounded.
+pub const MAX_BINDINGS: usize = 256;
+
+/// One remote of one clone: the clone's root, the remote's name and the
+/// repository it names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Binding {
+    root: Place,
+    remote: String,
+    repo: RepoId,
+}
+
+/// Which local directories are clones of which repositories, by remote
+/// name. A path is in the clone whose root is its longest ancestor; that
+/// clone's files are its `origin`'s (else its latest bound remote's). A
+/// later binding of the same root and remote replaces the earlier one; at
+/// most [`MAX_BINDINGS`] are kept, oldest dropped first.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct RepoBindings(Vec<(AbsolutePath, RepoId)>);
+pub struct RepoBindings(Vec<Binding>);
 
 impl RepoBindings {
+    /// Bind `root`'s `origin` to `repo`.
     pub fn bind(&mut self, root: AbsolutePath, repo: RepoId) {
-        self.0.retain(|(bound, _)| *bound != root);
-        self.0.push((root, repo));
+        self.bind_remote(Place::Absolute(root), ORIGIN, repo);
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = (&AbsolutePath, &RepoId)> {
-        self.0.iter().map(|(root, repo)| (root, repo))
+    /// Bind `root`'s remote `remote` to `repo`.
+    pub fn bind_remote(&mut self, root: Place, remote: &str, repo: RepoId) {
+        self.0
+            .retain(|binding| !(binding.root == root && binding.remote == remote));
+        if self.0.len() >= MAX_BINDINGS {
+            self.0.remove(0);
+        }
+        self.0.push(Binding {
+            root,
+            remote: remote.to_owned(),
+            repo,
+        });
+    }
+
+    /// Every clone root and the repository its files belong to.
+    pub fn iter(&self) -> impl Iterator<Item = (&Place, &RepoId)> {
+        self.0
+            .iter()
+            .filter(|binding| self.files_binding(&binding.root) == Some(*binding))
+            .map(|binding| (&binding.root, &binding.repo))
     }
 
     /// The repository `path` is in and its path inside it.
     pub fn locate(&self, path: &AbsolutePath) -> Option<(&RepoId, AbsolutePath)> {
+        self.locate_place(&Place::Absolute(path.clone()))
+    }
+
+    /// The repository `place` is in and its path inside it.
+    pub fn locate_place(&self, place: &Place) -> Option<(&RepoId, AbsolutePath)> {
+        let root = self.root_of(place)?;
+        let inside = root.contains(place)?;
+        Some((&self.files_binding(root)?.repo, inside))
+    }
+
+    /// The clone `place` is in: its root.
+    pub fn root_of(&self, place: &Place) -> Option<&Place> {
         self.0
             .iter()
-            .filter_map(|(root, repo)| Some((root, repo, within(path, root)?)))
-            .max_by_key(|(root, _, _)| root.as_str().len())
-            .map(|(_, repo, inside)| (repo, inside))
+            .filter(|binding| binding.root.contains(place).is_some())
+            .map(|binding| &binding.root)
+            .max_by_key(|root| root_len(root))
+    }
+
+    /// The repository the remote `remote` of the clone `place` is in
+    /// names; `None` (the default) is `origin`, else the clone's latest
+    /// bound remote.
+    pub fn remote(&self, place: &Place, remote: Option<&str>) -> Option<&RepoId> {
+        let root = self.root_of(place)?;
+        match remote {
+            Some(name) => self
+                .0
+                .iter()
+                .rev()
+                .find(|binding| binding.root == *root && binding.remote == name)
+                .map(|binding| &binding.repo),
+            None => self.files_binding(root).map(|binding| &binding.repo),
+        }
+    }
+
+    /// Every `Home` root made absolute under `home`.
+    pub fn resolve_home(&mut self, home: &AbsolutePath) {
+        let bindings = std::mem::take(&mut self.0);
+        for binding in bindings {
+            let root = binding.root.resolve_home(home);
+            self.bind_remote(root, &binding.remote, binding.repo);
+        }
+    }
+
+    /// The binding whose repository the files under `root` belong to.
+    fn files_binding(&self, root: &Place) -> Option<&Binding> {
+        let mut at_root = self.0.iter().filter(|binding| binding.root == *root);
+        let latest = at_root.clone().next_back();
+        at_root.rfind(|binding| binding.remote == ORIGIN).or(latest)
     }
 }
 
-/// `path` relative to `root`, as an absolute path inside it.
-fn within(path: &AbsolutePath, root: &AbsolutePath) -> Option<AbsolutePath> {
-    if root.as_str() == "/" {
-        return Some(path.clone());
+fn root_len(root: &Place) -> usize {
+    match root {
+        Place::Absolute(path) | Place::Home(path) => path.as_str().len(),
     }
-    let rest = path.as_str().strip_prefix(root.as_str())?;
-    if rest.is_empty() {
-        return Some(AbsolutePath::root());
-    }
-    rest.starts_with('/')
-        .then(|| AbsolutePath::parse(rest).ok())
-        .flatten()
 }

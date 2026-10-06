@@ -1,0 +1,31 @@
+[invariant]
+id = "flow.extract.shell-state-from-observed"
+statement = "A conversation's shell state (working directory for a persistent shell, previous directory, home directory, clone remotes) is a function of the agent's calls and results in that conversation observed in order: replaying them gives the same state and accesses; once the home directory is known no place in the state is home-relative; the home is only ever taken from an output (`pwd`, `echo ~`, a failed `cd ~/…`'s message); the clone bindings never exceed MAX_BINDINGS; and one agent's results never change another agent's context."
+kind = "domain"
+property = "invariant"
+requires = ["property", "unit"]
+rationale = """
+The AI Village's `bash` keeps one shell per agent: it `cd`s in one call
+and pushes in the next, writes `~/repo`, and works in clones made before
+the conversation. Without that state the gateway could not resolve 3,483
+repository, 4,320 repository-file and 31 thread accesses of the week
+(442, 1,054 and 27 more through `~`). The state must be replayable (the
+eval replays, the gateway restarts), must not invent a home directory
+(another agent's home is not ours), and must stay bounded over a long
+conversation.
+"""
+
+[evidence]
+property = "crosstalk_flow::extract::tests::shell_state::shell_state_is_a_function_of_what_was_observed"
+unit = [
+    "crosstalk_flow::extract::tests::shell_state::a_clone_under_an_unknown_home_is_learnt_from_its_push",
+    "crosstalk_flow::extract::tests::shell_state::a_push_runs_in_the_clone_an_earlier_call_entered",
+    "crosstalk_flow::extract::tests::shell_state::a_pull_in_a_clone_made_before_the_conversation",
+    "crosstalk_flow::extract::tests::shell_state::the_home_directory_is_learnt_only_from_output",
+    "crosstalk_flow::extract::tests::shell_state::clone_bindings_are_bounded",
+    "crosstalk_gateway::live::layers::extract::tests::results_teach_the_agents_own_context",
+]
+
+[evidence-review]
+property = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

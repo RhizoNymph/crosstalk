@@ -41,6 +41,7 @@ impl<'w> Options<'w> {
                         Some(Word {
                             text: value.to_owned(),
                             literal: word.literal,
+                            home: None,
                         }),
                     )),
                     None if spec.long_values.contains(&text) => {
@@ -60,6 +61,7 @@ impl<'w> Options<'w> {
                             Some(Word {
                                 text: rest.to_owned(),
                                 literal: word.literal,
+                                home: None,
                             })
                         };
                         options.push((name, value));

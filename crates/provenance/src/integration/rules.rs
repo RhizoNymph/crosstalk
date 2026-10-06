@@ -38,6 +38,7 @@ use crate::tests::bench_boilerplate::{
     BODY, PAGES, TEMPLATE_SENTENCE, VOCABULARY, read_task, system, write_task,
 };
 use crate::tests::bench_channel_template::{CACHE_V1, CACHE_V2, CACHE_V3};
+use crate::tests::bench_verbatim_template::{CACHE_10, earlier_fills};
 use crate::tests::fixtures::{RETENTION, Turn, World, at, brief_matches, config};
 use crate::tests::match_quality::COMMON;
 use crate::tests::nearer_source::{ALICE_SQL, BILL, BOB_SQL, ECHO, HEAD, ROWS, SCHEMA, get_log};
@@ -84,6 +85,22 @@ where
         {
             spans.push(span.span.id);
             lines.push(format!("  span {span:?}"));
+        }
+        let ids: Vec<SpanId> = spans[spans.len()
+            - world
+                .store
+                .exchange_spans(ran.exchange)
+                .await
+                .expect("spans read")
+                .len()..]
+            .to_vec();
+        for coincidence in world
+            .store
+            .coincident_sources(&ids)
+            .await
+            .expect("coincidences read")
+        {
+            lines.push(format!("  coincidence {coincidence:?}"));
         }
         for stored in world
             .store
@@ -263,11 +280,14 @@ where
             "backfill lag",
             "lock time",
         ),
+        // Mirrors `match_quality::template_skeleton_with_other_slot_words_is_not_matched`:
+        // the fourth fill is "versioned keys" so the read shares only the
+        // skeleton (`provenance.span.coincident-template-originated`).
         (
             "cache invalidation",
             "ttl jitter",
             "purge queue",
-            "purge queue",
+            "versioned keys",
         ),
         ("queue sharding", "rebalancing", "hot keys", "ordering"),
     ];
@@ -1088,6 +1108,47 @@ async fn pg_shadowed_fragments_agree_with_memory() {
     agree!(&db, real(), shadowed);
     agree!(&db, real(), shadowed_secret);
     agree!(&db, real(), shadowed_control);
+    db.close().await.expect("close");
+}
+
+// ---------------------------------------------------------------------
+// provenance.span.coincident-template-originated, with the one-hop
+// holder count of provenance.match.cross-agent-spread.
+
+/// A whole page of template sentences, each coinciding with earlier
+/// agents' fills, read verbatim: only its writer is matched, and the
+/// coincidences are recorded alike.
+async fn verbatim_template<I, S>(world: &mut W<I, S>)
+where
+    I: FingerprintIndex + Send + Sync,
+    S: ProvenanceStore + Clone + Send + Sync,
+{
+    page_chatter(world, &[CACHE_10]).await;
+    let earlier: Vec<AgentId> = (0..4).map(|_| world.agent()).collect();
+    for (n, fill) in earlier_fills(CACHE_10).iter().enumerate() {
+        world
+            .run(
+                Turn::new(earlier[n % 4], at(10 + n as u64))
+                    .input(user_text("carry on with your task"))
+                    .output(assistant_text(fill)),
+            )
+            .await;
+    }
+    let (writer, reader) = (world.agent(), world.agent());
+    put_page(world, writer, 1, "cache-invalidation-10", CACHE_10, 40).await;
+    let origins = read_page(world, reader, CACHE_10, 60).await;
+    assert!(origins.contains(&writer), "{origins:?}");
+    assert!(origins.iter().all(|agent| *agent == writer), "{origins:?}");
+}
+
+/// Coincident template stretches on Postgres agree with the memory model:
+/// the same spans, coincidences, holder counts and matches.
+#[tokio::test(flavor = "multi_thread")]
+async fn pg_coincident_templates_agree_with_memory() {
+    let Some(db) = database("pg_coincident_templates_agree_with_memory").await else {
+        return;
+    };
+    agree!(&db, real(), verbatim_template);
     db.close().await.expect("close");
 }
 

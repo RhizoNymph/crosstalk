@@ -22,10 +22,12 @@ use crate::extract::resource::KeyCanon;
 use crate::extract::sites::SitesConfig;
 
 /// The extractors' configuration: the MCP tool mapping, the HTTP tool
-/// names, the fetch tool names and the site rules. The default maps no MCP
-/// tool, has the default HTTP tools ([`DEFAULT_HTTP_TOOLS`]), no configured
-/// fetch tool (the built-in ones stay known) and the built-in site rules
-/// ([`SitesConfig::default`]).
+/// names, the fetch tool names, the shell tools that persist and the site
+/// rules. The default maps no MCP tool, has the default HTTP tools
+/// ([`DEFAULT_HTTP_TOOLS`]), no configured fetch tool (the built-in ones
+/// stay known), no configured persistent shell (the built-in ones,
+/// Claude Code's `Bash` and OpenHands' `execute_bash`, stay persistent)
+/// and the built-in site rules ([`SitesConfig::default`]).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(try_from = "RawExtractConfig", into = "RawExtractConfig")]
 pub struct ExtractConfig {
@@ -34,6 +36,7 @@ pub struct ExtractConfig {
     index: HashMap<(String, String), (usize, usize)>,
     http_tools: Vec<String>,
     fetch_tools: Vec<String>,
+    persistent_shells: Vec<String>,
     sites: SitesConfig,
 }
 
@@ -44,6 +47,7 @@ impl Default for ExtractConfig {
             index: HashMap::new(),
             http_tools: default_http_tools(),
             fetch_tools: Vec::new(),
+            persistent_shells: Vec::new(),
             sites: SitesConfig::default(),
         }
     }
@@ -69,6 +73,8 @@ struct RawExtractConfig {
     http_tools: Vec<String>,
     #[serde(default)]
     fetch_tools: Vec<String>,
+    #[serde(default)]
+    persistent_shells: Vec<String>,
     #[serde(default)]
     sites: SitesConfig,
 }
@@ -225,6 +231,7 @@ impl ExtractConfig {
             index,
             http_tools: default_http_tools(),
             fetch_tools: Vec::new(),
+            persistent_shells: Vec::new(),
             sites: SitesConfig::default(),
         })
     }
@@ -271,6 +278,29 @@ impl ExtractConfig {
     /// (`catalog::FETCH_TOOLS`): each reads the URL in its `url` argument.
     pub fn fetch_tools(&self) -> &[String] {
         &self.fetch_tools
+    }
+
+    /// The same configuration with `names` as further shell tools whose
+    /// harness keeps one shell per conversation, so a `cd` moves where the
+    /// next call starts (the AI Village's `bash`). Refuses an empty name.
+    pub fn with_persistent_shells(self, names: Vec<String>) -> Result<Self, ConfigError> {
+        if names.iter().any(String::is_empty) {
+            return Err(ConfigError::EmptyName);
+        }
+        Ok(Self {
+            persistent_shells: names,
+            ..self
+        })
+    }
+
+    /// The configured persistent shells' names.
+    pub fn persistent_shells(&self) -> &[String] {
+        &self.persistent_shells
+    }
+
+    /// Whether the shell tool `name` is configured as persistent.
+    pub fn persistent_shell(&self, name: &str) -> bool {
+        self.persistent_shells.iter().any(|shell| shell == name)
     }
 
     /// The same configuration with `sites` as its site rules.
@@ -326,7 +356,8 @@ impl TryFrom<RawExtractConfig> for ExtractConfig {
     fn try_from(raw: RawExtractConfig) -> Result<Self, Self::Error> {
         Self::new(raw.mcp_servers)?
             .with_http_tools(raw.http_tools)?
-            .with_fetch_tools(raw.fetch_tools)
+            .with_fetch_tools(raw.fetch_tools)?
+            .with_persistent_shells(raw.persistent_shells)
             .map(|config| config.with_sites(raw.sites))
     }
 }
@@ -337,6 +368,7 @@ impl From<ExtractConfig> for RawExtractConfig {
             mcp_servers: config.servers,
             http_tools: config.http_tools,
             fetch_tools: config.fetch_tools,
+            persistent_shells: config.persistent_shells,
             sites: config.sites,
         }
     }

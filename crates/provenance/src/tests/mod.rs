@@ -5,6 +5,7 @@
 mod agentdojo;
 pub(crate) mod bench_boilerplate;
 pub(crate) mod bench_channel_template;
+pub(crate) mod bench_verbatim_template;
 mod config;
 mod coverage_cache;
 mod decode;

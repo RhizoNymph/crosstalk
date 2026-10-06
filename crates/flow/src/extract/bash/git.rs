@@ -10,15 +10,17 @@
 //!   own in the call (`WritePayload::Unseen`); `--dry-run` writes nothing.
 //!   `git pull [<remote>]` and `git fetch [<remote>]` read it. The
 //!   repository is the remote operand when it is a URL or a path, else
-//!   (a remote name, or none) the one the clone the command runs in is
-//!   bound to. The output judges each (`CommandRule::GitPush`,
-//!   `CommandRule::GitTransfer`).
-//! - `git remote add|set-url <name> <url>` binds the working directory, as
-//!   the clone's root.
-//! - `git remote -v`, `git remote get-url` and `git config --get
-//!   remote.<name>.url` print a remote: the context binds the working
-//!   directory to the one the result shows
-//!   ([`ConversationContext::observe`]).
+//!   that remote of the clone the command runs in (by name; with none, the
+//!   clone's default remote, `origin`). A remote name the clone has no
+//!   binding for names nothing. The output judges each
+//!   (`CommandRule::GitPush`, `CommandRule::GitTransfer`), and the remote
+//!   it prints (`To <url>`, `From <url>`) wins over the binding
+//!   ([`super::transfers`]).
+//! - `git remote add|set-url <name> <url>` binds that remote of the
+//!   working directory, as the clone's root.
+//! - `git remote -v`, `git remote get-url <name>` and `git config --get
+//!   remote.<name>.url` print remotes: the context binds them, by name, to
+//!   the directory they ran in ([`ConversationContext::observe`]).
 //! - `git show <rev>:<path>` (and `git cat-file -p`) reads the repository's
 //!   file at `<path>`, from the root of the clone the working directory is
 //!   in (from the working directory for `./` and `../` paths).
@@ -31,9 +33,10 @@ use crosstalk_spec::derived::flow::access::Extraction;
 
 use crate::extract::op::Candidate;
 use crate::extract::outcome::CommandRule;
-use crate::extract::resource::{AbsolutePath, RepoId, absolute_locator};
+use crate::extract::resource::repo::ORIGIN;
+use crate::extract::resource::{AbsolutePath, Place, RepoId};
 
-use super::commands::Shell;
+use super::commands::{Found, RemoteQuery, RemoteRef, Shell, Transfer, TransferKind};
 use super::lex::Word;
 use super::options::{OptSpec, Options};
 
@@ -80,8 +83,8 @@ const PULL_FETCH: OptSpec = OptSpec {
 };
 
 impl Shell<'_> {
-    pub(super) fn git(&mut self, args: &[Word], stdout_to_file: bool, found: &mut Vec<Candidate>) {
-        let mut dir = self.state.cwd.clone();
+    pub(super) fn git(&mut self, args: &[Word], stdout_to_file: bool, found: &mut Vec<Found>) {
+        let mut dir = self.state.cwd().cloned();
         let mut rest = args;
         while let Some((first, tail)) = rest.split_first() {
             match first.text.as_str() {
@@ -105,12 +108,18 @@ impl Shell<'_> {
         match subcommand.text.as_str() {
             "clone" => {
                 let parsed = Options::parse(args, &CLONE);
+                let origin = parsed
+                    .last(&["-o", "--origin"])
+                    .and_then(Word::as_literal)
+                    .unwrap_or(ORIGIN)
+                    .to_owned();
                 if let Some(repo) =
-                    self.clone_into(dir.as_ref(), &parsed.operands, |remote, cwd| {
+                    self.clone_into(dir.as_ref(), &parsed.operands, &origin, |remote, cwd| {
                         RepoId::parse(remote, cwd)
                     })
                 {
-                    found.push(
+                    self.found(
+                        found,
                         Candidate::read(repo.locator().clone(), Extraction::Parsed)
                             .judged_by(CommandRule::GitTransfer),
                     );
@@ -124,13 +133,7 @@ impl Shell<'_> {
                 let named = parsed
                     .last(&["--repo"])
                     .or_else(|| parsed.operands.first().copied());
-                if let Some(repo) = self.remote_repo(dir.as_ref(), named) {
-                    found.push(
-                        Candidate::write(repo.locator().clone(), Extraction::Parsed)
-                            .unseen()
-                            .judged_by(CommandRule::GitPush),
-                    );
-                }
+                self.transfer(TransferKind::Push, dir, named, found);
             }
             "pull" | "fetch" => {
                 let parsed = Options::parse(args, &PULL_FETCH);
@@ -142,43 +145,54 @@ impl Shell<'_> {
                 } else {
                     parsed.operands.first().copied()
                 };
-                if let Some(repo) = self.remote_repo(dir.as_ref(), named) {
-                    found.push(
-                        Candidate::read(repo.locator().clone(), Extraction::Parsed)
-                            .judged_by(CommandRule::GitTransfer),
-                    );
-                }
+                self.transfer(TransferKind::Fetch, dir, named, found);
             }
             "remote" => match args {
-                [verb, _name, url, ..] if matches!(verb.text.as_str(), "add" | "set-url") => {
-                    if let (Some(dir), Some(repo)) = (
+                [verb, name, url, ..] if matches!(verb.text.as_str(), "add" | "set-url") => {
+                    let cwd = self.state.absolute_cwd().cloned();
+                    if let (Some(dir), Some(name), Some(repo)) = (
                         dir,
+                        name.as_literal(),
                         url.as_literal()
-                            .and_then(|url| RepoId::parse(url, self.state.cwd.as_ref())),
+                            .and_then(|url| RepoId::parse(url, cwd.as_ref())),
                     ) {
-                        self.state.repos.bind(dir, repo);
+                        self.state.bind(dir, name, repo);
                     }
                 }
-                [verb, ..] if matches!(verb.text.as_str(), "-v" | "--verbose" | "get-url") => {
-                    self.remote_queries.push(dir);
+                [verb, ..] if matches!(verb.text.as_str(), "-v" | "--verbose") => {
+                    self.remote_queries.push(RemoteQuery { dir, name: None });
+                }
+                [verb, name, ..] if verb.text == "get-url" => {
+                    if let Some(name) = name.as_literal() {
+                        self.remote_queries.push(RemoteQuery {
+                            dir,
+                            name: Some(name.to_owned()),
+                        });
+                    }
                 }
                 _ => {}
             },
             "config" => {
-                let prints_url =
-                    args.iter().any(|word| {
-                        word.text.starts_with("remote.") && word.text.ends_with(".url")
-                    }) && !args.iter().any(|word| {
-                        matches!(word.text.as_str(), "--add" | "--unset" | "--replace-all")
-                    }) && args.len() <= 3;
-                if prints_url {
-                    self.remote_queries.push(dir);
+                let printed = args.iter().find_map(|word| {
+                    word.as_literal()?
+                        .strip_prefix("remote.")?
+                        .strip_suffix(".url")
+                        .map(str::to_owned)
+                });
+                let prints_url = !args.iter().any(|word| {
+                    matches!(word.text.as_str(), "--add" | "--unset" | "--replace-all")
+                }) && args.len() <= 3;
+                if let Some(name) = printed.filter(|_| prints_url) {
+                    self.remote_queries.push(RemoteQuery {
+                        dir,
+                        name: Some(name),
+                    });
                 }
             }
             "show" | "cat-file" if !stdout_to_file => {
                 for word in args.iter().filter(|word| !word.text.starts_with('-')) {
                     if let Some(candidate) = self.revision_file(dir.as_ref(), word) {
-                        found.push(candidate);
+                        self.found(found, candidate);
                     }
                 }
             }
@@ -186,62 +200,107 @@ impl Shell<'_> {
         }
     }
 
-    /// Bind the directory a clone makes to the repository it clones, which
-    /// is returned.
+    /// A `git push`, `pull` or `fetch` in `dir` of the remote `named`:
+    /// the repository it moves (a write for a push, with no content in the
+    /// call; a read otherwise), and the transfer, which the output can
+    /// correct ([`super::transfers`]).
+    fn transfer(
+        &mut self,
+        kind: TransferKind,
+        dir: Option<Place>,
+        named: Option<&Word>,
+        found: &mut Vec<Found>,
+    ) {
+        let remote = match named {
+            None => RemoteRef::Clone(None),
+            Some(word) => {
+                let Some(text) = word.as_literal() else {
+                    return;
+                };
+                if RepoId::parse(text, dir.as_ref().and_then(Place::absolute)).is_some() {
+                    RemoteRef::Explicit
+                } else {
+                    RemoteRef::Clone(Some(text.to_owned()))
+                }
+            }
+        };
+        let repo = self.remote_repo(dir.as_ref(), named);
+        if let Some(repo) = &repo {
+            let candidate = match kind {
+                TransferKind::Push => Candidate::write(repo.locator().clone(), Extraction::Parsed)
+                    .unseen()
+                    .judged_by(CommandRule::GitPush),
+                TransferKind::Fetch => Candidate::read(repo.locator().clone(), Extraction::Parsed)
+                    .judged_by(CommandRule::GitTransfer),
+            };
+            self.found(found, candidate);
+        }
+        self.transfers.push(Transfer {
+            step: self.step,
+            kind,
+            remote,
+            dir,
+            repo,
+        });
+    }
+
+    /// Bind the directory a clone makes to the repository it clones (as
+    /// its remote `origin`), which is returned.
     pub(super) fn clone_into(
         &mut self,
-        dir: Option<&AbsolutePath>,
+        dir: Option<&Place>,
         operands: &[&Word],
+        origin: &str,
         repo_of: impl Fn(&str, Option<&AbsolutePath>) -> Option<RepoId>,
     ) -> Option<RepoId> {
         let remote = operands.first().and_then(|word| word.as_literal())?;
-        let repo = repo_of(remote, dir)?;
+        let repo = repo_of(remote, dir.and_then(Place::absolute))?;
         let target = match operands.get(1) {
             Some(word) => self.directory(dir, word),
             None => dir
                 .zip(clone_directory(remote))
-                .and_then(|(dir, name)| dir.join(name).ok()),
+                .and_then(|(dir, name)| dir.join(name)),
         };
         if let Some(target) = target {
-            self.state.repos.bind(target, repo.clone());
+            self.state.bind(target, origin, repo.clone());
         }
         Some(repo)
     }
 
     /// The repository a remote operand names: a URL or path names it
-    /// directly; a remote name, or none, is the remote the clone `dir` is
-    /// in is bound to.
-    pub(super) fn remote_repo(
-        &self,
-        dir: Option<&AbsolutePath>,
-        named: Option<&Word>,
-    ) -> Option<RepoId> {
-        if let Some(word) = named {
-            let text = word.as_literal()?;
-            if let Some(repo) = RepoId::parse(text, dir) {
-                return Some(repo);
+    /// directly; a remote name is that remote of the clone `dir` is in,
+    /// and none is the clone's default remote (`origin`).
+    pub(super) fn remote_repo(&self, dir: Option<&Place>, named: Option<&Word>) -> Option<RepoId> {
+        let name = match named {
+            Some(word) => {
+                let text = word.as_literal()?;
+                if let Some(repo) = RepoId::parse(text, dir.and_then(Place::absolute)) {
+                    return Some(repo);
+                }
+                Some(text)
             }
-        }
-        self.bound_repo(dir)
+            None => None,
+        };
+        self.state.repos().remote(dir?, name).cloned()
     }
 
-    /// The repository the clone `dir` is in is bound to.
-    pub(super) fn bound_repo(&self, dir: Option<&AbsolutePath>) -> Option<RepoId> {
-        let (repo, _) = self.state.repos.locate(dir?)?;
-        Some(repo.clone())
+    /// The repository the clone `dir` is in is bound to (its default
+    /// remote).
+    pub(super) fn bound_repo(&self, dir: Option<&Place>) -> Option<RepoId> {
+        self.state.repos().remote(dir?, None).cloned()
     }
 
     /// `<rev>:<path>`: the repository file it names.
-    fn revision_file(&self, dir: Option<&AbsolutePath>, word: &Word) -> Option<Candidate> {
+    fn revision_file(&self, dir: Option<&Place>, word: &Word) -> Option<Candidate> {
         let (_rev, path) = word.as_literal()?.split_once(':')?;
         if path.is_empty() {
             return None;
         }
         let dir = dir?;
         let locator = if path.starts_with("./") || path.starts_with("../") {
-            absolute_locator(dir.join(path).ok()?, self.scope())
+            self.place_locator(dir.join(path)?)?
         } else {
-            let (repo, _) = self.state.repos.locate(dir)?;
+            let (repo, _) = self.state.repos().locate_place(dir)?;
             repo.file(&AbsolutePath::parse(&format!("/{path}")).ok()?)
         };
         Some(Candidate::read(locator, Extraction::Parsed))

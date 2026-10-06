@@ -1,0 +1,28 @@
+[invariant]
+id = "flow.extract.printed-remote-wins"
+statement = "When a shell call's script has one `git push` (or one `git pull`/`git fetch`) that names its remote by name or not at all, and its output prints `To <remote>` (`From <remote>`) lines: a push whose bound repository none of those lines names is a Rejected Write of the bound repository; a pull or fetch whose `From` lines name one repository reads that repository whatever the binding said; and the conversation's context binds that remote of the clone the command ran in to the printed repository. A URL or path operand is never corrected, and a script with several pushes (or pulls) is not corrected."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+A binding learnt in a directory the agent has since left attributes a
+push to the wrong repository: `git push origin main` printing `To
+…/constraint-dashboard.git` was recorded as a write of
+`daily-signal-garden-gpt55` (AI Village 01KXESRHVM2S1265BP82GN2RCR,
+01KXESQPE17KBP4TKRAK0HCY59, 01KXET8ZTTFVD2MCFCGW3ZH7S6; the pull
+01KXHB5HQQHV7CBSMV31T798NT). git names the remote it talked to, so the
+output is the authority. A push's write locator is held from the call
+(flow.extract.write-locators-from-call), so the push to the printed
+repository itself is not recorded for that call; the binding it teaches
+makes the next push in that clone the printed repository's.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_flow::extract::tests::shell_state::a_printed_remote_overrides_a_stale_binding",
+    "crosstalk_flow::extract::tests::shell_state::a_pull_reads_the_repository_it_printed",
+    "crosstalk_flow::extract::tests::shell_state::printed_remotes_never_correct_an_explicit_remote_or_an_ambiguous_script",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

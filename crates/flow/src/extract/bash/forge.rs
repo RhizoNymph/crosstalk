@@ -43,9 +43,10 @@ use crate::extract::outcome::CommandRule;
 use crate::extract::resource::{ForgeStyle, RepoId, ThreadKind, url_locator};
 use crate::extract::sites::{github, gitlab};
 
-use super::commands::Shell;
+use super::commands::{Found, Shell};
 use super::lex::Word;
 use super::options::{OptSpec, Options};
+use crate::extract::resource::repo::ORIGIN;
 
 /// Which forge CLI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -152,7 +153,7 @@ impl Shell<'_> {
         cli: Cli,
         args: &[Word],
         stdout_to_file: bool,
-        found: &mut Vec<Candidate>,
+        found: &mut Vec<Found>,
     ) {
         let Some((group, rest)) = args.split_first() else {
             return;
@@ -168,7 +169,7 @@ impl Shell<'_> {
         }
     }
 
-    fn forge_clone(&mut self, cli: Cli, args: &[Word], found: &mut Vec<Candidate>) {
+    fn forge_clone(&mut self, cli: Cli, args: &[Word], found: &mut Vec<Found>) {
         let Some((verb, rest)) = args.split_first() else {
             return;
         };
@@ -176,24 +177,21 @@ impl Shell<'_> {
             return;
         }
         let parsed = Options::parse(rest, &CLONE);
-        let dir = self.state.cwd.clone();
-        if let Some(repo) = self.clone_into(dir.as_ref(), &parsed.operands, |remote, cwd| {
-            repo_argument(cli, remote).or_else(|| RepoId::parse(remote, cwd))
-        }) {
-            found.push(
+        let dir = self.state.cwd().cloned();
+        if let Some(repo) =
+            self.clone_into(dir.as_ref(), &parsed.operands, ORIGIN, |remote, cwd| {
+                repo_argument(cli, remote).or_else(|| RepoId::parse(remote, cwd))
+            })
+        {
+            self.found(
+                found,
                 Candidate::read(repo.locator().clone(), Extraction::Parsed)
                     .judged_by(CommandRule::GitTransfer),
             );
         }
     }
 
-    fn thread_command(
-        &self,
-        cli: Cli,
-        kind: ThreadKind,
-        args: &[Word],
-        found: &mut Vec<Candidate>,
-    ) {
+    fn thread_command(&self, cli: Cli, kind: ThreadKind, args: &[Word], found: &mut Vec<Found>) {
         let Some((verb, rest)) = args.split_first() else {
             return;
         };
@@ -205,7 +203,7 @@ impl Shell<'_> {
         let number = target.and_then(thread_number);
         let repo = match parsed.last(&["-R", "--repo"]) {
             Some(word) => word.as_literal().and_then(|text| repo_argument(cli, text)),
-            None => self.bound_repo(self.state.cwd.as_ref()),
+            None => self.bound_repo(self.state.cwd()),
         };
         let thread = || -> Option<Locator> {
             if let Some(url) = &url_thread {
@@ -232,11 +230,11 @@ impl Shell<'_> {
             _ => None,
         };
         if let Some(candidate) = candidate {
-            found.push(candidate.judged_by(CommandRule::ForgeCli));
+            self.found(found, candidate.judged_by(CommandRule::ForgeCli));
         }
     }
 
-    fn api(&self, cli: Cli, args: &[Word], stdout_to_file: bool, found: &mut Vec<Candidate>) {
+    fn api(&self, cli: Cli, args: &[Word], stdout_to_file: bool, found: &mut Vec<Found>) {
         let parsed = Options::parse(args, &API);
         let Some(endpoint) = parsed.operands.first().and_then(|word| word.as_literal()) else {
             return;
@@ -291,7 +289,7 @@ impl Shell<'_> {
         if !placeholders.iter().any(|p| endpoint.contains(p)) {
             return Some(endpoint.to_owned());
         }
-        let repo = self.bound_repo(self.state.cwd.as_ref())?;
+        let repo = self.bound_repo(self.state.cwd())?;
         let forge = repo.forge_parts()?;
         let encoded = format!("{}%2F{}", forge.owner.replace('/', "%2F"), forge.name);
         let filled = match cli {

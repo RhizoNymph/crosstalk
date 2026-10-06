@@ -93,18 +93,23 @@ impl<'a> ToolExtractors<'a> {
         };
         let result = result.filter(|result| result.call_id == call.id);
         let args = Args::parse(&call.arguments)?;
+        let text = result.map(outcome::result_text);
         let candidates = match tool {
             KnownTool::File(file) => file::candidates(file, &call.name, &args, self.context)?,
             KnownTool::Fetch(fetch) => fetch::candidates(fetch, &args, self.config.sites())?,
-            KnownTool::Shell(shell) => {
-                bash::candidates(shell, &call.name, &args, self.context, self.config.sites())?
-            }
+            KnownTool::Shell(shell) => bash::candidates(
+                shell,
+                &call.name,
+                &args,
+                self.context,
+                self.config.sites(),
+                text.as_deref(),
+            )?,
             KnownTool::Mcp(mcp) => {
                 mcp::candidates(mcp, &call.name, &args, self.context, self.config.sites())?
             }
             KnownTool::Http(http) => http::tool_candidates(http, &args, self.config.sites())?,
         };
-        let text = result.map(outcome::result_text);
         let mut classified: Vec<Classified> = Vec::with_capacity(candidates.len());
         for Candidate {
             kind,
@@ -112,9 +117,14 @@ impl<'a> ToolExtractors<'a> {
             via,
             payload,
             rule,
+            refuted,
         } in candidates
         {
-            let judged = outcome::judge(&tool, rule, result, text.as_deref());
+            let judged = if refuted && result.is_some() {
+                WriteOutcome::Rejected
+            } else {
+                outcome::judge(&tool, rule, result, text.as_deref())
+            };
             let op = match kind {
                 AccessKind::Write => ExtractedOp::Write {
                     outcome: judged,
