@@ -482,7 +482,11 @@ Surface<LiveStores>: crosstalk-api's InProcess::start_with over the same stores,
   one handles nothing new: wait until every slot's group is empty, the
   outbox is flushed and every stage's side inputs are drained (twice in a
   row), tick every stage at the clock's time in slot order, wait again.
-  It gives up with `SettleError::NotQuiet` after 64 passes. Under
+  It gives up with `SettleError::NotQuiet` after 64 passes. Between two
+  looks at the bus it yields to the scheduler (so on a current-thread
+  runtime every runnable stage runs first and an idle process settles at
+  once), and after 64 waits in a row sleeps 1 ms per wait instead, so a
+  settle waiting on slow work does not spin. Under
   `Ticking::OnSettle`, nothing time-driven runs between settles, and
   every id is derived from its input or drawn from a seeded generator in
   input order, so the same input settles to the same stores

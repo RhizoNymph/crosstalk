@@ -5,7 +5,9 @@
 mod agentdojo;
 mod bench_boilerplate;
 mod config;
+mod coverage_cache;
 mod decode;
+mod decoded_bodies;
 mod fingerprint;
 pub(crate) mod fixtures;
 mod match_quality;

@@ -279,8 +279,17 @@ watermark.
   7. Semantic hits are kept only at or above the threshold, on live spans
      of other agents that no fingerprint matched in that part.
 - **Output.** The output is segmented against the inputs, using a bounded
-  per-message k-gram cache (`scan::cache`). Each originated candidate's
-  fingerprints are looked up:
+  per-message k-gram cache (`scan::cache`). The inputs' coverage (where
+  every k-gram of every input occurs) is taken from `CoverageCache` when a
+  kept coverage covers a prefix of the inputs (the conversation's previous
+  exchange, usually) and extended by the remaining messages; a coverage
+  only appends, so the extended one equals one built from scratch. The
+  cache holds at most 64 coverages and 8 Mi k-gram positions, least
+  recently kept evicted first. `BlobMessages` keeps decoded bodies (128 MiB
+  of encoded bytes, least recently used evicted first) with the bytes they
+  were decoded from, and answers a read from them only when the stored
+  bytes are identical, so the request history is not decoded again on
+  every scan. Each originated candidate's fingerprints are looked up:
   - When there are hits and their spans' bodies are stored, maximal runs
     found in a hit span's text become `Relayed(Span(s))` spans. Without
     bodies, the merged hit extents are used.
@@ -525,7 +534,7 @@ feeder reads through it. `PgProvenanceStore` does not yet.
 | `src/fingerprint/short.rs` | The short-span exact path: a whole value's hash, a read's token runs | `whole`, `token_runs` |
 | `src/decode/{mod,base64,hex,url,unicode,escape}.rs` | Decoders and the pipeline | `Step`, `TextDecoder`, `DecodedText`, `DecodePipeline`, `Layer`, `AnyDecoder`, the six decoders |
 | `src/segment/{mod,coverage,view}.rs` | The segmenter, input coverage, part views | `NovelRunSegmenter`, `Coverage`, `message_kgrams`, `runs`, `text_parts`, `view`, `PartKind` |
-| `src/scan/{mod,reads,output,hits,kind,cache,messages}.rs` | The scanner | `Scanner`, `Loaded`, `ScanEnv`, `IndexWork`, `ScanError`, `LiveSpans`, `match_kind`, `KGramCache`, `TokenCache` (`cache::Bounded`), `MessageSource`, `BlobMessages`, `MemoryMessages` |
+| `src/scan/{mod,reads,output,hits,kind,cache,messages}.rs` | The scanner | `Scanner`, `Loaded`, `ScanEnv`, `IndexWork`, `ScanError`, `LiveSpans`, `match_kind`, `KGramCache`, `TokenCache` (`cache::Bounded`), `CoverageCache`, `MessageSource`, `BlobMessages` (`new`, `with_budget`), `MemoryMessages` |
 | `src/scan/nearer.rs` | The reader's nearer source: own output and direct reads of a forward's source | `Nearer`, `OwnCache` (`cache::Bounded`), `Scanner::nearer_hits` (crate) |
 | `src/scan/postings.rs` | What a span is posted under beyond its own fingerprints: context k-grams, short-span hashes | `Scanner::context_kgrams`, `Scanner::short_fingerprint` (crate) |
 | `src/engine.rs` | Processing, replay, eviction | `Provenance`, `Processed`, `EngineError`, `envelopes`, `exchange_record` |

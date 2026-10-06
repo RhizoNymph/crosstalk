@@ -272,6 +272,50 @@ proptest! {
     }
 }
 
+proptest! {
+    /// The per-fingerprint counts stay exact through age-outs: observations
+    /// written at moving `now`s (some dropping older ones), each followed by
+    /// a frequency read at its own `now`, against a direct count of what is
+    /// retained.
+    #[test]
+    fn frequency_counts_survive_age_outs(
+        steps in proptest::collection::vec(
+            (proptest::collection::vec(0u64..6, 0..5), 0u64..300, 0u64..400, 0u64..400),
+            0..16,
+        ),
+    ) {
+        let runtime = tokio::runtime::Builder::new_current_thread().build()?;
+        let mut index = index();
+        // The model: every observation kept, aged out at each write's `now`.
+        let mut kept: Vec<(Vec<u64>, u64)> = Vec::new();
+        for (fingerprints, t, write_now, read_now) in &steps {
+            let observed: Vec<Fingerprint> = fingerprints.iter().map(|n| fp(*n)).collect();
+            let read = runtime.block_on(async {
+                let _ = index.observe(&observed, at(*t), at(*write_now)).await;
+                let mut read = Vec::new();
+                for n in 0..6 {
+                    read.push(index.frequency(fp(n), at(*read_now)).await);
+                }
+                read
+            });
+            kept.retain(|(_, at)| at + 100 >= *write_now);
+            if t + 100 >= *write_now {
+                let mut distinct = fingerprints.clone();
+                distinct.sort_unstable();
+                distinct.dedup();
+                kept.push((distinct, *t));
+            }
+            for (n, frequency) in (0u64..6).zip(read) {
+                let expected = kept
+                    .iter()
+                    .filter(|(fingerprints, at)| fingerprints.contains(&n) && at + 100 >= *read_now)
+                    .count();
+                prop_assert_eq!(frequency, Ok(u64::try_from(expected).unwrap_or(u64::MAX)));
+            }
+        }
+    }
+}
+
 /// The reference agrees with itself under the harness, which proves the
 /// harness runs; see `harness_rejects_an_index_that_ignores_the_cutoff`
 /// for the converse.
