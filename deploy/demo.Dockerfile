@@ -40,15 +40,17 @@ RUN --mount=type=cache,sharing=locked,target=/usr/local/cargo/registry \
     --mount=type=cache,sharing=locked,target=/src/target \
     cargo build --locked --release \
         -p crosstalk-demo --bin crosstalk-demo \
-        -p crosstalk-eval --bin ct-eval \
+        -p crosstalk-eval --bin ct-eval --bin ct-bench-detect \
     && install -D target/release/crosstalk-demo /out/crosstalk-demo \
     && install -D target/release/ct-eval /out/ct-eval \
+    && install -D target/release/ct-bench-detect /out/ct-bench-detect \
     && install -D -m 0644 crates/eval/gates.toml /out/eval/gates.toml
 
 FROM gcr.io/distroless/cc-debian13:nonroot
 
 COPY --from=build /out/crosstalk-demo /usr/local/bin/crosstalk-demo
 COPY --from=build /out/ct-eval /usr/local/bin/ct-eval
+COPY --from=build /out/ct-bench-detect /usr/local/bin/ct-bench-detect
 COPY --from=build /out/eval/gates.toml /usr/local/share/crosstalk-eval/gates.toml
 
 # 8070 fake upstream, 8090 wiki. The swarm and ct-eval listen on nothing.
