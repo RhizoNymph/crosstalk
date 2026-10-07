@@ -90,6 +90,8 @@ services:
     build:
       context: ..
       dockerfile: deploy/crosstalk.Dockerfile
+      additional_contexts:
+        a2a: ${A2A_BENCH_GIT:-../../.build-deps/a2a-transmission-bench.git}
     command: ["migrate", "--config", "/etc/crosstalk/crosstalk.json"]
     restart: "no"
     logging: *logging
@@ -105,6 +107,8 @@ services:
     build:
       context: ..
       dockerfile: deploy/crosstalk.Dockerfile
+      additional_contexts:
+        a2a: ${A2A_BENCH_GIT:-../../.build-deps/a2a-transmission-bench.git}
     command: ["serve", "--role", "all", "--config", "/etc/crosstalk/crosstalk.json"]
     restart: unless-stopped
     logging: *logging
@@ -144,6 +148,8 @@ services:
     build:
       context: ..
       dockerfile: deploy/ui.Dockerfile
+      additional_contexts:
+        a2a: ${A2A_BENCH_GIT:-../../.build-deps/a2a-transmission-bench.git}
     restart: unless-stopped
     logging: *logging
     # The HTTP backend reads the gateway's operator API at crosstalk:8081
