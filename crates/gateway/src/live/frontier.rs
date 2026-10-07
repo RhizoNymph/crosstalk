@@ -145,26 +145,29 @@ const UNADMITTED: &str = "SELECT g.name, min(e.at) FROM transport.groups g \
          AND e.routed AND e.subject = ANY(g.subjects) \
      WHERE g.name = ANY($1) GROUP BY g.name";
 
-impl<P: SpoolBacklog> PgFrontierSource<P> {
-    async fn unadmitted(&self) -> Result<Vec<(ConsumerGroup, Timestamp)>, EdgeError> {
-        let names: Vec<String> = self.groups.iter().map(|group| group.0.clone()).collect();
-        let rows: Vec<(String, Option<i64>)> = sqlx::query_as(UNADMITTED)
-            .bind(&names)
-            .fetch_all(&self.pool)
-            .await
-            .map_err(|error| read_failed("unadmitted log entries", error))?;
-        Ok(rows
-            .into_iter()
-            .filter_map(|(name, at)| {
-                at.map(|at| {
-                    (
-                        ConsumerGroup(name),
-                        Timestamp::from_micros(u64::try_from(at).unwrap_or(0)),
-                    )
-                })
+/// Per group of `groups`, the oldest `at` of a log entry it takes but has
+/// not admitted yet; groups with none are left out.
+pub async fn unadmitted(
+    pool: &PgPool,
+    groups: &[ConsumerGroup],
+) -> Result<Vec<(ConsumerGroup, Timestamp)>, EdgeError> {
+    let names: Vec<String> = groups.iter().map(|group| group.0.clone()).collect();
+    let rows: Vec<(String, Option<i64>)> = sqlx::query_as(UNADMITTED)
+        .bind(&names)
+        .fetch_all(pool)
+        .await
+        .map_err(|error| read_failed("unadmitted log entries", error))?;
+    Ok(rows
+        .into_iter()
+        .filter_map(|(name, at)| {
+            at.map(|at| {
+                (
+                    ConsumerGroup(name),
+                    Timestamp::from_micros(u64::try_from(at).unwrap_or(0)),
+                )
             })
-            .collect())
-    }
+        })
+        .collect())
 }
 
 impl<P: SpoolBacklog> FrontierSource for PgFrontierSource<P> {
@@ -174,7 +177,7 @@ impl<P: SpoolBacklog> FrontierSource for PgFrontierSource<P> {
         // unadmitted entries before the deliveries: an entry admitted
         // between the two reads is a delivery by the second.
         let spooled = self.spool.oldest_spooled();
-        let unadmitted = self.unadmitted().await?;
+        let unadmitted = unadmitted(&self.pool, &self.groups).await?;
         let ticked = self
             .ticks
             .ticked_through(self.shards)

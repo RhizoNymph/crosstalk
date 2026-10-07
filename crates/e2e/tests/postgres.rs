@@ -11,7 +11,7 @@
 //! Needs the test database (`TEST_DATABASE_URL`, `TestDb::new_or_skip`);
 //! skips, passing, without one.
 
-use std::num::{NonZeroU32, NonZeroU64, NonZeroUsize};
+use std::num::{NonZeroU16, NonZeroU32, NonZeroU64, NonZeroUsize};
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -21,6 +21,7 @@ use crosstalk_e2e::read::{self, ReadError};
 use crosstalk_e2e::scenario::{DEFAULT_START, Scenario};
 use crosstalk_e2e::{compose_with, feed, options};
 use crosstalk_flow::extract::ExtractConfig;
+use crosstalk_gateway::live::pg::diagnose::bounded;
 use crosstalk_gateway::live::pg::{PgParts, PgSet};
 use crosstalk_gateway::live::{BlobConfig, Live, LiveClock, LiveConfig, Ticking};
 use crosstalk_gateway::pipeline::Settings;
@@ -40,7 +41,24 @@ use tokio::time::Instant;
 
 const SECRET_HEX: &str = "5ec2e75ec2e75ec2e75ec2e75ec2e75ec2e75ec2e75ec2e75ec2e75ec2e75ec2";
 const SEED: u64 = 0xE2E;
-const DRAIN: Duration = Duration::from_secs(10);
+const DRAIN: Duration = Duration::from_secs(30);
+
+/// How long any wait on Postgres-mode work (recovery, feeding, a settle,
+/// the reads, a shutdown) may take before the test fails with what the
+/// process was waiting on (`live::pg::diagnose`): minutes, for a loaded
+/// LAN Postgres.
+const WAIT: Duration = Duration::from_secs(300);
+
+/// `work` within [`WAIT`], or a panic with `live`'s diagnosis.
+async fn within<T>(
+    live: &Live<PgSet>,
+    what: &str,
+    work: impl std::future::Future<Output = T>,
+) -> T {
+    bounded(WAIT, what, work, || live.diagnose())
+        .await
+        .unwrap_or_else(|stalled| panic!("{stalled}"))
+}
 
 /// One hour past the scenario's end: every window closed, every
 /// suspicion expired or confirmed.
@@ -159,7 +177,6 @@ async fn start_pg(db: &TestDb, dir: &Path, clock: ManualClock) -> Live<PgSet> {
     let pool = lazy_pool(&StoreConfig::new(db.url().clone(), settings));
     let parts = PgParts::open(
         pool,
-        Arc::new(clock.clone()),
         bus_config(),
         spool_config(dir),
         secret(),
@@ -167,15 +184,28 @@ async fn start_pg(db: &TestDb, dir: &Path, clock: ManualClock) -> Live<PgSet> {
     )
     .await
     .expect("the postgres parts");
-    Live::<PgSet>::start_pg(live_config(clock), parts)
-        .await
-        .expect("the postgres live process starts")
+    let probe = parts.clone();
+    bounded(
+        WAIT,
+        "the postgres live process's recovery",
+        Live::<PgSet>::start_pg(live_config(clock), parts),
+        || async move { probe.diagnose(NonZeroU16::MIN).await },
+    )
+    .await
+    .unwrap_or_else(|stalled| panic!("{stalled}"))
+    .expect("the postgres live process starts")
 }
 
 async fn stop_pg(live: Live<PgSet>) {
     let spool = live.layers().spool.clone();
-    live.shutdown(Instant::now() + DRAIN).await;
-    spool.close().await;
+    let diagnosis = live.diagnose().await;
+    match tokio::time::timeout(WAIT, live.shutdown(Instant::now() + DRAIN)).await {
+        Ok(_) => {}
+        Err(_) => panic!("the shutdown did not finish within {WAIT:?}; before it:\n{diagnosis}"),
+    }
+    if tokio::time::timeout(WAIT, spool.close()).await.is_err() {
+        panic!("closing the spool did not finish within {WAIT:?}");
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
@@ -227,21 +257,30 @@ async fn postgres_mode_answers_as_memory_mode_and_after_a_restart() {
     let dir = tempfile::tempdir().expect("a temp dir");
     let clock = ManualClock::at(scenario.start);
     let live = start_pg(&db, dir.path(), clock.clone()).await;
-    let caller = live
-        .caller(RequestIdentity::Anonymous)
+    let caller = within(&live, "a caller", live.caller(RequestIdentity::Anonymous))
         .await
         .expect("a caller");
-    feed(&scenario, live.pipeline(), |at| clock.set(at))
-        .await
-        .expect("fed");
+    within(
+        &live,
+        "feeding the scenario",
+        feed(&scenario, live.pipeline(), |at| clock.set(at)),
+    )
+    .await
+    .expect("fed");
     for (pass, until) in [ends, after].into_iter().enumerate() {
-        live.settle(until).await.expect("settles");
-        let observed = answers(
-            live.surface().as_ref(),
-            &caller,
-            &live.stores().transmissions,
-            &scenario,
-            live.watermark(),
+        within(&live, &format!("settle pass {pass}"), live.settle(until))
+            .await
+            .expect("settles");
+        let observed = within(
+            &live,
+            &format!("the reads of pass {pass}"),
+            answers(
+                live.surface().as_ref(),
+                &caller,
+                &live.stores().transmissions,
+                &scenario,
+                live.watermark(),
+            ),
         )
         .await
         .expect("postgres answers");
@@ -257,17 +296,30 @@ async fn postgres_mode_answers_as_memory_mode_and_after_a_restart() {
     // spool, drained and closed, may still be releasing its `LOCK` as its
     // aborted tasks drop; a real restart is a new process.)
     let restarted = start_pg(&db, &dir.path().join("restarted"), clock.clone()).await;
-    let caller = restarted
-        .caller(RequestIdentity::Anonymous)
-        .await
-        .expect("a caller");
-    restarted.settle(after).await.expect("settles");
-    let observed = answers(
-        restarted.surface().as_ref(),
-        &caller,
-        &restarted.stores().transmissions,
-        &scenario,
-        restarted.watermark(),
+    let caller = within(
+        &restarted,
+        "a caller after the restart",
+        restarted.caller(RequestIdentity::Anonymous),
+    )
+    .await
+    .expect("a caller");
+    within(
+        &restarted,
+        "the settle after the restart",
+        restarted.settle(after),
+    )
+    .await
+    .expect("settles");
+    let observed = within(
+        &restarted,
+        "the reads after the restart",
+        answers(
+            restarted.surface().as_ref(),
+            &caller,
+            &restarted.stores().transmissions,
+            &scenario,
+            restarted.watermark(),
+        ),
     )
     .await
     .expect("answers after the restart");

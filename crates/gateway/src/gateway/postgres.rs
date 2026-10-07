@@ -189,7 +189,10 @@ pub async fn capture_side(
     clock: &Arc<dyn Clock>,
 ) -> Result<CaptureSide, StartError> {
     let section = config.store.ok_or(StartError::NoStore)?;
-    let bus = PgBus::new(pool.clone(), Arc::clone(clock), section.bus).map_err(StartError::Bus)?;
+    // Delays on the wall clock even when the live process runs on a manual
+    // one (`live::pg::bus_clock`).
+    let bus = PgBus::new(pool.clone(), crate::live::pg::bus_clock(), section.bus)
+        .map_err(StartError::Bus)?;
     let gate = Gate::closed();
     if role == Role::Api {
         return Ok(CaptureSide {

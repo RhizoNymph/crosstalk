@@ -26,6 +26,7 @@
 //! relay. There is no evidence slot: `PgEvidence` reads the stores. Each
 //! stage's subscription is [`pump::Pumped`].
 
+pub mod diagnose;
 pub mod l3;
 pub mod l4;
 pub mod l5;
@@ -86,6 +87,8 @@ pub struct PgLayers {
     /// The spool in front of it (also `ctx.stores.bus`).
     pub spool: LiveBus,
     pub ids: PgIds,
+    /// The recovery status the process was started with.
+    pub status: super::recovery::StatusReader,
 }
 
 /// [`Quiet`] over Postgres: group stats, the spool's backlog and the
@@ -164,6 +167,9 @@ impl Quiet for PgQuiet {
 }
 
 /// What a Postgres-mode live process starts from besides its config.
+/// Clones share every part (a clone kept aside can [`PgParts::diagnose`]
+/// a start that does not finish).
+#[derive(Clone)]
 pub struct PgParts {
     /// The pool, migrations at head (checked by the caller).
     pub pool: PgPool,
@@ -198,18 +204,17 @@ pub enum PgPartsError {
 impl PgParts {
     /// The parts over `pool` (migrated) for a process that captures only
     /// through [`Live::pipeline`] (no proxy): the bus with `bus` settings
-    /// on `clock`, the spool in `spool` behind its gate, and a fresh
-    /// status. For tests and harnesses; `serve` builds its own (the
-    /// capture side starts before the database answers).
+    /// on the wall clock ([`bus_clock`]), the spool in `spool` behind its
+    /// gate, and a fresh status. For tests and harnesses; `serve` builds
+    /// its own (the capture side starts before the database answers).
     pub async fn open(
         pool: PgPool,
-        clock: Arc<dyn crosstalk_spec::support::Clock>,
         bus: crosstalk_transport::PgBusConfig,
         spool: crosstalk_transport::SpoolConfig,
         secret: Arc<KeyedHasher>,
         ids: PgIds,
     ) -> Result<Self, PgPartsError> {
-        let bus = PgBus::new(pool.clone(), clock, bus).map_err(PgPartsError::Bus)?;
+        let bus = PgBus::new(pool.clone(), bus_clock(), bus).map_err(PgPartsError::Bus)?;
         let gate = Gate::closed();
         let spool = crosstalk_transport::SpoolingBus::open(
             crate::spool::Gated::new(bus.clone(), gate.clone()),
@@ -229,6 +234,21 @@ impl PgParts {
             status: StatusReporter::new(super::recovery::PipelineStatus::waiting()),
         })
     }
+}
+
+/// The clock `PgBus` times its delays with (a nacked or timed-out
+/// delivery's `available_at`, a recovered hold's backoff): always the wall
+/// clock, whatever clock the live process runs on.
+///
+/// A delayed delivery becomes ready only once the bus clock passes its
+/// `available_at`. Under a manual clock that only `Live::settle(until)`
+/// moves, a delay taken during a settle would never come due while that
+/// settle waits for the groups to empty, and the settle would wait
+/// forever (the restart e2e hung this way). `MpscBus` times its retries on
+/// tokio time for the same reason. `serve` runs on the wall clock, so for
+/// it this changes nothing.
+pub fn bus_clock() -> Arc<dyn crosstalk_spec::support::Clock> {
+    Arc::new(crosstalk_spec::support::SystemClock)
 }
 
 /// The groups whose pending deliveries can still reach a bucket.
@@ -442,6 +462,7 @@ impl Live<PgSet> {
                 bus: bus.clone(),
                 spool: spool.clone(),
                 ids,
+                status: status.reader(),
             },
             publisher: Publisher::new(pipeline.ingester()),
             clock: Arc::clone(&reader),
@@ -587,6 +608,56 @@ impl Live<PgSet> {
             tasks,
             stage_tasks,
         })
+    }
+}
+
+impl Live<PgSet> {
+    /// What the process is waiting on now (see [`diagnose`]): for a
+    /// settle or shutdown that does not finish.
+    pub async fn diagnose(&self) -> diagnose::PgDiagnosis {
+        let layers = &self.context.layers;
+        let groups: Vec<ConsumerGroup> = UPSTREAM.iter().map(|slot| slot.group()).collect();
+        let shards = u16::try_from(self.context.flow.shards.get())
+            .ok()
+            .and_then(NonZeroU16::new)
+            .unwrap_or(NonZeroU16::MIN);
+        let watermark = self
+            .backend
+            .stores
+            .edges
+            .watermark()
+            .await
+            .map(|watermark| watermark.at())
+            .map_err(|error| format!("{error:?}"));
+        diagnose::diagnose(diagnose::DiagnoseFrom {
+            pool: &layers.pool,
+            bus: &layers.bus,
+            spool: Some(&layers.spool),
+            groups: &groups,
+            shards,
+            status: Some(&layers.status),
+            watermark: Some(watermark),
+        })
+        .await
+    }
+}
+
+impl PgParts {
+    /// What the parts' database and spool hold now, before (or without) a
+    /// live process: for a recovery that does not finish.
+    pub async fn diagnose(&self, shards: NonZeroU16) -> diagnose::PgDiagnosis {
+        let groups: Vec<ConsumerGroup> = UPSTREAM.iter().map(|slot| slot.group()).collect();
+        let status = self.status.reader();
+        diagnose::diagnose(diagnose::DiagnoseFrom {
+            pool: &self.pool,
+            bus: &self.bus,
+            spool: Some(&self.spool),
+            groups: &groups,
+            shards,
+            status: Some(&status),
+            watermark: None,
+        })
+        .await
     }
 }
 

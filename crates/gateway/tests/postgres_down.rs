@@ -29,6 +29,32 @@ const SECRET_HEX: &str = "5ec2e75ec2e75ec2e75ec2e75ec2e75ec2e75ec2e75ec2e75ec2e7
 /// Nothing listens on port 1: every connection is refused at once.
 const UNREACHABLE: &str = "postgres://crosstalk@127.0.0.1:1/crosstalk";
 
+/// How long any step (start, forwarding every case, shutdown) may take
+/// before the test fails with the process's readiness and health.
+const WAIT: Duration = Duration::from_secs(300);
+
+/// `work` within [`WAIT`], or a panic with `running`'s readiness and
+/// health.
+async fn within<T>(running: &Running, what: &str, work: impl std::future::Future<Output = T>) -> T {
+    match tokio::time::timeout(WAIT, work).await {
+        Ok(done) => done,
+        Err(_) => panic!(
+            "{what} did not finish within {WAIT:?}\nreadiness: {:?}\nhealth: {:?}",
+            running.readiness().await,
+            running.health()
+        ),
+    }
+}
+
+/// Shut `running` down within [`WAIT`].
+async fn shutdown(running: Running) -> crosstalk_gateway::gateway::ShutdownReport {
+    let readiness = running.readiness().await;
+    match tokio::time::timeout(WAIT, running.shutdown()).await {
+        Ok(report) => report,
+        Err(_) => panic!("the shutdown did not finish within {WAIT:?}; before it: {readiness:?}"),
+    }
+}
+
 fn lookup(name: &str) -> Option<String> {
     match name {
         SECRET_ENV => Some(SECRET_HEX.to_owned()),
@@ -67,13 +93,17 @@ fn config(upstream_base: &str, data_dir: &Path, spool: Value) -> GatewayConfig {
 }
 
 async fn start(upstream: &FakeUpstream, data_dir: &Path, spool: Value) -> Running {
-    gateway::start(
-        &config(&upstream.base_url(), data_dir, spool),
-        Role::All,
-        lookup,
-        Arc::new(SystemClock),
+    tokio::time::timeout(
+        WAIT,
+        gateway::start(
+            &config(&upstream.base_url(), data_dir, spool),
+            Role::All,
+            lookup,
+            Arc::new(SystemClock),
+        ),
     )
     .await
+    .unwrap_or_else(|_| panic!("the gateway did not start within {WAIT:?}"))
     .expect("the gateway starts without its database")
 }
 
@@ -180,7 +210,12 @@ async fn capture_spools_while_the_database_is_down() {
     let data_dir = dir.path().join("data");
     let running = start(&upstream, &data_dir, serde_json::json!({})).await;
 
-    let sent = forward_every_case(&running, &upstream).await;
+    let sent = within(
+        &running,
+        "forwarding every case",
+        forward_every_case(&running, &upstream),
+    )
+    .await;
     assert!(sent > 0);
     captured(&running, sent).await;
     let health = running.health();
@@ -234,7 +269,7 @@ async fn capture_spools_while_the_database_is_down() {
         );
     }
 
-    let report = running.shutdown().await;
+    let report = shutdown(running).await;
     assert!(report.capture_drained, "{report:?}");
 }
 
@@ -252,7 +287,12 @@ async fn a_full_spool_drops_counted_and_the_proxy_still_answers() {
     )
     .await;
 
-    let sent = forward_every_case(&running, &upstream).await;
+    let sent = within(
+        &running,
+        "forwarding every case",
+        forward_every_case(&running, &upstream),
+    )
+    .await;
     captured(&running, sent).await;
     let health = running.health();
     let spool = health.spool.expect("a spool section");
@@ -289,7 +329,7 @@ async fn a_full_spool_drops_counted_and_the_proxy_still_answers() {
         );
     }
 
-    running.shutdown().await;
+    shutdown(running).await;
 }
 
 /// A second process on the same data directory cannot open the spool: its
@@ -300,11 +340,15 @@ async fn a_second_process_on_the_data_directory_is_refused() {
     let dir = tempfile::tempdir().expect("a temp dir");
     let data_dir = dir.path().join("data");
     let first = start(&upstream, &data_dir, serde_json::json!({})).await;
-    let second = gateway::start(
-        &config(&upstream.base_url(), &data_dir, serde_json::json!({})),
-        Role::All,
-        lookup,
-        Arc::new(SystemClock),
+    let second = within(
+        &first,
+        "the second start",
+        gateway::start(
+            &config(&upstream.base_url(), &data_dir, serde_json::json!({})),
+            Role::All,
+            lookup,
+            Arc::new(SystemClock),
+        ),
     )
     .await;
     assert!(
@@ -312,5 +356,5 @@ async fn a_second_process_on_the_data_directory_is_refused() {
         "{:?}",
         second.err()
     );
-    first.shutdown().await;
+    shutdown(first).await;
 }

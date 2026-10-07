@@ -4,6 +4,7 @@
 //! `TestDb::new_or_skip` (the node0 server named by `TEST_DATABASE_URL`)
 //! and skips, passing, without one.
 
+use std::future::Future;
 use std::num::{NonZeroU16, NonZeroU32};
 use std::sync::Arc;
 use std::time::Duration;
@@ -28,8 +29,9 @@ use tokio::time::Instant;
 use crate::config::GatewayConfig;
 use crate::gateway::postgres::{self, Late, PipelineStart};
 use crate::live::frontier::PgFrontierSource;
-use crate::live::pg::{PgParts, PgSet};
-use crate::live::recovery::{LockState, MigrationState, PipelinePhase, RecoveryStep};
+use crate::live::pg::diagnose::{DiagnoseFrom, PgDiagnosis, bounded, diagnose};
+use crate::live::pg::{PgParts, PgSet, bus_clock};
+use crate::live::recovery::{LockState, MigrationState, PipelinePhase, RecoveryStep, StatusReader};
 use crate::live::{Live, LiveClock, LiveConfig, Slot};
 use crate::ops::{Ops, PgOps, Phase};
 use crate::role::Role;
@@ -40,7 +42,74 @@ use crate::store::{StoreProbe, lazy_pool};
 use crate::tasks::Tasks;
 
 const SECRET_HEX: &str = "5ec2e75ec2e75ec2e75ec2e75ec2e75ec2e75ec2e75ec2e75ec2e75ec2e75ec2";
-const PATIENCE: Duration = Duration::from_secs(60);
+/// How long a wait on the database (recovery, a settle, a delivery, the
+/// lock, LISTEN) may take before the test fails with what the process was
+/// waiting on: minutes, for a loaded LAN Postgres.
+const WAIT: Duration = Duration::from_secs(300);
+
+/// What a stalled wait's diagnosis reads.
+struct Probe {
+    pool: PgPool,
+    bus: PgBus,
+    spool: Option<SpoolingBus<Gated>>,
+    status: Option<StatusReader>,
+}
+
+impl Probe {
+    async fn diagnosis(&self) -> PgDiagnosis {
+        let groups: Vec<ConsumerGroup> = [
+            Slot::L3Reconstruct,
+            Slot::L4Provenance,
+            Slot::L5Flow,
+            Slot::L6Classify,
+            Slot::L7Topology,
+        ]
+        .iter()
+        .map(|slot| slot.group())
+        .collect();
+        diagnose(DiagnoseFrom {
+            pool: &self.pool,
+            bus: &self.bus,
+            spool: self.spool.as_ref(),
+            groups: &groups,
+            shards: NonZeroU16::MIN,
+            status: self.status.as_ref(),
+            watermark: None,
+        })
+        .await
+    }
+}
+
+/// `work` within [`WAIT`], or a panic naming `what` and what the process
+/// was waiting on.
+async fn within<T>(what: &str, work: impl Future<Output = T>, probe: &Probe) -> T {
+    bounded(WAIT, what, work, || probe.diagnosis())
+        .await
+        .unwrap_or_else(|stalled| panic!("{stalled}"))
+}
+
+fn start_probe(start: &PipelineStart) -> Probe {
+    Probe {
+        pool: start.pool.clone(),
+        bus: start.bus.clone(),
+        spool: Some(start.spool.clone()),
+        status: Some(start.status.reader()),
+    }
+}
+
+/// Stop the pipeline task and its live process, bounded.
+async fn stop_pipeline(task: postgres::StopHandle<postgres::PipelineHeld>, probe: &Probe) {
+    let held = within("stopping the pipeline task", task_stop(task), probe).await;
+    if let Some((live, lock)) = held {
+        within(
+            "the live process's shutdown",
+            live.shutdown(Instant::now() + Duration::from_secs(30)),
+            probe,
+        )
+        .await;
+        drop(lock);
+    }
+}
 const T0: u64 = 1_790_845_200_000_000;
 
 fn secret() -> Arc<KeyedHasher> {
@@ -202,14 +271,15 @@ async fn pg_readyz_reports_behind_then_every_recovery_step() {
     let (start, _gate, spool, _bus) = pipeline_start(&db, dir.path(), late.clone()).await;
     let ops = ops(&start, spool, &late);
     let mut status = start.status.reader();
+    let probe = start_probe(&start);
     let task = postgres::spawn_pipeline(start);
 
-    let behind = tokio::time::timeout(
-        PATIENCE,
+    let behind = within(
+        "the head check",
         status.wait_until(|status| matches!(status.migrations, MigrationState::Behind(_))),
+        &probe,
     )
     .await
-    .expect("the head check reports")
     .expect("the reporter lives");
     assert_eq!(behind.phase, PipelinePhase::WaitingForMigrations);
     let ready = ops.readiness().await;
@@ -222,12 +292,12 @@ async fn pg_readyz_reports_behind_then_every_recovery_step() {
     assert_eq!(ready.pipeline.as_deref(), Some("waiting_for_migrations"));
 
     migrate_all(&db.store()).await.expect("migrates");
-    let running = tokio::time::timeout(
-        PATIENCE,
+    let running = within(
+        "the pipeline's recovery",
         status.wait_until(|status| status.phase == PipelinePhase::Running),
+        &probe,
     )
     .await
-    .expect("the pipeline starts")
     .expect("the reporter lives");
     assert_eq!(running.migrations, MigrationState::AtHead);
     assert_eq!(running.lock, LockState::Held);
@@ -247,10 +317,7 @@ async fn pg_readyz_reports_behind_then_every_recovery_step() {
     assert_eq!(ready.pipeline_lock.as_deref(), Some("held"));
     assert_eq!(ready.migrations, "at_head");
 
-    if let Some((live, lock)) = task_stop(task).await {
-        live.shutdown(Instant::now() + Duration::from_secs(5)).await;
-        drop(lock);
-    }
+    stop_pipeline(task, &probe).await;
     db.close().await.expect("drops");
 }
 
@@ -282,13 +349,14 @@ async fn pg_second_pipeline_waits_while_the_lock_is_held_elsewhere() {
     let (start, _gate, spool, _bus) = pipeline_start(&db, dir.path(), late.clone()).await;
     let ops = ops(&start, spool, &late);
     let mut status = start.status.reader();
+    let probe = start_probe(&start);
     let task = postgres::spawn_pipeline(start);
-    tokio::time::timeout(
-        PATIENCE,
+    within(
+        "the second process seeing the lock",
         status.wait_until(|status| status.lock == LockState::HeldElsewhere),
+        &probe,
     )
     .await
-    .expect("the second process sees the lock")
     .expect("the reporter lives");
     let ready = ops.readiness().await;
     assert!(!ready.ready, "{ready:?}");
@@ -296,17 +364,14 @@ async fn pg_second_pipeline_waits_while_the_lock_is_held_elsewhere() {
     assert_eq!(ready.pipeline.as_deref(), Some("waiting_for_lock"));
 
     drop(first);
-    tokio::time::timeout(
-        PATIENCE,
+    within(
+        "the second process taking over",
         status.wait_until(|status| status.phase == PipelinePhase::Running),
+        &probe,
     )
     .await
-    .expect("the second process takes over")
     .expect("the reporter lives");
-    if let Some((live, lock)) = task_stop(task).await {
-        live.shutdown(Instant::now() + Duration::from_secs(5)).await;
-        drop(lock);
-    }
+    stop_pipeline(task, &probe).await;
     db.close().await.expect("drops");
 }
 
@@ -318,8 +383,13 @@ async fn pg_frontier_covers_pending_deliveries() {
     let Some(db) = migrated("pg_frontier_covers_pending_deliveries").await else {
         return;
     };
-    let clock: Arc<dyn Clock> = Arc::new(ManualClock::at(Timestamp::from_micros(T0)));
-    let bus = PgBus::new(pipeline_pool(&db), Arc::clone(&clock), bus_config()).expect("a bus");
+    let bus = PgBus::new(pipeline_pool(&db), bus_clock(), bus_config()).expect("a bus");
+    let probe = Probe {
+        pool: db.pool().clone(),
+        bus: bus.clone(),
+        spool: None,
+        status: None,
+    };
     let shards = NonZeroU16::MIN;
     let pipeline = Slot::L3Reconstruct.group();
     let outside = ConsumerGroup("outside".to_owned());
@@ -355,9 +425,8 @@ async fn pg_frontier_covers_pending_deliveries() {
 
     let at = Timestamp::from_micros(T0 - 60_000_000);
     bus.publish(envelope(1, at)).await.expect("publishes");
-    let delivery = tokio::time::timeout(PATIENCE, inside.next())
+    let delivery = within("the first delivery", inside.next(), &probe)
         .await
-        .expect("delivered")
         .expect("open")
         .expect("decodes");
     assert_eq!(
@@ -376,9 +445,8 @@ async fn pg_frontier_covers_pending_deliveries() {
 
     let later = Timestamp::from_micros(T0);
     bus.publish(envelope(2, later)).await.expect("publishes");
-    let second = tokio::time::timeout(PATIENCE, inside.next())
+    let second = within("the second delivery", inside.next(), &probe)
         .await
-        .expect("delivered")
         .expect("open")
         .expect("decodes");
     inside.ack(second.id).await.expect("acks");
@@ -401,8 +469,7 @@ async fn pg_frontier_covers_the_spool() {
         return;
     };
     let dir = tempfile::tempdir().expect("a temp dir");
-    let clock: Arc<dyn Clock> = Arc::new(ManualClock::at(Timestamp::from_micros(T0)));
-    let bus = PgBus::new(pipeline_pool(&db), Arc::clone(&clock), bus_config()).expect("a bus");
+    let bus = PgBus::new(pipeline_pool(&db), bus_clock(), bus_config()).expect("a bus");
     let gate = Gate::closed();
     let spool = SpoolingBus::open(
         Gated::new(bus.clone(), gate.clone()),
@@ -437,11 +504,22 @@ async fn pg_frontier_covers_the_spool() {
         Some(at)
     );
     gate.open();
-    let deadline = Instant::now() + PATIENCE;
-    while spool.stats().records > 0 {
-        assert!(Instant::now() < deadline, "the spool drains");
-        tokio::time::sleep(Duration::from_millis(20)).await;
-    }
+    let probe = Probe {
+        pool: db.pool().clone(),
+        bus: bus.clone(),
+        spool: Some(spool.clone()),
+        status: None,
+    };
+    within(
+        "the spool's drain",
+        async {
+            while spool.stats().records > 0 {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+            }
+        },
+        &probe,
+    )
+    .await;
     assert_eq!(
         frontier.frontier().await.expect("reads").oldest_pending,
         Some(at),
@@ -470,44 +548,110 @@ async fn pg_watermark_survives_a_restart() {
     };
     let dir = tempfile::tempdir().expect("a temp dir");
     let clock = ManualClock::at(Timestamp::from_micros(T0));
-    let start = |clock: ManualClock, spool: &str| {
-        let pool = pipeline_pool(&db);
-        let spool = spool_config(&dir.path().join(spool));
-        async move {
-            let parts = PgParts::open(
-                pool,
-                Arc::new(clock.clone()),
-                bus_config(),
-                spool,
-                secret(),
-                PgIds::Seeded(0xE2E),
-            )
-            .await
-            .expect("the parts");
-            Live::<PgSet>::start_pg(test_live_config(clock), parts)
-                .await
-                .expect("the live process starts")
-        }
-    };
-    let live = start(clock.clone(), "first").await;
+    let live = start_live(&db, &dir.path().join("first"), clock.clone()).await;
     assert_eq!(live.report().watermark_micros, 0);
-    let settled = live
-        .settle(Timestamp::from_micros(T0 + 3_600_000_000))
-        .await
-        .expect("settles");
+    let settled = settle_live(&live, Timestamp::from_micros(T0 + 3_600_000_000)).await;
     let before = live.report().watermark_micros;
     assert!(before > 0, "the watermark advanced by {settled:?}");
-    live.shutdown(Instant::now() + Duration::from_secs(10))
-        .await;
+    stop_live(live).await;
 
-    let restarted = start(clock, "restarted").await;
+    let restarted = start_live(&db, &dir.path().join("restarted"), clock).await;
     assert_eq!(
         restarted.report().watermark_micros,
         before,
         "the persisted watermark, from the first report"
     );
-    restarted
-        .shutdown(Instant::now() + Duration::from_secs(10))
-        .await;
+    stop_live(restarted).await;
     db.close().await.expect("drops");
+}
+
+/// The restart e2e hang's regression: a delivery a stage retries (an
+/// `ExchangeCaptured` whose bodies were never stored: L3 cannot read them)
+/// is nacked, delayed, retried and finally dead-lettered while a settle
+/// waits, although the live process runs on a manual clock that the
+/// settle does not move. The bus times its delays on the wall clock
+/// (`live::pg::bus_clock`); on the manual clock the delayed delivery
+/// would never come due and the settle would wait forever.
+#[tokio::test(flavor = "multi_thread")]
+async fn pg_settle_finishes_while_a_delivery_is_retried() {
+    let Some(db) = migrated("pg_settle_finishes_while_a_delivery_is_retried").await else {
+        return;
+    };
+    let dir = tempfile::tempdir().expect("a temp dir");
+    let clock = ManualClock::at(Timestamp::from_micros(T0));
+    let live = start_live(&db, &dir.path().join("spool"), clock).await;
+    let mut ids = crosstalk_testkit::ids::Ids::seeded(5);
+    let exchange = crosstalk_testkit::build::ExchangeBuilder::new(&mut ids).build();
+    let envelope = Envelope {
+        id: EventId::from_ulid(0xE7),
+        at: Timestamp::from_micros(T0),
+        event: BusEvent::Ingest(
+            crosstalk_spec::events::ingest::IngestEvent::ExchangeCaptured(Box::new(exchange)),
+        ),
+    };
+    live.stores()
+        .bus
+        .publish(envelope)
+        .await
+        .expect("publishes");
+    settle_live(&live, Timestamp::from_micros(T0 + 1_000_000)).await;
+    let stats = live.layers().bus.group_stats().await.expect("group stats");
+    let l3 = stats
+        .iter()
+        .find(|stats| stats.group == Slot::L3Reconstruct.group())
+        .expect("the L3 group");
+    assert_eq!(l3.pending, 0, "{l3:?}");
+    assert_eq!(l3.dead_letters, 1, "retried, then dead-lettered: {l3:?}");
+    stop_live(live).await;
+    db.close().await.expect("drops");
+}
+
+/// A Postgres-mode live process over `db` on `clock`, its spool in
+/// `spool`; recovery bounded by [`WAIT`].
+async fn start_live(db: &TestDb, spool: &std::path::Path, clock: ManualClock) -> Live<PgSet> {
+    let parts = PgParts::open(
+        pipeline_pool(db),
+        bus_config(),
+        spool_config(spool),
+        secret(),
+        PgIds::Seeded(0xE2E),
+    )
+    .await
+    .expect("the parts");
+    let probe = parts.clone();
+    bounded(
+        WAIT,
+        "the live process's recovery",
+        Live::<PgSet>::start_pg(test_live_config(clock), parts),
+        || async move { probe.diagnose(NonZeroU16::MIN).await },
+    )
+    .await
+    .unwrap_or_else(|stalled| panic!("{stalled}"))
+    .expect("the live process starts")
+}
+
+/// `live.settle(until)` bounded by [`WAIT`].
+async fn settle_live(live: &Live<PgSet>, until: Timestamp) -> crate::live::Settled {
+    bounded(WAIT, "a settle", live.settle(until), || live.diagnose())
+        .await
+        .unwrap_or_else(|stalled| panic!("{stalled}"))
+        .expect("settles")
+}
+
+/// Shut `live` down and close its spool, bounded by [`WAIT`].
+async fn stop_live(live: Live<PgSet>) {
+    let spool = live.layers().spool.clone();
+    let probe = Probe {
+        pool: live.layers().pool.clone(),
+        bus: live.layers().bus.clone(),
+        spool: Some(spool.clone()),
+        status: Some(live.layers().status.clone()),
+    };
+    within(
+        "the live process's shutdown",
+        live.shutdown(Instant::now() + Duration::from_secs(30)),
+        &probe,
+    )
+    .await;
+    within("closing the spool", spool.close(), &probe).await;
 }

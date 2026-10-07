@@ -100,6 +100,36 @@ fetched delivery for the next pull. The one remaining cancellation is an
 ack that arrives while the pump fetches (the flow consumer's checkpoint
 acks).
 
+### The bus clock
+
+`PgBus` times its delays (a nacked or timed-out delivery's
+`available_at`, a recovered hold's backoff) with the wall clock
+(`live::pg::bus_clock`), whatever clock the live process runs on, as
+`MpscBus` times its retries on tokio time. A delayed delivery becomes
+ready only once the bus clock passes its `available_at`; under a manual
+clock that only `Live::settle(until)` moves, a delay taken during a settle
+never came due while that settle waited for the groups to empty, and the
+settle waited forever. That is what hung the restart e2e on node0: a
+retried or timed-out delivery, for example one whose take a pump cancelled
+for a checkpoint ack (held until the reaper's provisional deadline, then
+delayed), sat delayed past a frozen manual clock. `serve` runs on the wall
+clock, so a real restart never hit it; the fix keeps every harness on a
+manual clock out of it (regression: `integration::pg_settle_finishes_while_a_delivery_is_retried`).
+
+### Diagnosing a stalled wait
+
+`live::pg::diagnose` reads what a Postgres-mode process waits on: the
+frontier against the watermark and the frontier's parts (shard ticks, the
+spool's oldest record, unadmitted entries per group, group stats), the
+pipeline lock's holders (`pg_locks`), the spool's state and counters, the
+four outbox tables, the pool (size, idle, in use) and the recovery steps
+reached. `Live::<PgSet>::diagnose` and `PgParts::diagnose` (a clone kept
+aside before `start_pg`) read it; `diagnose::bounded(limit, what, work,
+diagnosis)` runs a wait for at most `limit` and returns `Stalled` (what,
+how long, the diagnosis) past it. Every Postgres-mode test bounds its
+waits on settles, recovery, deliveries, the lock and shutdowns with it
+(five minutes each), so a stall fails with its cause instead of hanging.
+
 ### Settling and shutdown
 
 `Live::settle` is shared. A set with deferred acks (`PgSet`) drains the
@@ -200,6 +230,7 @@ topics,search,projections,alerts}`).
 | `crates/gateway/src/live/pg/mod.rs` | the Postgres set and recovery | `PgSet`, `PgLayers`, `PgQuiet`, `PgParts`, `Live::start_pg` |
 | `crates/gateway/src/live/pg/{l3,l4,l5,l6,l7}.rs` | the stages | `PgReconstruct`, `PgProvenanceStage`, `PgFlowConsumer`, `PgClassify`, `PgTopology` |
 | `crates/gateway/src/live/pg/pump.rs` | cancel-safe subscriptions | `Pumped`, `pump` |
+| `crates/gateway/src/live/pg/diagnose.rs` | what a stalled wait waits on | `diagnose`, `DiagnoseFrom`, `PgDiagnosis`, `bounded`, `Stalled` |
 | `crates/gateway/src/live/frontier.rs` | the frontier | `PgFrontierSource`, `SpoolBacklog`, `combine` |
 | `crates/gateway/src/live/recovery.rs` | status for ops | `PipelineStatus`, `StatusReporter`, `RecoveryStep`, `RecoveryReport` |
 | `crates/gateway/src/spool.rs` | gate, spooled bus, discard | `Gate`, `Gated`, `LiveBus`, `discard_corrupt` |
