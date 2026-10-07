@@ -6,6 +6,7 @@
 #
 # Steps, in order (each is one function below):
 #   1. confirm_restart          say what restarts; ask unless --yes
+#      fresh_database           a new database for the run (crosstalk_bench_<run>)
 #   2. start_stack              `up -d --build` with the demo override
 #   3. require_detection        fail fast unless /readyz has `live` and `api`
 #                               running and the API takes the token
@@ -106,9 +107,12 @@ confirm_restart() {
 run.sh bench is about to:
   - start the demo stack (`up -d --build` with compose.demo.yaml); services
     whose image or config changed are recreated;
-  - restart `wiki`: its pages live in memory and are lost (a fresh world);
-  - restart `crosstalk`: its detection state lives in memory and is lost.
-The exchange log and blobs on the `data` volume are kept.
+  - create a fresh database for the run (crosstalk_bench_<run>), migrate it
+    and point `crosstalk` at it, so earlier runs' detection state (kept in
+    their own databases, never deleted) cannot affect this one;
+  - restart `wiki`: its pages live in memory and are lost (a fresh world).
+The exchange log and blobs on the `data` volume are kept. A later plain
+`run.sh up` points crosstalk back at the `crosstalk` database.
 EOF
     [[ "$yes" == 1 ]] && return 0
     [[ -t 0 ]] || bench_fail "stdin is not a terminal; pass --yes to restart without asking"
@@ -119,6 +123,23 @@ EOF
 # 2. The demo stack, built (the image must carry ct-eval) and running.
 start_stack() {
     compose up -d --build
+}
+
+# A fresh database for run `stamp`, so nothing earlier runs left in Postgres
+# (fingerprints, token observations, transmissions) reaches this one. The
+# gateway and `migrate` read its name from CROSSTALK_DB_NAME (compose.yaml's
+# DATABASE_URL); start_stack then migrates it and recreates crosstalk on it.
+fresh_database() {
+    local stamp="$1" name
+    name="crosstalk_bench_${stamp,,}"
+    compose up -d postgres
+    wait_healthy postgres 120
+    compose exec -T postgres psql -v ON_ERROR_STOP=1 -q -U crosstalk -d crosstalk \
+        -c "CREATE DATABASE \"${name}\"" \
+        || bench_fail "could not create the run's database ${name}"
+    CROSSTALK_DB_NAME="$name"
+    export CROSSTALK_DB_NAME
+    echo "run.sh bench: database ${name}" >&2
 }
 
 # Wait for a compose service's container to report healthy.
@@ -349,12 +370,15 @@ bench() {
     mkdir -p "${here}/bench"
 
     confirm_restart "$yes"
+    local stamp
+    stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+    fresh_database "$stamp"
     start_stack
     wait_healthy crosstalk 180
     require_detection
     fresh_world
 
-    run="$(date -u +%Y%m%dT%H%M%SZ)"
+    run="$stamp"
     if ((holdout == 1)); then
         mkdir -p "${here}/bench/holdout"
         run="holdout/${run}"
@@ -367,6 +391,7 @@ bench() {
         echo "scenario=${scenario}"
         echo "seed=${seed}"
         echo "holdout=${holdout}"
+        echo "database=${CROSSTALK_DB_NAME}"
         echo "swarm=${swarm_args[*]} ${extra[*]}"
         echo "evidence_window_ms=$(demo_flow_ms evidence_window_ms)"
         echo "suspected_ttl_ms=$(demo_flow_ms suspected_ttl_ms)"
