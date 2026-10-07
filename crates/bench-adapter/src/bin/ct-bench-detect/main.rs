@@ -12,6 +12,9 @@
 //! ct-bench-detect swarm-fetch --api URL [--token-env VAR] [--truth FILE | --since-unix-ms MS] --out RUNDIR
 //! ```
 //!
+//! Dataset extract configs for `--extract-config` live in
+//! `crates/bench-adapter/extract/`: `ai-village.json` and `agentdojo.json`.
+//!
 //! Exit 0: a complete predictions file (trailer present). A world that
 //! cannot be processed is a `failed { reason }` world row; a non-zero exit
 //! means the whole run failed.
@@ -95,7 +98,9 @@ struct DetectArgs {
     /// Whether L4 indexes text an agent forwards under that agent.
     #[arg(long, value_enum, default_value_t = ForwardingChoice::Off)]
     forwarding: ForwardingChoice,
-    /// L5's extractor configuration (`ExtractConfig` JSON).
+    /// L5's extractor configuration (`ExtractConfig` JSON); datasets'
+    /// configs are in crates/bench-adapter/extract/ (ai-village.json,
+    /// agentdojo.json).
     #[arg(long)]
     extract_config: Option<PathBuf>,
     /// L5's correlation window in seconds (default 60).

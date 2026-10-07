@@ -463,6 +463,7 @@ holding just that call (`ledger::stored_call`), decoded back exactly.
 | `store/ledger.rs`, `migrations/0004_extract_ledger.sql` | the ledger on Postgres | `PgExtractionLedger` (`new`, `state`) |
 | `crates/gateway/src/live/layers/extract.rs` | adapter: the step over the memory ledger, the live blob store and provenance store, into the flow consumer's channel | `Extraction`, `ExtractStepError` (re-exported) |
 | `crates/bench-adapter/extract/ai-village.json` | the village's extractor configuration (`persistent_shells: ["bash"]`), for `ct-bench-detect --extract-config` | |
+| `crates/bench-adapter/extract/agentdojo.json` | AgentDojo's extractor configuration (`fetch_tools: ["get_webpage"]`), for `ct-bench-detect --extract-config` | |
 | `extract/sites/mod.rs` | site rules | `SitesConfig`, `MediaWikiSite`, `HostPattern`, `SitePath`, `SiteAccess` |
 | `extract/sites/mediawiki.rs` | MediaWiki | `apply`, `canonical_title`, `page_locator` |
 | `extract/sites/github.rs` | GitHub: repositories, files, threads, Pages | `apply` |

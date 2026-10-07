@@ -105,8 +105,9 @@ ct-bench-detect swarm-fetch --api URL [--token-env VAR] [--truth FILE | --since-
 - **`--extract-config`** is L5's `ExtractConfig` JSON (`mcp_servers`,
   `http_tools`, `fetch_tools`, `sites`, `persistent_shells`).
   `crates/bench-adapter/extract/ai-village.json` (`{"persistent_shells":
-  ["bash"]}`) is the one AI Village runs use. AgentDojo's
-  (`{"fetch_tools": ["get_webpage"]}`) lives with the bench now.
+  ["bash"]}`) is the one AI Village runs use;
+  `crates/bench-adapter/extract/agentdojo.json` (`{"fetch_tools":
+  ["get_webpage"]}`) is AgentDojo's.
 - **`swarm-fetch`** saves `export.jsonl` (`POST /exports` for the
   transmissions in `fetch::FETCHED_STATES`: confirmed, classified,
   aggregated and discarded) and `evidence.jsonl` (`GET
@@ -292,6 +293,7 @@ the bench canonicalises again), `Mcp` → `mcp`, `Opaque` → `opaque`.
 | `Cargo.toml` | package `crosstalk-bench-adapter` (a composer), binary `ct-bench-detect`; `a2a-bench-format` at tag `a2a-bench-format-v1.0.0` | |
 | `build.rs` | records the build's crosstalk commit | `CROSSTALK_ADAPTER_GIT` |
 | `extract/ai-village.json` | the extract config AI Village runs pass with `--extract-config` | |
+| `extract/agentdojo.json` | the extract config AgentDojo runs pass with `--extract-config` | |
 | `src/lib.rs` | crate root; the contract's failure codes | `FailureCode`, `WorldFailure`, `converter_version` |
 | `src/config.rs` | detector names, variants, config digests | `live_info`, `pipeline_info`, `digest`, `live_variant`, `LIVE`, `PIPELINE`, `DEFAULT_VARIANT` |
 | `src/input.rs` | the input directory in lockstep | `InputDir`, `WorldRead`, `InputError`, `read_manifest` |
