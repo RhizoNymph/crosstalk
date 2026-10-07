@@ -116,6 +116,21 @@ delayed), sat delayed past a frozen manual clock. `serve` runs on the wall
 clock, so a real restart never hit it; the fix keeps every harness on a
 manual clock out of it (regression: `integration::pg_settle_finishes_while_a_delivery_is_retried`).
 
+### Bodies across a restart
+
+`Excerpted::BodyDropped` means only that the blob store has no body under
+the hash (`BlobStore::get` returned `None`). No content-retention policy
+exists yet: neither blob store deletes anything (the spec's `BlobStore`
+has no delete), so no drop decision has to survive a restart. `serve`
+reopens `FsBlobStore` at `blobs.root` on its volume and shows the same
+excerpts after a restart. The restart e2e first gave each process a fresh
+in-memory blob store, so the restarted one found no bodies and showed
+`BodyDropped` where the uninterrupted run showed excerpts; it now reopens
+one filesystem store across the restart, as `serve` does. When content
+retention lands and deletes bodies, `Bodies::SkipStored` must give way to
+`PutEvery` (or learn of deletions) and the evidence of a dropped body must
+read `BodyDropped` before and after a restart alike.
+
 ### Diagnosing a stalled wait
 
 `live::pg::diagnose` reads what a Postgres-mode process waits on: the

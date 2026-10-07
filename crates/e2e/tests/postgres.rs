@@ -89,11 +89,11 @@ fn spool_config(dir: &Path) -> SpoolConfig {
 }
 
 /// The composition's config (`crosstalk_e2e::compose_with`), on `clock`.
-fn live_config(clock: ManualClock) -> LiveConfig {
+fn live_config(clock: ManualClock, blobs: BlobConfig) -> LiveConfig {
     LiveConfig {
         surface: options::in_process(clock.clone()).expect("surface options"),
         clock: LiveClock::Manual(clock),
-        blobs: BlobConfig::Memory,
+        blobs,
         bus: BusConfig::default(),
         pipeline: Settings::default(),
         flow: options::flow().expect("flow options"),
@@ -166,8 +166,13 @@ where
     })
 }
 
-/// A Postgres-mode live process over `db`, its spool in `dir`.
-async fn start_pg(db: &TestDb, dir: &Path, clock: ManualClock) -> Live<PgSet> {
+/// A Postgres-mode live process over `db`, its spool in `dir`, its bodies
+/// in a filesystem blob store at `blobs`. A restart must reopen the same
+/// blob store, as `serve` reopens `blobs.root` on its volume: a fresh
+/// memory store per process would hold none of the bodies captured before
+/// the restart, and the evidence page would show their excerpts as
+/// `BodyDropped` (what the first run of this test did).
+async fn start_pg(db: &TestDb, dir: &Path, blobs: &Path, clock: ManualClock) -> Live<PgSet> {
     let settings = PoolSettings::new(
         NonZeroU32::MIN.saturating_add(11),
         0,
@@ -188,7 +193,15 @@ async fn start_pg(db: &TestDb, dir: &Path, clock: ManualClock) -> Live<PgSet> {
     bounded(
         WAIT,
         "the postgres live process's recovery",
-        Live::<PgSet>::start_pg(live_config(clock), parts),
+        Live::<PgSet>::start_pg(
+            live_config(
+                clock,
+                BlobConfig::Fs {
+                    root: blobs.to_path_buf(),
+                },
+            ),
+            parts,
+        ),
         || async move { probe.diagnose(NonZeroU16::MIN).await },
     )
     .await
@@ -256,7 +269,8 @@ async fn postgres_mode_answers_as_memory_mode_and_after_a_restart() {
     // Postgres mode, same traffic, same clock, same seed.
     let dir = tempfile::tempdir().expect("a temp dir");
     let clock = ManualClock::at(scenario.start);
-    let live = start_pg(&db, dir.path(), clock.clone()).await;
+    let blobs = dir.path().join("blobs");
+    let live = start_pg(&db, dir.path(), &blobs, clock.clone()).await;
     let caller = within(&live, "a caller", live.caller(RequestIdentity::Anonymous))
         .await
         .expect("a caller");
@@ -295,7 +309,7 @@ async fn postgres_mode_answers_as_memory_mode_and_after_a_restart() {
     // new happens. (A spool directory of its own: the stopped process's
     // spool, drained and closed, may still be releasing its `LOCK` as its
     // aborted tasks drop; a real restart is a new process.)
-    let restarted = start_pg(&db, &dir.path().join("restarted"), clock.clone()).await;
+    let restarted = start_pg(&db, &dir.path().join("restarted"), &blobs, clock.clone()).await;
     let caller = within(
         &restarted,
         "a caller after the restart",
