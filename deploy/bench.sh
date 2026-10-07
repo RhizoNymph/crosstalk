@@ -125,6 +125,15 @@ start_stack() {
     compose up -d --build
 }
 
+# How many per-run bench databases exist and their total size, so whoever
+# asks the user about dropping old ones knows when it matters. Nothing here
+# drops anything.
+bench_database_tally() {
+    compose exec -T postgres psql -At -U crosstalk -d crosstalk -c \
+        "SELECT count(*) || ' bench databases, ' || pg_size_pretty(coalesce(sum(pg_database_size(datname)), 0)) FROM pg_database WHERE datname LIKE 'crosstalk\_bench\_%'" \
+        2>/dev/null || echo "bench databases: unknown (postgres not reachable)"
+}
+
 # A fresh database for run `stamp`, so nothing earlier runs left in Postgres
 # (fingerprints, token observations, transmissions) reaches this one. The
 # gateway and `migrate` read its name from CROSSTALK_DB_NAME (compose.yaml's
@@ -408,6 +417,7 @@ bench() {
     wait_caught_up "$run" "$end_ms" "$timeout"
     fetch_detections "$run" "$holdout"
     snapshot_inputs "$run"
+    echo "run.sh bench: $(bench_database_tally)" >&2
     if ((holdout == 1)); then
         # Holdout: no scoring, no report/, no metrics; just say what was saved.
         echo "holdout run ${run#holdout/} (scenario ${scenario}, seed ${seed}) saved, unscored:"
