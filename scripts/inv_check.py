@@ -51,7 +51,9 @@ class Repo:
         if not m:
             return f"evidence path {path!r} is not crosstalk_spec::... or crosstalk_<crate>::..."
         crate = m.group(1)
-        if crate != "spec" and crate not in self.crates:
+        # A library `crosstalk_<a>_<b>` is the package `crosstalk-<a>-<b>`
+        # in crates/<a>-<b>.
+        if crate != "spec" and crate not in self.crates and crate.replace("_", "-") not in self.crates:
             return f"evidence path {path!r} names crate crosstalk_{crate}, which is not in crates/"
         return None
 

@@ -96,7 +96,7 @@ gateway (and the composers beside it). The roles:
 | Role | Crates |
 | --- | --- |
 | layer | `ingress`, `canonical`, `transport`, `reconstruct`, `provenance`, `flow`, `analysis`, `topology`, `surface` |
-| composition | `api`, `client`, `e2e`, `eval`, `gateway` (`e2e` is the end-to-end smoke harness, `crates/e2e`: it composes the gateway's pipeline with the surface, so it is a composer rather than test support, and no layer may depend on it) |
+| composition | `api`, `bench-adapter`, `client`, `e2e`, `gateway` (`e2e` is the end-to-end smoke harness, `crates/e2e`: it composes the gateway's pipeline with the surface, so it is a composer rather than test support, and no layer may depend on it) |
 | test support | `conformance`, `memory`, `sim`, `testkit`, `world` |
 | tool | `demo` |
 | open | `spec`, `store`, and every third-party crate |
@@ -105,7 +105,7 @@ The rules, applied to every declared dependency (normal, dev and build,
 including optional and target-specific ones) of every workspace member:
 
 1. A layer crate never depends on another layer crate, nor on `api`,
-   `client`, `e2e`, `eval` or `gateway`, under any kind, except that it may depend on
+   `client`, `e2e`, `bench-adapter` or `gateway`, under any kind, except that it may depend on
    `transport` as a dev-dependency. `transport` is infrastructure as well as
    L2: layers publish through the spec's `EventBus` trait, and use the
    in-process bus only in their tests.
@@ -133,9 +133,9 @@ parses the JSON with `serde_json`.
 - `workspace_obeys_the_dependency_rule` fails with every violation listed.
 - `workspace_has_every_crate_the_rule_names` fails if a crate the rule
   names is missing, so the rule can never pass vacuously after a rename.
-  `Composer::required` exempts `eval` until `crates/eval` lands (roadmap
-  P3.1); `eval_composes_gateway_and_layers_and_is_not_yet_required`
-  checks that it is classified as a composer meanwhile.
+  `the_bench_adapter_composes_gateway_and_layers` checks that
+  `bench-adapter` (`crosstalk-bench-adapter`, formerly `crosstalk-eval`)
+  may depend on the gateway and every layer and no layer on it.
 - `e2e_composes_gateway_and_layers_and_no_layer_uses_it` checks that
   `e2e` may depend on the gateway and every layer, and that a layer's
   dependency on it, of any kind, is `LayerOnComposer`.

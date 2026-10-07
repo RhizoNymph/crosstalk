@@ -1,0 +1,35 @@
+{
+  "format": "a2a-bench/1",
+  "dataset": "collusion-wiki",
+  "dataset_version": 1,
+  "split": "dev",
+  "source": {
+    "path": "collusion-wiki",
+    "revision": "unknown",
+    "digest": "f30ae717c310ee57e871127ccffaee69beeff4518b7622ecf1a2f005c48de9f3"
+  },
+  "converter": {
+    "version": "0.1.0",
+    "git": "ff3dc44a65daae3f9d99e6dfc191996aabf624e6"
+  },
+  "selection": {},
+  "pace": {
+    "max_ms": 5000,
+    "min_ms": 1000,
+    "seed": 3
+  },
+  "worlds": [
+    {
+      "key": "dse/RelayIndexAlpha",
+      "exchanges": 11
+    },
+    {
+      "key": "dse/SoloScratchPage",
+      "exchanges": 2
+    }
+  ],
+  "files": {
+    "messages": "b8f374090dd6dd26ce274974e4e0f658c1bebe8d76aa5e6221b90287946dc379",
+    "exchanges": "60f4756567626b24f3dbf784cef31235ba203bb7365807e22b039620d62c5c6c"
+  }
+}

@@ -462,7 +462,7 @@ holding just that call (`ledger::stored_call`), decoded back exactly.
 | `extract/step/tests/` | the gateway's step cases on the memory ledger (`cases`), the commit protocol (`protocol`), context serde (`serde`), Postgres against memory (`pg`) over generated delta sequences (`script`) | |
 | `store/ledger.rs`, `migrations/0004_extract_ledger.sql` | the ledger on Postgres | `PgExtractionLedger` (`new`, `state`) |
 | `crates/gateway/src/live/layers/extract.rs` | adapter: the step over the memory ledger, the live blob store and provenance store, into the flow consumer's channel | `Extraction`, `ExtractStepError` (re-exported) |
-| `crates/eval/extract/ai-village.json` | the village's extractor configuration (`persistent_shells: ["bash"]`), for `ct-eval run --extract-config` | |
+| `crates/bench-adapter/extract/ai-village.json` | the village's extractor configuration (`persistent_shells: ["bash"]`), for `ct-bench-detect --extract-config` | |
 | `extract/sites/mod.rs` | site rules | `SitesConfig`, `MediaWikiSite`, `HostPattern`, `SitePath`, `SiteAccess` |
 | `extract/sites/mediawiki.rs` | MediaWiki | `apply`, `canonical_title`, `page_locator` |
 | `extract/sites/github.rs` | GitHub: repositories, files, threads, Pages | `apply` |
@@ -543,7 +543,7 @@ JSON, in the spec's conventions (snake_case keys, enums tagged
   refused. The built-in fetch tools stay known whatever is configured
   (`flow.extract.fetch-tools-configured`, INV-1113). The gateway reads
   this configuration from its config's `extract` section
-  (`LiveConfig::extract`); the eval from `ct-eval run --extract-config`.
+  (`LiveConfig::extract`); the bench adapter from `ct-bench-detect --extract-config`.
 - `persistent_shells`: default none. Names of shell tools whose harness
   keeps one shell per conversation (the AI Village's `bash`), besides the
   built-in Claude Code `Bash` and OpenHands `execute_bash`: a `cd` moves

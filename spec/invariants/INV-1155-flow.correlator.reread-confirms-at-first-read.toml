@@ -15,13 +15,14 @@ of them Decoded([JsonString]) only because the run spans a newline),
 which read as an L4 decode-path bug. The converter labels a reread as a
 Reread negative control; this pins both halves: the first read is found,
 the reread is not predicted, and new content read alongside the reread
-still confirms.
+still confirms. The labelling is the a2a-transmission-bench's collusion-wiki
+converter now; the evidence runs the shape through `ct-bench-detect` and
+checks it against that converter's labels.
 """
 
 [evidence]
 unit = [
-    "crosstalk_eval::tests::wiki_rereads::the_live_detector_finds_every_first_read_and_no_reread",
-    "crosstalk_eval::tests::wiki_rereads::a_second_read_of_the_same_lines_is_a_reread_control",
+    "crosstalk_bench_adapter::tests::rereads::the_live_detector_finds_every_first_read_and_no_reread",
 ]
 
 [evidence-review]

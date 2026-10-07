@@ -15,8 +15,9 @@
 //!    generator and demo swarm) under any dependency kind.
 //!
 //! `store` and `spec` are open to every crate. Only `gateway`, `api`,
-//! `client`, `eval` (the evaluation harness, `crates/eval`), `e2e` (the
-//! end-to-end smoke harness, `crates/e2e`) and `ui` compose layer crates.
+//! `client`, `bench-adapter` (crosstalk's adapter to the
+//! a2a-transmission-bench, `crates/bench-adapter`), `e2e` (the end-to-end
+//! smoke harness, `crates/e2e`) and `ui` compose layer crates.
 //! `ui` (the operator UI, `crosstalk-ui`) is an application: it may depend
 //! on `surface`, `api`, `client`, the memory stores and the world seed; no
 //! layer crate may depend on it. Tool crates are unrestricted in what they
@@ -73,13 +74,14 @@ impl Layer {
 }
 
 /// The crates allowed to wire layer crates together: the gateway, its
-/// HTTP server and client, the evaluation harness, and the operator UI.
+/// HTTP server and client, the bench adapter, the end-to-end harness, and
+/// the operator UI.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Composer {
     Api,
+    BenchAdapter,
     Client,
     E2e,
-    Eval,
     Gateway,
     Ui,
 }
@@ -87,9 +89,9 @@ enum Composer {
 impl Composer {
     const ALL: [Composer; 6] = [
         Composer::Api,
+        Composer::BenchAdapter,
         Composer::Client,
         Composer::E2e,
-        Composer::Eval,
         Composer::Gateway,
         Composer::Ui,
     ];
@@ -97,9 +99,9 @@ impl Composer {
     fn dir(self) -> &'static str {
         match self {
             Composer::Api => "api",
+            Composer::BenchAdapter => "bench-adapter",
             Composer::Client => "client",
             Composer::E2e => "e2e",
-            Composer::Eval => "eval",
             Composer::Gateway => "gateway",
             Composer::Ui => "ui",
         }
@@ -615,7 +617,10 @@ fn roles_classify_by_package_name() {
         Role::of("crosstalk-gateway"),
         Role::Composer(Composer::Gateway)
     );
-    assert_eq!(Role::of("crosstalk-eval"), Role::Composer(Composer::Eval));
+    assert_eq!(
+        Role::of("crosstalk-bench-adapter"),
+        Role::Composer(Composer::BenchAdapter)
+    );
     assert_eq!(Role::of("crosstalk-e2e"), Role::Composer(Composer::E2e));
     assert_eq!(
         Role::of("crosstalk-testkit"),
@@ -636,15 +641,15 @@ fn roles_classify_by_package_name() {
 }
 
 #[test]
-fn eval_composes_gateway_and_layers() {
+fn the_bench_adapter_composes_gateway_and_layers() {
     for kind in [DepKind::Normal, DepKind::Dev, DepKind::Build] {
-        assert_eq!(check(&edge("eval", "gateway", kind)), None);
+        assert_eq!(check(&edge("bench-adapter", "gateway", kind)), None);
         for layer in Layer::ALL {
-            assert_eq!(check(&edge("eval", layer.dir(), kind)), None);
+            assert_eq!(check(&edge("bench-adapter", layer.dir(), kind)), None);
             assert_eq!(
-                check(&edge(layer.dir(), "eval", kind)),
+                check(&edge(layer.dir(), "bench-adapter", kind)),
                 Some(Violation::LayerOnComposer {
-                    edge: edge(layer.dir(), "eval", kind)
+                    edge: edge(layer.dir(), "bench-adapter", kind)
                 })
             );
         }

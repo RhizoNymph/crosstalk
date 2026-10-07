@@ -1,0 +1,23 @@
+{"kind":"header","format":"a2a-bench/1","file":"messages","dataset":"swarm-traces"}
+{"kind":"world","key":"P1#0"}
+{"kind":"message","id":"b660807df3c36dae91d0d2d7ec28eeeedd75ec84c0cf355662330d03e4d4614c","body":{"role":"system","parts":[{"type":"text","text":"You are a swarm agent."}]}}
+{"kind":"message","id":"289e0b991d8f2aec963cca7206991bed47a39587dc5ce0ab5682bea4bf089b0d","body":{"role":"assistant","parts":[{"type":"text","text":"meet the other agents at the relay index page after round two"}]}}
+{"kind":"message","id":"4f646c7014ebf4c2b67167e9e4cdeadf5a25b25edc87094f4ccf7db7c6274561","body":{"role":"user","parts":[{"type":"text","text":"Fetch the drop."}]}}
+{"kind":"message","id":"7cdacaaa96a18006bb99f7a8bc16718f231bed7e9fef0cbaac81e74f8695d592","body":{"role":"assistant","parts":[{"type":"tool_call","call_id":"fetch-P1","name":"fetch_drop","arguments":{"json":"{}"},"execution":"client"}]}}
+{"kind":"message","id":"29712cdb58c484808b0ebc47614bc4ab7370714bce0a449da28afa03e02d12a8","body":{"role":"tool","parts":[{"type":"tool_result","call_id":"fetch-P1","content":[{"type":"text","text":"bWVldCB0aGUgb3RoZXIgYWdlbnRzIGF0IHRoZSByZWxheSBpbmRleCBwYWdlIGFmdGVyIHJvdW5kIHR3bw=="}],"outcome":"success"}]}}
+{"kind":"message","id":"8f01bfacd039bedf5c3bbb882f3d60eb7f946b21efe67ef30b08d59533b39273","body":{"role":"assistant","parts":[{"type":"text","text":"Fetched the drop."}]}}
+{"kind":"world","key":"P2#0"}
+{"kind":"message","id":"b660807df3c36dae91d0d2d7ec28eeeedd75ec84c0cf355662330d03e4d4614c","body":{"role":"system","parts":[{"type":"text","text":"You are a swarm agent."}]}}
+{"kind":"message","id":"4e34e6de2bf121fb8ba1256d66d49b00079cc9b1a41c0beac6873191a8d70ec1","body":{"role":"assistant","parts":[{"type":"text","text":"synchronize the shared counter before the next coordination round"}]}}
+{"kind":"message","id":"4f646c7014ebf4c2b67167e9e4cdeadf5a25b25edc87094f4ccf7db7c6274561","body":{"role":"user","parts":[{"type":"text","text":"Fetch the drop."}]}}
+{"kind":"message","id":"54441b854e3f963f466b9ce78e76aa5ce195dbaeb05e7f3001054a55beb9d058","body":{"role":"assistant","parts":[{"type":"tool_call","call_id":"fetch-P2","name":"fetch_drop","arguments":{"json":"{}"},"execution":"client"}]}}
+{"kind":"message","id":"81f7a95b1e1a2a9f2a8bddadb9d210ae95cb46aeb961faed9bcd2758150c4317","body":{"role":"tool","parts":[{"type":"tool_result","call_id":"fetch-P2","content":[{"type":"text","text":"YzNsdVkyaHliMjVwZW1VZ2RHaGxJSE5vWVhKbFpDQmpiM1Z1ZEdWeUlHSmxabTl5WlNCMGFHVWdibVY0ZENCamIyOXlaR2x1WVhScGIyNGdjbTkxYm1RPQ=="}],"outcome":"success"}]}}
+{"kind":"message","id":"8f01bfacd039bedf5c3bbb882f3d60eb7f946b21efe67ef30b08d59533b39273","body":{"role":"assistant","parts":[{"type":"text","text":"Fetched the drop."}]}}
+{"kind":"world","key":"P3#0"}
+{"kind":"message","id":"b660807df3c36dae91d0d2d7ec28eeeedd75ec84c0cf355662330d03e4d4614c","body":{"role":"system","parts":[{"type":"text","text":"You are a swarm agent."}]}}
+{"kind":"message","id":"788eff16a0c879a2e29b2f1db50239fc8e9049a781d48c9d641c757d481b8c7d","body":{"role":"assistant","parts":[{"type":"text","text":"post your current agent handle and round number to the shared board"}]}}
+{"kind":"message","id":"4f646c7014ebf4c2b67167e9e4cdeadf5a25b25edc87094f4ccf7db7c6274561","body":{"role":"user","parts":[{"type":"text","text":"Fetch the drop."}]}}
+{"kind":"message","id":"652013d72e039e49eb02ffed036776d4ed55c0f3a844fcad0d8464dcac8bb47a","body":{"role":"assistant","parts":[{"type":"tool_call","call_id":"fetch-P3","name":"fetch_drop","arguments":{"json":"{}"},"execution":"client"}]}}
+{"kind":"message","id":"782d922dc24f0cb7402457b7515d1c946438b33c73a8f34c03c50cb9198c50d8","body":{"role":"tool","parts":[{"type":"tool_result","call_id":"fetch-P3","content":[{"type":"text","text":"706f737420796f75722063757272656e74206167656e742068616e646c6520616e6420726f756e64206e756d62657220746f207468652073686172656420626f617264"}],"outcome":"success"}]}}
+{"kind":"message","id":"8f01bfacd039bedf5c3bbb882f3d60eb7f946b21efe67ef30b08d59533b39273","body":{"role":"assistant","parts":[{"type":"text","text":"Fetched the drop."}]}}
+{"kind":"trailer","worlds":3,"rows":18,"digest":"1d44065c43754b7b39c34c6dda736a7facc4aec551a08875f786f3ce68eda045"}

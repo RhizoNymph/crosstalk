@@ -1,0 +1,39 @@
+{
+  "format": "a2a-bench/1",
+  "dataset": "swarm-traces",
+  "dataset_version": 1,
+  "split": "dev",
+  "source": {
+    "path": "swarm-traces",
+    "revision": "unknown",
+    "digest": "865a24597e7420ab1f208768262498a26220951192a6c0cfc857dd131f9a29fa"
+  },
+  "converter": {
+    "version": "0.1.0",
+    "git": "ff3dc44a65daae3f9d99e6dfc191996aabf624e6"
+  },
+  "selection": {},
+  "pace": {
+    "max_ms": 5000,
+    "min_ms": 1000,
+    "seed": 0
+  },
+  "worlds": [
+    {
+      "key": "P1#0",
+      "exchanges": 3
+    },
+    {
+      "key": "P2#0",
+      "exchanges": 3
+    },
+    {
+      "key": "P3#0",
+      "exchanges": 3
+    }
+  ],
+  "files": {
+    "messages": "1d44065c43754b7b39c34c6dda736a7facc4aec551a08875f786f3ce68eda045",
+    "exchanges": "d2f7df45e3dc2d371b57689caa0c6c2153a6c175ca311d6ab482918fd49cca6f"
+  }
+}

@@ -59,8 +59,8 @@ follow the deployment contract in `docs/features/deploy.md` (branch
   capture.
 - Application metrics beyond the capture counters, and tracing spans.
 - TLS on the listeners. The proxy speaks plain HTTP to harnesses.
-- The eval harness itself (`crates/eval`, being built separately): this
-  crate only gives it `Pipeline` and registers it as a composer in the
+- The bench adapter itself (`crates/bench-adapter`): this crate only
+  gives it `Pipeline` and `Live` and registers it as a composer in the
   architecture test.
 
 ## Commands
@@ -288,8 +288,8 @@ operator ──HTTP──▶ crosstalk_api::http::serve (api listener): Auth (Be
 
 `crosstalk_gateway::pipeline` (roadmap P3.1) is the gateway's composition
 behind the proxy, usable without the binary. The `serve` roles build one
-(`gateway::start`), and so does the eval harness (`crosstalk-eval`, a
-composer in the architecture test), over the simulation's stores and
+(`gateway::start`), and so does the bench adapter
+(`crosstalk-bench-adapter`, a composer in the architecture test), over the simulation's stores and
 clock.
 
 ```rust
@@ -361,8 +361,8 @@ let id: EventId = pipeline.ingest(normalized, at).await?;   // Result<EventId, I
 
 `crosstalk_gateway::live::Live` is every layer and the L8 surface in one
 process, over one set of in-memory stores: what the UI binary hosts, what
-the e2e smoke (`crosstalk_e2e::compose`) drives, and what eval builds
-against. It is memory-only (`crosstalk-memory`'s reference stores, plus
+the e2e smoke (`crosstalk_e2e::compose`) drives, and what the bench
+adapter builds against. It is memory-only (`crosstalk-memory`'s reference stores, plus
 L3's `MemoryConversations` and L4's `MemoryProvenanceStore`); the blob
 store is in memory or on disk.
 
@@ -662,7 +662,7 @@ CROSSTALK_SIM_SEEDS=300 cargo test -p crosstalk-gateway tests::dst   # a wider s
 
 ## Invariants and constraints
 
-- Only the composers (`gateway`, and `api`, `client`, `eval` beside it)
+- Only the composers (`gateway`, and `api`, `client`, `bench-adapter` beside it)
   depend on layer crates (`tests/architecture.rs`).
 - There is one path after L1: the capture stage normalizes and calls
   `Ingester::ingest`, the same function `Pipeline::ingest` is.

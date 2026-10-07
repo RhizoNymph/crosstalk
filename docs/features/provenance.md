@@ -786,7 +786,8 @@ feeder reads through it. `PgProvenanceStore` answers the same through
   (INV-1122). The labels are `Decoded([JsonString])` only because a run of
   several lines holds a newline, which the writer's `POST` arguments
   escape; the tool-argument view already undoes that. The eval now labels
-  rereads as controls (eval.md, collusion-wiki labels). No L4 change.
+  rereads as controls (the collusion-wiki labels, now the
+  a2a-transmission-bench's). No L4 change.
 - **Bench run 20261005T184633Z** (boilerplate scenario, run live on
   staging 02103e9 = c3cd7f2): 41 false matches, 17 `UserTurn` and 24
   `ReaderOutput`. `ct-eval replay` of the same run:
