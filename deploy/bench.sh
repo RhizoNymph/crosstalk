@@ -17,6 +17,7 @@
 #                               swarm's end (exports are cut at the watermark)
 #   7. fetch_detections         ct-eval swarm-fetch (export + evidence)
 #      snapshot_inputs          copy the exchange log and blobs into the run dir
+#      bench_detect_inputs      ct-bench-detect fetch (/query answers) and from-export
 #   8. score                    ct-eval swarm, headline, ct-eval's exit code
 # Nothing after step 4 may restart or recreate crosstalk: its detection
 # state is in memory. Every `compose run` here passes --no-deps for that.
@@ -308,6 +309,37 @@ snapshot_inputs() {
         || bench_fail "could not copy the exchange log and blobs into ${dir}"
 }
 
+# One ct-bench-detect step in the bench container; its output goes to
+# <run>/<name>.log, and to the terminal too unless this is a holdout run.
+bench_detect_step() {
+    local run="$1" quiet="$2" name="$3" dir rc=0 out
+    dir="${here}/bench/${run}"
+    shift 3
+    out="$(compose --profile bench run --rm --no-deps -T \
+        --entrypoint /usr/local/bin/ct-bench-detect bench "$@" 2>&1)" || rc=$?
+    if [[ "$quiet" == 1 ]]; then
+        printf '%s\n' "$out" >"${dir}/${name}.log"
+    else
+        printf '%s\n' "$out" | tee "${dir}/${name}.log"
+    fi
+    ((rc == 0)) || bench_fail "ct-bench-detect ${name} failed (exit ${rc}); see ${dir}/${name}.log"
+}
+
+# After the snapshot, while the gateway still holds the run's detections:
+# `ct-bench-detect fetch` saves the gateway's /query answers
+# (exchange-turns.json, span-points.json) beside the export, which only a
+# live gateway can give; `from-export` turns the run directory into
+# a2a-transmission-bench input (bench-input/: manifest.json, messages.jsonl,
+# exchanges.jsonl, predictions.jsonl). Neither scores anything.
+bench_detect_inputs() {
+    local run="$1" quiet="$2"
+    bench_detect_step "$run" "$quiet" detect-fetch \
+        fetch --api "$bench_api_url" --token-env CROSSTALK_API_TOKEN \
+        --truth "/bench/${run}/truth.jsonl" --out "/bench/${run}"
+    bench_detect_step "$run" "$quiet" from-export \
+        from-export --run "/bench/${run}" --out "/bench/${run}/bench-input"
+}
+
 # 8. Score offline against the exchange log and blobs read in place on the
 # data volume; print the headline and return ct-eval's exit code (2: a gate
 # failed).
@@ -400,6 +432,9 @@ bench() {
         echo "scenario=${scenario}"
         echo "seed=${seed}"
         echo "holdout=${holdout}"
+        # The crosstalk commit this checkout was synced from (the sync
+        # writes deploy/SOURCE_COMMIT; a rsynced copy has no .git).
+        echo "crosstalk_commit=$(cat "${here}/SOURCE_COMMIT" 2>/dev/null || echo unknown)"
         echo "database=${CROSSTALK_DB_NAME}"
         echo "swarm=${swarm_args[*]} ${extra[*]}"
         echo "evidence_window_ms=$(demo_flow_ms evidence_window_ms)"
@@ -418,6 +453,7 @@ bench() {
     fetch_detections "$run" "$holdout"
     snapshot_inputs "$run"
     echo "run.sh bench: $(bench_database_tally)" >&2
+    bench_detect_inputs "$run" "$holdout"
     if ((holdout == 1)); then
         # Holdout: no scoring, no report/, no metrics; just say what was saved.
         echo "holdout run ${run#holdout/} (scenario ${scenario}, seed ${seed}) saved, unscored:"

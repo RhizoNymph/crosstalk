@@ -25,6 +25,8 @@ x-demo-image: &demo-image
   build:
     context: ..
     dockerfile: deploy/demo.Dockerfile
+    additional_contexts:
+      a2a: ${A2A_BENCH_GIT:-../../.build-deps/a2a-transmission-bench.git}
   logging: *demo-logging
   environment:
     RUST_LOG: ${DEMO_LOG:-info}
