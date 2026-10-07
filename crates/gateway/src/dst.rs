@@ -237,7 +237,13 @@ async fn frontier_covers_spool(ctx: SimCtx) -> Result<(), CheckFailed> {
             dead_letters: 0,
             oldest_dead_letter: None,
         };
-        let frontier = combine(Some(now), &[stats], std::slice::from_ref(&group), spooled);
+        let frontier = combine(
+            Some(now),
+            &[stats],
+            &[],
+            std::slice::from_ref(&group),
+            spooled,
+        );
         for (id, at) in &published {
             let unsent = !taken.contains_key(id);
             let unacked = !acked.contains(id);

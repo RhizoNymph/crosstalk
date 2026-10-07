@@ -966,7 +966,7 @@ allows. Raising `max_bytes` is the operator's lever.
   `crosstalk_spool_oldest_age_seconds` (by the clock: now minus the oldest
   record's `at`);
 - `crosstalk_spool_appended_total`, `crosstalk_spool_drained_total`;
-- `crosstalk_spool_rejected_total{reason="full|io"}`;
+- `crosstalk_spool_rejected_total{reason="spool_full|spool_io"}` (W8: the label values the dashboards use);
 - `crosstalk_spool_truncated_bytes_total`.
 
 Capture adds `crosstalk_capture_uncaptured_total{reason="spool_full"}`.

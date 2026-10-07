@@ -6,8 +6,19 @@
 //!                  (none yet ─▶ the epoch: nothing settles)
 //! oldest_pending = min( oldest pending `at` and oldest dead letter `at` over the
 //!                       pipeline groups (PgBus::group_stats),
+//!                       the oldest `at` of a log entry a pipeline group takes but
+//!                       has not admitted yet (seq past its admitted_through),
 //!                       the oldest `at` still in the publish spool )
 //! ```
+//!
+//! - A group admits log entries into its deliveries only when its consumer
+//!   asks for the next one, so an envelope can sit in `transport.events`,
+//!   past the group's `admitted_through`, with no delivery row: pending for
+//!   the group, but not in `group_stats`. The frontier reads those entries
+//!   itself (`UNADMITTED`, read-only on the `transport` schema: the bus has
+//!   no read for it yet), so the watermark never passes an envelope a group
+//!   has still to take (found by `integration::pg_frontier_covers_the_spool`:
+//!   a drained spool's envelope was in the log, admitted by no one).
 //!
 //! - A dead letter in a pipeline group holds the watermark back on purpose
 //!   (`topology.frontier.covers-pending`, INV-581).
@@ -34,6 +45,7 @@ use crosstalk_spec::aggregates::watermark::PipelineFrontier;
 use crosstalk_spec::interfaces::l2_transport::{ConsumerGroup, EventBus};
 use crosstalk_spec::interfaces::l7_topology::{EdgeError, FrontierSource};
 use crosstalk_spec::support::Timestamp;
+use crosstalk_store::sqlx::{self, PgPool};
 use crosstalk_transport::{DrainTarget, GroupStats, PgBus, SpoolingBus};
 
 /// Where the spool's backlog is read: its oldest unsent `at`.
@@ -58,6 +70,8 @@ impl SpoolBacklog for () {
 #[derive(Debug, Clone)]
 pub struct PgFrontierSource<P> {
     bus: PgBus,
+    /// The bus's database, for the entries no group admitted yet.
+    pool: PgPool,
     ticks: PgShardTicks,
     shards: NonZeroU16,
     groups: Vec<ConsumerGroup>,
@@ -70,6 +84,7 @@ impl<P: SpoolBacklog> PgFrontierSource<P> {
     /// `groups`.
     pub fn new(
         bus: PgBus,
+        pool: PgPool,
         ticks: PgShardTicks,
         shards: NonZeroU16,
         groups: Vec<ConsumerGroup>,
@@ -77,6 +92,7 @@ impl<P: SpoolBacklog> PgFrontierSource<P> {
     ) -> Self {
         Self {
             bus,
+            pool,
             ticks,
             shards,
             groups,
@@ -85,12 +101,14 @@ impl<P: SpoolBacklog> PgFrontierSource<P> {
     }
 }
 
-/// The frontier from its three readings: the earliest shard tick (`None`
-/// before every shard ticked), every group's backlog (only `groups`
-/// count), and the spool's oldest unsent `at`.
+/// The frontier from its readings: the earliest shard tick (`None`
+/// before every shard ticked), every group's backlog and its oldest
+/// unadmitted log entry (only `groups` count), and the spool's oldest
+/// unsent `at`.
 pub fn combine(
     ticked_through: Option<Timestamp>,
     stats: &[GroupStats],
+    unadmitted: &[(ConsumerGroup, Timestamp)],
     groups: &[ConsumerGroup],
     spooled: Option<Timestamp>,
 ) -> PipelineFrontier {
@@ -98,6 +116,12 @@ pub fn combine(
         .iter()
         .filter(|stats| groups.contains(&stats.group))
         .flat_map(|stats| [stats.oldest_pending, stats.oldest_dead_letter])
+        .chain(
+            unadmitted
+                .iter()
+                .filter(|(group, _)| groups.contains(group))
+                .map(|(_, at)| Some(*at)),
+        )
         .chain([spooled])
         .flatten()
         .min();
@@ -113,11 +137,44 @@ fn read_failed(what: &str, error: impl std::fmt::Debug) -> EdgeError {
     }
 }
 
+/// Per group of `$1`, the earliest `at` of a routed log entry under one of
+/// its subjects past its `admitted_through`: taken by the group, not yet
+/// admitted into its deliveries.
+const UNADMITTED: &str = "SELECT g.name, min(e.at) FROM transport.groups g \
+     JOIN transport.events e ON e.seq > g.admitted_through \
+         AND e.routed AND e.subject = ANY(g.subjects) \
+     WHERE g.name = ANY($1) GROUP BY g.name";
+
+impl<P: SpoolBacklog> PgFrontierSource<P> {
+    async fn unadmitted(&self) -> Result<Vec<(ConsumerGroup, Timestamp)>, EdgeError> {
+        let names: Vec<String> = self.groups.iter().map(|group| group.0.clone()).collect();
+        let rows: Vec<(String, Option<i64>)> = sqlx::query_as(UNADMITTED)
+            .bind(&names)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(|error| read_failed("unadmitted log entries", error))?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|(name, at)| {
+                at.map(|at| {
+                    (
+                        ConsumerGroup(name),
+                        Timestamp::from_micros(u64::try_from(at).unwrap_or(0)),
+                    )
+                })
+            })
+            .collect())
+    }
+}
+
 impl<P: SpoolBacklog> FrontierSource for PgFrontierSource<P> {
     async fn frontier(&self) -> Result<PipelineFrontier, EdgeError> {
         // The spool first: an envelope drained between this read and the
-        // group stats is then in the log, where the stats see it.
+        // log reads is then in the log, where they see it. Then the
+        // unadmitted entries before the deliveries: an entry admitted
+        // between the two reads is a delivery by the second.
         let spooled = self.spool.oldest_spooled();
+        let unadmitted = self.unadmitted().await?;
         let ticked = self
             .ticks
             .ticked_through(self.shards)
@@ -128,7 +185,7 @@ impl<P: SpoolBacklog> FrontierSource for PgFrontierSource<P> {
             .group_stats()
             .await
             .map_err(|error| read_failed("group stats", error))?;
-        Ok(combine(ticked, &stats, &self.groups, spooled))
+        Ok(combine(ticked, &stats, &unadmitted, &self.groups, spooled))
     }
 }
 
@@ -162,6 +219,7 @@ mod tests {
         let frontier = combine(
             Some(at(50)),
             &[stats("a", None, None)],
+            &[],
             &groups(&["a"]),
             None,
         );
@@ -176,7 +234,7 @@ mod tests {
 
     #[test]
     fn no_tick_yet_settles_nothing() {
-        let frontier = combine(None, &[], &groups(&["a"]), None);
+        let frontier = combine(None, &[], &[], &groups(&["a"]), None);
         assert_eq!(frontier.ticked_through, at(0));
     }
 
@@ -187,7 +245,7 @@ mod tests {
             stats("b", None, Some(30)),
             stats("outside", Some(10), Some(5)),
         ];
-        let frontier = combine(Some(at(50)), &all, &groups(&["a", "b"]), None);
+        let frontier = combine(Some(at(50)), &all, &[], &groups(&["a", "b"]), None);
         assert_eq!(frontier.oldest_pending, Some(at(30)));
     }
 
@@ -203,6 +261,7 @@ mod tests {
             let frontier = combine(
                 Some(at(50)),
                 &[stats("a", pending, None)],
+                &[],
                 &groups(&["a"]),
                 spooled.map(at),
             );

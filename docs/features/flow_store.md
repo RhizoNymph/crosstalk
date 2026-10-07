@@ -40,11 +40,16 @@ model-tested against the `crosstalk-memory` reference stores.
 - `ResourceExtractor`, `Correlator` and the flow bus consumer (sibling
   branches `feat/flow-extract`, `feat/flow-correlator`). The consumer calls
   these stores; the stores never call it.
-- `AccessStore::accesses` and `TransmissionStore::list` on Postgres: the
-  tables are shaped for them (accesses by id, transmissions by
-  `(state, channel_id, opened_at)`). `PgTransmissionStore::list` is a TODO
-  that returns `TransmissionStoreError::Store`; the memory store
-  (`MemoryVerdicts`) implements it.
+- `AccessStore::accesses` on Postgres (the table is shaped for it:
+  accesses by id). `PgTransmissionStore::list` is implemented (P7.3 W8):
+  one `REPEATABLE READ` snapshot of `flow.transmissions`, the window on
+  `opened_at` (half-open), the states by their column, the channel resolved
+  through `flow.channels.superseded_by` on both sides (one hop), newest id
+  first, keyset-paged on the id with a `flow.cursors` cursor (list `tl`)
+  binding the query as given; checked against `MemoryVerdicts` by
+  `store::tests::list::pg_list_agrees_with_the_memory_reference` (a query
+  matrix of windows, state sets, channels including a superseded and an
+  unknown one, page sizes 1, 3 and 100).
 - Retention of old rows, and cursor pruning on a schedule (the function
   exists; nothing calls it yet).
 - Gateway wiring.

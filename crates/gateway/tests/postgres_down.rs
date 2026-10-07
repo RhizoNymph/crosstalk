@@ -278,6 +278,16 @@ async fn a_full_spool_drops_counted_and_the_proxy_still_answers() {
         text.lines().any(|candidate| candidate == line),
         "missing {line}\n{text}"
     );
+    // The label values crosstalk-infra's dashboard and alerts select on.
+    for line in [
+        format!("crosstalk_spool_rejected_total{{reason=\"spool_full\"}} {sent}"),
+        "crosstalk_spool_rejected_total{reason=\"spool_io\"} 0".to_owned(),
+    ] {
+        assert!(
+            text.lines().any(|candidate| candidate == line),
+            "missing {line}\n{text}"
+        );
+    }
 
     running.shutdown().await;
 }

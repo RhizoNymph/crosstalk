@@ -325,6 +325,7 @@ async fn pg_frontier_covers_pending_deliveries() {
     let outside = ConsumerGroup("outside".to_owned());
     let frontier = PgFrontierSource::new(
         bus.clone(),
+        db.pool().clone(),
         PgShardTicks::new(db.pool().clone()),
         shards,
         vec![pipeline.clone()],
@@ -412,6 +413,7 @@ async fn pg_frontier_covers_the_spool() {
     let group = Slot::L3Reconstruct.group();
     let frontier = PgFrontierSource::new(
         bus.clone(),
+        db.pool().clone(),
         PgShardTicks::new(db.pool().clone()),
         NonZeroU16::MIN,
         vec![group.clone()],
@@ -443,7 +445,7 @@ async fn pg_frontier_covers_the_spool() {
     assert_eq!(
         frontier.frontier().await.expect("reads").oldest_pending,
         Some(at),
-        "drained into the group, still pending"
+        "drained into the log, not yet admitted by the group: still pending"
     );
     spool.close().await;
     bus.shutdown();

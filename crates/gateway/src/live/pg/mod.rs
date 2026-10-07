@@ -493,6 +493,7 @@ impl Live<PgSet> {
                 spool.clone(),
                 crate::live::frontier::PgFrontierSource::new(
                     bus.clone(),
+                    pool.clone(),
                     PgShardTicks::new(pool.clone()),
                     shards,
                     UPSTREAM.iter().map(|slot| slot.group()).collect(),

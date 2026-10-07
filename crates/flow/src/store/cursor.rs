@@ -25,6 +25,7 @@ pub(crate) enum List {
     Channels,
     ChannelTransmissions,
     ResourceUse,
+    Transmissions,
 }
 
 impl List {
@@ -33,6 +34,7 @@ impl List {
             List::Channels => "ch",
             List::ChannelTransmissions => "tx",
             List::ResourceUse => "ru",
+            List::Transmissions => "tl",
         }
     }
 }

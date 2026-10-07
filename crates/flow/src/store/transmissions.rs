@@ -35,16 +35,20 @@ use std::collections::{BTreeMap, BTreeSet};
 use crosstalk_spec::ids::{ExchangeId, OperatorId, SpanId, TransmissionId};
 use crosstalk_spec::interfaces::l3_reconstruction::AgentDirectory;
 use crosstalk_spec::interfaces::l5_flow::transmissions::{
-    MatchKey, TransmissionStore, TransmissionStoreError,
+    MatchKey, TransmissionQuery, TransmissionStore, TransmissionStoreError,
 };
 use crosstalk_spec::interfaces::l5_flow::verdicts::{TransmissionVerdicts, VerdictError};
+use crosstalk_spec::interfaces::l8_surface::summary::TransmissionStateKind;
+use crosstalk_spec::paging::{Page, PageRequest, TransmissionList};
 use crosstalk_spec::support::{TimeWindow, Timestamp};
 use crosstalk_store::{SerializableRetry, TxError, retry_serializable};
 use sqlx::{PgConnection, PgPool};
 
 use super::codec::{from_json, id_text, json, micros};
-use super::error::{Fault, failed, finished};
+use super::cursor::{self, List};
+use super::error::{Fault, StoreFault, failed, finished};
 use super::outbox::{EventSink, Relay, stage};
+use super::registry::canonical;
 
 /// The transmission store on Postgres. Clones share the pool.
 pub struct PgTransmissionStore<D, S> {
@@ -108,6 +112,36 @@ pub(crate) fn state_column(state: &TransmissionState) -> &'static str {
         TransmissionState::Aggregated { .. } => "aggregated",
         TransmissionState::Discarded { .. } => "discarded",
     }
+}
+
+/// The `state` column a state kind is stored under ([`state_column`]).
+fn kind_column(kind: TransmissionStateKind) -> &'static str {
+    match kind {
+        TransmissionStateKind::Detected => "detected",
+        TransmissionStateKind::AwaitingContent => "awaiting_content",
+        TransmissionStateKind::Suspected => "suspected",
+        TransmissionStateKind::Confirmed => "confirmed",
+        TransmissionStateKind::Classified => "classified",
+        TransmissionStateKind::Aggregated => "aggregated",
+        TransmissionStateKind::Discarded => "discarded",
+    }
+}
+
+/// What a `list` cursor binds: the query as given.
+fn list_binding(query: &TransmissionQuery) -> Result<String, Fault> {
+    let window = (
+        query.window.start().as_micros(),
+        query.window.end().as_micros(),
+    );
+    let states: Option<Vec<&'static str>> = query
+        .states
+        .as_ref()
+        .map(|states| states.iter().map(|kind| kind_column(*kind)).collect());
+    let channel = query.channel.map(id_text);
+    Ok(json(
+        "transmission list binding",
+        &(window, states, channel),
+    )?)
 }
 
 /// The `route` and `channel_id` columns of a route.
@@ -295,20 +329,80 @@ impl<D: Send + Sync, S: EventSink> TransmissionStore for PgTransmissionStore<D, 
         stored(&mut conn, id, false).await.map_err(failed)
     }
 
-    // TODO(flow-store): list over `flow.transmissions` (opened_at window,
-    // state column, channel_id resolved through the supersession table),
-    // keyset-paged on id. Live and eval read the memory store today.
+    /// `flow.transmissions` in one `REPEATABLE READ` snapshot: the window
+    /// on `opened_at` (half-open, as `TimeWindow::contains`), the states by
+    /// their column, the channel resolved through `flow.channels`'
+    /// supersessions on both sides (one hop: a superseding channel is never
+    /// superseded), newest id first, keyset-paged on the id. The cursor
+    /// binds the query as given (`flow.cursors`).
     async fn list(
         &self,
-        _query: &crosstalk_spec::interfaces::l5_flow::transmissions::TransmissionQuery,
-        _page: &crosstalk_spec::paging::PageRequest<crosstalk_spec::paging::TransmissionList>,
-    ) -> Result<
-        crosstalk_spec::paging::Page<Transmission, crosstalk_spec::paging::TransmissionList>,
-        TransmissionStoreError,
-    > {
-        Err(TransmissionStoreError::Store {
-            reason: "TransmissionStore::list is not implemented on Postgres yet".to_owned(),
-        })
+        query: &TransmissionQuery,
+        page: &PageRequest<TransmissionList>,
+    ) -> Result<Page<Transmission, TransmissionList>, TransmissionStoreError> {
+        let binding = list_binding(query).map_err(failed)?;
+        let start = micros("list window start", query.window.start()).map_err(failed)?;
+        let end = micros("list window end", query.window.end()).map_err(failed)?;
+        let states: Option<Vec<&'static str>> = query
+            .states
+            .as_ref()
+            .map(|states| states.iter().map(|kind| kind_column(*kind)).collect());
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            .await
+            .map_err(failed)?;
+        let after: Option<String> =
+            cursor::resolve(&mut tx, List::Transmissions, &binding, page.after.as_ref())
+                .await
+                .map_err(failed)?
+                .map_err(|_| TransmissionStoreError::InvalidCursor)?;
+        let channel = match query.channel {
+            None => None,
+            Some(wanted) => Some(id_text(
+                canonical(&mut tx, wanted)
+                    .await
+                    .map_err(failed)?
+                    .unwrap_or(wanted),
+            )),
+        };
+        let limit = i64::from(page.size.get().get()) + 1;
+        let rows: Vec<(String,)> = sqlx::query_as(
+            "SELECT t.transmission FROM flow.transmissions t \
+             LEFT JOIN flow.channels c ON c.id = t.channel_id \
+             WHERE t.opened_at >= $1 AND t.opened_at < $2 \
+               AND ($3::text[] IS NULL OR t.state = ANY($3::text[])) \
+               AND ($4::text IS NULL OR (t.route = 'channel' \
+                    AND coalesce(c.superseded_by, t.channel_id) = $4::text)) \
+               AND ($5::text IS NULL OR t.id < $5::text) \
+             ORDER BY t.id DESC LIMIT $6",
+        )
+        .bind(start)
+        .bind(end)
+        .bind(states)
+        .bind(channel)
+        .bind(after)
+        .bind(limit)
+        .fetch_all(&mut *tx)
+        .await
+        .map_err(failed)?;
+        tx.commit().await.map_err(failed)?;
+        let mut items = Vec::with_capacity(rows.len());
+        for (text,) in rows {
+            items.push(
+                from_json::<Transmission>("transmissions.transmission", &text).map_err(failed)?,
+            );
+        }
+        cursor::page(
+            &self.pool,
+            List::Transmissions,
+            &binding,
+            items,
+            page.size,
+            |transmission| id_text(transmission.id),
+        )
+        .await
+        .map_err(TransmissionStoreError::store)
     }
 
     async fn holding(

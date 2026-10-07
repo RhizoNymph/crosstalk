@@ -5,6 +5,7 @@
 mod concurrency;
 mod detection;
 mod holding;
+mod list;
 mod model;
 mod registry;
 pub(crate) mod support;

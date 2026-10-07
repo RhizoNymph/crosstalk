@@ -7,6 +7,8 @@
 //! `crosstalk_spool_bytes`, `crosstalk_spool_records`,
 //! `crosstalk_spool_oldest_age_seconds`, `crosstalk_spool_appended_total`,
 //! `crosstalk_spool_drained_total`, `crosstalk_spool_rejected_total{reason}`
+//! (`spool_full` or `spool_io`, the values crosstalk-infra's dashboard and
+//! alerts select on)
 //! and `crosstalk_spool_truncated_bytes_total`.
 
 use std::fmt::Write as _;
@@ -155,8 +157,8 @@ fn spool_series(out: &mut String, spool: &super::SpoolReport) {
         "crosstalk_spool_rejected_total",
         "Appends refused, by reason.",
         &[
-            (&[("reason", "full")], spool.rejected_full),
-            (&[("reason", "io")], spool.rejected_io),
+            (&[("reason", "spool_full")], spool.rejected_full),
+            (&[("reason", "spool_io")], spool.rejected_io),
         ],
     );
     counter(

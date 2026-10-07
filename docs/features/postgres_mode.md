@@ -116,11 +116,20 @@ touching its tables), for restart tests.
 
 ```text
 ticked_through = PgShardTicks::ticked_through(shards)          (epoch until every shard ticked)
-oldest_pending = min(pending and dead-letter `at` of the five pipeline groups, spool oldest_at)
+oldest_pending = min(pending and dead-letter `at` of the five pipeline groups,
+                     oldest `at` of a log entry a pipeline group takes but has not admitted,
+                     spool oldest_at)
 ```
 
-The spool is read before the group stats, so an envelope drained between
-the two reads is counted by one of them. In-flight proxy exchanges are
+A group admits log entries into deliveries only when its consumer asks
+for the next one, so `group_stats` misses an envelope in `transport.events`
+past the group's `admitted_through` (the Postgres run of
+`pg_frontier_covers_the_spool` found it: a drained envelope was pending in
+no statistic). The frontier reads those entries itself (`UNADMITTED`, a
+read-only query of the `transport` schema; the bus has no read for it). The
+spool is read first, then the unadmitted entries, then the group stats, so
+an envelope moving from the spool to the log, or from the log into a
+delivery, between two reads is counted by one of them. In-flight proxy exchanges are
 not counted, as in memory mode (no registry exists; their times are later
 than `now - settle_after`).
 
@@ -150,7 +159,10 @@ accesses_refed, deliveries_redelivered}` and `spool.{state, records,
 bytes, oldest_at_micros, oldest_age_seconds, max_bytes, appended,
 drained, rejected_full, rejected_io, truncated_bytes,
 capture_spool_full}`; `live.watermark_micros` is the persisted watermark
-from the first report. `/metrics` adds `crosstalk_spool_*` and the
+from the first report. `/metrics` adds `crosstalk_spool_*` (`state{state}`, `bytes`,
+`records`, `oldest_age_seconds`, `appended_total`, `drained_total`,
+`rejected_total{reason="spool_full"|"spool_io"}`, `truncated_bytes_total`:
+the names and label values crosstalk-infra's dashboard and alerts use) and the
 `spool_full` reason of `crosstalk_capture_uncaptured_total` and outcome of
 `crosstalk_pipeline_exchanges_total`.
 
@@ -249,6 +261,9 @@ topics,search,projections,alerts}`).
 
 ## Gaps
 
+- `PgTransmissionStore::list` was a stub returning `Store`; W8 implemented
+  it (see [flow_store](flow_store.md)). No other "not implemented on
+  Postgres" stub is left in the stores `serve` uses.
 - `PgChannelRegistry` implements neither the spec's `AccessStore` nor a
   resource read by id; `PgEvidence` reads `flow.accesses`/`flow.resources`
   itself, and `PgQuiet` counts the four outboxes by SQL. Both belong in

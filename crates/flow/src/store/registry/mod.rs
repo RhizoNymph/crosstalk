@@ -17,6 +17,7 @@ mod traffic;
 
 #[cfg(test)]
 pub(crate) use detection::{advanced, next_origin};
+pub(crate) use rows::canonical;
 
 use std::sync::Arc;
 
