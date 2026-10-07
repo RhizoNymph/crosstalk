@@ -334,8 +334,10 @@ like the `DEMO_*` variables they are not in `.env.example`.
 - **A holdout run is never scored here.** `--holdout` stops before
   scoring and prints no metrics; holdout seeds (>= 1,000,000) are refused
   without `--holdout`, and `--holdout` refuses any other seed.
-- **One run, one directory.** The run id is the UTC second the swarm
-  starts; an existing directory stops the run.
+- **One run, one directory.** The run id is the UTC second the bench
+  stamps the run, just after the confirmation and before the stack starts
+  (the run's database is named from it); an existing directory stops the
+  run. Scoring windows come from the truth header, not the run id.
 - **The world is fresh:** an empty wiki and empty detection state at the
   start of every run. The exchange log and blobs are not fresh, by design.
 - **The scenario is recorded** in `bench.env` and the truth header, so a
