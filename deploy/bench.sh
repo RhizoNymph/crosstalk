@@ -8,7 +8,9 @@
 #   1. confirm_restart          say what restarts; ask unless --yes
 #      fresh_database           a new database for the run (crosstalk_bench_<run>)
 #   2. start_stack              `up -d --build` with the demo override
-#   3. require_detection        fail fast unless /readyz has `live` and `api`
+#   3. require_detection        Postgres mode: wait for recovery done, lock
+#                               held, capture durable; then fail fast unless
+#                               /readyz has `live` and `api`
 #                               running and the API takes the token
 #   4. fresh_world              restart wiki and crosstalk, wait for health,
 #                               check step 3 again
@@ -173,15 +175,48 @@ ready_task() {
     grep -Eq "\"name\":[[:space:]]*\"$1\",[[:space:]]*\"running\":[[:space:]]*true" <<<"$2"
 }
 
-# 3. Fail fast, before a run's worth of traffic: the gateway must run the
+# /readyz string field `$1` ("" when absent: memory mode leaves the
+# Postgres-mode fields out).
+readyz_field() {
+    sed -n "s/.*\"$1\":[[:space:]]*\"\([^\"]*\)\".*/\1/p" <<<"$2"
+}
+
+# Postgres mode (a `store` section): the pipeline recovers after the process
+# starts, with /readyz already 200 (degraded). Wait until recovery is done,
+# this process holds the pipeline lock and capture writes straight to the
+# bus, so the run's first exchange is not measured against a recovering
+# pipeline. Memory mode has no `recovery` field and returns at once. Prints
+# the last /readyz body.
+wait_pipeline_recovered() {
+    local timeout="$1" ready deadline recovery lock capture
+    deadline=$((SECONDS + timeout))
+    while true; do
+        ready="$(curl -sS --max-time 5 "$(ops_url)/readyz")" \
+            || bench_fail "$(ops_url)/readyz did not answer"
+        recovery="$(readyz_field recovery "$ready")"
+        [[ -z "$recovery" ]] && break
+        lock="$(readyz_field pipeline_lock "$ready")"
+        capture="$(readyz_field capture "$ready")"
+        [[ "$recovery" == done && "$lock" == held && "$capture" == durable ]] && break
+        if ((SECONDS >= deadline)); then
+            echo "run.sh bench: the Postgres-mode pipeline is not ready after ${timeout}s (recovery ${recovery}, pipeline_lock ${lock}, capture ${capture})" >&2
+            echo "  /readyz: ${ready}" >&2
+            exit 1
+        fi
+        sleep 2
+    done
+    printf '%s\n' "$ready"
+}
+
+# 3. Fail fast, before a run's worth of traffic: in Postgres mode, once the
+# pipeline has recovered (wait_pipeline_recovered), the gateway must run the
 # Live detection pipeline (`live`: every layer stage task running) and serve
 # the operator API (`api`: listener bound), and the API must take our token.
 # Without `live` the export is empty and the score a real but meaningless
 # zero; without `api` there is no export at all.
 require_detection() {
     local ready code
-    ready="$(curl -sS --max-time 5 "$(ops_url)/readyz")" \
-        || bench_fail "$(ops_url)/readyz did not answer"
+    ready="$(wait_pipeline_recovered 180)"
     if ! ready_task api "$ready"; then
         echo "run.sh bench: the gateway does not expose detections (no running \`api\` task in /readyz); see docs/features/bench.md" >&2
         echo "  /readyz: ${ready}" >&2

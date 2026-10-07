@@ -128,7 +128,9 @@ bash deploy/run.sh bench --yes --holdout --seed 1000002 --scenario boilerplate
 run.sh bench
  1 confirm_restart ── prints what restarts; asks on a TTY unless --yes
  2 start_stack ────── compose up -d --build   (base + compose.demo.yaml)
- 3 require_detection ── host curl /readyz: tasks `live` and `api` running;
+ 3 require_detection ── host curl /readyz: Postgres mode waits (≤180 s) for
+                        recovery done, pipeline_lock held, capture durable;
+                        then tasks `live` and `api` running;
                         host curl GET /operators with the API token: 200
  4 fresh_world ────── compose restart wiki crosstalk; wait until both are healthy; step 3 again
  5 run_swarm ──────── compose run --no-deps swarm --agents … --ground-truth /bench/<run>/truth.jsonl
@@ -155,7 +157,12 @@ Step by step:
    build makes sure the demo image carries `ct-eval`. It then waits for
    `crosstalk` to be healthy.
 3. **Fail fast.** From the host, the bench reads the ops listener's
-   `/readyz` and requires two running tasks: `live` (every layer stage of
+   `/readyz`. In Postgres mode (a `store` section; `/readyz` then carries
+   `recovery`) `/readyz` is already 200 (degraded) while the pipeline
+   recovers, so the bench first polls it for up to 180 s until `recovery`
+   is `done`, `pipeline_lock` is `held` and `capture` is `durable`, and
+   stops with exit 1 if not (`wait_pipeline_recovered`); memory mode skips
+   the wait. It then requires two running tasks: `live` (every layer stage of
    the Live detection pipeline is running) and `api` (the operator API's
    listener is bound). It then calls `GET /operators` on the published API
    port with `CROSSTALK_API_TOKEN` from `deploy/.env` and requires a 200.
@@ -299,7 +306,7 @@ the upstream URL) to differ:
 | File | Role |
 | --- | --- |
 | `deploy/run.sh` | Usage text and the `bench` subcommand; sources `deploy/bench.sh` |
-| `deploy/bench.sh` | The bench: one function per step (`confirm_restart`, `start_stack`, `require_detection`, `fresh_world`, `run_swarm`, `wait_caught_up`, `fetch_detections`, `score`), plus `bench` (options), `ops_url`, `api_url`, `env_value`, `ready_task`, `healthz_watermark`, `demo_flow_ms`, `wait_healthy` |
+| `deploy/bench.sh` | The bench: one function per step (`confirm_restart`, `start_stack`, `require_detection`, `fresh_world`, `run_swarm`, `wait_caught_up`, `fetch_detections`, `score`), plus `bench` (options), `ops_url`, `api_url`, `env_value`, `ready_task`, `readyz_field`, `wait_pipeline_recovered`, `healthz_watermark`, `demo_flow_ms`, `wait_healthy` |
 | `deploy/compose.demo.yaml` | The `bench` service: the demo image with entrypoint `ct-eval`, profile `bench`, `restart: "no"`, `user: ${BENCH_UID:-65532}:${BENCH_GID:-65532}`, `CROSSTALK_API_TOKEN`, `./bench:/bench` and `data:/var/lib/crosstalk:ro` |
 | `deploy/demo.Dockerfile` | Builds `crosstalk-demo` and `ct-eval` in one cargo invocation; ships `ct-eval` at `/usr/local/bin/ct-eval` and `crates/eval/gates.toml` at `/usr/local/share/crosstalk-eval/gates.toml`. The `.dockerignore` already admits `crates/` and `spec/` and excludes only `deploy`, `target`, VCS and editor files, which the build does not need |
 | `.gitignore` | `/deploy/bench/` |
