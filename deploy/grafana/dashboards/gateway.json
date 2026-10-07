@@ -1163,6 +1163,296 @@
     },
     {
       "type": "row",
+      "title": "Spool (Postgres mode)",
+      "collapsed": false,
+      "id": 23,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 32
+      },
+      "panels": []
+    },
+    {
+      "type": "timeseries",
+      "title": "Spool size",
+      "description": "Captures written to <data dir>/spool while Postgres is unreachable (Postgres mode only). The limit line assumes the default spool.max of 1 GiB; past it captures are rejected.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${ds_prometheus}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${ds_prometheus}"
+          },
+          "expr": "max(crosstalk_spool_bytes{job=\"crosstalk\"})",
+          "refId": "A",
+          "legendFormat": "spooled",
+          "range": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${ds_prometheus}"
+          },
+          "expr": "vector(1073741824)",
+          "refId": "B",
+          "legendFormat": "limit (default 1 GiB)",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "bytes",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "gradientMode": "none",
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 24,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 33
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Oldest spooled capture",
+      "description": "How long the oldest capture has waited to drain, and how many are waiting. Non-zero for long means the database has been down that long.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${ds_prometheus}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${ds_prometheus}"
+          },
+          "expr": "max(crosstalk_spool_oldest_age_seconds{job=\"crosstalk\"})",
+          "refId": "A",
+          "legendFormat": "oldest age",
+          "range": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${ds_prometheus}"
+          },
+          "expr": "max(crosstalk_spool_records{job=\"crosstalk\"})",
+          "refId": "B",
+          "legendFormat": "records",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "gradientMode": "none",
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 25,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 33
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Spool appended / drained / rejected per second",
+      "description": "Appended: captures spooled. Drained: delivered to the bus after the database came back. Rejected (spool_full, spool_io): captures lost.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${ds_prometheus}"
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${ds_prometheus}"
+          },
+          "expr": "sum(rate(crosstalk_spool_appended_total{job=\"crosstalk\"}[$__rate_interval]))",
+          "refId": "A",
+          "legendFormat": "appended",
+          "range": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${ds_prometheus}"
+          },
+          "expr": "sum(rate(crosstalk_spool_drained_total{job=\"crosstalk\"}[$__rate_interval]))",
+          "refId": "B",
+          "legendFormat": "drained",
+          "range": true
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${ds_prometheus}"
+          },
+          "expr": "sum by (reason) (rate(crosstalk_spool_rejected_total{job=\"crosstalk\"}[$__rate_interval]))",
+          "refId": "C",
+          "legendFormat": "rejected: {{reason}}",
+          "range": true
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 10,
+            "showPoints": "never",
+            "spanNulls": false,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            },
+            "axisPlacement": "auto",
+            "gradientMode": "none",
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "color": {
+            "mode": "palette-classic"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "min": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true,
+          "calcs": [
+            "mean",
+            "max",
+            "lastNotNull"
+          ]
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "id": 26,
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 33
+      }
+    },
+    {
+      "type": "row",
       "title": "Exchange log",
       "collapsed": false,
       "id": 14,
@@ -1170,7 +1460,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 32
+        "y": 41
       },
       "panels": []
     },
@@ -1297,7 +1587,7 @@
         "h": 8,
         "w": 16,
         "x": 0,
-        "y": 33
+        "y": 42
       }
     },
     {
@@ -1388,7 +1678,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 33
+        "y": 42
       }
     },
     {
@@ -1400,7 +1690,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 41
+        "y": 50
       },
       "panels": []
     },
@@ -1488,7 +1778,7 @@
         "h": 7,
         "w": 24,
         "x": 0,
-        "y": 42
+        "y": 51
       }
     },
     {
@@ -1500,7 +1790,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 49
+        "y": 58
       },
       "panels": []
     },
@@ -1612,7 +1902,7 @@
         "h": 7,
         "w": 24,
         "x": 0,
-        "y": 50
+        "y": 59
       }
     },
     {
@@ -1651,7 +1941,7 @@
         "h": 14,
         "w": 24,
         "x": 0,
-        "y": 57
+        "y": 66
       }
     }
   ]
