@@ -357,7 +357,8 @@ before each prompt.
 The collector logs progress every 10 s and returns these figures:
 
 - requests, successes, and failures by outcome (`http <status>`,
-  `transport`, `malformed`);
+  `unsent`: refused before it was sent, so the gateway never saw it;
+  `transport`: sent, then no head, a cut body or a stall; `malformed`);
 - follow-ups and req/s;
 - bytes sent and received;
 - time to first byte and total time, p50/p95/p99/max, for streaming and
@@ -377,8 +378,14 @@ writes the file below. `--json` prints the report as JSON instead of text.
 
 The schema is agreed with ct-eval's owner. Every line is one JSON object;
 the first line is the header. `turn` is the 0-based ordinal of generation
-requests (POST /v1/messages) the agent sent in that session, counting
-failed and retried ones and nothing else.
+requests (POST /v1/messages) the agent sent in that session that may have
+reached the gateway, counting failed and retried ones and nothing else. A
+request refused before it was sent (`unsent`: the connection refused while
+the gateway is down or restarting, a failed handshake, an unbuildable
+request) claims no ordinal: the gateway has no exchange for it, so counting
+it would put every later turn of the session one past the exchanges the
+gateway captured. A send error or a head timeout still counts, since the
+gateway may have read the request and captured it.
 
 ```
 {"kind":"header","version":2,"scenario":"headline","world":"swarm-<run>","run":"<ulid>","seed":42,"agents":150,"keys":150,"agents_per_key":1,
@@ -430,10 +437,11 @@ Meanings, and where each value comes from:
   and `tools::execute` stamps it on the `WriteRecord`.
 - **`reader_turn`, `reader_tool_use_id`.** The reader's first request whose
   `messages` carry the GET's tool_result (the request sent after the read
-  ran), and the GET tool_use's id. `exchange` claims the turn, then hands
-  every `PendingRead` to `deliver_reads` with the body value it is about to
-  send. If that attempt fails, the retry carries the result too, but the
-  row keeps the first.
+  ran), and the GET tool_use's id. `exchange` opens the request, claims the
+  turn unless it was refused before it was sent, then hands every
+  `PendingRead` to `deliver_reads` with the body value it sent. A refused
+  attempt leaves the reads pending for the retry. If a sent attempt fails,
+  the retry carries the result too, but the row keeps the first.
 - **`content.at`.** `message` and `block` index `messages` and that
   message's `content` exactly as serialised and sent:
   `conversation::locate_result` searches the very `serde_json::Value` the
@@ -605,7 +613,7 @@ demo services.
 | `tests::generate` | Identical bytes for the same seed and body; another seed or body changes them. Write and read markers produce the matching tool call. Undeclared tools are never called. Tool results get a closing answer. System turns are skipped. Malformed requests are refused. Timing and length stay in range, and `max_tokens` caps the length |
 | `tests::conversation` | Each body's messages extend the previous body's. A tool call is answered by its result, refusing out-of-order and foreign results. The Claude Code shape puts a system turn before each prompt. Agent A's generated page reaches agent B's next request verbatim, through the real wiki store and the fake model |
 | `tests::truth` | Page URLs from one function (trailing slash, host case, port 80, IPv6) and their round trip through the marker. The one declared tool's schema. `WikiCall` accepts GET/PUT of a wiki page and refuses other tools, methods, URLs and body-less PUTs. The fake model's GET and PUT carry the marker's base URL, deterministically. The agent runs a batch of calls against a real wiki: results, the `WikiWrite` with its turn, and the pending reads. `locate_result` with and without the system turn. Turn claiming, excerpts, digests (sha256 known answer), run ids. The book: every kind, rereads per session, reads waiting for their write, unattributed reads, counts. Every row kind's exact keys and order |
-| `tests::truth_run` | Swarm runs over sockets against a recording model that fails the first attempt of about half the bodies (529). Every row is checked against the recorded requests: the header and clusters; `reader_turn` is the first request of the session carrying the result and `content.at` its exact block; the hashes are of those bytes, which are in the raw body; `writer_turn`'s request answers with the PUT whose body is the text; some ordinals count failed requests; the report's counts equal the rows; in both shapes; and all four read kinds appear |
+| `tests::truth_run` | Swarm runs over sockets against a recording model that fails the first attempt of about half the bodies (529). Every row is checked against the recorded requests: the header and clusters; `reader_turn` is the first request of the session carrying the result and `content.at` its exact block; the hashes are of those bytes, which are in the raw body; `writer_turn`'s request answers with the PUT whose body is the text; some ordinals count failed requests; the report's counts equal the rows; in both shapes; and all four read kinds appear. `refused_requests_claim_no_turn` runs against a port nothing listens on for the first 300 ms (a gateway down or restarting): the refused requests are `unsent`, the model received every other counted request, and every row still points at the requests it received |
 | `tests::units` | Spans, fractions, durations, the random stream, markers, page names, topics, the wiki store, nearest-rank percentiles, base URLs, and the CLI (accepted and refused lines) |
 | `tests::servers` | Over sockets: a paced stream (first byte, spread, same bytes twice); the JSON document, 401, 400, count_tokens, 404 and the healthcheck; the wiki (versions, authors, listing, limits); and a short swarm run whose report and ground-truth file show writes, reads and cross-agent transmissions with no failures |
 | `tests::deploy` | The demo config equals the deployment config except for the upstream URL |
