@@ -15,6 +15,18 @@ ENV RUSTUP_TOOLCHAIN=${RUST_TOOLCHAIN}
 RUN rustup toolchain install "${RUST_TOOLCHAIN}" --profile minimal
 
 WORKDIR /src
+# The workspace depends on the private a2a-transmission-bench repo by git
+# tag (Cargo.lock pins its URL and commit). The build gets it from a bare
+# mirror passed as the `a2a` build context (compose: A2A_BENCH_GIT); git's
+# insteadOf sends cargo's fetch of the GitHub URL to that mirror, so no
+# token is needed and the lockfile is unchanged.
+RUN apt-get update && apt-get install -y --no-install-recommends git \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=a2a . /deps/a2a-transmission-bench.git
+RUN git config --global url."file:///deps/a2a-transmission-bench.git".insteadOf \
+        "https://github.com/RhizoNymph/a2a-transmission-bench" \
+    && git config --global --add safe.directory '*'
+ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
 COPY . .
 
 # Cache mounts keep the registry and target dir across builds; the binary is

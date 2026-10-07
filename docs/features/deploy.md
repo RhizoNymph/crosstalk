@@ -329,12 +329,18 @@ The checkout reaches the host by rsync rather than git, so any worktree
 can be deployed (a worktree's `.git` is only a pointer file):
 
 ```sh
-rsync -a --exclude deploy/.env --exclude target --exclude .claude <checkout>/ node0:<dir>/
+rsync -a --delete --exclude deploy/.env --exclude deploy/bench --exclude target \
+    --exclude .claude --exclude node_modules --exclude ui/elements/dist --exclude .git \
+    <checkout>/ node0:<dir>/
 ```
 
-- **No `--delete`, and `deploy/.env` excluded**, so the host's generated
-  secrets survive. Files deleted from the checkout stay on the host until
-  removed by hand.
+- **`--delete`, with the host's own files excluded.** Excluded paths are
+  never deleted (only `--delete-excluded` would), so `deploy/.env` (the
+  host's generated secrets), `deploy/bench/` (bench runs) and build output
+  survive, while files removed or renamed in the checkout disappear from
+  the host too. Without `--delete` a renamed module stays behind and the
+  next image build fails: `crates/api/src/world.rs` beside the new
+  `world/mod.rs` gave rustc E0761.
 - **Data survives a re-sync.** Volumes are named after the compose project
   (`name: crosstalk`), not the directory: `crosstalk_pgdata`,
   `crosstalk_data` and the rest.
@@ -346,6 +352,34 @@ rsync -a --exclude deploy/.env --exclude target --exclude .claude <checkout>/ no
   for `crosstalk.json`, `ui.json`, `loki.yaml` and `config.alloy`.
   Directory mounts (`rules/`, Grafana's provisioning and dashboards) see
   new files.
+
+### The private bench dependency
+
+`crates/eval` depends on the private `a2a-transmission-bench` repository by
+git tag; `Cargo.lock` pins its URL and commit. Image builds never see a
+GitHub token: each Rust image's build stage gets a bare mirror of that repo
+as the `a2a` build context, and git's `insteadOf` sends cargo's fetch of
+the GitHub URL to it (`CARGO_NET_GIT_FETCH_WITH_CLI=true`), so the lockfile
+is unchanged and `--locked` holds.
+
+- **Where the mirror lives.** `${A2A_BENCH_GIT}`, by default
+  `../../.build-deps/a2a-transmission-bench.git` from `deploy/` (for a
+  worktree at `~/Code/ai/crosstalk/<worktree>`, that is
+  `~/Code/ai/crosstalk/.build-deps/`), outside every git checkout.
+- **Making it**, on a machine that can read the repository (any local
+  clone or worktree, or GitHub with credentials):
+
+  ```sh
+  git clone --bare <a2a-transmission-bench clone or URL> ~/Code/ai/crosstalk/.build-deps/a2a-transmission-bench.git
+  rsync -a ~/Code/ai/crosstalk/.build-deps/ node0:~/Code/ai/crosstalk/.build-deps/
+  ```
+
+- **When the pinned tag moves** (a new `a2a-bench-format-v*` in
+  `Cargo.lock`), fetch it into the mirror (`git -C <mirror> fetch --tags
+  <source>`) and re-sync it; a build whose mirror lacks the commit fails
+  at cargo's git fetch.
+- Plain `docker build` needs the context too: `--build-context
+  a2a=<mirror>`.
 
 ### Smoke test
 
