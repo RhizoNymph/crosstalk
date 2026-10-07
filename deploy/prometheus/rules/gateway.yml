@@ -171,7 +171,7 @@ groups:
   # ------------------------------------------------------------------ spool
   # Postgres mode only: while the database is unreachable, captures are
   # written to <data dir>/spool and drained once it is back. The thresholds
-  # assume the default spool.max of 1 GiB.
+  # assume the default spool.max_bytes of 1 GiB.
   - name: crosstalk-gateway-spool
     rules:
       - alert: CrosstalkSpoolRejecting
@@ -219,8 +219,24 @@ groups:
         labels:
           severity: warning
         annotations:
-          summary: "crosstalk truncated part of its capture spool"
+          summary: "crosstalk truncated a torn tail of its capture spool"
           description: >-
-            {{ $value | humanize1024 }}B of spool were truncated in the last 5
-            minutes (a torn or corrupt segment). Captures in it are lost; see
-            `crosstalk spool --discard-corrupt` and the gateway logs.
+            {{ $value | humanize1024 }}B were truncated from the end of the
+            spool in the last 5 minutes: a record torn by a crash mid-append.
+            The capture in it is lost; the spool itself is fine and keeps
+            draining. A corrupt record elsewhere in the spool is a different,
+            worse case (CrosstalkSpoolCorrupt).
+
+      - alert: CrosstalkSpoolCorrupt
+        expr: max by (job, instance) (crosstalk_spool_state{job="crosstalk", state="corrupt"}) == 1
+        labels:
+          severity: critical
+        annotations:
+          summary: "crosstalk's capture spool is corrupt; detection is stalled"
+          description: >-
+            The spool holds a corrupt record, so draining has stopped:
+            /readyz answers 503 and nothing spooled reaches the pipeline, so
+            detection is stalled until someone acts. Inspect the gateway logs,
+            then run `crosstalk spool --discard-corrupt` (in the crosstalk
+            container, with its config) to drop the corrupt record and resume
+            draining; the captures in that record are lost.
