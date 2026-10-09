@@ -576,6 +576,34 @@ dependencies = [
 ]
 
 [[package]]
+name = "crosstalk-bench-adapter"
+version = "0.1.0"
+dependencies = [
+ "a2a-bench-format",
+ "anyhow",
+ "blake3",
+ "bytes",
+ "clap",
+ "crosstalk-flow",
+ "crosstalk-gateway",
+ "crosstalk-memory",
+ "crosstalk-provenance",
+ "crosstalk-sim",
+ "crosstalk-spec",
+ "crosstalk-testkit",
+ "crosstalk-transport",
+ "http-body-util",
+ "hyper",
+ "hyper-util",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "crosstalk-canonical"
 version = "0.1.0"
 dependencies = [
@@ -665,39 +693,6 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tokio",
-]
-
-[[package]]
-name = "crosstalk-eval"
-version = "0.1.0"
-dependencies = [
- "a2a-bench-format",
- "anyhow",
- "base64 0.22.1",
- "blake3",
- "bytes",
- "clap",
- "crosstalk-flow",
- "crosstalk-gateway",
- "crosstalk-memory",
- "crosstalk-provenance",
- "crosstalk-sim",
- "crosstalk-spec",
- "crosstalk-testkit",
- "crosstalk-transport",
- "flate2",
- "http-body-util",
- "hyper",
- "hyper-util",
- "parquet",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror",
- "tokio",
- "toml",
- "tracing",
- "tracing-subscriber",
 ]
 
 [[package]]

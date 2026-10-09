@@ -1,0 +1,42 @@
+[package]
+name = "crosstalk-bench-adapter"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+description = "crosstalk's adapter to the a2a-transmission-bench: ct-bench-detect runs the gateway's live composition (or bare pipeline) over a bench input directory, and turns a saved node0 bench run into a bench input directory and the gateway's predictions."
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "ct-bench-detect"
+path = "src/bin/ct-bench-detect/main.rs"
+
+[dependencies]
+# The bench's on-disk format, pinned to the bench repository's
+# a2a-bench-format-v1.0.0 tag (commit c289eda, which includes b347f83).
+a2a-bench-format = { git = "https://github.com/RhizoNymph/a2a-transmission-bench", tag = "a2a-bench-format-v1.0.0" }
+crosstalk-spec = { path = "../../spec" }
+crosstalk-flow = { path = "../flow" }
+crosstalk-gateway = { path = "../gateway" }
+crosstalk-memory = { path = "../memory" }
+crosstalk-provenance = { path = "../provenance" }
+crosstalk-transport = { path = "../transport" }
+anyhow.workspace = true
+blake3.workspace = true
+clap.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
+tracing.workspace = true
+tracing-subscriber = { workspace = true, features = ["env-filter", "fmt", "std"] }
+bytes.workspace = true
+http-body-util.workspace = true
+hyper = { workspace = true, features = ["client", "http1"] }
+hyper-util = { workspace = true, features = ["client-legacy", "http1", "tokio"] }
+
+[dev-dependencies]
+crosstalk-testkit = { path = "../testkit" }
+crosstalk-sim = { path = "../sim" }
+tokio = { workspace = true, features = ["macros", "rt", "sync", "test-util", "time"] }

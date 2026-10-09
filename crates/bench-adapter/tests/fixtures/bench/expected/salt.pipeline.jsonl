@@ -1,0 +1,5 @@
+{"kind":"header","format":"a2a-bench/1","file":"predictions","dataset":"salt","detector":{"name":"crosstalk-pipeline","version":"ff3dc44a65daae3f9d99e6dfc191996aabf624e6","variant":"default","config_digest":"57d0a2070a80f2e202afffb5a60bd5d2341710c05fad52e9ca8f537fc1dcef09"},"manifest_digest":"3fbf3a929ebfadaab5ab16093ac7021211513fedb07fcc1546b39af949526d78"}
+{"kind":"world","key":"controlled_peer/controlled_peer__fixture-model__summary/rep001","status":{"status":"no_consumers","ingested":3}}
+{"kind":"world","key":"main/main__fixture-model/rep001","status":{"status":"no_consumers","ingested":17}}
+{"kind":"world","key":"memory_scope/memory_scope__fixture-model__communication-onward/rep001","status":{"status":"no_consumers","ingested":17}}
+{"kind":"trailer","worlds":3,"rows":0,"digest":"22f7b174e18d98ca474c68a05c8489850ba75c63a875ec1afd1a7962f0c7c75f"}

@@ -4,10 +4,19 @@
 the single-machine compose deployment (node0). The demo swarm
 ([demo.md](demo.md)) sends its traffic through the gateway to the fake
 upstream and writes ground truth v2. The gateway's detections are then
-exported over the L8 API, and `ct-eval swarm` ([eval.md](eval.md#swarm-benchmark))
-scores them against the truth, giving precision and recall. The host has no
-Rust toolchain, so `ct-eval` ships in the `crosstalk-demo` image and runs as
-the compose service `bench`.
+exported over the L8 API, and `ct-eval swarm` scores them against the
+truth, giving precision and recall. The host has no Rust toolchain, so
+`ct-eval` ships in the `crosstalk-demo` image and runs as the compose
+service `bench`.
+
+**Transition.** ct-eval's scoring has moved to the a2a-transmission-bench,
+and the workspace no longer builds `ct-eval` (its code stays in history at
+`7f8a2fb` and `4d3d2c3`). `deploy/` below still describes and invokes it
+until crosstalk-infra's `run.sh bench` switch, which fetches with
+`ct-bench-detect swarm-fetch` (the same flags and output), converts the run
+with `ct-bench-detect from-export`, and scores it with the bench against its
+`gates/crosstalk-gateway-export.toml`
+([bench_adapter.md](bench_adapter.md)).
 
 **Status:** the running gateway cannot serve detections yet. `serve` neither
 binds the L8 API (`api.listen`, port 8081) nor runs the `Live` detection

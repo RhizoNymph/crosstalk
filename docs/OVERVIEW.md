@@ -83,20 +83,18 @@ Overview:
     composition is a library entry point, crosstalk_gateway::pipeline::
     Pipeline (build over any blob store, bus and injected clock), and a
     pre-normalized exchange enters it through Pipeline::ingest, the same
-    path the capture stage takes after L1 (P3.1), so the eval harness can
+    path the capture stage takes after L1 (P3.1), so the bench adapter can
     drive the real layers under simulated time. crosstalk_gateway::live::
     Live composes every layer in one process over the memory stores: L3
     reconstruct, L4 provenance with L5's extraction step, L5 flow, a
     minimal L6 classifier and L7 topology as bus consumer slots, the store
     outboxes forwarded onto the bus, and crosstalk-api's InProcess surface
     over the same stores; Live::settle drives it deterministically to a
-    fixed point (gateway). crosstalk-eval is that
-    harness (eval): it converts public multi-agent datasets (SALT-NLP
-    first) into labelled corpora of spec NormalizedExchanges, scores a
-    detector against the labels, and runs a naive reference matcher,
-    Pipeline::ingest (unscored: it has no detection consumers) and a
-    LiveBackend seam that scores the gateway's live composition once
-    crosstalk_gateway::live::Live merges. crosstalk-analysis has
+    fixed point (gateway). crosstalk-bench-adapter is crosstalk's side of
+    the a2a-transmission-bench (bench_adapter), which owns the datasets,
+    labels, scoring and gates: its ct-bench-detect converts a bench input
+    directory to spec NormalizedExchanges and runs them through Live (or
+    the bare Pipeline::ingest) into bench predictions. crosstalk-analysis has
     L6's HTTP adapters (analysis, topics_sidecar): SidecarTopicModel and
     SidecarLayoutFitter over a Python sidecar (sidecar/topics: UMAP,
     HDBSCAN and c-TF-IDF behind a versioned JSON contract, deterministic
@@ -193,52 +191,27 @@ Overview:
       synthetic week the UI and the tests share, seeded through the write
       traits). Layer crates may depend on store; memory, sim, testkit and
       world are their dev-dependencies only.
-    eval: >
-      Crate crosstalk-eval (a composer, beside the gateway rather than in
-      it) and its ct-eval binary: dataset converters stream worlds of spec
-      NormalizedExchanges (replayed: IngressMode::Replay) with ground-truth
-      labels; a detector (the naive reference matcher, the gateway's own
-      Pipeline::ingest, which is unscored, or a LiveBackend composition)
-      produces spec Transmissions, whose spans, accesses and channel
-      resources are read back through the spec's read traits (SpanIndex,
-      AccessStore, ChannelReads); the scorer aligns them with the labels
-      and reports per dataset, route, carrier, match or access class and
-      tier against regression gates. Out-of-reach and forwarding labels
-      (SALT deliveries pasting the sender's own tool output) are reported
-      apart from overall; ct-eval run --detector live --forwarding on|off
-      sets L4's ProvenanceConfig::forwarding, and gates select by detector
-      and forwarding setting.
-      The swarm benchmark (ct-eval swarm) instead scores the live gateway:
-      it joins the demo swarm's ground truth to the gateway's exchange log
-      (cut to the run window, so a reused session id's earlier-run
-      exchanges and detections are excluded and reported) and blobs, and
-      scores a saved L8 transmissions export and its evidence,
-      suspected and discarded transmissions as access-only predictions
-      from their evidence's accesses (reported as access-only recall,
-      apart from overall; a suspected one under a negative control is
-      reported apart from the violations, never gated). The truth's session rows map every gateway
-      session to its swarm agent; it scores under
-      demo-swarm/<scenario> (headline or boilerplate), and its gates are
-      those named detector "gateway-export". A discarded co-access that
-      aligns with no label is dismissed (the detector's own "no"), never a
-      false positive or a control violation; the control it fell under is
-      recorded ("dismissed on reread controls: N"). ct-eval replay --run <dir>
-      replays a saved bench run's exchange log and blobs through
-      crosstalk_gateway::live::Live in memory with the run's flow windows
-      (bench.env), reads the export and evidence back through the same L8
-      surface, and scores them as ct-eval swarm does, offline and
-      deterministically.
-      The golden export (crosstalk_eval::golden) writes the same worlds,
-      labels and predictions in the bench's detector-neutral format
-      a2a-bench/1 (crate a2a-bench-format, a path dependency until the
-      bench repository has a tag): ct-eval export --format a2a-bench/1
-      writes an export directory, ct-eval run --predictions-out and ct-eval
-      swarm --export-out/--predictions-out write predictions naming its
-      manifest, and every file passes the format's own checks.
-      ct-bench-detect (crosstalk_eval::bench_detect) is the detector side
-      of the bench's contract: an export's input view in, predictions out,
-      byte-identical to ct-eval run --predictions-out; from-export and
-      replay turn saved node0 bench runs into bench inputs and predictions.
+    bench_adapter: >
+      Crate crosstalk-bench-adapter (a composer, beside the gateway rather
+      than in it) and its ct-bench-detect binary: crosstalk's side of the
+      a2a-transmission-bench's detector contract. The bench owns the
+      datasets, labels, scoring, reports and gates over its format
+      a2a-bench/1 (crate a2a-bench-format, pinned at tag
+      a2a-bench-format-v1.0.0). ct-bench-detect --input DIR --output FILE
+      reads an input view (manifest, messages, exchanges; never labels),
+      converts bench messages and exchanges to spec values (part text
+      checked equal), runs each world through a fresh
+      crosstalk_gateway::live::Live behind the LiveBackend seam (or the
+      bare Pipeline::ingest, which writes no_consumers worlds), reads the
+      transmissions' spans, accesses and channels back through the spec's
+      read traits (SpanIndex, AccessStore, ChannelReads), and writes bench
+      prediction rows (attribution, unattributed, transmissions), a world
+      it cannot process as a coded failed row. from-export and replay turn
+      a saved node0 bench run (truth header, exchange log, blobs, L8
+      export and evidence, conversation reads) into an input view and the
+      gateway's (or an in-memory replay's) predictions; swarm-fetch and
+      fetch save the gateway's side of a run over L8. a2a-bench run drives
+      it and scores the result.
     e2e: >
       Crate crosstalk-e2e (a composer): the end-to-end smoke harness. A
       scripted two-agent Claude Code scenario as wire traffic, captured
@@ -254,7 +227,10 @@ Overview:
       stored, how they run and how they scale is in docs/infrastructure.md.
       run.sh bench drives one scored detection benchmark on that stack: the
       demo swarm through the real gateway, its detections exported over the
-      L8 API, and ct-eval (shipped in the demo image) scoring them.
+      L8 API, and ct-eval (shipped in the demo image) scoring them; the
+      crosstalk-infra switch moves it to ct-bench-detect swarm-fetch and
+      from-export plus the bench's scorer (ct-eval's scoring is retired
+      from the workspace).
 
     ui: >
       Crate crosstalk-ui (ui/, a workspace member; Topcoat): the operator
@@ -1326,11 +1302,11 @@ Features Index:
       retry), mints the envelope id at at and publishes ExchangeCaptured;
       the capture stage calls it after normalizing, so there is one path
       after L1. Envelope ids reach the bus in strictly increasing order
-      under concurrent ingests. Every serve role builds one; the eval
-      harness (crosstalk-eval, a composer) builds one over simulated
-      stores and time. live::Live is the whole detection path and the L8
+      under concurrent ingests. Every serve role builds one; the bench
+      adapter (crosstalk-bench-adapter, a composer) builds one over
+      simulated stores and time. live::Live is the whole detection path and the L8
       surface in one process over the memory stores (what the UI hosts,
-      the e2e smoke drives and eval builds against): Live::start(LiveConfig
+      the e2e smoke drives and the bench adapter builds against): Live::start(LiveConfig
       { surface, clock: LiveClock, blobs (memory or fs), bus, pipeline,
       flow: FlowConfig (correlation_window_ms, evidence_window_ms,
       suspected_ttl_ms, content_retention_ms, shards, tick_ms), provenance, extract:
@@ -1346,7 +1322,7 @@ Features Index:
       same stores. Live::settle(until) moves a manual clock, ticks every
       stage and drains every group until a pass changes nothing;
       Live::stores and Live::layers expose TransmissionStore::list and
-      ExchangePlacements::placement for eval. Live advances the L7
+      ExchangePlacements::placement for the bench adapter. Live advances the L7
       watermark on each tick when the layer groups are empty (the spec's
       Watermark::settled rule) and reports per-stage counts. With a store
       section serve runs in Postgres mode instead (postgres_mode: PgStores,
@@ -1553,7 +1529,7 @@ Features Index:
       ground-truth JSONL file (schema v2: header with the scenario, agent clusters, and per
       read the writer's and reader's session, turn and tool_use id, the
       content's hashes and its exact message/block in the reader's request),
-      which ct-eval scores against.
+      which the bench's demo-swarm converter labels (formerly ct-eval).
       healthcheck serves the distroless image. deploy/compose.demo.yaml,
       deploy/demo.Dockerfile (which also ships ct-eval for run.sh bench),
       deploy/demo/crosstalk.demo.json and run.sh demo up|run|down|logs run
@@ -1585,7 +1561,10 @@ Features Index:
       service). Prints precision, recall and the gate result and passes
       ct-eval's exit code through (2 = a gate failed). Fails fast unless
       /readyz has the `live` and `api` tasks running and the API takes the
-      token. ct-eval ships in the crosstalk-demo image. --scenario
+      token. ct-eval ships in the crosstalk-demo image (the workspace no
+      longer builds ct-eval: crosstalk-infra's switch moves the run to
+      ct-bench-detect swarm-fetch and from-export and the bench's scorer
+      with gates/crosstalk-gateway-export.toml). --scenario
       headline (default, high-entropy prose: the headline precision and
       recall) or boilerplate (templated prose unrelated agents share: a
       regression scenario for false positives on shared text), recorded in
@@ -1595,7 +1574,7 @@ Features Index:
       - deploy/bench.sh
       - deploy/compose.demo.yaml
       - deploy/demo.Dockerfile
-    depends_on: [demo, eval, deploy, gateway, http_api]
+    depends_on: [demo, bench_adapter, deploy, gateway, http_api]
     doc: docs/features/bench.md
   conformance:
     description: >
@@ -1720,94 +1699,44 @@ Features Index:
       - deploy/ui.Dockerfile
     depends_on: [query_surface, read_models, export, type_spec, workspace, deploy, memory, world, surface_service, http_client, http_server]
     doc: docs/features/ui.md
-  eval:
+  bench_adapter:
     description: >
-      crosstalk-eval and the ct-eval CLI (a composer): dataset converters
-      (SALT-NLP, AgentDojo, tau2-bench, AI Village, collusion-wiki (synthesised
-      http_request reads and writes of public wiki pages; a reader's second
-      read of lines it already received is a reread control, INV-1122) and swarm-traces (a
-      decode-chain corpus reported by chain, count and length only))
-      streaming worlds of checked
-      spec NormalizedExchanges on a deterministic virtual clock (datasets
-      without times pace calls 1 to 5 s apart, seeded and configurable;
-      synthetic tool calls are answered in the agent's next request of one
-      growing conversation), with typed,
-      JSONL-serialisable ground truth (expected transmissions, out of reach
-      when undecodable or read from a medium the sender never wrote
-      (INV-963), access-only expectations that only suspected or discarded
-      evidence finds (a co-access whose write carries no spans, such as a
-      git push), negative controls, exemptions, agent clusters, with
-      tiers); predictions converted from
-      spec Transmissions (one per ContentMatch, and one per CoAccess of a
-      suspected or discarded transmission) through a read seam over the
-      spec's SpanIndex, AccessStore and channel reads; one documented
-      alignment rule and a scorer with TP/FP/FN by dataset, route, carrier
-      kind, match or access class and tier, negative-control violations
-      (content classes only; access-only ones reported apart) and a
-      DetectionQuality bridge keyed by QualityMatch; a Detector seam
-      with the naive reference matcher (channel rereads of a span already
-      reported to the reader dropped; escape-aware matching classed as
-      Exact, Normalized or Decoded([JsonString | YamlString]) through one
-      classifier, with hits only two string levels explain out of reach
-      and unreported, decoding, opaque-blob exclusion, a boilerplate cutoff
-      on shingle postings at L4's default of 50), the gateway pipeline (Pipeline::ingest under
-      the corpus clock or a sim clock, reported as unscored), and
-      LiveDetector over the LiveBackend seam (a fresh composition per
-      world: ingest, settle, list transmissions, read spans, accesses,
-      channel resources and L3 attribution), whose adapter
-      (detect::live::gateway) drives the merged crosstalk_gateway::live::Live
-      (ct-eval run --detector live, with overridable correlation windows and
-      a --predictions JSONL dump), and ct-eval replay, which re-runs a
-      saved node0 bench run (exchange log, blobs, truth, bench.env)
-      through Live offline and scores it like ct-eval swarm, discarded
-      co-access aligned with no label counted dismissed rather than false;
-      reports (overall, out of reach,
-      access-only recall, background) and regression gates per detector
-      (reference or live), found through --gates, CT_EVAL_GATES, the bench
-      image's installed file or the crate's own, else none. Every converter labels escaped text with the spec's
-      string codecs, never Normalized. The golden export writes any
-      selection's worlds, labels and predictions (reference, live or the
-      demo swarm's gateway export) in the bench format a2a-bench/1
-      (ct-eval export, run --predictions-out, swarm --export-out
-      --predictions-out, verify): controls no exchange carries are dropped
-      and counted in the manifest's per-world notes, and what the format
-      cannot express is refused. ct-bench-detect is crosstalk's side of the
-      bench's detector contract: --input DIR --output FILE turns an
-      export's input view (manifest, messages, exchanges; never labels)
-      into predictions from the live composition (--mode live, default) or
-      the bare pipeline (--mode pipeline), converting bench messages back to
-      spec messages with part text checked equal (P1, live) and writing a
-      coded failed world (part_text_mismatch, conversion, ingest, settle,
-      read, unlocated_access) when a world cannot be processed; its bytes
-      equal ct-eval run --predictions-out's (P5, tested). from-export and
-      replay turn a saved node0 bench run into an input view plus the
-      gateway's (or an in-memory replay's) predictions, attributed from
-      the conversation reads (/query/exchange-turns, /query/span-points,
-      saved by ct-bench-detect fetch) or, without them, from the evidence.
+      crosstalk-bench-adapter and its ct-bench-detect binary (a composer):
+      crosstalk's side of the a2a-transmission-bench's detector contract.
+      Datasets, labels, scoring, reports and gates are the bench's.
+      --input DIR --output FILE turns a bench input view (manifest,
+      messages, exchanges; never labels) into predictions from the live
+      composition (--mode live, default: a fresh crosstalk_gateway::live::Live
+      per world behind the LiveBackend seam, with --forwarding off|on,
+      --extract-config and overridable windows) or the bare pipeline
+      (--mode pipeline, no_consumers worlds), converting bench messages
+      back to spec messages with part text checked equal (P1, live),
+      sorting each transmission's evidence by bench location, and writing
+      a coded failed world (part_text_mismatch, conversion, ingest,
+      settle, read, unlocated_access) when a world cannot be processed;
+      on the checked-in inputs its bytes equal ct-eval's run
+      --predictions-out at ff3dc44 but for the build commit (P5, frozen,
+      tested). from-export and replay turn a saved node0 bench run into an
+      input view plus the gateway's (or an in-memory replay's)
+      predictions, cut to the run window and attributed from the
+      conversation reads (/query/exchange-turns, /query/span-points, saved
+      by fetch) or, without them, from the evidence; swarm-fetch saves the
+      L8 transmissions export (confirmed, classified, aggregated,
+      discarded) and each row's evidence.
     entry_points:
-      - crates/eval/src/lib.rs
-      - crates/eval/src/bench_detect/mod.rs
-      - crates/eval/src/bin/ct-bench-detect/main.rs
-      - crates/eval/src/pipeline.rs
-      - crates/eval/src/gateway.rs
-      - crates/eval/src/score/align.rs
-      - crates/eval/src/datasets/salt/mod.rs
-      - crates/eval/src/datasets/wiki/mod.rs
-      - crates/eval/src/datasets/swarm/mod.rs
-      - crates/eval/src/bin/ct-eval/main.rs
-      - crates/eval/src/datasets/agentdojo/mod.rs
-      - crates/eval/src/datasets/tau2/mod.rs
-      - crates/eval/src/datasets/swarm_truth/mod.rs
-      - crates/eval/src/datasets/swarm_truth/replay.rs
-      - crates/eval/src/predict/reads.rs
-      - crates/eval/src/detect/live/mod.rs
-      - crates/eval/src/detect/live/gateway.rs
-      - crates/eval/src/reference/classify.rs
-      - crates/eval/src/report/gates.rs
-      - crates/eval/src/golden/mod.rs
-      - crates/eval/src/bin/ct-eval/golden.rs
+      - crates/bench-adapter/src/lib.rs
+      - crates/bench-adapter/src/bin/ct-bench-detect/main.rs
+      - crates/bench-adapter/src/run.rs
+      - crates/bench-adapter/src/convert.rs
+      - crates/bench-adapter/src/detect/live/mod.rs
+      - crates/bench-adapter/src/detect/live/gateway.rs
+      - crates/bench-adapter/src/gateway.rs
+      - crates/bench-adapter/src/to_bench/predictions.rs
+      - crates/bench-adapter/src/from_export/mod.rs
+      - crates/bench-adapter/src/swarm/fetch.rs
+      - crates/bench-adapter/src/swarm/replay.rs
     depends_on: [type_spec, gateway, transport, flow_extract, export, http_api, eval_gaps, sim, testkit, memory]
-    doc: docs/features/eval.md
+    doc: docs/features/bench_adapter.md
   e2e_smoke:
     description: >
       crosstalk-e2e (a composer): the end-to-end smoke. A deterministic
@@ -1983,63 +1912,4 @@ Features Index:
       - crates/analysis/src/pg/mod.rs
     depends_on: [type_spec, store, memory, gateway]
     doc: docs/features/search_alerts.md
-  eval_swe_synthetic:
-    description: >
-      Background and synthetic corpora for crosstalk-eval (ct-eval --dataset
-      open-swe | lmcache | swe-splice | cipher). Open-SWE-Traces and LMCache
-      trajectories (Parquet, read with the parquet crate; Open-SWE tool
-      results paired with calls by position, LMCache responses taken from
-      the next request) are mixed into background worlds with only
-      Boilerplate/SharedSource negative controls. Seeded splices plant one
-      Channel/File transmission from A's file write to B's harness-format
-      read (exact, whitespace, JSON-string, base64). Seeded cipher pairs
-      deliver steganographic-evals payloads encoded: base64, hex, URL and
-      chains are in reach, while rotN, binary8 and substitution are
-      Tier::OutOfReach and reported as missed by design; a JSON-string
-      splice read through a shell is in reach (L4 decodes the writer's
-      argument values, INV-1057, so the reader needs one level). crosstalk-flow's
-      real extractors resolve the shell cat -n read and the editor view to
-      the same Locator::File read. Reports gain out_of_reach and background
-      (false positives per 1k exchanges, top sources) summaries.
-    entry_points:
-      - crates/eval/src/datasets/background.rs
-      - crates/eval/src/datasets/open_swe/mod.rs
-      - crates/eval/src/datasets/lmcache/mod.rs
-      - crates/eval/src/datasets/swe_splice/mod.rs
-      - crates/eval/src/datasets/cipher/mod.rs
-      - crates/eval/src/score/sources.rs
-    depends_on: [eval, type_spec, flow_extract]
-    doc: docs/features/eval_swe_synthetic.md
-  eval_ai_village:
-    description: >
-      The AI Village converter (crosstalk-eval datasets::ai_village, ct-eval
-      --dataset ai-village). Claude Code mode: the Claude Agent SDK agent's
-      exact calls, one world per context, with construction-tier labels for
-      every chat message it read through the village MCP server's
-      get_events (keyed by event id; Direct/ToolResult). Window mode
-      (default 2026-07-13..17): every standard agent, one world per village
-      day, requests rebuilt from responses (system prompt from goals and
-      memory, session history, chat since the previous call), structural
-      chat labels, heuristic channel labels from bash accesses, GUI edits
-      counted. Every bash command goes through crosstalk-flow's
-      ToolExtractors as the bash call the agent made, so each access's
-      locator (Locator::Repository for git push/pull/clone, the
-      repository's File for a clone's or a raw URL's file, the issue or
-      merge request page, else L5's URL locator), op and WriteOutcome are
-      the gateway's; the converter adds the shell's true state (the
-      persistent working directory, ~, clones learnt from a push's or
-      pull's printed remote) and keeps shared resources only. A pair whose
-      write is a git push (no spans) is an access-only expectation on the
-      repository; a pair whose writer's typed text reaches the reader's
-      output through one file, thread or page is a content label. Its
-      streaming table passes, resource lookup and bash access tagger are
-      reusable.
-    entry_points:
-      - crates/eval/src/datasets/ai_village/mod.rs
-      - crates/eval/src/datasets/ai_village/tables.rs
-      - crates/eval/src/datasets/ai_village/resource.rs
-      - crates/eval/src/datasets/ai_village/access/mod.rs
-      - crates/eval/src/datasets/ai_village/window/repo.rs
-    depends_on: [eval, flow_extract]
-    doc: docs/features/eval_ai_village.md
 ```
