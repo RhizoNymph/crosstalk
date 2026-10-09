@@ -6,8 +6,11 @@
 #
 # Steps, in order (each is one function below):
 #   1. confirm_restart          say what restarts; ask unless --yes
+#      fresh_database           a new database for the run (crosstalk_bench_<run>)
 #   2. start_stack              `up -d --build` with the demo override
-#   3. require_detection        fail fast unless /readyz has `live` and `api`
+#   3. require_detection        Postgres mode: wait for recovery done, lock
+#                               held, capture durable; then fail fast unless
+#                               /readyz has `live` and `api`
 #                               running and the API takes the token
 #   4. fresh_world              restart wiki and crosstalk, wait for health,
 #                               check step 3 again
@@ -107,9 +110,12 @@ confirm_restart() {
 run.sh bench is about to:
   - start the demo stack (`up -d --build` with compose.demo.yaml); services
     whose image or config changed are recreated;
-  - restart `wiki`: its pages live in memory and are lost (a fresh world);
-  - restart `crosstalk`: its detection state lives in memory and is lost.
-The exchange log and blobs on the `data` volume are kept.
+  - create a fresh database for the run (crosstalk_bench_<run>), migrate it
+    and point `crosstalk` at it, so earlier runs' detection state (kept in
+    their own databases, never deleted) cannot affect this one;
+  - restart `wiki`: its pages live in memory and are lost (a fresh world).
+The exchange log and blobs on the `data` volume are kept. A later plain
+`run.sh up` points crosstalk back at the `crosstalk` database.
 EOF
     [[ "$yes" == 1 ]] && return 0
     [[ -t 0 ]] || bench_fail "stdin is not a terminal; pass --yes to restart without asking"
@@ -120,6 +126,32 @@ EOF
 # 2. The demo stack, built (the image must carry ct-eval) and running.
 start_stack() {
     compose up -d --build
+}
+
+# How many per-run bench databases exist and their total size, so whoever
+# asks the user about dropping old ones knows when it matters. Nothing here
+# drops anything.
+bench_database_tally() {
+    compose exec -T postgres psql -At -U crosstalk -d crosstalk -c \
+        "SELECT count(*) || ' bench databases, ' || pg_size_pretty(coalesce(sum(pg_database_size(datname)), 0)) FROM pg_database WHERE datname LIKE 'crosstalk\_bench\_%'" \
+        2>/dev/null || echo "bench databases: unknown (postgres not reachable)"
+}
+
+# A fresh database for run `stamp`, so nothing earlier runs left in Postgres
+# (fingerprints, token observations, transmissions) reaches this one. The
+# gateway and `migrate` read its name from CROSSTALK_DB_NAME (compose.yaml's
+# DATABASE_URL); start_stack then migrates it and recreates crosstalk on it.
+fresh_database() {
+    local stamp="$1" name
+    name="crosstalk_bench_${stamp,,}"
+    compose up -d postgres
+    wait_healthy postgres 120
+    compose exec -T postgres psql -v ON_ERROR_STOP=1 -q -U crosstalk -d crosstalk \
+        -c "CREATE DATABASE \"${name}\"" \
+        || bench_fail "could not create the run's database ${name}"
+    CROSSTALK_DB_NAME="$name"
+    export CROSSTALK_DB_NAME
+    echo "run.sh bench: database ${name}" >&2
 }
 
 # Wait for a compose service's container to report healthy.
@@ -143,15 +175,48 @@ ready_task() {
     grep -Eq "\"name\":[[:space:]]*\"$1\",[[:space:]]*\"running\":[[:space:]]*true" <<<"$2"
 }
 
-# 3. Fail fast, before a run's worth of traffic: the gateway must run the
+# /readyz string field `$1` ("" when absent: memory mode leaves the
+# Postgres-mode fields out).
+readyz_field() {
+    sed -n "s/.*\"$1\":[[:space:]]*\"\([^\"]*\)\".*/\1/p" <<<"$2"
+}
+
+# Postgres mode (a `store` section): the pipeline recovers after the process
+# starts, with /readyz already 200 (degraded). Wait until recovery is done,
+# this process holds the pipeline lock and capture writes straight to the
+# bus, so the run's first exchange is not measured against a recovering
+# pipeline. Memory mode has no `recovery` field and returns at once. Prints
+# the last /readyz body.
+wait_pipeline_recovered() {
+    local timeout="$1" ready deadline recovery lock capture
+    deadline=$((SECONDS + timeout))
+    while true; do
+        ready="$(curl -sS --max-time 5 "$(ops_url)/readyz")" \
+            || bench_fail "$(ops_url)/readyz did not answer"
+        recovery="$(readyz_field recovery "$ready")"
+        [[ -z "$recovery" ]] && break
+        lock="$(readyz_field pipeline_lock "$ready")"
+        capture="$(readyz_field capture "$ready")"
+        [[ "$recovery" == done && "$lock" == held && "$capture" == durable ]] && break
+        if ((SECONDS >= deadline)); then
+            echo "run.sh bench: the Postgres-mode pipeline is not ready after ${timeout}s (recovery ${recovery}, pipeline_lock ${lock}, capture ${capture})" >&2
+            echo "  /readyz: ${ready}" >&2
+            exit 1
+        fi
+        sleep 2
+    done
+    printf '%s\n' "$ready"
+}
+
+# 3. Fail fast, before a run's worth of traffic: in Postgres mode, once the
+# pipeline has recovered (wait_pipeline_recovered), the gateway must run the
 # Live detection pipeline (`live`: every layer stage task running) and serve
 # the operator API (`api`: listener bound), and the API must take our token.
 # Without `live` the export is empty and the score a real but meaningless
 # zero; without `api` there is no export at all.
 require_detection() {
     local ready code
-    ready="$(curl -sS --max-time 5 "$(ops_url)/readyz")" \
-        || bench_fail "$(ops_url)/readyz did not answer"
+    ready="$(wait_pipeline_recovered 180)"
     if ! ready_task api "$ready"; then
         echo "run.sh bench: the gateway does not expose detections (no running \`api\` task in /readyz); see docs/features/bench.md" >&2
         echo "  /readyz: ${ready}" >&2
@@ -381,12 +446,15 @@ bench() {
     mkdir -p "${here}/bench"
 
     confirm_restart "$yes"
+    local stamp
+    stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+    fresh_database "$stamp"
     start_stack
     wait_healthy crosstalk 180
     require_detection
     fresh_world
 
-    run="$(date -u +%Y%m%dT%H%M%SZ)"
+    run="$stamp"
     if ((holdout == 1)); then
         mkdir -p "${here}/bench/holdout"
         run="holdout/${run}"
@@ -402,6 +470,7 @@ bench() {
         # The crosstalk commit this checkout was synced from (the sync
         # writes deploy/SOURCE_COMMIT; a rsynced copy has no .git).
         echo "crosstalk_commit=$(cat "${here}/SOURCE_COMMIT" 2>/dev/null || echo unknown)"
+        echo "database=${CROSSTALK_DB_NAME}"
         echo "swarm=${swarm_args[*]} ${extra[*]}"
         echo "evidence_window_ms=$(demo_flow_ms evidence_window_ms)"
         echo "suspected_ttl_ms=$(demo_flow_ms suspected_ttl_ms)"
@@ -418,6 +487,7 @@ bench() {
     wait_caught_up "$run" "$end_ms" "$timeout"
     fetch_detections "$run" "$holdout"
     snapshot_inputs "$run"
+    echo "run.sh bench: $(bench_database_tally)" >&2
     bench_detect_inputs "$run" "$holdout"
     if ((holdout == 1)); then
         # Holdout: no scoring, no report/, no metrics; just say what was saved.

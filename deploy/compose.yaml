@@ -23,7 +23,9 @@ x-logging: &logging
     max-file: "5"
 
 x-crosstalk-env: &crosstalk-env
-  DATABASE_URL: postgres://crosstalk:${POSTGRES_PASSWORD:?run deploy/run.sh init}@postgres:5432/crosstalk
+  # CROSSTALK_DB_NAME picks the database (run.sh bench gives each run its
+  # own, crosstalk_bench_<run>); a plain `up` uses `crosstalk`.
+  DATABASE_URL: postgres://crosstalk:${POSTGRES_PASSWORD:?run deploy/run.sh init}@postgres:5432/${CROSSTALK_DB_NAME:-crosstalk}
   CROSSTALK_SECRET_V1: ${CROSSTALK_SECRET_V1:?run deploy/run.sh init}
   CROSSTALK_API_TOKEN: ${CROSSTALK_API_TOKEN:?run deploy/run.sh init}
   CROSSTALK_EMBEDDINGS_API_KEY: ${CROSSTALK_EMBEDDINGS_API_KEY:-}
