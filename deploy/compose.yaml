@@ -71,6 +71,20 @@ services:
       - log_min_duration_statement=500ms
       - -c
       - log_lock_waits=on
+      # Reap a client that vanished without closing (a network partition, a
+      # killed host) in about 25 s instead of hours, so its session's
+      # advisory locks (the gateway's pipeline lock) are released and a
+      # restarted gateway can take them. Keepalives cover an idle
+      # connection (10 s idle, then 3 probes 5 s apart);
+      # tcp_user_timeout covers one with unacknowledged data in flight.
+      - -c
+      - tcp_keepalives_idle=10
+      - -c
+      - tcp_keepalives_interval=5
+      - -c
+      - tcp_keepalives_count=3
+      - -c
+      - tcp_user_timeout=25000
     shm_size: 1g
     volumes:
       # Postgres 18 images keep PGDATA under /var/lib/postgresql/18/.
