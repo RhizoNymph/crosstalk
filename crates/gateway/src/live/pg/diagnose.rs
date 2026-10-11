@@ -52,6 +52,14 @@ pub struct PgDiagnosis {
     /// Every group's deliveries by state (`ready`, `held`, `delayed`): a
     /// `held` one nobody settles is a consumer that lost it.
     pub deliveries: Part<Vec<(String, String, i64)>>,
+    /// The oldest pending deliveries themselves: group, seq, state,
+    /// attempt, how far `available_at` is from the bus clock (micros), the
+    /// last error and the subject.
+    pub pending_rows: Part<Vec<PendingRow>>,
+    /// Sessions that could block a take or a reaping: idle in a
+    /// transaction, waiting on a lock, or holding a lock on the bus's
+    /// `deliveries` or `groups` tables.
+    pub blockers: Part<Vec<String>>,
     /// Connections the pool holds, and how many of them are idle.
     pub pool_size: u32,
     pub pool_idle: usize,
@@ -70,6 +78,35 @@ pub struct DiagnoseFrom<'a> {
     pub status: Option<&'a StatusReader>,
     pub watermark: Option<Part<Timestamp>>,
 }
+
+/// One pending delivery, for [`PgDiagnosis::pending_rows`].
+pub type PendingRow = (
+    String,
+    i64,
+    String,
+    i32,
+    Option<i64>,
+    Option<String>,
+    String,
+);
+
+const PENDING_ROWS: &str = "SELECT d.group_name, d.seq, d.state, d.attempt, \
+     d.available_at - $1, d.last_error, e.subject \
+     FROM transport.deliveries d JOIN transport.events e ON e.seq = d.seq \
+     ORDER BY d.seq LIMIT 20";
+
+const BLOCKERS: &str = "SELECT format('pid %s %s xact since %s wait %s/%s locks [%s] query %s', \
+       a.pid, a.state, a.xact_start, a.wait_event_type, a.wait_event, \
+       (SELECT string_agg(DISTINCT c.relname || ':' || l.mode, ', ') FROM pg_locks l \
+          JOIN pg_class c ON c.oid = l.relation \
+          WHERE l.pid = a.pid AND c.relname IN ('deliveries', 'groups', 'events')), \
+       left(a.query, 100)) \
+     FROM pg_stat_activity a \
+     WHERE a.datname = current_database() AND a.pid <> pg_backend_pid() \
+       AND (a.state LIKE 'idle in transaction%' OR a.wait_event_type = 'Lock' \
+            OR EXISTS (SELECT 1 FROM pg_locks l JOIN pg_class c ON c.oid = l.relation \
+                       WHERE l.pid = a.pid AND c.relname IN ('deliveries', 'groups'))) \
+     ORDER BY a.xact_start NULLS LAST";
 
 fn reason(error: impl fmt::Debug) -> String {
     format!("{error:?}")
@@ -119,8 +156,20 @@ pub async fn diagnose(from: DiagnoseFrom<'_>) -> PgDiagnosis {
     .fetch_all(from.pool)
     .await
     .map_err(reason);
+    let now = i64::try_from(super::bus_clock().now().as_micros()).unwrap_or(i64::MAX);
+    let pending_rows: Part<Vec<PendingRow>> = sqlx::query_as(PENDING_ROWS)
+        .bind(now)
+        .fetch_all(from.pool)
+        .await
+        .map_err(reason);
+    let blockers: Part<Vec<String>> = sqlx::query_scalar(BLOCKERS)
+        .fetch_all(from.pool)
+        .await
+        .map_err(reason);
     PgDiagnosis {
         deliveries,
+        pending_rows,
+        blockers,
         frontier,
         watermark: from.watermark,
         ticked_through,
@@ -219,6 +268,27 @@ impl fmt::Display for PgDiagnosis {
         writeln!(f, "spool:           {:?}", self.spool)?;
         writeln!(f, "outbox rows:     {:?}", self.outbox_rows)?;
         writeln!(f, "deliveries:      {:?}", self.deliveries)?;
+        match &self.pending_rows {
+            Ok(rows) => {
+                for (group, seq, state, attempt, due, error, subject) in rows {
+                    writeln!(
+                        f,
+                        "  pending {group} seq {seq} {subject}: {state}, attempt {attempt}, \
+                         due in {due:?} micros, last error {error:?}"
+                    )?;
+                }
+            }
+            Err(why) => writeln!(f, "  pending rows unreadable: {why}")?,
+        }
+        match &self.blockers {
+            Ok(blockers) if blockers.is_empty() => writeln!(f, "blockers:        none")?,
+            Ok(blockers) => {
+                for blocker in blockers {
+                    writeln!(f, "blocker:         {blocker}")?;
+                }
+            }
+            Err(why) => writeln!(f, "blockers:        unreadable: {why}")?,
+        }
         writeln!(
             f,
             "pool:            {} connections, {} idle, {} in use",
@@ -301,6 +371,8 @@ mod tests {
             spool: None,
             outbox_rows: Ok(outbox),
             deliveries: Ok(vec![(Slot::SurfaceRelay.group().0, "held".to_owned(), 1)]),
+            pending_rows: Ok(Vec::new()),
+            blockers: Ok(Vec::new()),
             pool_size: 0,
             pool_idle: 0,
             status: None,
