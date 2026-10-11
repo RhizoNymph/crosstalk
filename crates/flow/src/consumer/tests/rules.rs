@@ -370,6 +370,34 @@ impl TransmissionStore for Flaky {
         self.inner.save(transmission).await
     }
 
+    async fn modify<T, F>(
+        &mut self,
+        id: TransmissionId,
+        change: F,
+    ) -> Result<Option<T>, TransmissionStoreError>
+    where
+        T: Send,
+        F: FnOnce(
+                Transmission,
+            ) -> (
+                crosstalk_spec::derived::flow::transmission::TransmissionState,
+                T,
+            ) + Send,
+    {
+        if self
+            .failures
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                left.checked_sub(1)
+            })
+            .is_ok()
+        {
+            return Err(TransmissionStoreError::Store {
+                reason: "injected".to_owned(),
+            });
+        }
+        self.inner.modify(id, change).await
+    }
+
     async fn transmission(
         &self,
         id: TransmissionId,

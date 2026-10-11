@@ -12,6 +12,7 @@
 //! `TransmissionStore::save`, which keeps the transmission's log.
 
 pub mod model;
+pub mod race;
 
 #[cfg(test)]
 mod tests;
@@ -20,7 +21,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
 use crosstalk_spec::aggregates::quality::DetectionQuality;
-use crosstalk_spec::derived::flow::transmission::Transmission;
+use crosstalk_spec::derived::flow::transmission::{Transmission, TransmissionState};
 use crosstalk_spec::derived::flow::verdict::{
     InvalidVerdictRecord, TransmissionVerdict, Verdict, VerdictLog, VerdictRecorded,
 };
@@ -228,6 +229,26 @@ impl TransmissionStore for MemoryVerdicts {
             .transmissions
             .insert(transmission.id, transmission);
         Ok(())
+    }
+
+    /// Under the write lock, so no other write of the store runs between
+    /// the read `change` is given and the write of its result.
+    async fn modify<T, F>(
+        &mut self,
+        id: TransmissionId,
+        change: F,
+    ) -> Result<Option<T>, TransmissionStoreError>
+    where
+        T: Send,
+        F: FnOnce(Transmission) -> (TransmissionState, T) + Send,
+    {
+        let mut state = self.state.write();
+        let Some(stored) = state.transmissions.get_mut(&id) else {
+            return Ok(None);
+        };
+        let (next, outcome) = change(stored.clone());
+        stored.state = next;
+        Ok(Some(outcome))
     }
 
     async fn transmission(

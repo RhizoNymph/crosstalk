@@ -131,6 +131,14 @@ retention lands and deletes bodies, `Bodies::SkipStored` must give way to
 `PutEvery` (or learn of deletions) and the evidence of a dropped body must
 read `BodyDropped` before and after a restart alike.
 
+### Classification and late content
+
+L5 and L6 write the same `flow.transmissions` row; both go through
+`TransmissionStore::modify` (a `FOR UPDATE` read and the write in one
+transaction, INV-1230), so a classification never drops content the flow
+consumer added after the classifier read the row. See
+[flow_store.md](flow_store.md#concurrent-writers).
+
 ### Diagnosing a stalled wait
 
 `live::pg::diagnose` reads what a Postgres-mode process waits on: the

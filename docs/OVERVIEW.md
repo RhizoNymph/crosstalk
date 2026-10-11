@@ -835,7 +835,10 @@ Features Index:
       consumer's checkpoint writes (PgFlowDurability, migration
       0003_restart: recording order, access resolutions, tool calls, held
       writes, checkpoints). PgExtractionLedger keeps the extraction step's
-      ledger (0004_extract_ledger). Model-tested against
+      ledger (0004_extract_ledger). TransmissionStore::modify (a FOR
+      UPDATE read and its write in one transaction) is how the flow
+      consumer extends and analysis classifies a confirmed transmission,
+      so neither drops the other's write (INV-1230). Model-tested against
       crosstalk-memory's reference stores with the reference harnesses'
       proptest strategies.
     entry_points:

@@ -560,3 +560,14 @@ async fn holding_finds_the_transmission_holding_each_match() {
         .unwrap_or_else(|error| panic!("holding: {error:?}"));
     assert!(none.is_empty());
 }
+
+/// INV-1230 `flow.transmission-store.modify-atomic`: content extended from
+/// several tasks while a classification holds its read keeps every match,
+/// and the classification.
+#[tokio::test]
+async fn modify_keeps_concurrent_extensions_and_classification() {
+    let (store, _events) = store_with(Vec::new()).await;
+    for round in 0..4 {
+        assert_eq!(super::race::race(store.clone(), round).await, Ok(()));
+    }
+}

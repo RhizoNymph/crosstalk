@@ -1,0 +1,22 @@
+[invariant]
+id = "flow.transmission-store.modify-atomic"
+statement = "TransmissionStore::modify gives its change the transmission as stored when the call runs and saves the state the change returns before any other save or modify of that id commits; content extended from several tasks while a classification of the transmission is written keeps every match and the classification."
+kind = "coordination"
+requires = ["unit", "integration"]
+rationale = """
+Two consumers write a confirmed transmission: the flow consumer extends
+its content as late matches arrive, and analysis classifies it once it is
+confirmed. Each writes the whole stored state. Read with transmission and
+written with save, the classifier wrote back the content it had read and
+dropped every match the flow consumer added in between (the
+20261007T150139Z bench run lost two content matches this way on
+Postgres). Through modify, each write starts from the other's.
+"""
+
+[evidence]
+unit = "crosstalk_memory::flow::verdicts::tests::modify_keeps_concurrent_extensions_and_classification"
+integration = "crosstalk_flow::store::tests::modify::pg_modify_keeps_concurrent_extensions_and_classification"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

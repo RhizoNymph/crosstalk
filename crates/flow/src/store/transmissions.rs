@@ -171,6 +171,56 @@ fn verdict_of(column: Option<&str>) -> Result<Option<Verdict>, Fault> {
 }
 
 /// The stored transmission, locked for the transaction when `lock`.
+/// Write `transmission` as its stored row and its `transmission_matches`
+/// keys, replacing what its id held; the verdict log is not touched.
+async fn write(conn: &mut PgConnection, transmission: &Transmission) -> Result<(), Fault> {
+    let (route, channel) = route_columns(&transmission.route);
+    let opened = micros("transmissions.opened_at", transmission.opened_at)?;
+    let body = json("transmission", transmission)?;
+    let keys = match_rows(transmission)?;
+    let id = id_text(transmission.id);
+    sqlx::query(
+        "INSERT INTO flow.transmissions (id, state, route, channel_id, opened_at, transmission) \
+             VALUES ($1, $2, $3, $4, $5, $6) \
+             ON CONFLICT (id) DO UPDATE SET state = EXCLUDED.state, route = EXCLUDED.route, \
+                 channel_id = EXCLUDED.channel_id, opened_at = EXCLUDED.opened_at, \
+                 transmission = EXCLUDED.transmission",
+    )
+    .bind(&id)
+    .bind(state_column(&transmission.state))
+    .bind(route)
+    .bind(channel)
+    .bind(opened)
+    .bind(body)
+    .execute(&mut *conn)
+    .await?;
+    sqlx::query("DELETE FROM flow.transmission_matches WHERE transmission_id = $1")
+        .bind(&id)
+        .execute(&mut *conn)
+        .await?;
+    if !keys.origin.is_empty() {
+        sqlx::query(
+                "INSERT INTO flow.transmission_matches \
+                     (origin, reader_exchange, message, part, range_start, range_end, transmission_id) \
+                 SELECT k.origin, k.reader_exchange, k.message, k.part, k.range_start, k.range_end, $7 \
+                 FROM UNNEST($1::text[], $2::text[], $3::text[], $4::int4[], $5::int8[], $6::int8[]) \
+                     AS k(origin, reader_exchange, message, part, range_start, range_end) \
+                 ON CONFLICT (origin, reader_exchange, message, part, range_start, range_end) \
+                 DO UPDATE SET transmission_id = EXCLUDED.transmission_id",
+            )
+            .bind(&keys.origin)
+            .bind(&keys.reader_exchange)
+            .bind(&keys.message)
+            .bind(&keys.part)
+            .bind(&keys.range_start)
+            .bind(&keys.range_end)
+            .bind(&id)
+            .execute(&mut *conn)
+            .await?;
+    }
+    Ok(())
+}
+
 async fn stored(
     conn: &mut PgConnection,
     id: TransmissionId,
@@ -269,56 +319,36 @@ async fn set_verdict(
 
 impl<D: Send + Sync, S: EventSink> TransmissionStore for PgTransmissionStore<D, S> {
     async fn save(&mut self, transmission: Transmission) -> Result<(), TransmissionStoreError> {
-        let (route, channel) = route_columns(&transmission.route);
-        let opened = micros("transmissions.opened_at", transmission.opened_at).map_err(failed)?;
-        let body = json("transmission", &transmission).map_err(failed)?;
-        let keys = match_rows(&transmission).map_err(failed)?;
-        let id = id_text(transmission.id);
         let mut tx = self.pool.begin().await.map_err(failed)?;
-        sqlx::query(
-            "INSERT INTO flow.transmissions (id, state, route, channel_id, opened_at, transmission) \
-             VALUES ($1, $2, $3, $4, $5, $6) \
-             ON CONFLICT (id) DO UPDATE SET state = EXCLUDED.state, route = EXCLUDED.route, \
-                 channel_id = EXCLUDED.channel_id, opened_at = EXCLUDED.opened_at, \
-                 transmission = EXCLUDED.transmission",
-        )
-        .bind(&id)
-        .bind(state_column(&transmission.state))
-        .bind(route)
-        .bind(channel)
-        .bind(opened)
-        .bind(body)
-        .execute(&mut *tx)
-        .await
-        .map_err(failed)?;
-        sqlx::query("DELETE FROM flow.transmission_matches WHERE transmission_id = $1")
-            .bind(&id)
-            .execute(&mut *tx)
-            .await
-            .map_err(failed)?;
-        if !keys.origin.is_empty() {
-            sqlx::query(
-                "INSERT INTO flow.transmission_matches \
-                     (origin, reader_exchange, message, part, range_start, range_end, transmission_id) \
-                 SELECT k.origin, k.reader_exchange, k.message, k.part, k.range_start, k.range_end, $7 \
-                 FROM UNNEST($1::text[], $2::text[], $3::text[], $4::int4[], $5::int8[], $6::int8[]) \
-                     AS k(origin, reader_exchange, message, part, range_start, range_end) \
-                 ON CONFLICT (origin, reader_exchange, message, part, range_start, range_end) \
-                 DO UPDATE SET transmission_id = EXCLUDED.transmission_id",
-            )
-            .bind(&keys.origin)
-            .bind(&keys.reader_exchange)
-            .bind(&keys.message)
-            .bind(&keys.part)
-            .bind(&keys.range_start)
-            .bind(&keys.range_end)
-            .bind(&id)
-            .execute(&mut *tx)
-            .await
-            .map_err(failed)?;
-        }
+        write(&mut tx, &transmission).await.map_err(failed)?;
         tx.commit().await.map_err(failed)?;
         Ok(())
+    }
+
+    /// One transaction: the row is read `FOR UPDATE`, so a concurrent
+    /// `save` or `modify` of the id waits for this one's commit.
+    async fn modify<T, F>(
+        &mut self,
+        id: TransmissionId,
+        change: F,
+    ) -> Result<Option<T>, TransmissionStoreError>
+    where
+        T: Send,
+        F: FnOnce(Transmission) -> (TransmissionState, T) + Send,
+    {
+        let mut tx = self.pool.begin().await.map_err(failed)?;
+        let Some(stored) = stored(&mut tx, id, true).await.map_err(failed)? else {
+            return Ok(None);
+        };
+        let before = stored.state.clone();
+        let (state, outcome) = change(stored.clone());
+        if state != before {
+            write(&mut tx, &Transmission { state, ..stored })
+                .await
+                .map_err(failed)?;
+        }
+        tx.commit().await.map_err(failed)?;
+        Ok(Some(outcome))
     }
 
     async fn transmission(
