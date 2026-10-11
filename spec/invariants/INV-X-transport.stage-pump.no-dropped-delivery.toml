@@ -1,5 +1,5 @@
 [invariant]
-id = "gateway.stage-pump.no-dropped-delivery"
+id = "transport.stage-pump.no-dropped-delivery"
 statement = "A delivery the stage pump handed to a Pumped::next call whose future was dropped before it returned is returned, at the same attempt and without waiting for an ack timeout, by the next Pumped::next call on that subscription."
 kind = "coordination"
 requires = ["unit"]

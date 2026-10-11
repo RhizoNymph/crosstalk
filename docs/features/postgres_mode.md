@@ -182,7 +182,7 @@ from another holder.
 that drops a `next` future (a command won its `select!`) after the pump
 answered no longer loses the delivery until the ack timeout; settles that
 kept draining could lose it on every redelivery and hang.
-`gateway.stage-pump.no-dropped-delivery` (INV-X) pins it:
+`transport.stage-pump.no-dropped-delivery` (INV-X; the layer prefix is the transport consumer contract the gateway's pump implements) pins it:
 `live::pg::pump::tests::a_next_dropped_after_its_answer_keeps_the_delivery`
 drives the pump (generic over `Subscription`) with a scripted
 subscription on a paused clock, drops a `next` after its answer, and
