@@ -17,7 +17,8 @@
 #   7. fetch_detections         ct-eval swarm-fetch (export + evidence)
 #      snapshot_inputs          copy the exchange log and blobs into the run dir
 #      bench_detect_inputs      ct-bench-detect fetch (/query answers) and from-export
-#   8. score                    ct-eval swarm, headline, ct-eval's exit code
+#   8. score                    a2a-bench export + score (bench_ref), headline,
+#                               score's exit code
 # Nothing after step 4 may restart or recreate crosstalk: its detection
 # state is in memory. Every `compose run` here passes --no-deps for that.
 
@@ -26,7 +27,7 @@ bench_api_url="http://crosstalk:8081"
 # Where the `data` volume is mounted (read-only) in the bench container;
 # the gateway's data directory (blobs.root's parent).
 bench_data_dir="/var/lib/crosstalk"
-bench_gates="/usr/local/share/crosstalk-eval/gates.toml"
+bench_gates="/usr/local/share/a2a-bench/gates/crosstalk-gateway-export.toml"
 # Seeds at or above this are reserved for holdout runs (the n-th holdout run
 # uses 1_000_000 + n); development runs stay below it, so a dev run can never
 # spend a holdout seed.
@@ -117,7 +118,7 @@ EOF
     [[ "$answer" =~ ^([yY]|[yY][eE][sS])$ ]] || bench_fail "not confirmed; nothing was restarted"
 }
 
-# 2. The demo stack, built (the image must carry ct-eval) and running.
+# 2. The demo stack, built (the image must carry the bench tools) and running.
 start_stack() {
     compose up -d --build
 }
@@ -266,8 +267,8 @@ fetch_detections() {
 }
 
 # After the export: copy the gateway's exchange log and blob store into the
-# run directory, so the run can be re-scored anywhere (ct-eval swarm needs
-# the truth, the exchange log, the blobs and the export). Both accumulate
+# run directory, so the run can be re-scored anywhere (ct-bench-detect
+# from-export reads them beside the truth and the export). Both accumulate
 # across runs (blobs are content-addressed), so this copies everything so
 # far; the importer joins on the run's sessions.
 snapshot_inputs() {
@@ -310,25 +311,35 @@ bench_detect_inputs() {
         from-export --run "/bench/${run}" --out "/bench/${run}/bench-input"
 }
 
-# 8. Score offline against the exchange log and blobs read in place on the
-# data volume; print the headline and return ct-eval's exit code (2: a gate
-# failed).
+# 8. Score with a2a-bench, the bench repo's scorer, at the release tag the
+# demo image was built with (bench_ref in bench.env): `export` turns the
+# ground truth and bench-input/ into the bench's export (bench-export/:
+# labels joined to the captured exchanges by session and tool-use id),
+# `score` scores bench-input/predictions.jsonl against it with the bench's
+# gates for the gateway's export. Prints the headline and returns score's
+# exit code (2: a gate failed).
+bench_a2a() {
+    compose --profile bench run --rm --no-deps -T \
+        --entrypoint /usr/local/bin/a2a-bench bench "$@"
+}
+
 score() {
     local run="$1" rc=0 dir="${here}/bench/${run}"
-    compose --profile bench run --rm --no-deps -T bench \
-        swarm --truth "/bench/${run}/truth.jsonl" \
-        --exchanges "${bench_data_dir}/exchanges/exchange-log.jsonl" \
-        --blobs "${bench_data_dir}/blobs" \
-        --export "/bench/${run}/export.jsonl" \
-        --evidence "/bench/${run}/evidence.jsonl" \
+    bench_a2a export --dataset demo-swarm \
+        --inputs "/bench/${run}/bench-input" \
+        --truth "/bench/${run}/truth.jsonl" \
+        --out "/bench/${run}/bench-export" >"${dir}/bench-export.log" 2>&1 \
+        || bench_fail "a2a-bench export failed; see ${dir}/bench-export.log"
+    bench_a2a score --export "/bench/${run}/bench-export" \
+        --predictions "/bench/${run}/bench-input/predictions.jsonl" \
         --gates "$bench_gates" \
-        --out "/bench/${run}/report" >"${dir}/score.txt" || rc=$?
+        --out "/bench/${run}/report" >"${dir}/score.txt" 2>&1 || rc=$?
     if ((rc != 0 && rc != 2)); then
-        echo "run.sh bench: ct-eval swarm failed (exit ${rc}); output in ${dir}/score.txt" >&2
+        echo "run.sh bench: a2a-bench score failed (exit ${rc}); output in ${dir}/score.txt" >&2
         return "$rc"
     fi
     echo
-    echo "bench ${run} ($(sed -n 's/^scenario=//p' "${dir}/bench.env"))"
+    echo "bench ${run} ($(sed -n 's/^scenario=//p' "${dir}/bench.env"), $(sed -n 's/^bench_ref=//p' "${dir}/bench.env"))"
     grep -m 1 '^overall:' "${dir}/report/report.txt" || true
     if grep -q '^gates:' "${dir}/report/report.txt"; then
         sed -n '/^gates:/,/^$/p' "${dir}/report/report.txt"
@@ -338,6 +349,17 @@ score() {
     if ((rc == 2)); then echo "result: GATE FAILED"; else echo "result: pass"; fi
     echo "report: ${dir}/report/report.txt"
     return "$rc"
+}
+
+# The bench release the demo image carries (its REF file: bench_ref and
+# bench_commit lines), for bench.env.
+bench_ref_lines() {
+    local id out
+    id="$(docker create crosstalk-demo:dev)" || bench_fail "could not create a container from crosstalk-demo:dev"
+    out="$(docker cp "${id}:/usr/local/share/a2a-bench/REF" - 2>/dev/null | tar -xO 2>/dev/null)"
+    docker rm "$id" >/dev/null
+    [[ -n "$out" ]] || bench_fail "crosstalk-demo:dev has no /usr/local/share/a2a-bench/REF; rebuild it (deploy/demo.Dockerfile)"
+    printf '%s\n' "$out"
 }
 
 bench() {
@@ -407,6 +429,7 @@ bench() {
         echo "suspected_ttl_ms=$(demo_flow_ms suspected_ttl_ms)"
         echo "crosstalk_image=$(docker image inspect --format '{{.Id}}' crosstalk:dev)"
         echo "demo_image=$(docker image inspect --format '{{.Id}}' crosstalk-demo:dev)"
+        bench_ref_lines
     } >"${here}/bench/${run}/bench.env"
     echo "run.sh bench: run ${run} (scenario ${scenario}) -> deploy/bench/${run}/" >&2
 

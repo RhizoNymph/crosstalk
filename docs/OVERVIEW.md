@@ -1532,13 +1532,16 @@ Features Index:
       gateway writing ground truth v2 to deploy/bench/<run>/ (gitignored,
       run id a UTC timestamp), wait until /healthz live.watermark_micros
       passes the swarm's end (exports are cut at the watermark), export the
-      gateway's detections with ct-eval swarm-fetch over the L8 API, and
-      score them with ct-eval swarm against the exchange log and blobs read
-      in place from the data volume (mounted read-only into the bench
-      service). Prints precision, recall and the gate result and passes
-      ct-eval's exit code through (2 = a gate failed). Fails fast unless
-      /readyz has the `live` and `api` tasks running and the API takes the
-      token. ct-eval ships in the crosstalk-demo image. --scenario
+      gateway's detections with ct-eval swarm-fetch over the L8 API, copy
+      the exchange log and blobs into the run, turn the run into bench
+      input with ct-bench-detect, and score it with a2a-bench (the
+      a2a-transmission-bench scorer, at the release tag A2A_BENCH_REF in
+      deploy/demo.Dockerfile, recorded as bench_ref in bench.env) and the
+      bench repo's gates. Prints precision, recall and the gate result and
+      passes a2a-bench score's exit code through (2 = a gate failed). Fails
+      fast unless /readyz has the `live` and `api` tasks running and the
+      API takes the token. The bench tools ship in the crosstalk-demo
+      image. --scenario
       headline (default, high-entropy prose: the headline precision and
       recall) or boilerplate (templated prose unrelated agents share: a
       regression scenario for false positives on shared text), recorded in
