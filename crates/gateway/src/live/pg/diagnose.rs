@@ -49,6 +49,9 @@ pub struct PgDiagnosis {
     pub spool: Option<SpoolStats>,
     /// Rows waiting in the four store outboxes.
     pub outbox_rows: Part<i64>,
+    /// Every group's deliveries by state (`ready`, `held`, `delayed`): a
+    /// `held` one nobody settles is a consumer that lost it.
+    pub deliveries: Part<Vec<(String, String, i64)>>,
     /// Connections the pool holds, and how many of them are idle.
     pub pool_size: u32,
     pub pool_idle: usize,
@@ -109,7 +112,15 @@ pub async fn diagnose(from: DiagnoseFrom<'_>) -> PgDiagnosis {
         .fetch_one(from.pool)
         .await
         .map_err(reason);
+    let deliveries: Part<Vec<(String, String, i64)>> = sqlx::query_as(
+        "SELECT group_name, state, count(*) FROM transport.deliveries \
+         GROUP BY group_name, state ORDER BY group_name, state",
+    )
+    .fetch_all(from.pool)
+    .await
+    .map_err(reason);
     PgDiagnosis {
+        deliveries,
         frontier,
         watermark: from.watermark,
         ticked_through,
@@ -125,8 +136,63 @@ pub async fn diagnose(from: DiagnoseFrom<'_>) -> PgDiagnosis {
     }
 }
 
+impl PgDiagnosis {
+    /// What `Live::settle` (and a drain at shutdown) still waits on, as
+    /// `PgQuiet::busy` decides it: a live slot's group holding a delivery,
+    /// a record in the spool, a row in a store outbox. Empty when none of
+    /// those is the case (a settle then waits on the stages' own activity).
+    pub fn settle_waits_on(&self) -> Vec<String> {
+        let mut waits = Vec::new();
+        let slots: Vec<ConsumerGroup> = crate::live::Slot::ALL
+            .iter()
+            .map(|slot| slot.group())
+            .collect();
+        match &self.groups {
+            Ok(groups) => {
+                for group in groups
+                    .iter()
+                    .filter(|group| group.pending > 0 && slots.contains(&group.group))
+                {
+                    let states = match &self.deliveries {
+                        Ok(rows) => rows
+                            .iter()
+                            .filter(|(name, _, _)| *name == group.group.0)
+                            .map(|(_, state, count)| format!("{count} {state}"))
+                            .collect::<Vec<_>>()
+                            .join(", "),
+                        Err(_) => "states unreadable".to_owned(),
+                    };
+                    waits.push(format!(
+                        "group {} holds {} deliveries ({states})",
+                        group.group.0, group.pending
+                    ));
+                }
+            }
+            Err(why) => waits.push(format!("the groups did not read: {why}")),
+        }
+        if let Some(spool) = &self.spool
+            && spool.records > 0
+        {
+            waits.push(format!("the spool holds {} records", spool.records));
+        }
+        match &self.outbox_rows {
+            Ok(0) => {}
+            Ok(rows) => waits.push(format!("the store outboxes hold {rows} rows")),
+            Err(why) => waits.push(format!("the outboxes did not read: {why}")),
+        }
+        waits
+    }
+}
+
 impl fmt::Display for PgDiagnosis {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self.settle_waits_on() {
+            waits if waits.is_empty() => writeln!(
+                f,
+                "settle waits on: nothing the bus, spool or outboxes hold (a stage's own work)"
+            )?,
+            waits => writeln!(f, "settle waits on: {}", waits.join("; "))?,
+        }
         writeln!(f, "frontier:        {:?}", self.frontier)?;
         writeln!(f, "watermark:       {:?}", self.watermark)?;
         writeln!(f, "ticked_through:  {:?}", self.ticked_through)?;
@@ -152,6 +218,7 @@ impl fmt::Display for PgDiagnosis {
         writeln!(f, "lock holders:    {:?}", self.lock_holders)?;
         writeln!(f, "spool:           {:?}", self.spool)?;
         writeln!(f, "outbox rows:     {:?}", self.outbox_rows)?;
+        writeln!(f, "deliveries:      {:?}", self.deliveries)?;
         writeln!(
             f,
             "pool:            {} connections, {} idle, {} in use",
@@ -204,5 +271,67 @@ where
             waited: limit,
             diagnosis: Box::new(diagnosis().await),
         }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::live::Slot;
+
+    fn stats(group: ConsumerGroup, pending: u64) -> GroupStats {
+        GroupStats {
+            group,
+            pending,
+            oldest_pending: None,
+            dead_letters: 0,
+            oldest_dead_letter: None,
+        }
+    }
+
+    fn diagnosis(groups: Vec<GroupStats>, outbox: i64) -> PgDiagnosis {
+        PgDiagnosis {
+            frontier: Err("not read".to_owned()),
+            watermark: None,
+            ticked_through: Ok(None),
+            spool_oldest: None,
+            unadmitted: Ok(Vec::new()),
+            groups: Ok(groups),
+            lock_holders: Ok(Vec::new()),
+            spool: None,
+            outbox_rows: Ok(outbox),
+            deliveries: Ok(vec![(Slot::SurfaceRelay.group().0, "held".to_owned(), 1)]),
+            pool_size: 0,
+            pool_idle: 0,
+            status: None,
+        }
+    }
+
+    /// The surface relay is a live slot the frontier does not count, so
+    /// its held delivery is named only as what a settle waits on; a group
+    /// outside the live slots (the exchange log) is not.
+    #[test]
+    fn settle_waits_on_names_a_live_slot_group_holding_a_delivery() {
+        let held = diagnosis(
+            vec![
+                stats(Slot::L3Reconstruct.group(), 0),
+                stats(Slot::SurfaceRelay.group(), 1),
+                stats(ConsumerGroup("exchange-log".to_owned()), 4),
+            ],
+            2,
+        );
+        let waits = held.settle_waits_on();
+        assert_eq!(waits.len(), 2, "{waits:?}");
+        assert!(
+            waits[0].contains("live-surface-relay") && waits[0].contains("1 held"),
+            "{waits:?}"
+        );
+        assert!(waits[1].contains("2 rows"), "{waits:?}");
+        assert!(
+            held.to_string()
+                .starts_with("settle waits on: group live-surface-relay")
+        );
+        let quiet = diagnosis(vec![stats(Slot::L5Flow.group(), 0)], 0);
+        assert!(quiet.settle_waits_on().is_empty());
     }
 }
