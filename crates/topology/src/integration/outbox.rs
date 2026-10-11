@@ -347,3 +347,48 @@ async fn outbox_stamp_coalesces_traffic_once() {
     assert_eq!(kept, stamped[stamped.len() - kept.len()..].to_vec());
     db.close().await.expect("drop the database");
 }
+
+/// A relay hung mid-publish (a slow bus, a process about to be killed)
+/// holds no transaction and no lock: no session of its pool is idle in a
+/// transaction while it hangs, and another drain can take the drain lock
+/// and finish meanwhile.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_relay_hung_mid_publish_holds_no_transaction() {
+    let Some(db) = database("a_relay_hung_mid_publish_holds_no_transaction").await else {
+        return;
+    };
+    reset(db.pool()).await;
+    stage(db.pool()).await;
+    let hanging = small_pool(db.url().connect_options().clone(), 2).await;
+    let (bus, mut hung) = FaultBus::new(Fault::Hang {
+        call: 2,
+        recorded: true,
+    });
+    let mut ids = outbox_ids(11);
+    let mut relay = Box::pin(drain(&hanging, &mut ids, &bus));
+    tokio::select! {
+        result = &mut relay => panic!("the drain finished: {result:?}"),
+        _ = hung.recv() => {}
+    }
+    // The relay's future is alive, parked in its third publish.
+    let (idle,): (i64,) = sqlx::query_as(
+        "SELECT count(*) FROM pg_stat_activity \
+         WHERE datname = current_database() AND state LIKE 'idle in transaction%'",
+    )
+    .fetch_one(db.pool())
+    .await
+    .expect("reads the sessions");
+    assert_eq!(idle, 0, "a hung publish holds a transaction open");
+    let (second, _hung) = FaultBus::new(Fault::None);
+    let mut later = outbox_ids(99);
+    tokio::time::timeout(
+        std::time::Duration::from_secs(30),
+        drain(db.pool(), &mut later, &second),
+    )
+    .await
+    .expect("another drain is not blocked by the hung one")
+    .expect("drains");
+    drop(relay);
+    hanging.close().await;
+    db.close().await.expect("drop the database");
+}

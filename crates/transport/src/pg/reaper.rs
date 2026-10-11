@@ -215,6 +215,7 @@ pub(crate) async fn run(shared: Arc<Shared>, mut messages: mpsc::UnboundedReceiv
     let mut timers: BinaryHeap<Entry> = BinaryHeap::new();
     let mut settled: HashSet<HoldKey> = HashSet::new();
     loop {
+        shared.reaper_beat.beat(timers.len());
         let deadline = timers.peek().map(|Reverse((at, ..))| *at);
         tokio::select! {
             biased;

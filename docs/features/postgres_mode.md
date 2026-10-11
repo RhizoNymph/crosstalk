@@ -211,47 +211,73 @@ cancellation (`crates/transport/src/bus/subscription.rs`, `next`).
 
 ### Cancellation audit (bus reads, outbox polls, stream reads)
 
-Every `select!`, `timeout` or race in Postgres mode with a bus `next`, an
-outbox poll or a stream read as a branch. A branch is cancel-safe when
-dropping it mid-flight loses nothing it already took.
+Every cancellable point in Postgres mode, in the gateway's live process
+(`crates/gateway/src/live/pg`), the bus (`crates/transport/src/pg`), the
+spool, and every layer's outbox relay and stamping. For each: whether a
+`select!`/timeout can drop it mid-flight safely, whether it holds a
+transaction or a connection across an await there, and what a dropped
+future, a runtime shutdown or `Live::kill` leaves behind.
 
-| Where | Branches | Cancel-safe | Holds a transaction or connection across an await here | Why |
-| --- | --- | --- | --- | --- |
-| generic stage loop, `crates/gateway/src/live/stage.rs:484` (L3, L4, L6, L7, surface relay) | commands, `Pumped::next` | yes | no (a oneshot reply only) | `Pumped::next` keeps its pull's reply in the `Pumped` (`pump.rs`, `next`); a dropped call's answer goes to the next call |
-| durable flow loop, `crates/gateway/src/live/pg/l5.rs:116` | commands, checkpoint interval, extracted inputs (mpsc), `Pumped::next` | yes | no in the branches; the checkpoint's transaction runs in an arm body, never raced | `Interval::tick` and mpsc `recv` are cancel-safe; `Pumped::next` as above |
-| the pump's fetch, `crates/gateway/src/live/pg/pump.rs:117` | requests (mpsc), `PgSubscription::next` | yes | no since 686e5c9: the take's transaction lives in its own task. Before, yes: a fetch dropped mid-take dropped its transaction | an ack or nack arriving mid-fetch (the flow loop acks at its checkpoints while a pull waits) drops the fetch; `PgSubscription::next` runs each take in a task of its own and resumes it on the next call (`crates/transport/src/pg/subscription.rs`, `take_task`) |
-| a take's task, `crates/transport/src/pg/subscription.rs` (`try_take`) | none (runs to its commit) | not raced | yes, the take's transaction across its statements (row locks on `transport.deliveries`, `groups` `FOR UPDATE`) | DB awaits only. Aborted when its subscription drops (`Drop for PgSubscription`), so no take outlives its subscription, bus and pool; its rollback is flushed as the connection returns to the pool, or the server ends it after `idle_in_transaction_session_timeout` |
-| `PgSubscription::next`'s wait, `crates/transport/src/pg/subscription.rs:437` | closed, wake (watch), sleep | yes | no | waits only; the take finished before it |
-| bus reaper, `crates/transport/src/pg/reaper.rs:219` | messages (mpsc), next deadline | yes | `fail` holds its transaction across DB awaits only, after the select | `lock_timeout = 2s`: a row locked by a stuck session delays that reaping only |
-| topology outbox relay, `crates/topology/src/outbox.rs:223`, and `publish_batch` (`:340`) | wake (mpsc), sleep | yes | yes in `publish_batch`: the `topology.outbox` transaction (with its advisory transaction lock) is held across each `announce`, a bus publish through the spool | not raced; when the relay task is aborted (shutdown, kill) the transaction is dropped and rolled back on the connection's return, or ended by the server's timeout. Accepted: the publish is bounded by `publish_timeout`, or spools at once |
-| exchange log consumer, `crates/gateway/src/log/consumer.rs:68` | none (`while let`) over `Pumped::next` | yes | no | not raced |
-| surface relay into the hosted surface, `crates/api/src/in_process/mod.rs:522` | published events (mpsc), settle requests (mpsc) | yes | no in the branches (`apply_all` reads the stores in its arm body) | mpsc `recv` is cancel-safe |
-| outbox forwarder (memory set), `crates/gateway/src/live/relay.rs:33` | flushes, outbox (mpsc) | yes | no | mpsc `recv` |
-| spool drainer, `crates/transport/src/spool/drain.rs:65` | notify, sleep | yes | no (its batch publish is one transaction in `PgBus::publish_batch`, after the select) | waits only |
-| bus listener, `crates/transport/src/pg/listen.rs:24` | none | yes | a `LISTEN` connection, no transaction | a lost connection reconnects; notifications are hints |
-| pipeline lock holder, `crates/gateway/src/store/lock.rs` (`hold`) | interval | yes | its own connection (session advisory lock), no transaction | dropped, the connection closes and the server releases the lock |
-| `Live::shutdown` drain and joins, `crates/gateway/src/live/mod.rs:547`, `:562`, `:620`; `Live::kill` | the stages' drain, a group's emptiness, each task by a deadline | not by design | tasks aborted there may hold a transaction | an aborted task's transaction is rolled back when its connection returns to the pool (the runtime is alive), or when the process exits (the socket closes); a held delivery left behind is returned by the next start's `recover_held` |
-| `settle`/`quiet`, `crates/gateway/src/live/settle.rs` | none over the bus | yes | no | commands and group stats only |
-| recovery, `Live::start_pg` | none | yes | per-statement only | sequential |
+| Where | Cancel-safe | Holds a transaction or connection across an await here | A dropped future, runtime shutdown or kill leaves |
+| --- | --- | --- | --- |
+| generic stage loop `crates/gateway/src/live/stage.rs:484` (L3, L4, L6, L7, surface relay): commands vs `Pumped::next` | yes: `Pumped::next` keeps its pull's reply in the `Pumped` | no (a oneshot reply) | nothing; a dropped `next`'s answer is returned by the next call (`live::pg::pump::tests::a_next_dropped_after_its_answer_keeps_the_delivery`) |
+| durable flow loop `crates/gateway/src/live/pg/l5.rs:116`: commands, checkpoint interval, extracted inputs, `Pumped::next` | yes (interval, mpsc and `Pumped::next` are) | no in its branches; the checkpoint's transaction runs in an arm body | killed: unacked deliveries stay held until the next start's `recover_held`; inputs after the last checkpoint are re-fed by `restore` |
+| the pump `crates/gateway/src/live/pg/pump.rs:117`: requests vs `PgSubscription::next` | yes | no: since 686e5c9 a take's transaction lives in its own task | dropped with its subscription: the take is aborted (below) |
+| a take's task, `crates/transport/src/pg/subscription.rs` `try_take` (spawned by `take_task`, wrapped in `progress::Tracked`) | runs to its commit; abandoned past `take_limit` | yes: the take's transaction (group row `FOR UPDATE`, delivery rows) across its statements | aborted (subscription dropped, or stalled past `take_limit` = max(2 × publish timeout, 10 s) outside `acquire`): the transaction is dropped and rolled back as the connection returns to the pool; a hold it already committed is reaped at the provisional deadline. Its own `lock_timeout` (= the limit) ends a server-side lock wait first. Runtime shutdown: the socket closes and the server rolls back. Any other stall: the server ends it after `idle_in_transaction_session_timeout` (30 s) |
+| `PgSubscription::next`'s wait `crates/transport/src/pg/subscription.rs` (`closed`, `wake`, sleep) | yes | no | nothing |
+| bus reaper `crates/transport/src/pg/reaper.rs:219`, `fail` | yes (work after the select) | `fail`'s transaction across DB awaits only, `lock_timeout = 2s` | a lock wait delays that reaping only (retried at the poll); shutdown or kill stops reaping, and the next start's `recover_held` returns what was held. Its liveness is reported (`PgBus::reaper`) |
+| bus listener `crates/transport/src/pg/listen.rs:24` | yes | a `LISTEN` connection, no transaction | nothing (notifications are hints) |
+| `PgBus::publish` / `publish_batch` `crates/transport/src/pg/publish.rs` | not raced (each awaited to the end) | one transaction (with its append lock) across DB awaits only | dropped mid-commit: rolled back, or committed; the caller's retry is idempotent on id |
+| spool append `crates/transport/src/spool/mod.rs` (`blocking`) | yes | no (the file work runs on the blocking pool and finishes even if the caller goes) | a torn tail at most, truncated at the next open (`transport.spool.torn-tail-only`) |
+| spool drainer `crates/transport/src/spool/drain.rs:65` | yes (notify, sleep) | its batch publish is one bus transaction, after the select | killed between a batch's commit and the cursor: the batch is re-sent, deduplicated by id |
+| topology outbox relay `crates/topology/src/outbox.rs:223` (wake vs sleep), `publish_batch` | yes | **no since this change**: the batch is read in one transaction and deleted in another, under the drain lock; the publishes run between them. Before, the read transaction (with its advisory lock) was held across every publish | a relay aborted or hung mid-publish holds nothing; unpublished rows stay stamped and are republished under their ids (`integration::outbox::a_relay_hung_mid_publish_holds_no_transaction`) |
+| reconstruct, flow and analysis outbox relays (`crates/reconstruct/src/agents/outbox.rs` `relay`, `crates/flow/src/store/outbox.rs` `Relay::relay`, `crates/analysis/src/pg/outbox.rs` `relay`) | not raced | stamping is one committed transaction; publishes and the delete run outside it | rows stamped and not deleted are republished under their ids by the next relay (INV-1211 to INV-1213) |
+| store writes through `crosstalk_store::retry_serializable` (every layer) | not raced | one attempt's transaction across DB awaits only; the backoff sleeps outside it | an aborted task's transaction is rolled back on the connection's return, or by the server's timeout |
+| exchange log consumer `crates/gateway/src/log/consumer.rs:68` | yes (not raced) | no | nothing |
+| surface relay into the hosted surface `crates/api/src/in_process/mod.rs:522` | yes (mpsc) | no in its branches | node facts are rebuilt at the next start |
+| outbox forwarder (memory set) `crates/gateway/src/live/relay.rs:33` | yes (mpsc) | no | memory mode only |
+| pipeline lock holder `crates/gateway/src/store/lock.rs` (`hold`) | yes | its own session (advisory lock), no transaction | dropped: the connection closes and the server releases the lock; a partition: released when the server reaps the session (tcp keepalives, about 25 s) |
+| `Live::shutdown` `crates/gateway/src/live/mod.rs:547`, `:562`, `:620`; `Live::kill` | not by design | aborted tasks may hold a transaction | rolled back on the connection's return (the runtime is alive) or when the socket closes; the backstop ends any left idle |
+| settle and quiet `crates/gateway/src/live/settle.rs`, recovery `Live::start_pg` | yes | per statement only | nothing |
 
-Every Postgres-mode pool (`store::lazy_pool_named`; the gateway names its
-sessions `crosstalk-<role>-<pid>`, the pipeline lock
-`crosstalk-pipeline-lock-<pid>`) sets
-`idle_in_transaction_session_timeout = '30s'` on each new connection:
-whatever leaves a transaction idle (a task parked or abandoned mid-way,
-a process that keeps a socket open but stops driving it), the server ends
-the session within 30 s and its locks are released. Regression:
-`crosstalk_gateway::integration::pg_an_idle_transaction_is_ended_and_its_locks_released`.
+**Backstop.** Every pool from `store::lazy_pool_named` (the gateway names
+its sessions `crosstalk-<role>-<pid>`, the pipeline lock
+`crosstalk-pipeline-lock-<pid>`, the e2e harness
+`crosstalk-e2e-live-<n>`) sets `idle_in_transaction_session_timeout =
+'30s'` in `after_connect`: whatever leaves a transaction idle, the server
+ends that session within 30 s and its locks are released
+(`crosstalk_gateway::integration::pg_an_idle_transaction_is_ended_and_its_locks_released`).
 
-The memory set never goes through `Pumped`: `MemorySet::Sub =
-MpscSubscription` (`crates/gateway/src/live/store_set.rs:70`), whose
-`next` keeps its pending receiver across a cancelled call
-(`crates/transport/src/bus/subscription.rs:142-146`).
+**What a stall's diagnosis shows.** `live::pg::diagnose` lists the
+pending deliveries (state, attempt, due time, last error), every session
+that is idle in a transaction or holds locks on the bus tables (with its
+`application_name`, client port, backend and transaction start), this
+process's takes in flight (group, statement, running time, time since its
+task was last polled), how many takes were abandoned past their limit,
+and the reaper's liveness.
 
-Regression tests: `live::pg::pump::tests::a_next_dropped_after_its_answer_keeps_the_delivery`
-(no database) and `crosstalk_transport::integration::pg_next_dropped_mid_take_hands_out_the_hold_on_the_next_call`
-(Postgres: a `next` dropped mid-take; the take commits on its own and the
-next call hands the hold out at attempt 1, at once).
+**The abandoned transactions (node0, 686e5c9, `spool_outage` run 3).**
+Six sessions idle in transaction since the same 7 ms, each the bus's take
+transaction (`crates/transport/src/pg/subscription.rs`, `try_take`): one
+per pipeline group of the reader process (the six stage groups; the
+gateway has a seventh, the exchange log), started together by the wake-up
+of a settle tick's publish. The server waited for the client
+(`ClientRead`) after statements that the take follows at once with
+another (`make due` then `take`; `take` then `commit`; `next due` then
+`commit`): the client had the connections checked out (9 of 11 in use)
+and stopped driving them. No rollback was queued because the
+transactions were never dropped: sqlx queues a rollback only when a
+`Transaction` is dropped, and these futures were parked, alive. Meanwhile
+the relay group's delivery (seq 51) stayed held past every deadline: the
+reaper did not take it back, either because one of these transactions'
+row locks blocked its `fail` (which then waited without bound) or
+because the reaper itself was not being polled; the diagnosis now
+reports the reaper's liveness to tell which. Why the takes stopped
+being polled is not yet known; the takes' poll times and phases in the
+next stall's diagnosis tell a scheduling stall (`last polled` long ago)
+from a wait on I/O (`last polled` recent). Either way the take is now
+abandoned at its limit and rolled back, its lock waits end at
+`lock_timeout`, and the server ends whatever is left after 30 s.
 
 ### A delivery lost to a race: redelivered, or dead-lettered
 

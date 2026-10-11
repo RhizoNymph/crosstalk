@@ -33,6 +33,7 @@ use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
 use super::Shared;
+use super::progress::{Tracked, take_limit};
 use super::reaper::{Failure, HoldKey, ReaperMsg, fail};
 use super::row::{bus_error, decode_envelope, duration_micros, failure, subject_set};
 
@@ -165,7 +166,7 @@ pub struct PgSubscription {
     held: HashMap<DeliveryId, Hold>,
     /// The take a dropped `next` started: it runs to its commit in its own
     /// task, and the next `next` hands out what it took.
-    taking: Option<JoinHandle<Result<Took, sqlx::Error>>>,
+    taking: Option<(u64, JoinHandle<Result<Took, sqlx::Error>>)>,
     /// Test hook: drop without telling the reaper, as a process death does.
     abandoned: bool,
 }
@@ -184,15 +185,23 @@ impl PgSubscription {
 
     /// The take a dropped `next` left running, or a new one in its own
     /// task: its transaction commits whether or not the caller waits.
-    fn take_task(&mut self, provisional: Instant) -> JoinHandle<Result<Took, sqlx::Error>> {
+    fn take_task(&mut self, provisional: Instant) -> (u64, JoinHandle<Result<Took, sqlx::Error>>) {
         match self.taking.take() {
             Some(taking) => taking,
-            None => tokio::spawn(try_take(
-                Arc::clone(&self.shared),
-                self.group.0.clone(),
-                self.retry,
-                provisional,
-            )),
+            None => {
+                let id = self.shared.takes.register(&self.group.0);
+                let take = try_take(
+                    Arc::clone(&self.shared),
+                    id,
+                    self.group.0.clone(),
+                    self.retry,
+                    provisional,
+                );
+                (
+                    id,
+                    tokio::spawn(Tracked::new(Arc::clone(&self.shared), id, take)),
+                )
+            }
         }
     }
 
@@ -259,27 +268,42 @@ impl PgSubscription {
 /// ready, take the lowest ready row. Runs in its own task (`take_task`).
 async fn try_take(
     shared: Arc<Shared>,
+    id: u64,
     group: String,
     retry: RetryPolicy,
     provisional: Instant,
 ) -> Result<Took, sqlx::Error> {
     let shared = &*shared;
     let group = group.as_str();
+    let phase = |name| shared.takes.phase(id, name);
     let capacity = i64::try_from(shared.config.group_capacity.get()).unwrap_or(i64::MAX);
     let now = shared.now_micros();
     let mut tx = shared.pool.begin().await?;
+    // A server-side lock wait ends with an error before the client-side
+    // limit abandons the take (`progress::take_limit`).
+    phase("lock timeout");
+    let limit = take_limit(shared.config.publish_timeout.get());
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "SET LOCAL lock_timeout = '{}ms'",
+        limit.as_millis()
+    )))
+    .execute(&mut *tx)
+    .await?;
+    phase("lock group");
     let (through, subjects): (i64, Vec<String>) = sqlx::query_as(
         "SELECT admitted_through, subjects FROM transport.groups WHERE name = $1 FOR UPDATE",
     )
     .bind(group)
     .fetch_one(&mut *tx)
     .await?;
+    phase("count");
     let tracked: i64 =
         sqlx::query_scalar("SELECT count(*) FROM transport.deliveries WHERE group_name = $1")
             .bind(group)
             .fetch_one(&mut *tx)
             .await?;
     let room = capacity.saturating_sub(tracked).max(0);
+    phase("admit");
     let (head, candidates, last_admitted): (i64, i64, Option<i64>) = sqlx::query_as(ADMIT)
         .bind(group)
         .bind(through)
@@ -296,12 +320,14 @@ async fn try_take(
         head.max(through)
     };
     if advanced != through {
+        phase("advance");
         sqlx::query("UPDATE transport.groups SET admitted_through = $2 WHERE name = $1")
             .bind(group)
             .bind(advanced)
             .execute(&mut *tx)
             .await?;
     }
+    phase("make due");
     sqlx::query(
         "UPDATE transport.deliveries SET state = 'ready', available_at = NULL \
          WHERE group_name = $1 AND state = 'delayed' AND available_at <= $2",
@@ -310,6 +336,7 @@ async fn try_take(
     .bind(now)
     .execute(&mut *tx)
     .await?;
+    phase("take");
     let taken: Option<(i64, i32, String, String)> = sqlx::query_as(TAKE)
         .bind(group)
         .fetch_optional(&mut *tx)
@@ -340,6 +367,7 @@ async fn try_take(
             }
         }
         None => {
+            phase("next due");
             let next_due: Option<i64> = sqlx::query_scalar(
                 "SELECT min(available_at) FROM transport.deliveries \
                  WHERE group_name = $1 AND state = 'delayed'",
@@ -350,6 +378,7 @@ async fn try_take(
             Took::Empty { next_due }
         }
     };
+    phase("commit");
     tx.commit().await?;
     Ok(took)
 }
@@ -369,15 +398,45 @@ impl Subscription for PgSubscription {
             // only a call dropped mid-commit ever relies on it.
             let provisional = now + 2 * ack_timeout + self.shared.config.publish_timeout.get();
             let task = self.take_task(provisional);
-            let taking = self.taking.insert(task);
-            let took = match taking.await {
-                Ok(took) => took,
+            let (take, taking) = self.taking.insert(task);
+            let take = *take;
+            let limit = take_limit(self.shared.config.publish_timeout.get());
+            let joined = loop {
+                match tokio::time::timeout(limit, &mut *taking).await {
+                    Ok(joined) => break Some(joined),
+                    // Waiting for a pooled connection is bounded by the
+                    // pool's own acquire timeout.
+                    Err(_) if self.shared.takes.phase_of(take) == Some("acquire") => {}
+                    Err(_) => break None,
+                }
+            };
+            let took = match joined {
+                Some(Ok(took)) => took,
                 // The take's task panicked or was aborted: nothing was
                 // handed out; a committed hold is reaped at its deadline.
-                Err(error) => {
+                Some(Err(error)) => {
                     self.taking = None;
                     tracing::warn!(group = %self.group.0, error = %error, "a take's task failed; retrying");
                     tokio::time::sleep(self.shared.config.poll.get()).await;
+                    continue;
+                }
+                // Stalled past its limit: abandoned. Aborting drops its
+                // transaction, rolled back as the connection returns to the
+                // pool (or ended by the server's idle-in-transaction
+                // timeout); a hold it committed is reaped at its
+                // provisional deadline.
+                None => {
+                    let report = self.shared.takes.report(take);
+                    if let Some((_, taking)) = self.taking.take() {
+                        taking.abort();
+                    }
+                    self.shared.takes.count_stalled();
+                    tracing::warn!(
+                        group = %self.group.0,
+                        limit_ms = u64::try_from(limit.as_millis()).unwrap_or(u64::MAX),
+                        take = ?report,
+                        "a take stalled past its limit; abandoned and retried"
+                    );
                     continue;
                 }
             };
@@ -517,7 +576,7 @@ impl Drop for PgSubscription {
         // its hold is taken back at the provisional deadline the reaper
         // already has. A detached take would hold its connection, and maybe
         // row locks, past the subscription, its bus and its pool.
-        if let Some(taking) = self.taking.take() {
+        if let Some((_, taking)) = self.taking.take() {
             taking.abort();
         }
         if self.abandoned {

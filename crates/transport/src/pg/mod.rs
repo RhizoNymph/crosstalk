@@ -37,6 +37,7 @@
 mod config;
 mod dead_letters;
 mod listen;
+mod progress;
 mod prune;
 mod publish;
 mod reaper;
@@ -60,6 +61,7 @@ use tokio::task::JoinHandle;
 
 pub use config::{InvalidPgBusConfig, PgBusConfig};
 pub use dead_letters::PgDeadLetters;
+pub use progress::{ReaperReport, TakeReport};
 pub use stats::GroupStats;
 pub use subscription::PgSubscription;
 
@@ -89,6 +91,10 @@ pub(crate) struct Shared {
     pub(crate) next_delivery: AtomicU64,
     /// Keys dead-letter cursor checks; per bus value.
     pub(crate) cursor_key: RandomState,
+    /// Every take in flight, and the stalled ones counted.
+    pub(crate) takes: progress::Takes,
+    /// When the reaper last went round its loop.
+    pub(crate) reaper_beat: progress::ReaperBeat,
 }
 
 impl std::fmt::Debug for Shared {
@@ -176,6 +182,8 @@ impl PgBus {
             reaper: reaper_tx,
             next_delivery: AtomicU64::new(0),
             cursor_key: RandomState::new(),
+            takes: progress::Takes::default(),
+            reaper_beat: progress::ReaperBeat::default(),
         });
         let handles = vec![
             runtime.spawn(listen::run(Arc::clone(&shared))),
@@ -270,6 +278,24 @@ impl PgBus {
     /// [`PgBusConfig::retention`]). Returns how many were deleted.
     pub async fn prune(&self, now: Timestamp, keep: Duration) -> Result<u64, BusError> {
         prune::prune(&self.shared, now, keep).await
+    }
+
+    /// Every take in flight in this process, longest-running first: its
+    /// group, statement, and how long since its task was last polled.
+    pub fn takes(&self) -> Vec<TakeReport> {
+        self.shared.takes.reports()
+    }
+
+    /// How many takes ran past their limit and were abandoned (rolled
+    /// back and retried) since the bus started.
+    pub fn stalled_takes(&self) -> u64 {
+        self.shared.takes.stalled()
+    }
+
+    /// When the reaper last went round its loop and how many deadlines it
+    /// waits on: a reaper that stopped is what leaves holds unreaped.
+    pub fn reaper(&self) -> ReaperReport {
+        self.shared.reaper_beat.report()
     }
 
     /// The config the bus runs with.

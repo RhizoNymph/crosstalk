@@ -60,6 +60,12 @@ pub struct PgDiagnosis {
     /// transaction, waiting on a lock, or holding a lock on the bus's
     /// `deliveries` or `groups` tables.
     pub blockers: Part<Vec<String>>,
+    /// This process's takes in flight (group, statement, running, since
+    /// last polled) and how many were abandoned past their limit.
+    pub takes: Vec<crosstalk_transport::TakeReport>,
+    pub stalled_takes: u64,
+    /// The bus reaper's liveness.
+    pub reaper: crosstalk_transport::ReaperReport,
     /// Connections the pool holds, and how many of them are idle.
     pub pool_size: u32,
     pub pool_idle: usize,
@@ -95,8 +101,8 @@ const PENDING_ROWS: &str = "SELECT d.group_name, d.seq, d.state, d.attempt, \
      FROM transport.deliveries d JOIN transport.events e ON e.seq = d.seq \
      ORDER BY d.seq LIMIT 20";
 
-const BLOCKERS: &str = "SELECT format('pid %s (%s, port %s) %s xact since %s wait %s/%s locks [%s] query %s', \
-       a.pid, a.application_name, a.client_port, a.state, a.xact_start, a.wait_event_type, a.wait_event, \
+const BLOCKERS: &str = "SELECT format('pid %s (%s, port %s, backend since %s) %s xact since %s state since %s wait %s/%s locks [%s] query %s', \
+       a.pid, a.application_name, a.client_port, a.backend_start, a.state, a.xact_start, a.state_change, a.wait_event_type, a.wait_event, \
        (SELECT string_agg(DISTINCT c.relname || ':' || l.mode, ', ') FROM pg_locks l \
           JOIN pg_class c ON c.oid = l.relation \
           WHERE l.pid = a.pid AND c.relname IN ('deliveries', 'groups', 'events')), \
@@ -170,6 +176,9 @@ pub async fn diagnose(from: DiagnoseFrom<'_>) -> PgDiagnosis {
         deliveries,
         pending_rows,
         blockers,
+        takes: from.bus.takes(),
+        stalled_takes: from.bus.stalled_takes(),
+        reaper: from.bus.reaper(),
         frontier,
         watermark: from.watermark,
         ticked_through,
@@ -280,6 +289,20 @@ impl fmt::Display for PgDiagnosis {
             }
             Err(why) => writeln!(f, "  pending rows unreadable: {why}")?,
         }
+        writeln!(
+            f,
+            "takes:           {} in flight, {} abandoned past their limit; reaper {:?}",
+            self.takes.len(),
+            self.stalled_takes,
+            self.reaper
+        )?;
+        for take in &self.takes {
+            writeln!(
+                f,
+                "  take {} at {}: running {:?}, in phase {:?}, last polled {:?} ago",
+                take.group, take.phase, take.running, take.in_phase, take.since_poll
+            )?;
+        }
         match &self.blockers {
             Ok(blockers) if blockers.is_empty() => writeln!(f, "blockers:        none")?,
             Ok(blockers) => {
@@ -373,6 +396,12 @@ mod tests {
             deliveries: Ok(vec![(Slot::SurfaceRelay.group().0, "held".to_owned(), 1)]),
             pending_rows: Ok(Vec::new()),
             blockers: Ok(Vec::new()),
+            takes: Vec::new(),
+            stalled_takes: 0,
+            reaper: crosstalk_transport::ReaperReport {
+                since_active: None,
+                timers: 0,
+            },
             pool_size: 0,
             pool_idle: 0,
             status: None,
