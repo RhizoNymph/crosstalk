@@ -193,6 +193,36 @@ pub fn pipeline_pool(db: &TestDb) -> PgPool {
     )
 }
 
+/// A pipeline pool on `db` reached through `link` (a lossy `DbLink`):
+/// every statement stalls as on a link that drops packets.
+pub fn pipeline_pool_over(db: &TestDb, link: &crosstalk_testkit::db_link::DbLink) -> PgPool {
+    let settings = PoolSettings::new(
+        NonZeroU32::MIN.saturating_add(11),
+        0,
+        Duration::from_secs(30),
+    )
+    .expect("pool settings");
+    let options = db
+        .url()
+        .connect_options()
+        .clone()
+        .host(&link.host())
+        .port(link.port())
+        .application_name("crosstalk-e2e-lossy");
+    crosstalk_store::sqlx::postgres::PgPoolOptions::new()
+        .max_connections(settings.max_connections().get())
+        .acquire_timeout(settings.acquire_timeout())
+        .after_connect(|connection, _meta| {
+            Box::pin(async move {
+                sqlx::query("SET idle_in_transaction_session_timeout = '30s'")
+                    .execute(connection)
+                    .await
+                    .map(|_| ())
+            })
+        })
+        .connect_lazy_with(options)
+}
+
 /// Open the parts on `volume` over `pool`, retrying while the spool
 /// directory's `LOCK` is still held: a killed process's last spool handles
 /// drop with its aborted tasks, as a crashed process's file locks go with

@@ -714,14 +714,41 @@ async fn pg_a_hold_no_reaper_tracks_is_swept_and_redelivered() {
         return;
     };
     let quick = PgBusConfig {
-        ack_timeout: non_zero(SECOND),
-        publish_timeout: non_zero(SECOND),
+        ack_timeout: non_zero(5 * SECOND),
+        publish_timeout: non_zero(10 * SECOND),
         ..config()
     };
     let relay = group("relay");
 
+    // Both processes reach the database over a lossy link (15% of chunks
+    // stalled 200 to 400 ms, as the node0 loop's link was): a hold must be
+    // taken back however slow its statements are.
+    let options = db.url().connect_options();
+    let link = DbLink::start_lossy(
+        options.get_host(),
+        options.get_port(),
+        crosstalk_testkit::db_link::Lossy::tailscale_bad_day(0x5EED),
+    )
+    .await
+    .expect("a lossy link");
+    let over_link = || async {
+        let pool = PgPoolOptions::new()
+            .max_connections(4)
+            .acquire_timeout(30 * SECOND)
+            .connect_lazy_with(
+                db.url()
+                    .connect_options()
+                    .clone()
+                    .host(&link.host())
+                    .port(link.port()),
+            );
+        let bus = PgBus::new(pool, Arc::new(SystemClock), quick).expect("bus starts");
+        bus.recover_held().await.expect("recovers");
+        bus
+    };
+
     // The surviving process starts first and recovers: nothing is held yet.
-    let survivor = process(&db, quick).await;
+    let survivor = over_link().await;
     let mut sub = survivor
         .subscribe(&[Subject::Changed], relay.clone(), default_retry())
         .await
@@ -729,7 +756,7 @@ async fn pg_a_hold_no_reaper_tracks_is_swept_and_redelivered() {
 
     // Another process takes the delivery after that recovery, then dies
     // without telling anyone: its reaper goes with it.
-    let doomed = process(&db, quick).await;
+    let doomed = over_link().await;
     let mut doomed_sub = doomed
         .subscribe(&[Subject::Changed], relay.clone(), default_retry())
         .await
