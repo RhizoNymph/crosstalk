@@ -604,3 +604,44 @@ async fn minted_ids_never_collide_after_restart() {
     }
     db.close().await.expect("drops");
 }
+
+/// A start that finds no free connection (every one of its pool's taken,
+/// as when the server's are held by other sessions or a killed process's
+/// are not gone yet) is retried, as `serve`'s pipeline task retries it,
+/// instead of failing the run: the restart e2e once failed opening the
+/// sinks store on "pool timed out".
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn start_survives_a_pool_exhausted_at_open() {
+    let Some(db) = migrated("start_survives_a_pool_exhausted_at_open").await else {
+        return;
+    };
+    let settings = crosstalk_store::PoolSettings::new(
+        std::num::NonZeroU32::new(4).expect("non-zero"),
+        0,
+        Duration::from_secs(2),
+    )
+    .expect("pool settings");
+    let pool = crosstalk_gateway::store::lazy_pool_named(
+        &crosstalk_store::StoreConfig::new(db.url().clone(), settings),
+        "crosstalk-e2e-exhausted",
+    );
+    // Every connection taken for a while, then given back.
+    let mut taken = Vec::new();
+    for _ in 0..4 {
+        taken.push(pool.acquire().await.expect("a connection"));
+    }
+    let release = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(6)).await;
+        drop(taken);
+    });
+    let volume = Volume::new(DEFAULT_START);
+    let live = common::start_pg_on(&db, pool, &volume, PgIds::Seeded(common::SEED)).await;
+    release.await.expect("released");
+    assert_eq!(
+        live.layers().status.snapshot().pipeline_text(),
+        "running",
+        "started once connections were free"
+    );
+    stop_pg(live).await;
+    db.close().await.expect("drops");
+}

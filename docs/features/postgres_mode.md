@@ -452,6 +452,13 @@ processes on `SERVE_IDS` (`PgIds::Entropy`), killed or stopped in turn,
 each merging B into A, unmerging and renaming at the very same instant:
 every merge id is new and no audit id repeats.
 
+A start that finds no free connection (the server's taken by other
+sessions, a killed process's not gone yet) is retried every second until
+the bound, as `serve`'s pipeline task retries it, logging the server's
+connections by `application_name` (`common::start_pg_on`,
+`start_survives_a_pool_exhausted_at_open`); `kill_pg` closes the killed
+process's pool so its sessions go, as a crashed process's do.
+
 ### The spool through the gateway (`crates/e2e/tests/spool*`)
 
 The harness is `crates/e2e/tests/common/gateway.rs`. `spool` holds the

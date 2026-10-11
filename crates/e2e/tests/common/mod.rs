@@ -193,14 +193,15 @@ pub fn pipeline_pool(db: &TestDb) -> PgPool {
     )
 }
 
-/// Open the parts on `volume`, retrying while the spool directory's
-/// `LOCK` is still held: a killed process's last spool handles drop with
-/// its aborted tasks, as a crashed process's file locks go with it.
-async fn open_parts(db: &TestDb, volume: &Volume, ids: PgIds) -> PgParts {
+/// Open the parts on `volume` over `pool`, retrying while the spool
+/// directory's `LOCK` is still held: a killed process's last spool handles
+/// drop with its aborted tasks, as a crashed process's file locks go with
+/// it.
+async fn open_parts(pool: PgPool, volume: &Volume, ids: PgIds) -> PgParts {
     let deadline = Instant::now() + WAIT;
     loop {
         match PgParts::open(
-            pipeline_pool(db),
+            pool.clone(),
             bus_config(),
             spool_config(&volume.spool),
             secret(),
@@ -217,20 +218,76 @@ async fn open_parts(db: &TestDb, volume: &Volume, ids: PgIds) -> PgParts {
     }
 }
 
+/// How the server's connections stand: client backends against
+/// `max_connections`, per `application_name`. Read over the test's own
+/// pool, for a start that could not get connections.
+pub async fn server_connections(db: &TestDb) -> String {
+    let rows: Result<Vec<(Option<String>, i64)>, _> = sqlx::query_as(
+        "SELECT application_name, count(*) FROM pg_stat_activity \
+         WHERE backend_type = 'client backend' GROUP BY application_name ORDER BY 2 DESC",
+    )
+    .fetch_all(db.pool())
+    .await;
+    let max: Result<String, _> = sqlx::query_scalar("SELECT current_setting('max_connections')")
+        .fetch_one(db.pool())
+        .await;
+    format!("max_connections {max:?}; client backends by application: {rows:?}")
+}
+
+/// Whether a start failed for want of a database connection (a pool
+/// timed out, or a connection refused): what `serve`'s pipeline task
+/// retries, as this harness does.
+fn wants_a_connection(error: &crosstalk_gateway::live::LiveError) -> bool {
+    let text = format!("{error} {error:?}");
+    [
+        "pool timed out",
+        "PoolTimedOut",
+        "connection lost",
+        "ConnectionLost",
+        "too many clients",
+    ]
+    .iter()
+    .any(|sign| text.contains(sign))
+}
+
 /// A Postgres-mode live process over `db` and `volume` minting ids from
 /// `ids`; its recovery bounded by [`WAIT`].
 pub async fn start_pg(db: &TestDb, volume: &Volume, ids: PgIds) -> Live<PgSet> {
-    let parts = open_parts(db, volume, ids).await;
-    let probe = parts.clone();
-    bounded(
-        WAIT,
-        "the postgres live process's recovery",
-        Live::<PgSet>::start_pg(live_config(volume.clock.clone(), &volume.blobs), parts),
-        || async move { probe.diagnose(NonZeroU16::MIN).await },
-    )
-    .await
-    .unwrap_or_else(|stalled| panic!("{stalled}"))
-    .expect("the postgres live process starts")
+    start_pg_on(db, pipeline_pool(db), volume, ids).await
+}
+
+/// [`start_pg`] over `pool`. A start that fails for want of a connection
+/// (the server busy, a killed process's sessions not yet gone) is retried
+/// every second, as `serve`'s pipeline task retries it, until [`WAIT`];
+/// past it the test fails with the server's connections.
+pub async fn start_pg_on(db: &TestDb, pool: PgPool, volume: &Volume, ids: PgIds) -> Live<PgSet> {
+    let deadline = Instant::now() + WAIT;
+    loop {
+        let parts = open_parts(pool.clone(), volume, ids).await;
+        let probe = parts.clone();
+        let started = bounded(
+            WAIT,
+            "the postgres live process's recovery",
+            Live::<PgSet>::start_pg(live_config(volume.clock.clone(), &volume.blobs), parts),
+            || async move { probe.diagnose(NonZeroU16::MIN).await },
+        )
+        .await
+        .unwrap_or_else(|stalled| panic!("{stalled}"));
+        match started {
+            Ok(live) => return live,
+            Err(error) if wants_a_connection(&error) && Instant::now() < deadline => {
+                eprintln!(
+                    "the live process did not start ({error}); retrying. {}",
+                    server_connections(db).await
+                );
+                tokio::time::sleep(Duration::from_secs(1)).await;
+            }
+            Err(error) => panic!(
+                "the postgres live process starts: {error:?}\n{}",
+                server_connections(db).await
+            ),
+        }
+    }
 }
 
 /// The `generation`-th process of a run: seeded from `SEED + generation`.
@@ -272,7 +329,19 @@ pub async fn kill_pg(live: Live<PgSet>, db: &TestDb) -> String {
         panic!("stopping the killed process's spool drainer did not finish within {WAIT:?}");
     }
     drop(spool);
-    drop(pool);
+    // A crashed process's sessions end with it. The killed process's tasks
+    // are aborted; closing its pool ends the sessions they returned, so
+    // the next process (and the other tests sharing the server) do not
+    // find the server's connections taken by a process that is gone.
+    if tokio::time::timeout(Duration::from_secs(30), pool.close())
+        .await
+        .is_err()
+    {
+        eprintln!(
+            "the killed process's pool did not close within 30 s; {}",
+            server_connections(db).await
+        );
+    }
     diagnose_db(db.pool()).await
 }
 
