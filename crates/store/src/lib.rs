@@ -48,7 +48,10 @@ pub use retry::{
     InvalidSerializableRetry, SerializableError, SerializableRetry, TxError, TxFuture,
     retry_serializable,
 };
-pub use test_db::{RuntimeProblem, TEST_DB_PREFIX, TestDb, TestDbError, TestDbName};
+pub use test_db::{
+    RuntimeProblem, STALE_TEMPLATE_AGE, TEST_DB_PREFIX, TEST_TEMPLATE_PREFIX, TemplateDb,
+    TemplateStep, TestDb, TestDbError, TestDbName, drop_stale_templates, test_server,
+};
 
 /// The pinned sqlx, so layer crates name its types (`PgPool`, `Migrator`)
 /// through the same version. A layer crate that embeds migrations with

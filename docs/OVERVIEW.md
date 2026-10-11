@@ -806,13 +806,18 @@ Features Index:
       for layers to map into spec errors; retry_serializable runs a
       SERIALIZABLE transaction with bounded, backed-off retries. TestDb
       creates a fresh database per test from TEST_DATABASE_URL and drops it
-      on close or drop; tests skip with a printed reason when the variable
+      on close or drop; a suite with expensive shared contents builds them
+      once into a template (TestDb::create_template, freeze into a
+      TemplateDb) and clones it per test (TemplateDb::instantiate), stale
+      templates of dead or day-old processes dropped by the next
+      create_template; tests skip with a printed reason when the variable
       is unset, and scripts/test-db.sh starts a disposable Postgres 18 with
       pgvector.
     entry_points:
       - crates/store/src/lib.rs
       - crates/store/src/migrate.rs
-      - crates/store/src/test_db.rs
+      - crates/store/src/test_db/mod.rs
+      - crates/store/src/test_db/template.rs
       - scripts/test-db.sh
     depends_on: [workspace]
     doc: docs/features/store.md
@@ -959,7 +964,9 @@ Features Index:
       tests send the relay through the proxy with the database behind a
       cuttable DbLink (outage mid-stream, gateway killed while spooling,
       spool full); the L8 conformance suite runs over PgStores in process
-      and over HTTP.
+      and over HTTP, each test process seeding the world once into a
+      template database and each test hosting the surface over its own
+      clone of it.
     entry_points:
       - crates/api/src/pg/mod.rs
       - crates/gateway/src/live/pg/mod.rs
@@ -971,6 +978,7 @@ Features Index:
       - crates/e2e/tests/restart/main.rs
       - crates/e2e/tests/spool/main.rs
       - crates/api/tests/conformance_pg.rs
+      - crates/api/tests/support/pg_world.rs
     depends_on: [postgres_stores, gateway, pg_bus, publish_spool, store, reconstruct, provenance, flow_store, flow_correlator, flow_extract, search_alerts, topology_store, surface_service]
     doc: docs/features/postgres_mode.md
   sim:

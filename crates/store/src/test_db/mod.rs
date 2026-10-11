@@ -15,6 +15,18 @@
 //! not set it, from a [`TEST_ENV_FILE`] in the working directory or one of its
 //! ancestors (the workspace root, for `cargo test`). The file is gitignored,
 //! so a machine can point its tests at a server without exporting anything.
+//!
+//! A suite whose every test needs the same expensive contents builds them
+//! once into a template ([`TestDb::create_template`], then
+//! [`TestDb::freeze`] into a [`TemplateDb`]) and gives each test a
+//! `CREATE DATABASE … TEMPLATE` copy ([`TemplateDb::instantiate`]); see
+//! `template`.
+
+mod template;
+
+pub use template::{
+    STALE_TEMPLATE_AGE, TEST_TEMPLATE_PREFIX, TemplateDb, TemplateStep, drop_stale_templates,
+};
 
 use std::ffi::OsString;
 use std::io::Write;
@@ -44,6 +56,17 @@ fn admin_url() -> Result<DatabaseUrl, ConfigError> {
     DatabaseUrl::from_lookup(TEST_DATABASE_URL_VAR, |name| {
         std::env::var_os(name).or_else(|| env_file_value(name))
     })
+}
+
+/// The admin URL of the test server, found as [`TestDb::new`] finds it;
+/// `Ok(None)` when none is configured (the tests skip). Connects to
+/// nothing.
+pub fn test_server() -> Result<Option<DatabaseUrl>, TestDbError> {
+    match admin_url().map_err(TestDbError::from) {
+        Ok(url) => Ok(Some(url)),
+        Err(TestDbError::NotConfigured) => Ok(None),
+        Err(other) => Err(other),
+    }
 }
 
 fn env_file_value(name: &str) -> Option<OsString> {
@@ -112,15 +135,18 @@ static SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 impl TestDbName {
     fn fresh() -> Self {
+        Self::fresh_with(TEST_DB_PREFIX)
+    }
+
+    /// A fresh name under `prefix`, which is one of the module's constant
+    /// prefixes (lowercase letters and underscores).
+    fn fresh_with(prefix: &str) -> Self {
         let seq = SEQUENCE.fetch_add(1, Ordering::Relaxed);
         let nanos = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .map(|d| d.as_nanos())
             .unwrap_or(0);
-        Self(format!(
-            "{TEST_DB_PREFIX}{}_{nanos}_{seq}",
-            std::process::id()
-        ))
+        Self(format!("{prefix}{}_{nanos}_{seq}", std::process::id()))
     }
 
     /// The name, unquoted.
@@ -184,6 +210,34 @@ pub enum TestDbError {
     /// Connecting, migrating or creating extensions failed.
     #[error(transparent)]
     Store(#[from] StoreError),
+    /// A step of freezing a template, cloning one or listing stale ones
+    /// failed.
+    #[error("template database {name}: {step}: {failure}")]
+    Template {
+        /// The template's name.
+        name: String,
+        /// The step that failed.
+        step: TemplateStep,
+        /// The classified cause.
+        failure: DbFailure,
+        /// The driver error.
+        #[source]
+        source: sqlx::Error,
+    },
+    /// Sessions stayed on a template being frozen: nothing can be cloned
+    /// from it while any does.
+    #[error("template database {name} still had {sessions} sessions after {waited:?}")]
+    TemplateBusy {
+        /// The template's name.
+        name: String,
+        /// How many client sessions were still on it.
+        sessions: i64,
+        /// How long freezing waited for them to end.
+        waited: Duration,
+    },
+    /// The test database was already closed.
+    #[error("the test database was already closed")]
+    Closed,
 }
 
 impl From<ConfigError> for TestDbError {
@@ -287,6 +341,16 @@ impl TestDb {
                 source,
             });
         }
+        Self::open_created(admin, settings, name).await
+    }
+
+    /// Opens a pool on `name`, just created on `admin`'s server; drops the
+    /// database when that fails.
+    async fn open_created(
+        admin: DatabaseUrl,
+        settings: PoolSettings,
+        name: TestDbName,
+    ) -> Result<Self, TestDbError> {
         let url = admin.with_database(name.as_str());
         let pool = match open_pool(&url, &settings).await {
             Ok(pool) => pool,

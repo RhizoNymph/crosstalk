@@ -504,20 +504,60 @@ The L8 conformance suite runs over the Postgres stores in process
 through `crosstalk-client` (`crates/client/tests/conformance_pg.rs`), both
 on `crates/api/tests/support/pg_world.rs`:
 
-- each world gets a fresh `TestDb`, every layer migrated, extensions
-  created; `TestDb` needs a multi-thread runtime, so databases are created
-  and dropped on a helper runtime;
-- `PgStores` is opened on a bus that forwards every event to the surface's
-  relay, then `InProcess::host` (`CursorSecret::Derived`), the world
-  seeded through `WorldStores` on the bundle, the L7 outbox drained, the
-  relay settled, the clock moved to the anchor;
+- seeding the world through the Postgres stores is tens of thousands of
+  serializable transactions (far beyond the per-step `WAIT` of 300 s on a
+  remote server), so each test process seeds each distinct world once
+  into a template database and every test gets its own clone of it. A
+  world is distinct per access config (the world's directory plus the
+  harness's operators: none in process, one per permission set over
+  HTTP); knobs are surface options applied per test, so one template
+  serves every knob;
+- the template (`pg_world/template.rs`), seeded by whichever test asks
+  first, on the helper runtime, while every other test of the process
+  waits on the same outcome (a `watch` per access config; a failure is
+  every waiting test's failure). Its whole seed is bounded by
+  `TEMPLATE_WAIT` (2 h), separate from `WAIT`:
+  `TestDb::create_template` (stale templates dropped first), every layer
+  migrated, extensions created; `PgStores::open` with
+  `PgIds::Seeded(SEED)` on a bus that forwards every event to the
+  surface's relay and records it; `InProcess::host`
+  (`CursorSecret::Derived`); the world seeded through `WorldStores` on the
+  bundle, bodies through a `RecordingBlobs` over the bundle's
+  `MemoryBlobStore`; the L7 outbox drained; the relay settled. Then the
+  surface, the L7 relay and the dead-letter bus (and its `LISTEN`
+  connection) are shut down, the pool closed and `TestDb::freeze` refuses
+  new connections and terminates any left, since `CREATE DATABASE …
+  TEMPLATE` needs none on the template. The seed checks that the bundle's
+  blob store holds exactly the bodies it recorded, and warns when any
+  outbox (`reconstruct`, `flow`, `analysis`, `topology`) still holds rows,
+  which a clone's stores would publish again at open;
+- each test: `TemplateDb::instantiate` (a fresh `crosstalk_test_*`
+  database, dropped with the world); a fresh `MemoryBlobStore` given every
+  recorded body; `PgStores::open` with `PgIds::Seeded(SEED ^ CLONE_IDS)`
+  (the template's generators already minted `SEED`'s ids into the rows the
+  clone copies; a clone draws elsewhere, as a restarted deployment does)
+  and the L7 relay's ids likewise; `InProcess::host` with the test's knobs
+  (node facts rebuilt from the clone; reloading the same access config
+  changes nothing); the recorded events replayed into the relay channel in
+  their order, so the node facts and the live feed hold what they held
+  after the original seed (the feed's epoch is the clock's reading at
+  host, before the anchor, as it was); the L7 outbox drained; settled; the
+  clock moved to the anchor; the fitter started with the watermark read
+  from the clone; the scenario bound from the clone's reads and the
+  template's `Scenario`. Dead letters, bindings and cursor keys (derived
+  from the secret) come through the clone unchanged;
+- databases are created and dropped on a helper multi-thread runtime
+  (`TestDb` needs one); the template is never dropped by its process (it
+  lives in a static) and is dropped by the next `create_template` on the
+  server once its process is gone (same host) or it is a day old (any
+  host), or by the manual `crosstalk_test_%` cleanup (deploy.md);
 - projection jobs are fitted by a test-side copy of the in-process fitter
   over `PgProjectionSource` with `FakeLayoutFitter`;
 - the HTTP harness authenticates against the directory stored in
   Postgres;
 - without `TEST_DATABASE_URL` every test skips through
   `Harness::unavailable` (new in `crosstalk-conformance`); a configured
-  but unreachable server fails;
+  but unreachable server fails every test with the template's error;
 - expected failures: none (`SURFACE_FAILURES`);
 - gaps worked around in the harness: `PgChannelRegistry` has no
   `AccessStore` (binding reads accesses through `PgEvidence`), the
@@ -549,7 +589,9 @@ on `crates/api/tests/support/pg_world.rs`:
 | `crates/e2e/tests/restart/main.rs` | kill and restart, cursors, ids (W9) | tests |
 | `crates/e2e/tests/{spool,spool_outage,spool_outage_twice,spool_kill,spool_outage_serve_runtime}/main.rs` | the spool through the gateway (W9) | tests |
 | `crates/gateway/src/main.rs`, `crates/gateway/src/gateway/mod.rs` | `serve` exits non-zero once the pipeline's lock is lost (stopgap) | `Running::fatal`, `Fatal`, `FatalCause`, `Running::shutdown_bound` |
-| `crates/api/tests/support/pg_world.rs`, `crates/{api,client}/tests/conformance_pg.rs` | conformance over Postgres (W9) | the Postgres harnesses |
+| `crates/api/tests/support/pg_world.rs`, `crates/{api,client}/tests/conformance_pg.rs` | conformance over Postgres (W9): a clone of the template per test | `Databases`, `provision`, `PgWorld`, `Forwarding`, `SeedClock`, `WAIT`, `TEMPLATE_WAIT`, `CLONE_IDS` |
+| `crates/api/tests/support/pg_world/template.rs` | the template seeded once per process and access config | `template`, `Template`, `PgSeeding`, `RecordingBlobs` |
+| `crates/store/src/test_db/template.rs` | template databases: create, freeze, clone, stale cleanup | `TemplateDb`, `TestDb::{create_template, freeze}`, `drop_stale_templates` |
 | `crates/conformance/src/harness/mod.rs` | `Harness::unavailable`: skip a harness whose backend is not configured (W9) | `Harness` |
 
 ## Tests
@@ -628,6 +670,11 @@ on `crates/api/tests/support/pg_world.rs`:
 - Memory mode is byte-identical to before (replays).
 - Pool: at least `StoreSection::MIN_CONNECTIONS` (3); the pipeline lock
   holds a connection of its own.
+- Postgres conformance: no session is ever connected to a frozen
+  template; each test's world is its own clone, dropped with it; a clone
+  starts as the seeded world was after its settle (rows, bodies, applied
+  events, clock at the anchor); clone ids are drawn from
+  `SEED ^ CLONE_IDS`, never `SEED`; the test assertions are unchanged.
 
 ## Gaps
 
@@ -643,3 +690,9 @@ on `crates/api/tests/support/pg_world.rs`:
   intents as interrupted at its own start (single-node assumption, Q9).
 - A start that fails after `PgStores::open` leaves the hosted surface's
   relay and feed tasks to end on their own.
+- The Postgres conformance template is seeded once per test process: a
+  new process (each suite binary, each run) seeds again; templates are not
+  reused across runs. The template outlives its process until the next
+  `create_template` on the server drops it.
+- The Postgres conformance suites have not run green on node0 with the
+  template flow yet.

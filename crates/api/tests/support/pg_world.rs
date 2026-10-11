@@ -4,35 +4,56 @@
 //! (`crates/client/tests/conformance_pg.rs`, which includes this file by
 //! path).
 //!
+//! Seeding the world through the Postgres stores is tens of thousands of
+//! serializable transactions, so a test process seeds each distinct world
+//! (one per access config: the world's directory plus the harness's
+//! operators) once, into a template database, and every test gets its own
+//! `CREATE DATABASE … TEMPLATE` clone of it:
+//!
 //! ```text
-//! Databases::new        probe: TestDb::new_or_skip (on a helper multi-threaded runtime,
-//!                       since TestDb refuses the suite's current-thread one); none
-//!                       configured: every test skips (Harness::unavailable)
-//! provision(scenario)
-//!   a fresh database, every layer's migrations and the extensions
-//!   PgStores::open over a pool of the test's runtime; bus = Forwarding (every
-//!     published event to the surface's relay channel, as the memory outbox)
+//! Databases::new        reads the test server's URL (crosstalk_store::test_server);
+//!                       none configured: every test skips (Harness::unavailable)
+//! template(access)      once per process and access config (TEMPLATES), on the helper
+//!                       runtime, bounded by TEMPLATE_WAIT; concurrent tests wait on it
+//!   TestDb::create_template (stale templates dropped), every layer's migrations,
+//!     the extensions
+//!   PgStores::open (PgIds::Seeded(SEED)); bus = Forwarding, recording every event
+//!     it forwards to the surface's relay channel
 //!   InProcess::host (operators loaded, node facts, CursorSecret::Derived)
-//!   World::seed(&mut PgSeeding(stores))   every seeded write through Postgres, in the
-//!                                         memory harness's order (surface hosted first)
-//!   L7's outbox relay runs; wait until topology.outbox is empty
-//!   settle (the relay applied every seeded event), clock to the anchor
-//!   projection fitter over PgProjectionSource (FakeLayoutFitter, as in memory)
-//!   bind the scenario from the stores' reads
+//!   World::seed(&mut PgSeeding)   every seeded write through Postgres, in the memory
+//!                                 harness's order (surface hosted first); bodies to a
+//!                                 MemoryBlobStore through RecordingBlobs
+//!   L7's outbox relay runs; wait until topology.outbox is empty; settle
+//!   shut the surface, the relay and the bus down, close the pool, TestDb::freeze
+//!   -> Template { TemplateDb, the recorded bodies, the recorded events, the Scenario }
+//! provision(scenario)   per test, every step bounded by WAIT
+//!   TemplateDb::instantiate: a fresh database cloned from the template
+//!   a MemoryBlobStore holding the template's bodies
+//!   PgStores::open (PgIds::Seeded(SEED ^ CLONE_IDS)): the ids the template's
+//!     generators minted are in the clone, so the clone's draw from another seed
+//!   InProcess::host with the test's knobs (live feed, export limits)
+//!   the template's recorded events replayed, in order, into the relay channel
+//!   wait until topology.outbox is empty; settle; the clock to the anchor
+//!   projection fitter over PgProjectionSource (FakeLayoutFitter, as in memory),
+//!     its FixedWatermark read from the clone
+//!   bind the scenario from the clone's reads and the template's Scenario
 //! ```
 //!
-//! Every step is bounded by [`WAIT`]. Each world has its own database,
-//! dropped with it (or with the half-built world when provisioning fails).
+//! A clone ends as the seeded world used to after its settle: the same
+//! rows, the same bodies, the same events applied to the node facts and
+//! the live feed (whose epoch is the clock's reading at host, before the
+//! anchor, as before), the clock serving the anchor. Each test's database
+//! is dropped with its world (or with the half-built world when
+//! provisioning fails). The template lives as long as the process and is
+//! dropped by the next run's `TestDb::create_template` (or the manual
+//! `crosstalk_test_%` cleanup).
 
 use std::future::Future;
 use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 use std::time::Duration;
 
 use crosstalk_analysis::search::PgProjectionSource;
-use crosstalk_api::pg::{
-    PgAgentStore, PgAlerts, PgCatalog, PgChannels, PgEdges, PgProjections, PgSearch,
-    PgTransmissions,
-};
+use crosstalk_api::pg::PgChannels;
 use crosstalk_api::{
     CursorSecret, InProcess, InProcessOptions, PgEvidence, PgIds, PgOpen, PgSettings, PgStores,
     ProjectionFitting,
@@ -43,7 +64,6 @@ use crosstalk_conformance::world::{WorldReads, bind};
 use crosstalk_memory::analysis::fakes::FakeLayoutFitter;
 use crosstalk_memory::analysis::search::FixedWatermark;
 use crosstalk_memory::surface::sinks::SinkConfig;
-use crosstalk_provenance::store::PgProvenanceStore;
 use crosstalk_spec::aggregates::projection::frame::{FrameHeader, ProjectionFrame};
 use crosstalk_spec::aggregates::projection::{
     FitFailure, PointParts, ProjectedPoint, ProjectionInfo,
@@ -56,7 +76,9 @@ use crosstalk_spec::events::{BusEvent, Envelope, Subject};
 use crosstalk_spec::ids::{
     AccessId, ChannelId, DeploymentSecret, KeyedHasher, SecretVersion, SeededRandom,
 };
-use crosstalk_spec::interfaces::l2_transport::{BusError, ConsumerGroup, EventBus, RetryPolicy};
+use crosstalk_spec::interfaces::l2_transport::{
+    BlobStore, BusError, ConsumerGroup, EventBus, RetryPolicy,
+};
 use crosstalk_spec::interfaces::l5_flow::channels::{
     AccessReadError, AccessStore, ChannelReads, ChannelWithTraffic,
 };
@@ -66,32 +88,43 @@ use crosstalk_spec::interfaces::l6_analysis::{
 };
 use crosstalk_spec::interfaces::l7_topology::EdgeStore;
 use crosstalk_spec::interfaces::l8_surface::channel_traffic::ChannelTransmissionFilter;
-use crosstalk_spec::interfaces::l8_surface::export::{ExportFormat, ExportFormats, GatewayVersion};
+use crosstalk_spec::interfaces::l8_surface::export::{
+    ExportFormat, ExportFormats, ExportLimits, GatewayVersion,
+};
 use crosstalk_spec::interfaces::l8_surface::lists::ChannelFilter;
+use crosstalk_spec::interfaces::l8_surface::live::LiveConfig;
 use crosstalk_spec::interfaces::l8_surface::operators::{AccessConfig, OperatorConfig};
 use crosstalk_spec::interfaces::l8_surface::{PermissionSet, QueryApi};
 use crosstalk_spec::paging::{ChannelList, ChannelTransmissionList, Page, PageRequest};
 use crosstalk_spec::support::{Clock, Finite, TimeWindow, Timestamp};
 use crosstalk_store::sqlx::postgres::PgPoolOptions;
 use crosstalk_store::sqlx::{self, PgPool};
-use crosstalk_store::{Layer, Migrations, SerializableRetry, TestDb};
-use crosstalk_surface::pg::{PgAuditLog, PgOperatorStore, PgSinkRegistry};
+use crosstalk_store::{DatabaseUrl, Layer, Migrations, SerializableRetry, StoreError, TestDb};
 use crosstalk_surface::{EvidenceRecords, SurfaceConfig};
 use crosstalk_topology::outbox::{BusAnnouncer, OutboxIds};
 use crosstalk_transport::blob::MemoryBlobStore;
-use crosstalk_transport::{BusConfig, MpscBus, PgBus, PgBusConfig, PgDeadLetters};
+use crosstalk_transport::{BusConfig, MpscBus, PgBus, PgBusConfig};
 use crosstalk_world::clock::{BUCKET, DAY, MINUTE, UI_ANCHOR, minus, plus};
-use crosstalk_world::config::OPERATOR_RESEARCHER;
-use crosstalk_world::{Anchor, World, WorldClock, WorldStores};
+use crosstalk_world::config::{OPERATOR_RESEARCHER, WorldConfig};
+use crosstalk_world::{Anchor, World, WorldClock};
 use tokio::sync::mpsc::{UnboundedSender, unbounded_channel};
 use tokio::task::JoinHandle;
+
+#[path = "pg_world/template.rs"]
+mod template;
 
 /// The seed every world is generated from (the memory harness's).
 pub const SEED: u64 = 7;
 
-/// How long any one step of a provisioning (creating the database,
-/// migrating, seeding, settling) may take before it fails with its name.
+/// How long any one step of a test's provisioning (cloning the template,
+/// opening, hosting, settling) or of the template's setup (creating,
+/// migrating, freezing) may take before it fails with its name.
 pub const WAIT: Duration = Duration::from_secs(300);
+
+/// How long seeding the template may take, all of it: tens of thousands
+/// of serializable transactions against a possibly remote server. Tests
+/// waiting on it wait this long (and [`WAIT`] more) too.
+pub const TEMPLATE_WAIT: Duration = Duration::from_secs(2 * 60 * 60);
 
 /// The deployment secret the cursor keys derive from.
 pub const SECRET_HEX: &str = "c0f0c0f0c0f0c0f0c0f0c0f0c0f0c0f0c0f0c0f0c0f0c0f0c0f0c0f0c0f0c0f0";
@@ -99,23 +132,48 @@ pub const SECRET_HEX: &str = "c0f0c0f0c0f0c0f0c0f0c0f0c0f0c0f0c0f0c0f0c0f0c0f0c0
 /// How many connections each world's pool holds.
 pub const POOL: u32 = 8;
 
+/// Mixed into a clone's id seeds (`SEED ^ CLONE_IDS`): the template's
+/// generators already minted `SEED`'s first ids into the rows a clone
+/// copies, so a clone's generators start elsewhere, as a restarted
+/// deployment's do. The high bit keeps it apart from every `seed ^
+/// purpose` the stores derive.
+pub const CLONE_IDS: u64 = 0xC10E_0000_0000_0000;
+
+/// Mixed into the id seed of L7's outbox relay.
+pub const TOPOLOGY_IDS: u64 = 0x70B0;
+
+/// The label the access config's entries are hashed from.
+pub const ACCESS_LABEL: &str = "in-process access config";
+
 /// The bus the stores publish to: every event goes to the surface's relay
 /// channel, as the memory stores' outbox does (the harness runs no
 /// pipeline, so nothing else consumes them). Subscriptions are an idle
-/// in-memory bus's.
+/// in-memory bus's. While a template is seeded, every forwarded event is
+/// also recorded, in forwarding order, for its clones to replay.
 #[derive(Clone)]
 pub struct Forwarding {
     events: UnboundedSender<BusEvent>,
     idle: MpscBus,
+    recorded: Option<Arc<Mutex<Vec<BusEvent>>>>,
 }
 
 impl EventBus for Forwarding {
     type Subscription = <MpscBus as EventBus>::Subscription;
 
     async fn publish(&self, envelope: Envelope) -> Result<(), BusError> {
+        let Some(recorded) = &self.recorded else {
+            return self
+                .events
+                .send(envelope.event)
+                .map_err(|_| BusError::Disconnected);
+        };
+        // Held across the send so the record's order is the channel's.
+        let mut log = recorded.lock().unwrap_or_else(PoisonError::into_inner);
         self.events
-            .send(envelope.event)
-            .map_err(|_| BusError::Disconnected)
+            .send(envelope.event.clone())
+            .map_err(|_| BusError::Disconnected)?;
+        log.push(envelope.event);
+        Ok(())
     }
 
     async fn subscribe(
@@ -129,70 +187,6 @@ impl EventBus for Forwarding {
 }
 
 pub type Stores = PgStores<Forwarding, MemoryBlobStore>;
-
-/// The Postgres bundle as the world's [`WorldStores`]: the seed writes
-/// through the spec's write traits on handles sharing the surface's pool.
-pub struct PgSeeding(pub Stores);
-
-impl WorldStores for PgSeeding {
-    type Agents = PgAgentStore<Forwarding>;
-    type Spans = PgProvenanceStore;
-    type Channels = PgChannels<Forwarding>;
-    type Transmissions = PgTransmissions<Forwarding>;
-    type Catalog = PgCatalog<Forwarding>;
-    type Search = PgSearch<Forwarding>;
-    type Edges = PgEdges<Forwarding>;
-    type Alerts = PgAlerts<Forwarding>;
-    type Projections = PgProjections<Forwarding>;
-    type Operators = PgOperatorStore;
-    type Audit = PgAuditLog;
-    type Sinks = PgSinkRegistry;
-    type Letters = PgDeadLetters;
-    type Blobs = MemoryBlobStore;
-
-    fn agents(&mut self) -> &mut Self::Agents {
-        &mut self.0.agents
-    }
-    fn spans(&mut self) -> &mut Self::Spans {
-        &mut self.0.provenance
-    }
-    fn channels(&mut self) -> &mut Self::Channels {
-        &mut self.0.channels
-    }
-    fn transmissions(&mut self) -> &mut Self::Transmissions {
-        &mut self.0.transmissions
-    }
-    fn catalog(&mut self) -> &mut Self::Catalog {
-        &mut self.0.catalog
-    }
-    fn search(&mut self) -> &mut Self::Search {
-        &mut self.0.search
-    }
-    fn edges(&mut self) -> &mut Self::Edges {
-        &mut self.0.edges
-    }
-    fn alerts(&mut self) -> &mut Self::Alerts {
-        &mut self.0.alerts
-    }
-    fn projections(&mut self) -> &mut Self::Projections {
-        &mut self.0.projections
-    }
-    fn operators(&mut self) -> &mut Self::Operators {
-        &mut self.0.operators
-    }
-    fn audit(&mut self) -> &mut Self::Audit {
-        &mut self.0.audit
-    }
-    fn sinks(&mut self) -> &mut Self::Sinks {
-        &mut self.0.sinks
-    }
-    fn letters(&mut self) -> &mut Self::Letters {
-        &mut self.0.dead_letters
-    }
-    fn blobs(&mut self) -> &mut Self::Blobs {
-        &mut self.0.blobs
-    }
-}
 
 /// The registry's reads for [`bind`], with the accesses it needs read as
 /// the surface's evidence page reads them (`PgEvidence`): the Postgres
@@ -264,11 +258,21 @@ impl AccessStore for BindChannels<'_> {
 
 /// The present the stores and the surface read: a minute before the
 /// world's first config load while it is seeded (every seeded write
-/// carries its own time), the anchor once served (as `seed_world`'s).
+/// carries its own time) and while a clone replays the seed's events, the
+/// anchor once served (as `seed_world`'s).
 #[derive(Debug)]
 pub struct SeedClock {
     anchor: Anchor,
     serving: OnceLock<WorldClock>,
+}
+
+impl SeedClock {
+    fn new(anchor: Anchor) -> Self {
+        Self {
+            anchor,
+            serving: OnceLock::new(),
+        }
+    }
 }
 
 impl Clock for SeedClock {
@@ -281,7 +285,8 @@ impl Clock for SeedClock {
 }
 
 /// A helper multi-threaded runtime: `TestDb` creates and drops databases
-/// only on one, and the suite drives each test on a current-thread one.
+/// only on one, the suite drives each test on a current-thread one, and
+/// the template is seeded here whichever test asked first.
 pub fn pg_runtime() -> &'static tokio::runtime::Runtime {
     static RUNTIME: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
     RUNTIME.get_or_init(|| {
@@ -308,100 +313,218 @@ where
     })
 }
 
-/// A fresh migrated database, `None` without a test server.
-pub fn migrated_database(test: &'static str) -> Result<Option<TestDb>, String> {
-    on_pg(async move {
-        let created = tokio::time::timeout(WAIT, TestDb::new_or_skip(test))
-            .await
-            .map_err(|_| format!("creating the test database took over {WAIT:?}"))?
-            .map_err(|error| format!("the test database: {error}"))?;
-        let Some(db) = created else {
-            return Ok(None);
-        };
-        let migrate = async {
-            db.ensure_extensions().await?;
-            for (layer, migrator) in [
-                (Layer::Transport, &crosstalk_transport::pg::MIGRATIONS),
-                (
-                    Layer::Canonical,
-                    &crosstalk_canonical::exchanges::MIGRATIONS,
-                ),
-                (
-                    Layer::Reconstruct,
-                    &crosstalk_reconstruct::agents::MIGRATIONS,
-                ),
-                (Layer::Provenance, &crosstalk_provenance::store::MIGRATIONS),
-                (Layer::Flow, &crosstalk_flow::store::MIGRATIONS),
-                (Layer::Analysis, &crosstalk_analysis::pg::MIGRATIONS),
-                (Layer::Topology, &crosstalk_topology::store::MIGRATIONS),
-                (Layer::Surface, &crosstalk_surface::pg::MIGRATIONS),
-            ] {
-                db.migrate(layer, Migrations::Embedded(migrator)).await?;
-            }
-            Ok::<(), crosstalk_store::StoreError>(())
-        };
-        tokio::time::timeout(WAIT, migrate)
-            .await
-            .map_err(|_| format!("migrating took over {WAIT:?}"))?
-            .map_err(|error| format!("migrating: {error}"))?;
-        Ok(Some(db))
-    })
+/// `work` spawned on [`pg_runtime`] and awaited from the caller's runtime,
+/// which keeps running meanwhile.
+pub async fn spawned_on_pg<F>(work: F) -> Result<F::Output, String>
+where
+    F: Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    pg_runtime()
+        .spawn(work)
+        .await
+        .map_err(|error| format!("the helper runtime's work failed: {error}"))
 }
 
-/// Where the worlds' databases come from: the availability probe's
-/// database first, then a fresh one per world.
+/// Every layer's migrations and the extensions, into `db`.
+async fn migrate_all(db: &TestDb) -> Result<(), StoreError> {
+    db.ensure_extensions().await?;
+    for (layer, migrator) in [
+        (Layer::Transport, &crosstalk_transport::pg::MIGRATIONS),
+        (
+            Layer::Canonical,
+            &crosstalk_canonical::exchanges::MIGRATIONS,
+        ),
+        (
+            Layer::Reconstruct,
+            &crosstalk_reconstruct::agents::MIGRATIONS,
+        ),
+        (Layer::Provenance, &crosstalk_provenance::store::MIGRATIONS),
+        (Layer::Flow, &crosstalk_flow::store::MIGRATIONS),
+        (Layer::Analysis, &crosstalk_analysis::pg::MIGRATIONS),
+        (Layer::Topology, &crosstalk_topology::store::MIGRATIONS),
+        (Layer::Surface, &crosstalk_surface::pg::MIGRATIONS),
+    ] {
+        db.migrate(layer, Migrations::Embedded(migrator)).await?;
+    }
+    Ok(())
+}
+
+/// The test server the worlds' databases live on. Built per test (the
+/// suite builds a harness per test); connects to nothing.
 pub struct Databases {
-    /// The database the availability probe created, for the first world.
-    probe: Mutex<DbGuard>,
-    /// Why the harness cannot run: no test server configured.
-    unavailable: Option<String>,
-    /// Why the probe failed although a server is configured.
-    broken: Option<String>,
+    /// The admin URL; `None` when no test server is configured; `Err`
+    /// when one is configured but unusable.
+    server: Result<Option<DatabaseUrl>, String>,
 }
 
 impl Databases {
     pub fn new() -> Self {
-        match migrated_database("conformance_pg") {
-            Ok(Some(db)) => Self {
-                probe: Mutex::new(DbGuard(Some(db))),
-                unavailable: None,
-                broken: None,
-            },
-            Ok(None) => Self {
-                probe: Mutex::new(DbGuard(None)),
-                unavailable: Some("TEST_DATABASE_URL is not set".to_owned()),
-                broken: None,
-            },
-            Err(reason) => Self {
-                probe: Mutex::new(DbGuard(None)),
-                unavailable: None,
-                broken: Some(reason),
-            },
+        Self {
+            server: crosstalk_store::test_server().map_err(|error| error.to_string()),
         }
     }
 
-    /// The probe's database if still unused, else a fresh one.
-    pub fn database(&self) -> Result<TestDb, String> {
-        if let Some(reason) = &self.broken {
-            return Err(reason.clone());
-        }
-        let probe = self
-            .probe
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .0
-            .take();
-        match probe {
-            Some(db) => Ok(db),
-            None => migrated_database("conformance_pg")?
-                .ok_or_else(|| "the test server went away".to_owned()),
+    /// The server's admin URL, or why there is none to use.
+    fn server(&self) -> Result<DatabaseUrl, String> {
+        match &self.server {
+            Ok(Some(url)) => Ok(url.clone()),
+            Ok(None) => Err("TEST_DATABASE_URL is not set".to_owned()),
+            Err(reason) => Err(reason.clone()),
         }
     }
 
     /// Why no world can be provisioned here: no test server configured.
     pub fn unavailable(&self) -> Option<String> {
-        self.unavailable.clone()
+        match &self.server {
+            Ok(None) => Some("TEST_DATABASE_URL is not set".to_owned()),
+            Ok(Some(_)) | Err(_) => None,
+        }
     }
+}
+
+/// `work` within `wait`, or why not, naming `what`.
+async fn bounded<T, E: std::fmt::Debug>(
+    what: &str,
+    wait: Duration,
+    work: impl Future<Output = Result<T, E>>,
+) -> Result<T, String> {
+    match tokio::time::timeout(wait, work).await {
+        Ok(Ok(value)) => Ok(value),
+        Ok(Err(error)) => Err(format!("{what}: {error:?}")),
+        Err(_) => Err(format!("{what} took over {wait:?}")),
+    }
+}
+
+/// The deployment secret's hasher.
+fn secret() -> Result<Arc<KeyedHasher>, String> {
+    Ok(Arc::new(KeyedHasher::new(
+        DeploymentSecret::from_hex(SecretVersion(1), SECRET_HEX).map_err(|e| format!("{e:?}"))?,
+    )))
+}
+
+/// A lazy pool of [`POOL`] connections on `url`.
+fn pool_on(url: &DatabaseUrl) -> PgPool {
+    PgPoolOptions::new()
+        .max_connections(POOL)
+        .acquire_timeout(Duration::from_secs(30))
+        .connect_lazy_with(url.connect_options().clone())
+}
+
+/// The surface's options for `config`'s world with `access` as its
+/// directory, the knobs applied (`None`: the world's defaults).
+fn surface_options(
+    config: &WorldConfig,
+    access: AccessConfig,
+    clock: Arc<dyn Clock>,
+    live: Option<LiveConfig>,
+    export: Option<ExportLimits>,
+) -> Result<InProcessOptions, String> {
+    let live = match live {
+        Some(knob) => knob,
+        None => {
+            crosstalk_api::world::WorldOptions::new(SEED, UI_ANCHOR)
+                .map_err(|e| e.to_string())?
+                .live
+        }
+    };
+    Ok(InProcessOptions {
+        clock,
+        seed: SEED,
+        surface: SurfaceConfig {
+            export_formats: ExportFormats::new(vec![ExportFormat::Jsonl])
+                .map_err(|e| format!("{e:?}"))?,
+            export_limits: export.unwrap_or_default(),
+            gateway: GatewayVersion::new(env!("CARGO_PKG_VERSION"))
+                .map_err(|e| format!("{e:?}"))?,
+            default_remap_threshold: config.rules.default_remap_threshold,
+            frame_retention: config.frame_retention,
+            live,
+        },
+        access,
+        bucket_width: config.bucket_width,
+        timing: config.timing,
+        retention: config.retention,
+        lineage_floor: config.lineage_floor,
+        embedding_model: config.embedding.clone(),
+        sinks: config
+            .sinks
+            .iter()
+            .map(|sink| SinkConfig {
+                id: sink.id,
+                kind: sink.kind,
+                name: sink.name.clone(),
+            })
+            .collect(),
+        projection_lease: Duration::from_secs(600),
+        projection_fitting: ProjectionFitting::External,
+    })
+}
+
+/// What a world's stores open from: `options`' settings, ids drawn from
+/// `ids`.
+struct OpenParts<'a> {
+    pool: &'a PgPool,
+    bus: &'a Forwarding,
+    dead_letter_bus: &'a PgBus,
+    blobs: MemoryBlobStore,
+    clock: &'a Arc<dyn Clock>,
+    secret: &'a Arc<KeyedHasher>,
+    ids: PgIds,
+    options: &'a InProcessOptions,
+}
+
+impl OpenParts<'_> {
+    fn open(self) -> PgOpen<Forwarding, MemoryBlobStore> {
+        let options = self.options;
+        PgOpen {
+            pool: self.pool.clone(),
+            bus: self.bus.clone(),
+            dead_letters: self.dead_letter_bus.dead_letters(),
+            blobs: self.blobs,
+            clock: Arc::clone(self.clock),
+            secret: Arc::clone(self.secret),
+            ids: self.ids,
+            settings: PgSettings {
+                bucket_width: options.bucket_width,
+                timing: options.timing,
+                retention: options.retention,
+                lineage_floor: options.lineage_floor,
+                embedding_model: options.embedding_model.clone(),
+                default_remap_threshold: options.surface.default_remap_threshold,
+                projection_lease: options.projection_lease,
+                frame_retention: options.surface.frame_retention.as_duration(),
+                sinks: options.sinks.clone(),
+                configure_sinks: true,
+                threading: Default::default(),
+                retry: SerializableRetry::default(),
+            },
+        }
+    }
+}
+
+/// The idle in-memory bus behind a [`Forwarding`]'s subscriptions.
+fn idle_bus() -> Result<MpscBus, String> {
+    MpscBus::start(BusConfig::default()).map_err(|e| format!("{e:?}"))
+}
+
+/// The bus whose dead letters the stores keep, over `pool`.
+fn dead_letter_bus(pool: &PgPool) -> Result<PgBus, String> {
+    PgBus::new(
+        pool.clone(),
+        Arc::new(crosstalk_spec::support::SystemClock),
+        PgBusConfig::default(),
+    )
+    .map_err(|e| format!("{e:?}"))
+}
+
+/// Waits until `topology.outbox` is empty: L7's relay published every
+/// event it holds.
+async fn drain_topology_outbox(pool: &PgPool) -> Result<(), sqlx::Error> {
+    while topology_outbox(pool).await? > 0 {
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    Ok(())
 }
 
 /// A seeded world on its database. Dropped, it stops its tasks and drops
@@ -451,17 +574,9 @@ pub async fn within<T, E: std::fmt::Debug>(
     what: &str,
     work: impl Future<Output = Result<T, E>>,
 ) -> Result<T, ProvisionError> {
-    match tokio::time::timeout(WAIT, work).await {
-        Ok(Ok(value)) => Ok(value),
-        Ok(Err(error)) => Err(ProvisionError::Failed {
-            scenario,
-            reason: format!("{what}: {error:?}"),
-        }),
-        Err(_) => Err(ProvisionError::Failed {
-            scenario,
-            reason: format!("{what} took over {WAIT:?}"),
-        }),
-    }
+    bounded(what, WAIT, work)
+        .await
+        .map_err(|reason| ProvisionError::Failed { scenario, reason })
 }
 
 /// Rows `topology.outbox` holds: L7 events its relay has not published.
@@ -472,9 +587,10 @@ pub async fn topology_outbox(pool: &PgPool) -> Result<i64, sqlx::Error> {
     Ok(rows)
 }
 
-/// Seeds the world into a fresh migrated database and hosts the surface
-/// over it (see the module docs), with `extra` operators added to the
-/// world's directory; returns it with `request.scenario` bound.
+/// Hosts the surface over a fresh clone of the template of the world with
+/// `extra` operators added to its directory (seeding that template first
+/// if no test in the process has), with `request`'s knobs (see the module
+/// docs); returns it with `request.scenario` bound.
 pub async fn provision(
     databases: &Databases,
     request: Provision<'_>,
@@ -486,104 +602,72 @@ pub async fn provision(
         scenario: name,
         reason,
     };
-    let db = databases.database().map_err(failed)?;
-    let pool = PgPoolOptions::new()
-        .max_connections(POOL)
-        .acquire_timeout(Duration::from_secs(30))
-        .connect_lazy_with(db.url().connect_options().clone());
-    let db = DbGuard(Some(db));
+    let admin = databases.server().map_err(failed)?;
     let world = World::new(SEED, UI_ANCHOR).map_err(|e| failed(e.to_string()))?;
     let config = world.config().clone();
     let access = with_operators(&config.access, extra).map_err(failed)?;
-    let clock = Arc::new(SeedClock {
-        anchor: world.anchor(),
-        serving: OnceLock::new(),
-    });
+    let template = template::template(admin, access.clone())
+        .await
+        .map_err(|reason| failed(format!("the template: {reason}")))?;
+    let source = Arc::clone(&template);
+    let db = within(
+        name,
+        "cloning the template",
+        spawned_on_pg(async move { source.db.instantiate().await }),
+    )
+    .await?
+    .map_err(|error| failed(format!("cloning the template: {error}")))?;
+    let pool = pool_on(db.url());
+    let db = DbGuard(Some(db));
+    let clock = Arc::new(SeedClock::new(world.anchor()));
     let reader: Arc<dyn Clock> = clock.clone();
-    let secret = Arc::new(KeyedHasher::new(
-        DeploymentSecret::from_hex(SecretVersion(1), SECRET_HEX)
-            .map_err(|e| failed(format!("{e:?}")))?,
-    ));
-    let mut live = crosstalk_api::world::WorldOptions::new(SEED, UI_ANCHOR)
-        .map_err(|e| failed(e.to_string()))?
-        .live;
-    if let Some(knob) = request.knobs.live {
-        live = knob;
-    }
-    let export_limits = request.knobs.export.unwrap_or_default();
-    let options = InProcessOptions {
-        clock: Arc::clone(&reader),
-        seed: SEED,
-        surface: SurfaceConfig {
-            export_formats: ExportFormats::new(vec![ExportFormat::Jsonl])
-                .map_err(|e| failed(format!("{e:?}")))?,
-            export_limits,
-            gateway: GatewayVersion::new(env!("CARGO_PKG_VERSION"))
-                .map_err(|e| failed(format!("{e:?}")))?,
-            default_remap_threshold: config.rules.default_remap_threshold,
-            frame_retention: config.frame_retention,
-            live,
-        },
-        access: access.clone(),
-        bucket_width: config.bucket_width,
-        timing: config.timing,
-        retention: config.retention,
-        lineage_floor: config.lineage_floor,
-        embedding_model: config.embedding.clone(),
-        sinks: config
-            .sinks
-            .iter()
-            .map(|sink| SinkConfig {
-                id: sink.id,
-                kind: sink.kind,
-                name: sink.name.clone(),
-            })
-            .collect(),
-        projection_lease: Duration::from_secs(600),
-        projection_fitting: ProjectionFitting::External,
-    };
+    let secret = secret().map_err(failed)?;
+    let options = surface_options(
+        &config,
+        access.clone(),
+        Arc::clone(&reader),
+        request.knobs.live,
+        request.knobs.export,
+    )
+    .map_err(failed)?;
     let (events, published) = unbounded_channel();
     let bus = Forwarding {
-        events,
-        idle: MpscBus::start(BusConfig::default()).map_err(|e| failed(format!("{e:?}")))?,
+        events: events.clone(),
+        idle: idle_bus().map_err(failed)?,
+        recorded: None,
     };
-    let dead_letter_bus = PgBus::new(
-        pool.clone(),
-        Arc::new(crosstalk_spec::support::SystemClock),
-        PgBusConfig::default(),
-    )
-    .map_err(|e| failed(format!("{e:?}")))?;
+    let dead_letter_bus = dead_letter_bus(&pool).map_err(failed)?;
+    let blobs = MemoryBlobStore::new();
+    for body in &template.bodies {
+        blobs
+            .put(body)
+            .await
+            .map_err(|e| failed(format!("restoring the template's bodies: {e:?}")))?;
+    }
     let (stores, topology_relay) = within(
         name,
         "opening the postgres stores",
-        PgStores::open(PgOpen {
-            pool: pool.clone(),
-            bus: bus.clone(),
-            dead_letters: dead_letter_bus.dead_letters(),
-            blobs: MemoryBlobStore::new(),
-            clock: Arc::clone(&reader),
-            secret: Arc::clone(&secret),
-            ids: PgIds::Seeded(SEED),
-            settings: PgSettings {
-                bucket_width: options.bucket_width,
-                timing: options.timing,
-                retention: options.retention,
-                lineage_floor: options.lineage_floor,
-                embedding_model: options.embedding_model.clone(),
-                default_remap_threshold: options.surface.default_remap_threshold,
-                projection_lease: options.projection_lease,
-                frame_retention: options.surface.frame_retention.as_duration(),
-                sinks: options.sinks.clone(),
-                configure_sinks: true,
-                threading: Default::default(),
-                retry: SerializableRetry::default(),
-            },
-        }),
+        PgStores::open(
+            OpenParts {
+                pool: &pool,
+                bus: &bus,
+                dead_letter_bus: &dead_letter_bus,
+                blobs,
+                clock: &reader,
+                secret: &secret,
+                ids: PgIds::Seeded(SEED ^ CLONE_IDS),
+                options: &options,
+            }
+            .open(),
+        ),
     )
     .await?;
     let mut tasks = vec![tokio::spawn(topology_relay.run(
         BusAnnouncer::new(bus.clone()),
-        OutboxIds::new(Arc::clone(&reader), SeededRandom::new(SEED ^ 0x70B0)),
+        OutboxIds::new(
+            Arc::clone(&reader),
+            SeededRandom::new(SEED ^ CLONE_IDS ^ TOPOLOGY_IDS),
+        ),
         Duration::from_millis(50),
     ))];
     let in_process = within(
@@ -594,22 +678,23 @@ pub async fn provision(
             options,
             published,
             CursorSecret::Derived(&secret),
-            "in-process access config",
+            ACCESS_LABEL,
         ),
     )
     .await?;
-    let world_scenario = within(
+    // The relay applies what the seed published, in the seed's order, as
+    // it did while the template was seeded.
+    for event in &template.events {
+        events
+            .send(event.clone())
+            .map_err(|_| failed("replaying the seed's events: the relay is gone".to_owned()))?;
+    }
+    drop(events);
+    within(
         name,
-        "seeding the world into postgres",
-        world.seed(&mut PgSeeding(in_process.stores.clone())),
+        "relaying topology.outbox",
+        drain_topology_outbox(&pool),
     )
-    .await?;
-    within(name, "relaying topology.outbox", async {
-        while topology_outbox(&pool).await? > 0 {
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
-        Ok::<(), sqlx::Error>(())
-    })
     .await?;
     within(name, "the relay's settle", in_process.settle()).await?;
     clock.serving.get_or_init(|| world.clock());
@@ -636,7 +721,7 @@ pub async fn provision(
                 evidence: &stores.evidence,
             },
             transmissions: &stores.transmissions,
-            world: &world_scenario,
+            world: &template.scenario,
             watermark: present.at(),
             bucket: BUCKET,
         },

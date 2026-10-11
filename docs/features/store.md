@@ -315,6 +315,41 @@ multi-threaded runtime, which is why `new` insists on one. A failed drop is
 logged at `warn` and printed. A database left behind (only if teardown fails)
 is named `crosstalk_test_*` and dies with the disposable container.
 
+### Template databases
+
+A suite whose every test needs the same expensive contents (the Postgres
+conformance harnesses' seeded world) builds them once and clones them
+(`test_db/template.rs`):
+
+1. `TestDb::create_template(admin, settings)` first drops the server's
+   stale templates (`drop_stale_templates`; a failure is logged), then
+   creates `crosstalk_test_tmpl_<pid>_<nanos>_<seq>` from `template0` and
+   comments it `crosstalk test template host=<host>` (the host reduced to
+   `[A-Za-z0-9._-]`). It is an ordinary `TestDb` while the caller fills it.
+2. `TestDb::freeze(self)` closes its pool, runs `ALTER DATABASE …
+   ALLOW_CONNECTIONS false`, and terminates the client sessions still on
+   it (`pg_terminate_backend`) until none is left, for at most 30 s
+   (`TestDbError::TemplateBusy` otherwise, the database dropped). It
+   returns a `TemplateDb`.
+3. `TemplateDb::instantiate()` (or `instantiate_with(settings)`) runs
+   `CREATE DATABASE "crosstalk_test_<…>" TEMPLATE "<template>"
+   ALLOW_CONNECTIONS true` and opens a pool on the clone: an ordinary
+   `TestDb`, dropped as any. While the server reports the template in use
+   (SQLSTATE `55006`, an autovacuum worker say) it retries once a second,
+   30 times.
+4. `TemplateDb::close()`, or `Drop` on a multi-threaded runtime, drops the
+   template. A template held in a static is never dropped by its process;
+   `drop_stale_templates` drops it later: when the pid in its name is not
+   a live process on the host its comment names (the same host as the
+   caller, checked through `/proc`), or when it is older than
+   `STALE_TEMPLATE_AGE` (24 h) wherever it was made. A process never
+   drops its own.
+
+`test_server()` returns the admin URL `TestDb::new` would use, `Ok(None)`
+when none is configured, without connecting. Failures of these steps are
+`TestDbError::Template { name, step: TemplateStep, failure, source }`,
+`TemplateBusy` and `Closed`.
+
 `TestDb::new_or_skip(test)` is the gate: when `TEST_DATABASE_URL` is unset it
 writes `skipping <test>: TEST_DATABASE_URL is not set (run scripts/test-db.sh
 and export the URL it prints, or put it in .env.test)` straight to the stderr handle, which libtest
@@ -376,7 +411,11 @@ checks still run.
   constructors; deserialization goes through them).
 - Identifiers spliced into SQL are fixed lowercase layer names or
   `TestDbName`s (prefix, digits, underscores; at most 63 bytes). No input
-  string is ever spliced.
+  string is ever spliced; a template's comment splices only the host name
+  reduced to `[A-Za-z0-9._-]`, and names listed from the server are
+  spliced only after parsing as a template name.
+- A frozen template refuses connections and has no session on it;
+  template names start with `crosstalk_test_tmpl_`, under the test prefix.
 - `retry_serializable` retries only `SerializationFailure` and
   `DeadlockDetected`, never more than `max_attempts` times in total, and
   never retries an `Abort`.
@@ -397,15 +436,16 @@ checks still run.
 | `crates/store/src/extensions.rs` | Required extensions | `Extension`, `InstalledExtension`, `ensure_extensions`, `ensure_extension` |
 | `crates/store/src/error.rs` | Errors and classification | `StoreError`, `DbFailure`, `ExtensionProblem`, `classify` |
 | `crates/store/src/retry.rs` | Serializable retries | `retry_serializable`, `SerializableRetry`, `InvalidSerializableRetry`, `TxError`, `TxFuture`, `SerializableError` |
-| `crates/store/src/test_db.rs` | Test database harness | `TestDb`, `TestDbName`, `TestDbError`, `RuntimeProblem`, `TEST_DB_PREFIX` |
+| `crates/store/src/test_db/mod.rs` | Test database harness | `TestDb`, `TestDbName`, `TestDbError`, `RuntimeProblem`, `TEST_DB_PREFIX`, `test_server` |
+| `crates/store/src/test_db/template.rs` | Template databases | `TestDb::{create_template, freeze}`, `TemplateDb`, `TemplateStep`, `drop_stale_templates`, `TEST_TEMPLATE_PREFIX`, `STALE_TEMPLATE_AGE` |
 | `crates/store/tests/postgres/main.rs` | Gated integration tests: shared helpers and the `Failure` type | — |
-| `crates/store/tests/postgres/{harness,migrations,extensions,retry,connect}.rs` | Isolation and teardown; per-layer migrations; extensions; retries; connect | — |
+| `crates/store/tests/postgres/{harness,migrations,extensions,retry,connect,template}.rs` | Isolation and teardown; per-layer migrations; extensions; retries; connect; templates | — |
 | `crates/store/tests/fixtures/{alpha,beta,search}/` | Fixture migration directories. alpha and beta share version 1 and table `items`; search uses `vector` and `gin_trgm_ops` | — |
 | `scripts/test-db.sh` | Disposable Postgres 18 + pgvector for the gated tests | — |
 
 ## Tests
 
-Unit tests (no database), 46 of them:
+Unit tests (no database), 61 of them:
 
 - `config`: URL parsing and scheme checks, missing and non-unicode
   variables, no password in `Debug` or errors, `PoolSettings` JSON shapes
@@ -420,7 +460,10 @@ Unit tests (no database), 46 of them:
 - `retry`: backoff doubling, cap and overflow; the policy constructor; the
   future is `Send`.
 - `test_db`: names are unique, safe and at most 63 bytes; the runtime checks;
-  `block_in_place` teardown inside a multi-threaded `#[tokio::test]`.
+  `block_in_place` teardown inside a multi-threaded `#[tokio::test]`;
+  template names parse back to pid and birth and nothing else parses; the
+  comment and host are literal-safe; staleness (dead process on this host,
+  older than a day anywhere, never this process's own).
 
 Integration tests (`tests/postgres`), gated on `TEST_DATABASE_URL` except
 the first:
@@ -430,6 +473,11 @@ the first:
 - harness: databases are isolated; `close` and `Drop` both drop the database,
   `Drop` even with a connection still checked out; 8 parallel databases each
   migrate the same layer.
+- template: clones carry the template's rows and are independent of each
+  other and of the template, a detached connection on the template is
+  ended by `freeze`, clones and template drop on close; a frozen template
+  refuses connections (`datallowconn` false). Not yet run (no reachable
+  server from the agent sandbox).
 - migrations:
   - same versions in two layers don't collide, with nothing in `public` and
     the pool's `search_path` untouched;
