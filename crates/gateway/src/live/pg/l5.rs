@@ -5,7 +5,11 @@
 //! 1. commands: a tick answers the queued extracted batches, then
 //!    `FlowConsumer::tick(now)` (and, when the process ticks only on
 //!    settles, checkpoints so L7's frontier sees the tick); a drain
-//!    answers the queued batches, then checkpoints and acks what it holds;
+//!    answers the queued batches, retries the steps a transient failure
+//!    left (`retry_backlog`: a tick's decision has no input behind it to
+//!    retry it), then checkpoints and acks what it holds, and counts the
+//!    steps still waiting as undone work, so a settle never ends with a
+//!    decision's record or event stranded;
 //! 2. the checkpoint interval (`flow.checkpoint_ms`): checkpoint, then ack;
 //! 3. extracted batches from the L4 stage (`DurableInputs`), each answered
 //!    once its steps ran (its accesses, held writes and tool calls stored);
@@ -127,14 +131,24 @@ async fn run(
                 }
                 Command::Drain { done } => {
                     let handled = answer_queued(&mut consumer, &mut inputs).await;
-                    activity.add(handled);
+                    // Steps a transient failure left (a tick's decision has
+                    // no input behind it to retry it): run them now.
+                    let retried = u64::try_from(consumer.retry_backlog().await).unwrap_or(u64::MAX);
+                    activity.add(handled + retried);
                     if !unacked.is_empty() {
                         checkpoint_and_ack(&mut consumer, &mut subscription, &mut unacked, slot).await;
                     }
-                    let _ = done.send(handled);
+                    // Steps still waiting are work not done: a settle is not
+                    // quiet while they wait.
+                    let waiting = u64::try_from(consumer.backlog()).unwrap_or(u64::MAX);
+                    let _ = done.send(handled + retried + waiting);
                 }
             },
             _ = checkpoints.tick() => {
+                let retried = consumer.retry_backlog().await;
+                if retried > 0 {
+                    activity.bump();
+                }
                 checkpoint_and_ack(&mut consumer, &mut subscription, &mut unacked, slot).await;
             }
             batch = InputSource::recv(&mut inputs), if inputs_open => match batch {

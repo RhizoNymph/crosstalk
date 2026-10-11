@@ -44,6 +44,7 @@ struct Progress {
 pub(crate) struct ReaperBeat {
     at: Mutex<Option<Instant>>,
     timers: AtomicU64,
+    swept: AtomicU64,
 }
 
 /// The reaper's state as [`PgBus::reaper`](super::PgBus::reaper) reports it.
@@ -54,6 +55,8 @@ pub struct ReaperReport {
     pub since_active: Option<Duration>,
     /// The deadlines it was waiting on then.
     pub timers: u64,
+    /// Holds no reaper tracked that its sweeps took back.
+    pub swept: u64,
 }
 
 impl ReaperBeat {
@@ -63,11 +66,16 @@ impl ReaperBeat {
             .store(u64::try_from(timers).unwrap_or(u64::MAX), Ordering::Relaxed);
     }
 
+    pub(crate) fn swept(&self, taken: u64) {
+        self.swept.fetch_add(taken, Ordering::Relaxed);
+    }
+
     pub(crate) fn report(&self) -> ReaperReport {
         let at = *self.at.lock().unwrap_or_else(PoisonError::into_inner);
         ReaperReport {
             since_active: at.map(|at| Instant::now().saturating_duration_since(at)),
             timers: self.timers.load(Ordering::Relaxed),
+            swept: self.swept.load(Ordering::Relaxed),
         }
     }
 }

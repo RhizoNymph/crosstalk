@@ -132,7 +132,7 @@ admitted AS ( \
 SELECT (SELECT seq FROM head), (SELECT count(*) FROM candidates), (SELECT max(seq) FROM admitted)";
 
 const TAKE: &str = "\
-UPDATE transport.deliveries AS d SET state = 'held', attempt = d.attempt + 1 \
+UPDATE transport.deliveries AS d SET state = 'held', attempt = d.attempt + 1, held_at = $2 \
 FROM (SELECT seq FROM transport.deliveries \
       WHERE group_name = $1 AND state = 'ready' \
       ORDER BY seq LIMIT 1 FOR UPDATE SKIP LOCKED) AS pick, \
@@ -339,6 +339,7 @@ async fn try_take(
     phase("take");
     let taken: Option<(i64, i32, String, String)> = sqlx::query_as(TAKE)
         .bind(group)
+        .bind(now)
         .fetch_optional(&mut *tx)
         .await?;
     let took = match taken {
@@ -404,6 +405,9 @@ impl Subscription for PgSubscription {
             let joined = loop {
                 match tokio::time::timeout(limit, &mut *taking).await {
                     Ok(joined) => break Some(joined),
+                    // It finished as the limit ran out: its result (maybe
+                    // a committed hold) is taken, never thrown away.
+                    Err(_) if taking.is_finished() => break Some((&mut *taking).await),
                     // Waiting for a pooled connection is bounded by the
                     // pool's own acquire timeout.
                     Err(_) if self.shared.takes.phase_of(take) == Some("acquire") => {}

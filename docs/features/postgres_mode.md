@@ -452,6 +452,21 @@ processes on `SERVE_IDS` (`PgIds::Entropy`), killed or stopped in turn,
 each merging B into A, unmerging and renaming at the very same instant:
 every merge id is new and no audit id repeats.
 
+A start that finds no free connection (the server's taken by other
+sessions, a killed process's not gone yet) is retried every second until
+the bound, as `serve`'s pipeline task retries it, logging the server's
+connections by `application_name` (`common::start_pg_on`,
+`start_survives_a_pool_exhausted_at_open`); `kill_pg` closes the killed
+process's pool so its sessions go, as a crashed process's do.
+
+**Fault model: a lossy link.** `DbLink::start_lossy` (crosstalk-testkit)
+relays every chunk after a seeded delay, mostly jitter and, with a set
+probability, a 200 to 400 ms retransmission stall (`Lossy::tailscale_bad_day`:
+15%, the node0 loop's link). `killed_after_a_checkpoint_over_a_lossy_link_finishes_as_uninterrupted`
+runs both processes over it, and
+`crosstalk_transport::integration::pg_a_hold_no_reaper_tracks_is_swept_and_redelivered`
+does too: slowness may delay a decision or a redelivery, never lose one.
+
 ### The spool through the gateway (`crates/e2e/tests/spool*`)
 
 The harness is `crates/e2e/tests/common/gateway.rs`. `spool` holds the

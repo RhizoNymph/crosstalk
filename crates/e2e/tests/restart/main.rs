@@ -604,3 +604,103 @@ async fn minted_ids_never_collide_after_restart() {
     }
     db.close().await.expect("drops");
 }
+
+/// A start that finds no free connection (every one of its pool's taken,
+/// as when the server's are held by other sessions or a killed process's
+/// are not gone yet) is retried, as `serve`'s pipeline task retries it,
+/// instead of failing the run: the restart e2e once failed opening the
+/// sinks store on "pool timed out".
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn start_survives_a_pool_exhausted_at_open() {
+    let Some(db) = migrated("start_survives_a_pool_exhausted_at_open").await else {
+        return;
+    };
+    let settings = crosstalk_store::PoolSettings::new(
+        std::num::NonZeroU32::new(4).expect("non-zero"),
+        0,
+        Duration::from_secs(2),
+    )
+    .expect("pool settings");
+    let pool = crosstalk_gateway::store::lazy_pool_named(
+        &crosstalk_store::StoreConfig::new(db.url().clone(), settings),
+        "crosstalk-e2e-exhausted",
+    );
+    // Every connection taken for a while, then given back.
+    let mut taken = Vec::new();
+    for _ in 0..4 {
+        taken.push(pool.acquire().await.expect("a connection"));
+    }
+    let release = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_secs(6)).await;
+        drop(taken);
+    });
+    let volume = Volume::new(DEFAULT_START);
+    let live = common::start_pg_on(&db, pool, &volume, PgIds::Seeded(common::SEED)).await;
+    release.await.expect("released");
+    assert_eq!(
+        live.layers().status.snapshot().pipeline_text(),
+        "running",
+        "started once connections were free"
+    );
+    stop_pg(live).await;
+    db.close().await.expect("drops");
+}
+
+/// Killed right after a checkpoint while every statement crosses a lossy
+/// link (15% of chunks stalled 200 to 400 ms, seeded), the restarted
+/// process too: the answers, the L7 edge and the transmission's
+/// classification included, are the uninterrupted run's. Slowness may
+/// delay decisions; it may never lose one (the node0 loop lost the edge
+/// once a tick's decision failed transiently and was left in the flow
+/// backlog).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn killed_after_a_checkpoint_over_a_lossy_link_finishes_as_uninterrupted() {
+    let Some(db) =
+        migrated("killed_after_a_checkpoint_over_a_lossy_link_finishes_as_uninterrupted").await
+    else {
+        return;
+    };
+    let options = db.url().connect_options();
+    let link = crosstalk_testkit::db_link::DbLink::start_lossy(
+        options.get_host(),
+        options.get_port(),
+        crosstalk_testkit::db_link::Lossy::tailscale_bad_day(0xC0FFEE),
+    )
+    .await
+    .expect("a lossy link");
+    let scenario = scenario();
+    let expected = uninterrupted(&scenario).await;
+    let [ends, _] = passes(&scenario);
+    let volume = Volume::new(scenario.start);
+    let first = common::start_pg_on(
+        &db,
+        common::pipeline_pool_over(&db, &link),
+        &volume,
+        PgIds::Seeded(common::SEED),
+    )
+    .await;
+    feed(&first, &volume, &scenario).await;
+    let finished = settle_until(
+        &first,
+        ends,
+        changed(
+            &db,
+            "SELECT coalesce(string_agg(xmin::text, ',' ORDER BY shard), '') FROM flow.checkpoints",
+        ),
+    )
+    .await;
+    let after_kill = kill_pg(first, &db).await;
+    eprintln!(
+        "lossy, after a checkpoint: killed (the settle had finished: {finished}); {after_kill}"
+    );
+    let restarted = common::start_pg_on(
+        &db,
+        common::pipeline_pool_over(&db, &link),
+        &volume,
+        PgIds::Seeded(common::SEED + 1),
+    )
+    .await;
+    finish_and_compare(&restarted, &scenario, &expected).await;
+    stop_pg(restarted).await;
+    db.close().await.expect("drops");
+}
