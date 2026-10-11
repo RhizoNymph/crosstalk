@@ -80,6 +80,12 @@ pub(crate) async fn fail(
     failure: Failure,
 ) -> Result<bool, sqlx::Error> {
     let mut tx = shared.pool.begin().await?;
+    // A row lock held by a stuck session must not wedge the reaper (it
+    // reaps every hold of the process in turn): give up after a bound and
+    // retry at the next poll (`fire_due`), or fail the nack.
+    sqlx::query("SET LOCAL lock_timeout = '2s'")
+        .execute(&mut *tx)
+        .await?;
     let row: Option<(String, i64, String)> = sqlx::query_as(
         "SELECT e.id, e.at, e.envelope FROM transport.deliveries d \
          JOIN transport.events e ON e.seq = d.seq \

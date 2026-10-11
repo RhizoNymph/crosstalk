@@ -635,3 +635,68 @@ async fn pg_publish_while_unreachable_is_disconnected() {
     bus.shutdown();
     db.close().await.expect("drop the test database");
 }
+
+/// `PgSubscription::next` is cancel-safe: a call dropped while its take is
+/// in flight leaves the take running to its commit (the row becomes held),
+/// and the next call hands out that very hold at once, at attempt 1: no
+/// attempt spent, no ack timeout or provisional deadline waited (both are
+/// far longer than the bound here). A dropped take that never ran on is
+/// what left deliveries held until the reaper, and stage loops drop
+/// `next` whenever a command wins their `select!`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn pg_next_dropped_mid_take_hands_out_the_hold_on_the_next_call() {
+    let Some(db) = database("pg_next_dropped_mid_take_hands_out_the_hold_on_the_next_call").await
+    else {
+        return;
+    };
+    let bus = process(&db, config()).await;
+    let mut sub = bus
+        .subscribe(&[Subject::Changed], group("relay"), default_retry())
+        .await
+        .expect("subscribe");
+    bus.publish(changed(1)).await.expect("publish");
+
+    // Poll `next` once: its take starts. Then drop it, as a stage loop
+    // drops it when a command wins.
+    {
+        let mut next = std::pin::pin!(sub.next());
+        let ready =
+            std::future::poll_fn(|cx| std::task::Poll::Ready(next.as_mut().poll(cx).is_ready()))
+                .await;
+        assert!(!ready, "a take is a round trip at least");
+    }
+    // The take runs on without its caller and commits the hold.
+    let held = async {
+        loop {
+            let held: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM transport.deliveries WHERE state = 'held'",
+            )
+            .fetch_one(db.pool())
+            .await
+            .expect("counts");
+            if held == 1 {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    };
+    tokio::time::timeout(20 * SECOND, held)
+        .await
+        .expect("the dropped call's take committed its hold");
+
+    let delivery = tokio::time::timeout(5 * SECOND, sub.next())
+        .await
+        .expect("handed out at once, not after a deadline")
+        .expect("open")
+        .expect("a delivery");
+    assert_eq!((delivery.envelope, delivery.attempt.get()), (changed(1), 1));
+    sub.ack(delivery.id).await.expect("acks");
+    let left: i64 = sqlx::query_scalar("SELECT count(*) FROM transport.deliveries")
+        .fetch_one(db.pool())
+        .await
+        .expect("counts");
+    assert_eq!(left, 0, "acked: nothing pending");
+    drop(sub);
+    bus.shutdown();
+    db.close().await.expect("drop the test database");
+}

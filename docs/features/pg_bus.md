@@ -153,12 +153,15 @@ each notification and each reconnect) and the reaper task. Both stop on
 `None`. Neither touches the database on stop: a dropped bus is a stopped
 process.
 
-Cancel safety. A `next` dropped while its transaction commits may leave
-the row held; the reaper already knows the hold with its provisional
-deadline, so it is taken back then (one attempt and that delay lost,
-nothing else). `MpscBus`'s
-stronger guarantee (the next call returns the same delivery) does not
-hold here.
+Cancel safety. Each take's transaction runs in a task of its own
+(`take_task`), kept in the subscription: a `next` dropped while it waits
+leaves the take running to its commit, and the next call hands out what it
+took, as `MpscBus` returns the same delivery. Only a subscription dropped
+with a take in flight leaves a committed hold unseen; the reaper already
+knows it with its provisional deadline (one attempt and that delay lost,
+nothing else). The reaper's own transaction sets `lock_timeout = 2s`, so a
+row locked by a stuck session delays its reaping, never all reaping.
+Regression: `integration::pg_next_dropped_mid_take_hands_out_the_hold_on_the_next_call`.
 
 Transactions are `READ COMMITTED` with explicit locks (the queue-table
 pattern), not the `SERIALIZABLE` retries the stores use.

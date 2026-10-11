@@ -29,6 +29,7 @@ use crosstalk_spec::interfaces::l2_transport::{
     BusError, ConsumerGroup, Delivery, DeliveryId, RetryPolicy, Subscription,
 };
 use tokio::sync::watch;
+use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
 use super::Shared;
@@ -91,6 +92,7 @@ pub(crate) async fn subscribe(
         wake: shared.wake.subscribe(),
         closed: shared.closed.subscribe(),
         held: HashMap::new(),
+        taking: None,
         abandoned: false,
     })
 }
@@ -104,6 +106,7 @@ struct Hold {
 }
 
 /// One try of `next`'s transaction.
+#[derive(Debug)]
 enum Took {
     Row {
         seq: i64,
@@ -144,11 +147,14 @@ RETURNING d.seq, d.attempt, e.subject, e.envelope";
 /// `held` in the database; [`PgBus::recover_held`](super::PgBus::recover_held)
 /// returns them at the next start (`transport.restart.held-redelivered`).
 ///
-/// `next` is cancel-safe up to one attempt: a call dropped while its
-/// transaction commits may leave the row held, which the reaper takes back
-/// at a provisional deadline it learned before the commit (twice the ack
-/// timeout plus the publish timeout after the take began). The ack timeout
-/// itself runs from the handout.
+/// `next` is cancel-safe: each take's transaction runs in a task of its
+/// own, so a call dropped while it waits for the take leaves it running to
+/// its commit, and the next call hands out what it took (no attempt
+/// spent, no ack timeout waited). The reaper still learns of each hold
+/// before its commit (a provisional deadline: twice the ack timeout plus
+/// the publish timeout after the take began), which covers a subscription
+/// dropped with a take in flight. The ack timeout itself runs from the
+/// handout.
 #[derive(Debug)]
 pub struct PgSubscription {
     shared: Arc<Shared>,
@@ -157,6 +163,9 @@ pub struct PgSubscription {
     wake: watch::Receiver<u64>,
     closed: watch::Receiver<bool>,
     held: HashMap<DeliveryId, Hold>,
+    /// The take a dropped `next` started: it runs to its commit in its own
+    /// task, and the next `next` hands out what it took.
+    taking: Option<JoinHandle<Result<Took, sqlx::Error>>>,
     /// Test hook: drop without telling the reaper, as a process death does.
     abandoned: bool,
 }
@@ -173,96 +182,18 @@ impl PgSubscription {
         self.abandoned = true;
     }
 
-    async fn try_take(&self, provisional: Instant) -> Result<Took, sqlx::Error> {
-        let shared = &self.shared;
-        let group = self.group.0.as_str();
-        let capacity = i64::try_from(shared.config.group_capacity.get()).unwrap_or(i64::MAX);
-        let now = shared.now_micros();
-        let mut tx = shared.pool.begin().await?;
-        let (through, subjects): (i64, Vec<String>) = sqlx::query_as(
-            "SELECT admitted_through, subjects FROM transport.groups WHERE name = $1 FOR UPDATE",
-        )
-        .bind(group)
-        .fetch_one(&mut *tx)
-        .await?;
-        let tracked: i64 =
-            sqlx::query_scalar("SELECT count(*) FROM transport.deliveries WHERE group_name = $1")
-                .bind(group)
-                .fetch_one(&mut *tx)
-                .await?;
-        let room = capacity.saturating_sub(tracked).max(0);
-        let (head, candidates, last_admitted): (i64, i64, Option<i64>) = sqlx::query_as(ADMIT)
-            .bind(group)
-            .bind(through)
-            .bind(&subjects)
-            .bind(room)
-            .fetch_one(&mut *tx)
-            .await?;
-        // Every candidate fit: the group has seen the log up to the head
-        // this statement saw (publishes commit in seq order). Otherwise it
-        // stops after the last entry it admitted.
-        let advanced = if candidates > room {
-            last_admitted.unwrap_or(through)
-        } else {
-            head.max(through)
-        };
-        if advanced != through {
-            sqlx::query("UPDATE transport.groups SET admitted_through = $2 WHERE name = $1")
-                .bind(group)
-                .bind(advanced)
-                .execute(&mut *tx)
-                .await?;
+    /// The take a dropped `next` left running, or a new one in its own
+    /// task: its transaction commits whether or not the caller waits.
+    fn take_task(&mut self, provisional: Instant) -> JoinHandle<Result<Took, sqlx::Error>> {
+        match self.taking.take() {
+            Some(taking) => taking,
+            None => tokio::spawn(try_take(
+                Arc::clone(&self.shared),
+                self.group.0.clone(),
+                self.retry,
+                provisional,
+            )),
         }
-        sqlx::query(
-            "UPDATE transport.deliveries SET state = 'ready', available_at = NULL \
-             WHERE group_name = $1 AND state = 'delayed' AND available_at <= $2",
-        )
-        .bind(group)
-        .bind(now)
-        .execute(&mut *tx)
-        .await?;
-        let taken: Option<(i64, i32, String, String)> = sqlx::query_as(TAKE)
-            .bind(group)
-            .fetch_optional(&mut *tx)
-            .await?;
-        let took = match taken {
-            Some((seq, attempt, subject, envelope)) => {
-                // Known to the reaper before it commits, so a call dropped
-                // mid-commit is still taken back. This provisional deadline
-                // is later than the real one, which `next` registers once
-                // the hold is handed out (a fail is conditional on the row
-                // still being held at this attempt, so the later one is a
-                // no-op when the real one already fired or it was acked).
-                let key = HoldKey {
-                    group: group.to_owned(),
-                    seq,
-                    attempt,
-                };
-                let _ = shared.reaper.send(ReaperMsg::Hold {
-                    key,
-                    deadline: provisional,
-                    retry: self.retry,
-                });
-                Took::Row {
-                    seq,
-                    attempt,
-                    subject,
-                    envelope,
-                }
-            }
-            None => {
-                let next_due: Option<i64> = sqlx::query_scalar(
-                    "SELECT min(available_at) FROM transport.deliveries \
-                     WHERE group_name = $1 AND state = 'delayed'",
-                )
-                .bind(group)
-                .fetch_one(&mut *tx)
-                .await?;
-                Took::Empty { next_due }
-            }
-        };
-        tx.commit().await?;
-        Ok(took)
     }
 
     /// End an undecodable delivery: no redelivery, no dead letter
@@ -324,6 +255,105 @@ impl PgSubscription {
     }
 }
 
+/// One take's transaction (see the module docs): admit, make due rows
+/// ready, take the lowest ready row. Runs in its own task (`take_task`).
+async fn try_take(
+    shared: Arc<Shared>,
+    group: String,
+    retry: RetryPolicy,
+    provisional: Instant,
+) -> Result<Took, sqlx::Error> {
+    let shared = &*shared;
+    let group = group.as_str();
+    let capacity = i64::try_from(shared.config.group_capacity.get()).unwrap_or(i64::MAX);
+    let now = shared.now_micros();
+    let mut tx = shared.pool.begin().await?;
+    let (through, subjects): (i64, Vec<String>) = sqlx::query_as(
+        "SELECT admitted_through, subjects FROM transport.groups WHERE name = $1 FOR UPDATE",
+    )
+    .bind(group)
+    .fetch_one(&mut *tx)
+    .await?;
+    let tracked: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM transport.deliveries WHERE group_name = $1")
+            .bind(group)
+            .fetch_one(&mut *tx)
+            .await?;
+    let room = capacity.saturating_sub(tracked).max(0);
+    let (head, candidates, last_admitted): (i64, i64, Option<i64>) = sqlx::query_as(ADMIT)
+        .bind(group)
+        .bind(through)
+        .bind(&subjects)
+        .bind(room)
+        .fetch_one(&mut *tx)
+        .await?;
+    // Every candidate fit: the group has seen the log up to the head
+    // this statement saw (publishes commit in seq order). Otherwise it
+    // stops after the last entry it admitted.
+    let advanced = if candidates > room {
+        last_admitted.unwrap_or(through)
+    } else {
+        head.max(through)
+    };
+    if advanced != through {
+        sqlx::query("UPDATE transport.groups SET admitted_through = $2 WHERE name = $1")
+            .bind(group)
+            .bind(advanced)
+            .execute(&mut *tx)
+            .await?;
+    }
+    sqlx::query(
+        "UPDATE transport.deliveries SET state = 'ready', available_at = NULL \
+         WHERE group_name = $1 AND state = 'delayed' AND available_at <= $2",
+    )
+    .bind(group)
+    .bind(now)
+    .execute(&mut *tx)
+    .await?;
+    let taken: Option<(i64, i32, String, String)> = sqlx::query_as(TAKE)
+        .bind(group)
+        .fetch_optional(&mut *tx)
+        .await?;
+    let took = match taken {
+        Some((seq, attempt, subject, envelope)) => {
+            // Known to the reaper before it commits, so a call dropped
+            // mid-commit is still taken back. This provisional deadline
+            // is later than the real one, which `next` registers once
+            // the hold is handed out (a fail is conditional on the row
+            // still being held at this attempt, so the later one is a
+            // no-op when the real one already fired or it was acked).
+            let key = HoldKey {
+                group: group.to_owned(),
+                seq,
+                attempt,
+            };
+            let _ = shared.reaper.send(ReaperMsg::Hold {
+                key,
+                deadline: provisional,
+                retry,
+            });
+            Took::Row {
+                seq,
+                attempt,
+                subject,
+                envelope,
+            }
+        }
+        None => {
+            let next_due: Option<i64> = sqlx::query_scalar(
+                "SELECT min(available_at) FROM transport.deliveries \
+                 WHERE group_name = $1 AND state = 'delayed'",
+            )
+            .bind(group)
+            .fetch_one(&mut *tx)
+            .await?;
+            Took::Empty { next_due }
+        }
+    };
+    tx.commit().await?;
+    Ok(took)
+}
+
 impl Subscription for PgSubscription {
     async fn next(&mut self) -> Option<Result<Delivery, BusError>> {
         let ack_timeout = self.shared.config.ack_timeout.get();
@@ -338,7 +368,21 @@ impl Subscription for PgSubscription {
             // Covers the whole take (pool wait and round trips) twice over;
             // only a call dropped mid-commit ever relies on it.
             let provisional = now + 2 * ack_timeout + self.shared.config.publish_timeout.get();
-            let wait = match self.try_take(provisional).await {
+            let task = self.take_task(provisional);
+            let taking = self.taking.insert(task);
+            let took = match taking.await {
+                Ok(took) => took,
+                // The take's task panicked or was aborted: nothing was
+                // handed out; a committed hold is reaped at its deadline.
+                Err(error) => {
+                    self.taking = None;
+                    tracing::warn!(group = %self.group.0, error = %error, "a take's task failed; retrying");
+                    tokio::time::sleep(self.shared.config.poll.get()).await;
+                    continue;
+                }
+            };
+            self.taking = None;
+            let wait = match took {
                 Ok(Took::Row {
                     seq,
                     attempt,

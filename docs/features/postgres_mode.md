@@ -209,6 +209,68 @@ the old `Pumped`). Memory mode never goes through `Pumped`: `MemorySet`
 uses `MpscSubscription`, whose `next` keeps its pending receiver across a
 cancellation (`crates/transport/src/bus/subscription.rs`, `next`).
 
+### Cancellation audit (bus reads, outbox polls, stream reads)
+
+Every `select!`, `timeout` or race in Postgres mode with a bus `next`, an
+outbox poll or a stream read as a branch. A branch is cancel-safe when
+dropping it mid-flight loses nothing it already took.
+
+| Where | Branches | Cancel-safe | Why |
+| --- | --- | --- | --- |
+| generic stage loop, `crates/gateway/src/live/stage.rs:484` (L3, L4, L6, L7, surface relay) | commands, `Pumped::next` | yes | `Pumped::next` keeps its pull's reply in the `Pumped` (`pump.rs`, `next`); a dropped call's answer goes to the next call |
+| durable flow loop, `crates/gateway/src/live/pg/l5.rs:116` | commands, checkpoint interval, extracted inputs (mpsc), `Pumped::next` | yes | `Interval::tick` and mpsc `recv` are cancel-safe; `Pumped::next` as above |
+| the pump's fetch, `crates/gateway/src/live/pg/pump.rs:117` | requests (mpsc), `PgSubscription::next` | yes, since this change | an ack or nack arriving mid-fetch (the flow loop acks at its checkpoints while a pull waits) drops the fetch; `PgSubscription::next` now runs each take in a task of its own and resumes it on the next call (`crates/transport/src/pg/subscription.rs`, `take_task`). Before, a fetch dropped as its take committed left the row held until the reaper's provisional deadline (2 × ack timeout + publish timeout, 65 s by default), an attempt spent |
+| `PgSubscription::next`'s wait, `crates/transport/src/pg/subscription.rs:437` | closed, wake (watch), sleep | yes | waits only; the take finished before it |
+| exchange log consumer, `crates/gateway/src/log/consumer.rs:68` | none (`while let`) over `Pumped::next` | yes | not raced |
+| surface relay into the hosted surface, `crates/api/src/in_process/mod.rs:522` | published events (mpsc), settle requests (mpsc) | yes | mpsc `recv` is cancel-safe |
+| outbox forwarder (memory set), `crates/gateway/src/live/relay.rs:33` | flushes, outbox (mpsc) | yes | mpsc `recv` |
+| topology outbox relay, `crates/topology/src/outbox.rs:223` | wake (mpsc), sleep | yes | the drain runs after the select, never raced |
+| spool drainer, `crates/transport/src/spool/drain.rs:65` | notify, sleep | yes | waits only |
+| bus reaper, `crates/transport/src/pg/reaper.rs:219` | messages (mpsc), next deadline | yes | `fail` runs after the select; it now sets `lock_timeout = 2s`, so a row locked by a stuck session cannot wedge the reaper (it retries at the poll interval) |
+| bus listener, `crates/transport/src/pg/listen.rs:24` | none | yes | a lost connection reconnects; notifications are hints |
+| `Live::shutdown` drain and joins, `crates/gateway/src/live/mod.rs:547`, `:562`, `:620` | the stages' drain, a group's emptiness, each task by a deadline | not by design | shutdown: whatever is left held is returned by the next start's `recover_held` |
+| `settle`/`quiet`, `crates/gateway/src/live/settle.rs` | none over the bus | yes | commands and group stats only |
+| recovery, `Live::start_pg` | none | yes | sequential |
+
+The memory set never goes through `Pumped`: `MemorySet::Sub =
+MpscSubscription` (`crates/gateway/src/live/store_set.rs:70`), whose
+`next` keeps its pending receiver across a cancelled call
+(`crates/transport/src/bus/subscription.rs:142-146`).
+
+Regression tests: `live::pg::pump::tests::a_next_dropped_after_its_answer_keeps_the_delivery`
+(no database) and `crosstalk_transport::integration::pg_next_dropped_mid_take_hands_out_the_hold_on_the_next_call`
+(Postgres: a `next` dropped mid-take; the take commits on its own and the
+next call hands the hold out at attempt 1, at once).
+
+### A delivery lost to a race: redelivered, or dead-lettered
+
+What happens to a held row nobody acks (`crates/transport/src/pg/reaper.rs`,
+`fail`):
+
+- While the process's bus runs, its reaper takes the hold back at the
+  real deadline (handout + `ack_timeout`, 30 s by default) or, for a take
+  whose caller never saw it, the provisional one (take start + 2 ×
+  `ack_timeout` + `publish_timeout`, 65 s). That counts as an attempt
+  (the take already counted it). Below `retry.max_attempts` (`bus.retry`,
+  5 by default) the row is delayed by the backoff (`initial_backoff`
+  100 ms doubled per attempt, capped at `max_backoff` 30 s) and
+  redelivered: nothing is lost, the event arrives up to about
+  `ack_timeout` + backoff late (30 to 65 s, plus up to 30 s).
+- The same delivery lost `max_attempts` times in a row is dead-lettered
+  (`transport.dead_letters`, "ack timeout after 30000 ms"): kept, listed,
+  replayable (`ReplayDeadLetter`), but no longer delivered on its own. For
+  the surface relay that means a node fact or live feed event not applied
+  until a replay or the next rebuild (`InProcess::host` rebuilds node facts
+  at start).
+- When the bus's tasks are stopped (`Live::shutdown`/`kill`, the
+  lock-loss stopgap), nothing reaps: a held row stays held until the next
+  process's `recover_held`, which delays it with the attempt counted, or
+  dead-letters it on its last attempt.
+
+So a single lost race delays an event by at most about 95 s and loses
+nothing; only five losses of one delivery dead-letter it. With every
+consumer cancel-safe (the table above), no race is known to lose one.
+
 ### Settling and shutdown
 
 `Live::settle` is shared. A set with deferred acks (`PgSet`) drains the
