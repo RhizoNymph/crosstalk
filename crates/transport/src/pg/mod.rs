@@ -40,7 +40,7 @@ mod listen;
 mod progress;
 mod prune;
 mod publish;
-mod reaper;
+pub(crate) mod reaper;
 mod row;
 mod stats;
 mod subscription;
@@ -95,6 +95,9 @@ pub(crate) struct Shared {
     pub(crate) takes: progress::Takes,
     /// When the reaper last went round its loop.
     pub(crate) reaper_beat: progress::ReaperBeat,
+    /// Whether the reaper sweeps stale holds: set once this bus subscribes
+    /// a group (a consuming process; the `api` role's bus never does).
+    pub(crate) sweeps: std::sync::atomic::AtomicBool,
 }
 
 impl std::fmt::Debug for Shared {
@@ -184,6 +187,7 @@ impl PgBus {
             cursor_key: RandomState::new(),
             takes: progress::Takes::default(),
             reaper_beat: progress::ReaperBeat::default(),
+            sweeps: std::sync::atomic::AtomicBool::new(false),
         });
         let handles = vec![
             runtime.spawn(listen::run(Arc::clone(&shared))),
@@ -292,6 +296,15 @@ impl PgBus {
         self.shared.takes.stalled()
     }
 
+    /// Take back now every hold older than the longest a tracked hold can
+    /// live (what the reaper does every ack timeout once this bus
+    /// subscribed); how many. For tests and recovery tools.
+    pub async fn sweep_stale_holds(&self) -> Result<u64, BusError> {
+        reaper::sweep_stale(&self.shared)
+            .await
+            .map_err(|error| row::bus_error("sweep stale holds", &error))
+    }
+
     /// When the reaper last went round its loop and how many deadlines it
     /// waits on: a reaper that stopped is what leaves holds unreaped.
     pub fn reaper(&self) -> ReaperReport {
@@ -327,7 +340,11 @@ impl EventBus for PgBus {
         group: ConsumerGroup,
         retry: RetryPolicy,
     ) -> Result<PgSubscription, BusError> {
-        subscription::subscribe(&self.shared, subjects, group, retry).await
+        let subscribed = subscription::subscribe(&self.shared, subjects, group, retry).await?;
+        self.shared
+            .sweeps
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        Ok(subscribed)
     }
 }
 

@@ -401,6 +401,7 @@ mod tests {
             reaper: crosstalk_transport::ReaperReport {
                 since_active: None,
                 timers: 0,
+                swept: 0,
             },
             pool_size: 0,
             pool_idle: 0,

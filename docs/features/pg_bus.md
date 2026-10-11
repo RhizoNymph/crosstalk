@@ -153,6 +153,16 @@ each notification and each reconnect) and the reaper task. Both stop on
 `None`. Neither touches the database on stop: a dropped bus is a stopped
 process.
 
+Stale holds. Each hold records `held_at` (bus clock; `0002_held_at.sql`).
+A process that subscribed a group sweeps, every ack timeout, the holds
+older than `reaper::stale_after` (3 × ack timeout + publish timeout + a
+take's limit) and fails each as a timeout, its attempt counted
+(`transport.hold.always-reaped`): a hold its taker lost track of, or one a
+dying process committed after the next process's `recover_held`, is
+redelivered rather than held for good. `PgBus::reaper().swept` counts
+them. A take that finishes just as its limit runs out is handed out, not
+thrown away.
+
 Cancel safety. Each take's transaction runs in a task of its own
 (`take_task`), kept in the subscription: a `next` dropped while it waits
 leaves the take running to its commit, and the next call hands out what it

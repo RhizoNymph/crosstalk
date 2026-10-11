@@ -285,7 +285,7 @@ async fn pg_readyz_reports_behind_then_every_recovery_step() {
     let ready = ops.readiness().await;
     assert!(!ready.ready, "{ready:?}");
     assert!(
-        ready.migrations.starts_with("behind: transport 0 < 1"),
+        ready.migrations.starts_with("behind: transport 0 < "),
         "{}",
         ready.migrations
     );
