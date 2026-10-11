@@ -51,3 +51,7 @@ required-features = ["world"]
 [[test]]
 name = "world_conversations"
 required-features = ["world"]
+
+[[test]]
+name = "conformance_pg"
+required-features = ["world"]

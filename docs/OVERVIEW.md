@@ -950,7 +950,16 @@ Features Index:
       ready while the database is down; /healthz adds bus, recovery and
       spool sections; spool_full is a capture outcome. crosstalk migrate
       runs every layer and --reset-correlator; crosstalk spool
-      --discard-corrupt. Memory mode's replays are byte-identical.
+      --discard-corrupt. Memory mode's replays are byte-identical. Tested
+      end to end (W9): crosstalk-e2e's restart tests kill Postgres-mode Live
+      processes while feeding, mid-settle, after a checkpoint and with
+      outbox rows pending, restart them on the same database, blob store
+      and spool, and compare the whole answer set with an uninterrupted
+      run's once minted ids are renamed (crosstalk_e2e::answers); its spool
+      tests send the relay through the proxy with the database behind a
+      cuttable DbLink (outage mid-stream, gateway killed while spooling,
+      spool full); the L8 conformance suite runs over PgStores in process
+      and over HTTP.
     entry_points:
       - crates/api/src/pg/mod.rs
       - crates/gateway/src/live/pg/mod.rs
@@ -959,6 +968,9 @@ Features Index:
       - crates/gateway/src/store/migrations.rs
       - crates/gateway/src/spool.rs
       - crates/gateway/src/ops/mod.rs
+      - crates/e2e/tests/restart/main.rs
+      - crates/e2e/tests/spool/main.rs
+      - crates/api/tests/conformance_pg.rs
     depends_on: [postgres_stores, gateway, pg_bus, publish_spool, store, reconstruct, provenance, flow_store, flow_correlator, flow_extract, search_alerts, topology_store, surface_service]
     doc: docs/features/postgres_mode.md
   sim:
@@ -1833,6 +1845,7 @@ Features Index:
       - crates/e2e/src/capture.rs
       - crates/e2e/src/compose.rs
       - crates/e2e/src/read.rs
+      - crates/e2e/src/answers.rs
       - crates/e2e/tests/smoke/main.rs
     depends_on: [gateway, ingress, canonical, surface_service, memory, workspace]
     doc: docs/features/e2e_smoke.md

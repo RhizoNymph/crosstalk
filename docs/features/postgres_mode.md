@@ -35,8 +35,9 @@ section nothing changes: memory stores and `MpscBus` (decision Q7).
   detects and serves end to end. The `api` role reads the stores and
   rebuilds its node facts every few seconds; its live feed carries only
   config loads.
-- The restart and outage end-to-end tests through the proxy, conformance
-  over Postgres: W9.
+- The restart and outage end-to-end tests and conformance over Postgres
+  are W9's; see [Restart, outage and conformance
+  tests](#restart-outage-and-conformance-tests-w9).
 - Wiring the L6 search and alerts consumers, a real embedder and topic
   model (P6).
 - A volume free-space check against `spool.max_bytes` (no portable
@@ -397,6 +398,132 @@ Cursor keys derive from the deployment secret, one label per store
 (`crosstalk.cursor.v1.{surface,agents,conversations,audit,exchanges,
 topics,search,projections,alerts}`).
 
+## Restart, outage and conformance tests (W9)
+
+Tests (`crates/e2e`, `crates/api/tests`, `crates/client/tests`, a
+skip hook in `crates/conformance`); the production fixes they led to are
+described above. Every wait is bounded at five minutes
+and fails with `live::pg::diagnose` (or, for a gateway, its readiness,
+health and diagnosis).
+
+### Comparing runs: `crosstalk_e2e::answers`
+
+`answers(surface, caller, transmissions, scenario, watermark)` reads the
+whole answer set (agents by session, the topology graph, the A to B
+channel edge's transmissions, every stored transmission with its summary
+and evidence page, the channels, the watermark), the comparison
+`tests/postgres.rs` makes. `Answers::renamed` makes two runs comparable
+when their minted ids differ (a restarted process draws new ids; `serve`
+draws from OS entropy): every `<Kind>Id(<ulid>)` in the debug text becomes
+`<Kind>Id(@<millisecond>#<n>)`, keeping the millisecond the traffic fixes
+and numbering ids per kind and millisecond by first appearance. Agents
+are thereby named by their first evidence (A is the agent first seen at
+A's first exchange); distinct ids stay distinct, a duplicate stays a
+duplicate, and every other byte is compared as read. Checked without a
+database by `restart::renamed_answers_agree_across_id_seeds` (two memory
+runs with different seeds) and the module's unit tests.
+
+### Kill and restart (`crates/e2e/tests/restart`)
+
+```text
+Volume (spool dir, FsBlobStore root, ManualClock) outlives the processes
+start_pg(Seeded(SEED + generation)) ─ feed / settle ─▶ kill_pg | stop_pg
+   kill_pg: Live::kill, the spool's drainer stopped; the next open retries while LOCK is held
+start_pg on the same Volume ─ feed the rest ─ settle(ends), settle(ends + 1 h)
+   ─▶ answers.renamed() == the uninterrupted memory run's, at both passes
+```
+
+| Test | Kill point |
+| --- | --- |
+| `killed_while_feeding_finishes_as_uninterrupted` | after each of the first three exchanges (three kills, four processes) |
+| `killed_mid_settle_finishes_as_uninterrupted` | 30 ms into the first settle |
+| `killed_right_after_a_checkpoint_finishes_as_uninterrupted` | as soon as a `flow.checkpoints` row is rewritten (its `xmin` changes), before the acks it covers |
+| `killed_with_outbox_rows_pending_finishes_as_uninterrupted` | as soon as a store outbox holds a row (the run on node0 killed with 4 staged; recovery relayed 4) |
+| `graceful_restart_mid_stream_finishes_as_uninterrupted` | graceful stop after A's exchanges |
+
+The aimed kills land a moment after their trigger, so the exact point
+varies; each test asserts what holds wherever it lands, and logs what the
+database held after the kill and the restart's recovery report.
+`cursors_resolve_after_restart` (INV-1219) pages agents, conversations
+and the audit log one item at a time and resolves each first page's
+cursor after a restart (a later clock, a new seed) to the same second
+page. `minted_ids_never_collide_after_restart` (INV-1220) runs three
+processes on `SERVE_IDS` (`PgIds::Entropy`), killed or stopped in turn,
+each merging B into A, unmerging and renaming at the very same instant:
+every merge id is new and no audit id repeats.
+
+### The spool through the gateway (`crates/e2e/tests/spool*`)
+
+The harness is `crates/e2e/tests/common/gateway.rs`. `spool` holds the
+spool-full test; `spool_outage`, `spool_outage_twice` and `spool_kill` hold
+one database test each, run on 16 MiB stacks (`common::big_stack`, the
+killed gateway's runtime too) so a stack overflow aborts one binary only
+and names its thread (`gateway-test`, `gateway-test-worker`,
+`killed-gateway-worker`).
+`spool_outage_serve_runtime` runs the cut-once outage (lock lost, graceful
+stop, restart, drain) with every gateway task on a runtime from
+`crosstalk_gateway::runtime::builder`, the builder `serve` uses (tokio's
+default worker count and 2 MiB worker stacks), only its threads named
+`serve-runtime-worker`: an overflow on the outage path there is a
+production bug, not the harness's.
+
+The wiki relay is sent as HTTP through `gateway::start_on` (role `all`,
+`store` and `spool` sections, a manual clock set to each exchange's end,
+the flow tick a day apart) to a `FakeUpstream`; every request and
+response is checked byte for byte. `DATABASE_URL` points at a `DbLink`
+(the test server's URL with the link's host and port; never printed).
+After the last gateway stops, a `Live::<PgSet>` over the same database
+and the gateway's blob store settles both passes and reads the answers,
+compared renamed with an uninterrupted gateway run's.
+
+- `full_spool_refuses_and_proxy_still_forwards` (INV-1210, no database):
+  a spool bounded at what two captures take (measured by a first gateway)
+  holds two, refuses two at once (`spool_full`, `rejected_full`), never
+  exceeds the bound; the proxy answers all four unchanged; `/readyz` 503
+  `dropping: spool full`; the metrics.
+- `database_cut_mid_stream_spools_then_drains_to_the_uninterrupted_answers`:
+  cut after the first exchange, two exchanges forwarded and spooled
+  (`capture: spooling`, `crosstalk_spool_*`); the lock's loss
+  (`Running::fatal`), a graceful stop, a fresh start on the same data
+  directory with the link still cut (records recovered, 200 degraded,
+  `waiting_for_database`); restored, the spool drains (`drained: 2`),
+  `/readyz` `ok`; the last exchange; every capture in the log once; equal
+  answers. `database_cut_twice_drains_to_the_uninterrupted_answers`: the
+  same, twice.
+- `gateway_killed_while_spooling_drains_once_after_restart`: the first
+  gateway runs on a runtime of its own; cut, one capture spooled, the
+  runtime shut down (every task dropped, as a crash); restarted with the
+  link still cut, the record is recovered from disk and the next capture
+  spools behind it (`waiting_for_database`); restored, drained; every
+  capture is in `transport.events` exactly once; equal answers.
+
+### Conformance over Postgres
+
+The L8 conformance suite runs over the Postgres stores in process
+(`crates/api/tests/conformance_pg.rs`, feature `world`) and over HTTP
+through `crosstalk-client` (`crates/client/tests/conformance_pg.rs`), both
+on `crates/api/tests/support/pg_world.rs`:
+
+- each world gets a fresh `TestDb`, every layer migrated, extensions
+  created; `TestDb` needs a multi-thread runtime, so databases are created
+  and dropped on a helper runtime;
+- `PgStores` is opened on a bus that forwards every event to the surface's
+  relay, then `InProcess::host` (`CursorSecret::Derived`), the world
+  seeded through `WorldStores` on the bundle, the L7 outbox drained, the
+  relay settled, the clock moved to the anchor;
+- projection jobs are fitted by a test-side copy of the in-process fitter
+  over `PgProjectionSource` with `FakeLayoutFitter`;
+- the HTTP harness authenticates against the directory stored in
+  Postgres;
+- without `TEST_DATABASE_URL` every test skips through
+  `Harness::unavailable` (new in `crosstalk-conformance`); a configured
+  but unreachable server fails;
+- expected failures: none (`SURFACE_FAILURES`);
+- gaps worked around in the harness: `PgChannelRegistry` has no
+  `AccessStore` (binding reads accesses through `PgEvidence`), the
+  in-process fitter is memory-only and `pub(crate)`, `PgEdgeStore` has no
+  `WatermarkRead` (a fixed watermark dates the samples).
+
 ## Files
 
 | File | Role | Key exports |
@@ -419,7 +546,11 @@ topics,search,projections,alerts}`).
 | `crates/gateway/src/runtime.rs` | the runtime `serve` runs on, shared with the tests | `builder`, `build` |
 | `crates/e2e/src/answers.rs` | the answer set and the renaming of minted ids | `answers`, `Answers::renamed` |
 | `crates/e2e/tests/common/{mod,gateway}.rs` | the Postgres-mode harness and the gateway outage harness | `start_pg`, `uninterrupted`, `Gateway`, `Run`, `outage` |
-| `crates/e2e/tests/{spool_outage,spool_outage_twice,spool_outage_serve_runtime}/main.rs` | the outage stopgap end to end | tests |
+| `crates/e2e/tests/restart/main.rs` | kill and restart, cursors, ids (W9) | tests |
+| `crates/e2e/tests/{spool,spool_outage,spool_outage_twice,spool_kill,spool_outage_serve_runtime}/main.rs` | the spool through the gateway (W9) | tests |
+| `crates/gateway/src/main.rs`, `crates/gateway/src/gateway/mod.rs` | `serve` exits non-zero once the pipeline's lock is lost (stopgap) | `Running::fatal`, `Fatal`, `FatalCause`, `Running::shutdown_bound` |
+| `crates/api/tests/support/pg_world.rs`, `crates/{api,client}/tests/conformance_pg.rs` | conformance over Postgres (W9) | the Postgres harnesses |
+| `crates/conformance/src/harness/mod.rs` | `Harness::unavailable`: skip a harness whose backend is not configured (W9) | `Harness` |
 
 ## Tests
 
@@ -456,12 +587,30 @@ topics,search,projections,alerts}`).
 - Memory mode unchanged: every `ct-eval replay` of the bench runs is
   byte-identical to the base build (export, evidence, score, report).
 
+- W9 suite (Postgres unless noted; every wait bounded at five minutes
+  with the diagnosis): `crosstalk-e2e` `restart` (kills while feeding,
+  mid-settle, after a checkpoint, with outbox rows pending; a graceful
+  restart; `cursors_resolve_after_restart`, `minted_ids_never_collide_after_restart`;
+  `renamed_answers_agree_across_id_seeds` without a database), `spool`
+  (`full_spool_refuses_and_proxy_still_forwards`, no database),
+  `spool_outage`, `spool_outage_twice`, `spool_outage_serve_runtime`,
+  `spool_kill`; `crosstalk-api --features world --test conformance_pg`,
+  `crosstalk-client --test conformance_pg`; `crosstalk-transport`
+  `integration::pg_next_dropped_mid_take_hands_out_the_hold_on_the_next_call`;
+  `crosstalk-topology` `integration::outbox::a_relay_hung_mid_publish_holds_no_transaction`;
+  `crosstalk-gateway` `integration::pg_an_idle_transaction_is_ended_and_its_locks_released`
+  and `live::pg::pump::tests::a_next_dropped_after_its_answer_keeps_the_delivery`
+  (no database).
+
 ## Invariants and constraints
 
 | Invariant | Evidence (agent: ran) |
 | --- | --- |
 | INV-1217 `topology.frontier.covers-spool` | `crosstalk_gateway::dst::frontier_covers_spooled_envelopes` (ran) |
-| INV-1220 `surface.ids.unique-across-restart` | unit `crosstalk_gateway::live::tests::serve_seeds_id_generators_from_entropy` (ran); integration is W9's |
+| INV-1220 `surface.ids.unique-across-restart` | unit `crosstalk_gateway::live::tests::serve_seeds_id_generators_from_entropy` (ran); integration `crosstalk_e2e::restart::minted_ids_never_collide_after_restart` (passed on node0 at d8f5412; flag pending a green node0 run on this branch) |
+| INV-1219 `surface.cursor.survives-restart` | integration `crosstalk_e2e::restart::cursors_resolve_after_restart` (passed on node0; flag pending a green node0 run on this branch) |
+| INV-1210 `transport.spool.bounded` | integration `crosstalk_e2e::spool::full_spool_refuses_and_proxy_still_forwards` (no database; ran; flag pending with the others) |
+| INV-X `transport.stage-pump.no-dropped-delivery` | unit `crosstalk_gateway::live::pg::pump::tests::a_next_dropped_after_its_answer_keeps_the_delivery` (ran) |
 | INV-1221 `ingress.proxy.forwarding-independent-of-capture-store` | `crosstalk_gateway::postgres_down::proxy_forwards_through_outage_and_full_spool` (ran) |
 | INV-581 `topology.frontier.covers-pending` | `crosstalk_gateway::integration::pg_frontier_covers_pending_deliveries` (Postgres, not run) |
 | INV-1202 `transport.consumer.derived-envelope-ids` | `crosstalk_gateway::dst::classifier_redelivery_republishes_the_same_envelope_ids` (ran; the flag covers the whole list, left for the merger) |
