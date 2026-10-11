@@ -182,6 +182,14 @@ from another holder.
 that drops a `next` future (a command won its `select!`) after the pump
 answered no longer loses the delivery until the ack timeout; settles that
 kept draining could lose it on every redelivery and hang.
+`gateway.stage-pump.no-dropped-delivery` (INV-X) pins it:
+`live::pg::pump::tests::a_next_dropped_after_its_answer_keeps_the_delivery`
+drives the pump (generic over `Subscription`) with a scripted
+subscription on a paused clock, drops a `next` after its answer, and
+requires the next call to return the same delivery at once (it fails on
+the old `Pumped`). Memory mode never goes through `Pumped`: `MemorySet`
+uses `MpscSubscription`, whose `next` keeps its pending receiver across a
+cancellation (`crates/transport/src/bus/subscription.rs`, `next`).
 
 ### Settling and shutdown
 
