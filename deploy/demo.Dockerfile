@@ -1,8 +1,10 @@
 # syntax=docker/dockerfile:1.7
 #
 # crosstalk-demo: the fake Anthropic upstream, the shared wiki and the agent
-# swarm (one binary, subcommands), plus ct-eval for `run.sh bench` (the
-# deployment host has no Rust toolchain). Build context is the repository root:
+# swarm (one binary, subcommands), plus the bench tools for `run.sh bench`
+# (the deployment host has no Rust toolchain): ct-eval (fetching the
+# gateway's export), ct-bench-detect (the detector's bench input) and
+# a2a-bench at a pinned release tag (export and score). Build context is the repository root:
 #   docker build -f deploy/demo.Dockerfile -t crosstalk-demo:dev .
 # (deploy/compose.demo.yaml does this for you.)
 
@@ -46,14 +48,33 @@ RUN --mount=type=cache,sharing=locked,target=/usr/local/cargo/registry \
     && install -D target/release/ct-bench-detect /out/ct-bench-detect \
     && install -D -m 0644 crates/eval/gates.toml /out/eval/gates.toml
 
+# a2a-bench, the scorer, at a release tag of the bench repo, from the same
+# mirror. Bump A2A_BENCH_REF (and fetch the tag into the mirror) to score
+# with a newer bench; every run records the ref and commit in bench.env.
+ARG A2A_BENCH_REF=a2a-bench-v1.1.0
+RUN git clone --quiet /deps/a2a-transmission-bench.git /bench \
+    && git -C /bench -c advice.detachedHead=false checkout --quiet "${A2A_BENCH_REF}"
+RUN --mount=type=cache,sharing=locked,target=/usr/local/cargo/registry \
+    --mount=type=cache,sharing=locked,target=/bench/target \
+    cd /bench \
+    && cargo build --locked --release -p a2a-bench-cli --bin a2a-bench \
+    && install -D target/release/a2a-bench /out/a2a-bench \
+    && mkdir -p /out/a2a-bench-share/gates \
+    && cp gates/*.toml /out/a2a-bench-share/gates/ \
+    && printf 'bench_ref=%s\nbench_commit=%s\n' "${A2A_BENCH_REF}" "$(git rev-parse HEAD)" \
+        > /out/a2a-bench-share/REF
+
 FROM gcr.io/distroless/cc-debian13:nonroot
 
 COPY --from=build /out/crosstalk-demo /usr/local/bin/crosstalk-demo
 COPY --from=build /out/ct-eval /usr/local/bin/ct-eval
 COPY --from=build /out/ct-bench-detect /usr/local/bin/ct-bench-detect
 COPY --from=build /out/eval/gates.toml /usr/local/share/crosstalk-eval/gates.toml
+COPY --from=build /out/a2a-bench /usr/local/bin/a2a-bench
+COPY --from=build /out/a2a-bench-share /usr/local/share/a2a-bench
 
-# 8070 fake upstream, 8090 wiki. The swarm and ct-eval listen on nothing.
+# 8070 fake upstream, 8090 wiki. The swarm and the bench tools listen on
+# nothing.
 EXPOSE 8070 8090
 USER 65532:65532
 ENTRYPOINT ["/usr/local/bin/crosstalk-demo"]
