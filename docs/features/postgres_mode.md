@@ -170,6 +170,24 @@ the spool drains. Current behaviour: **a Postgres outage restarts the
 gateway, a few seconds of proxy downtime**; nothing captured is lost (the
 spool is on disk). INV-1221 is scoped to a running process accordingly.
 
+**After a network partition, a restarted gateway waits up to about 25 s
+for the old session's lock.** A partition (rather than a Postgres
+restart) can leave the stopped process's backend alive on the server,
+holding the pipeline advisory lock until the server notices the dead
+peer. With the OS's TCP keepalive defaults that is hours; with the
+server's `tcp_keepalives_idle=10`, `tcp_keepalives_interval=5`,
+`tcp_keepalives_count=3` (crosstalk-infra's deploy/postgres setting) it
+is about 25 s. Meanwhile the restarted gateway reports `pipeline_lock:
+held elsewhere`, keeps forwarding and spooling, and takes the lock once
+the server reaps the session; nothing terminates another backend. The
+gateway sets no client-side keepalives: its own side already sees the
+cut within the lock's 5 s ping. `spool_outage_twice` allows the lock
+`LOCK_RELEASE` (60 s) to come free and otherwise fails naming every
+session on the database, which one holds the lock, and the server's
+connection count and `tcp_keepalives_*` (`common::gateway::sessions`, read
+over the test's own pool, not the gateway's), so it passes once the
+server setting is applied.
+
 Follow-up: resume in process (back to waiting for the database and the
 lock, recovery again, no restart), with a fresh `PgBus` per pipeline
 generation, replaceable `Late` handles and the lock's loss told apart

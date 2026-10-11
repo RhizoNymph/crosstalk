@@ -18,6 +18,7 @@ use crosstalk_gateway::live::LiveClock;
 use crosstalk_gateway::live::Slot;
 use crosstalk_gateway::live::pg::diagnose::{DiagnoseFrom, diagnose};
 use crosstalk_gateway::role::Role;
+use crosstalk_gateway::store::lock::PIPELINE_LOCK;
 use crosstalk_memory::support::ManualClock;
 use crosstalk_spec::events::Subject;
 use crosstalk_store::TestDb;
@@ -310,6 +311,76 @@ pub fn has_line(text: &str, line: &str) {
     );
 }
 
+/// How long a restarted gateway may see `pipeline_lock: held elsewhere`:
+/// the server's reaping of a partitioned session (about 25 s with deploy's
+/// `tcp_keepalives_*`) and a margin.
+pub const LOCK_RELEASE: Duration = Duration::from_secs(60);
+
+/// One row of [`sessions`].
+type Session = (
+    i32,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<i32>,
+    Option<String>,
+    bool,
+);
+
+/// Every other session on the test database as the server sees it, and
+/// which one holds the pipeline lock: read over the test's own pool,
+/// which never goes through the `DbLink`.
+pub async fn sessions(db: &TestDb) -> String {
+    let rows: Result<Vec<Session>, _> = sqlx::query_as(
+        "SELECT a.pid, a.state, a.wait_event_type, a.wait_event, \
+                a.backend_start::text, a.state_change::text, a.client_addr::text, a.client_port, \
+                left(a.query, 120), \
+                EXISTS (SELECT 1 FROM pg_locks l WHERE l.pid = a.pid AND l.locktype = 'advisory' \
+                        AND l.granted AND l.classid::bigint = $1 AND l.objid::bigint = $2) \
+         FROM pg_stat_activity a \
+         WHERE a.datname = current_database() AND a.pid <> pg_backend_pid() \
+         ORDER BY a.backend_start",
+    )
+    .bind(PIPELINE_LOCK >> 32)
+    .bind(PIPELINE_LOCK & 0xFFFF_FFFF)
+    .fetch_all(db.pool())
+    .await;
+    let server: Result<(i64, String, String, String, String), _> = sqlx::query_as(
+        "SELECT (SELECT count(*) FROM pg_stat_activity WHERE backend_type = 'client backend'), \
+                current_setting('max_connections'), current_setting('tcp_keepalives_idle'), \
+                current_setting('tcp_keepalives_interval'), current_setting('tcp_keepalives_count')",
+    )
+    .fetch_one(db.pool())
+    .await;
+    let header = match server {
+        Ok((clients, max, idle, interval, count)) => format!(
+            "  server: {clients} client backends of max_connections {max}; \
+             tcp_keepalives idle {idle} interval {interval} count {count} (0: the OS default)\n"
+        ),
+        Err(error) => format!("  (the server's settings did not read: {error})\n"),
+    };
+    let listed = match rows {
+        Ok(rows) => rows
+            .iter()
+            .map(
+                |(pid, state, wait_type, wait, started, changed, addr, port, query, lock)| {
+                    format!(
+                        "  pid {pid}{} state {state:?} wait {wait_type:?}/{wait:?} since {changed:?} \
+                         (backend started {started:?}, client {addr:?}:{port:?}) query {query:?}",
+                        if *lock { " HOLDS THE PIPELINE LOCK" } else { "" }
+                    )
+                },
+            )
+            .collect::<Vec<_>>()
+            .join("\n"),
+        Err(error) => format!("  (pg_stat_activity did not read: {error})"),
+    };
+    format!("{header}{listed}")
+}
+
 impl Gateway {
     /// Send `exchanges` through the proxy, the clock at each one's end
     /// first: each request reaches the upstream unchanged and its response
@@ -397,11 +468,57 @@ impl Gateway {
     /// Wait until the pipeline runs on a reachable database with a direct
     /// spool, and nothing is pending: `/readyz` `ok`, the spool empty, no
     /// delivery held by any group.
+    ///
+    /// A restarted gateway may find the pipeline lock still held by the
+    /// stopped process's session: after a network partition (a `DbLink`
+    /// cut) the server keeps that backend, and its advisory lock, until it
+    /// notices the dead peer, about 25 s with deploy's server keepalives
+    /// (`tcp_keepalives_idle=10`, `interval=5`, `count=3`), hours with the
+    /// OS defaults. `pipeline_lock: held elsewhere` may last
+    /// [`LOCK_RELEASE`]; past it, or past [`WAIT`] overall, the test fails
+    /// naming every session on the database and which one holds the lock
+    /// ([`sessions`], read over the test's own pool, not the gateway's).
     pub async fn settled(&self, db: &TestDb, what: &str) {
-        self.readyz_until(what, |status, body| {
-            status == StatusCode::OK && body["status"] == "ok" && body["capture"] == "durable"
-        })
-        .await;
+        let running = &self.running;
+        let started = Instant::now();
+        let mut held_since: Option<Instant> = None;
+        loop {
+            let (status, body) = json(running, "/readyz").await;
+            if status == StatusCode::OK && body["status"] == "ok" && body["capture"] == "durable" {
+                break;
+            }
+            let pipeline = body["pipeline"].as_str().unwrap_or_default();
+            if pipeline.starts_with("stopped") || body["pipeline_lock"] == "lost" {
+                panic!(
+                    "{what}: the pipeline stopped and will not recover: {body}\n{}\nsessions:\n{}",
+                    state(running).await,
+                    sessions(db).await
+                );
+            }
+            match body["pipeline_lock"] == "held elsewhere" {
+                true => {
+                    let since = *held_since.get_or_insert_with(Instant::now);
+                    if since.elapsed() > LOCK_RELEASE {
+                        panic!(
+                            "{what}: the pipeline lock stayed held by another session for over \
+                             {LOCK_RELEASE:?}: a partitioned backend the server has not reaped \
+                             (are the server's tcp_keepalives_* set?)\nsessions:\n{}\n{}",
+                            sessions(db).await,
+                            state(running).await
+                        );
+                    }
+                }
+                false => held_since = None,
+            }
+            if started.elapsed() > WAIT {
+                panic!(
+                    "{what} did not finish within {WAIT:?}\n{}\nsessions:\n{}",
+                    state(running).await,
+                    sessions(db).await
+                );
+            }
+            tokio::time::sleep(POLL).await;
+        }
         let running = &self.running;
         within(running, what, async {
             let mut quiet = 0;

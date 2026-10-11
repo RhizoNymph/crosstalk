@@ -412,6 +412,19 @@ from the host instead.
   `docker exec crosstalk-crosstalk-1 /usr/local/bin/crosstalk inspect
   --config /etc/crosstalk/crosstalk.json [<exchange-id>]`.
 
+### After a network partition
+
+`serve` exits non-zero when its pipeline lock's session fails (a database
+outage or a partition) and compose restarts it. After a Postgres restart
+the old backends are gone and the new process takes the lock at once.
+After a partition the old backend can outlive the cut, holding the lock,
+until the server notices the dead peer: the restarted gateway waits up to
+about 25 s for the old session's lock (`pipeline_lock: held elsewhere`,
+forwarding and spooling meanwhile) with the server's
+`tcp_keepalives_idle=10`, `tcp_keepalives_interval=5` and
+`tcp_keepalives_count=3`, which deploy/postgres sets (crosstalk-infra).
+Without them the wait follows the OS keepalive defaults, hours.
+
 ## Invariants and constraints
 
 - **Secrets never live in a tracked file.**
