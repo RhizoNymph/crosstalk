@@ -84,8 +84,13 @@ async fn run(
                 }
                 Command::Drain { done } => {
                     let handled = drain(&mut consumer, &mut extracted).await;
-                    activity.add(handled);
-                    let _ = done.send(handled);
+                    // As the Postgres loop does: steps a transient failure
+                    // left run now, and steps still waiting keep a settle
+                    // from ending.
+                    let retried = u64::try_from(consumer.retry_backlog().await).unwrap_or(u64::MAX);
+                    activity.add(handled + retried);
+                    let waiting = u64::try_from(consumer.backlog()).unwrap_or(u64::MAX);
+                    let _ = done.send(handled + retried + waiting);
                 }
             },
             Some(input) = extracted.recv() => {
