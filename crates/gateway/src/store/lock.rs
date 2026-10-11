@@ -45,7 +45,11 @@ impl PipelineLock {
     /// Try to take the lock on a new connection to `url`. `None` when
     /// another session holds it.
     pub async fn try_take(url: &DatabaseUrl) -> Result<Option<Self>, StoreError> {
-        let mut connection = PgConnection::connect_with(url.connect_options()).await?;
+        let options = url
+            .connect_options()
+            .clone()
+            .application_name(&format!("crosstalk-pipeline-lock-{}", std::process::id()));
+        let mut connection = PgConnection::connect_with(&options).await?;
         let (taken,): (bool,) = sqlx::query_as("SELECT pg_try_advisory_lock($1)")
             .bind(PIPELINE_LOCK)
             .fetch_one(&mut connection)

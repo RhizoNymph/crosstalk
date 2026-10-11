@@ -655,3 +655,93 @@ async fn stop_live(live: Live<PgSet>) {
     .await;
     within("closing the spool", spool.close(), &probe).await;
 }
+
+/// The idle-in-transaction backstop: a session of `lazy_pool_named` that
+/// stops driving its transaction (a task stalled or abandoned mid-way)
+/// is ended by the server after `IDLE_IN_TRANSACTION_TIMEOUT`, and the
+/// locks it held are released; its `application_name` names the process
+/// in `pg_stat_activity` meanwhile.
+#[tokio::test(flavor = "multi_thread")]
+async fn pg_an_idle_transaction_is_ended_and_its_locks_released() {
+    let Some(db) = database("pg_an_idle_transaction_is_ended_and_its_locks_released").await else {
+        return;
+    };
+    let settings = PoolSettings::new(
+        NonZeroU32::MIN.saturating_add(1),
+        0,
+        Duration::from_secs(10),
+    )
+    .expect("pool settings");
+    let pool = crate::store::lazy_pool_named(
+        &StoreConfig::new(db.url().clone(), settings),
+        "crosstalk-idle-test",
+    );
+    let (timeout,): (String,) =
+        sqlx_query_as("SHOW idle_in_transaction_session_timeout", &pool).await;
+    assert_eq!(timeout, "30s");
+
+    // A transaction that takes a lock, then idles: its task never sends
+    // another statement.
+    let mut stalled = pool.begin().await.expect("begins");
+    let (pid,): (i32,) = crosstalk_store::sqlx::query_as(
+        "SELECT pg_backend_pid() FROM (SELECT pg_advisory_xact_lock(424242)) AS taken",
+    )
+    .fetch_one(&mut *stalled)
+    .await
+    .expect("locks");
+    let (name, state): (String, String) = crosstalk_store::sqlx::query_as(
+        "SELECT application_name, state FROM pg_stat_activity WHERE pid = $1",
+    )
+    .bind(pid)
+    .fetch_one(db.pool())
+    .await
+    .expect("reads the session");
+    assert_eq!(name, "crosstalk-idle-test");
+    assert_eq!(state, "idle in transaction");
+
+    // Within the timeout and a margin, the server ends the session, and the
+    // lock is free for another session.
+    let released = async {
+        loop {
+            let (free,): (bool,) =
+                crosstalk_store::sqlx::query_as("SELECT pg_try_advisory_lock(424242)")
+                    .fetch_one(db.pool())
+                    .await
+                    .expect("tries");
+            if free {
+                let _ = crosstalk_store::sqlx::query("SELECT pg_advisory_unlock(424242)")
+                    .execute(db.pool())
+                    .await;
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+    };
+    tokio::time::timeout(Duration::from_secs(60), released)
+        .await
+        .expect("the idle transaction's lock is released by the server's timeout");
+    let (alive,): (i64,) =
+        crosstalk_store::sqlx::query_as("SELECT count(*) FROM pg_stat_activity WHERE pid = $1")
+            .bind(pid)
+            .fetch_one(db.pool())
+            .await
+            .expect("reads");
+    assert_eq!(alive, 0, "the session was ended");
+    // The stalled client finds its transaction gone.
+    assert!(
+        crosstalk_store::sqlx::query("SELECT 1")
+            .execute(&mut *stalled)
+            .await
+            .is_err()
+    );
+    drop(stalled);
+    pool.close().await;
+    db.close().await.expect("drops");
+}
+
+async fn sqlx_query_as(sql: &'static str, pool: &PgPool) -> (String,) {
+    crosstalk_store::sqlx::query_as(sql)
+        .fetch_one(pool)
+        .await
+        .expect("reads a setting")
+}

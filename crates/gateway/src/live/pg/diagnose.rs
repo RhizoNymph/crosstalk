@@ -95,8 +95,8 @@ const PENDING_ROWS: &str = "SELECT d.group_name, d.seq, d.state, d.attempt, \
      FROM transport.deliveries d JOIN transport.events e ON e.seq = d.seq \
      ORDER BY d.seq LIMIT 20";
 
-const BLOCKERS: &str = "SELECT format('pid %s %s xact since %s wait %s/%s locks [%s] query %s', \
-       a.pid, a.state, a.xact_start, a.wait_event_type, a.wait_event, \
+const BLOCKERS: &str = "SELECT format('pid %s (%s, port %s) %s xact since %s wait %s/%s locks [%s] query %s', \
+       a.pid, a.application_name, a.client_port, a.state, a.xact_start, a.wait_event_type, a.wait_event, \
        (SELECT string_agg(DISTINCT c.relname || ':' || l.mode, ', ') FROM pg_locks l \
           JOIN pg_class c ON c.oid = l.relation \
           WHERE l.pid = a.pid AND c.relname IN ('deliveries', 'groups', 'events')), \

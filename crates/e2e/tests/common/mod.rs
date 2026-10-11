@@ -25,7 +25,6 @@ use crosstalk_gateway::live::pg::diagnose::{PgDiagnosis, bounded};
 use crosstalk_gateway::live::pg::{PgParts, PgPartsError, PgSet};
 use crosstalk_gateway::live::{BlobConfig, Live, LiveClock, LiveConfig, Ticking};
 use crosstalk_gateway::pipeline::Settings;
-use crosstalk_gateway::store::lazy_pool;
 use crosstalk_gateway::store::migrations::migrate_all;
 use crosstalk_memory::support::ManualClock;
 use crosstalk_provenance::config::ProvenanceConfig;
@@ -184,7 +183,14 @@ pub fn pipeline_pool(db: &TestDb) -> PgPool {
         Duration::from_secs(30),
     )
     .expect("pool settings");
-    lazy_pool(&StoreConfig::new(db.url().clone(), settings))
+    // Each process of a test gets a name of its own, so a dump of
+    // `pg_stat_activity` tells the processes apart.
+    static PROCESSES: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+    let process = PROCESSES.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    crosstalk_gateway::store::lazy_pool_named(
+        &StoreConfig::new(db.url().clone(), settings),
+        &format!("crosstalk-e2e-live-{process}"),
+    )
 }
 
 /// Open the parts on `volume`, retrying while the spool directory's

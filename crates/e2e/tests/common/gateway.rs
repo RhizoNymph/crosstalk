@@ -335,7 +335,7 @@ type Session = (
 /// which never goes through the `DbLink`.
 pub async fn sessions(db: &TestDb) -> String {
     let rows: Result<Vec<Session>, _> = sqlx::query_as(
-        "SELECT a.pid, a.state, a.wait_event_type, a.wait_event, \
+        "SELECT a.pid, a.application_name || ' ' || a.state, a.wait_event_type, a.wait_event, \
                 a.backend_start::text, a.state_change::text, a.client_addr::text, a.client_port, \
                 left(a.query, 120), \
                 EXISTS (SELECT 1 FROM pg_locks l WHERE l.pid = a.pid AND l.locktype = 'advisory' \

@@ -472,7 +472,10 @@ async fn start_postgres(
     let ops_listener = bind("ops", config.ops.listen).await?;
     let ops_addr = local_addr("ops", &ops_listener)?;
 
-    let pool = crate::store::lazy_pool(&store_config);
+    let pool = crate::store::lazy_pool_named(
+        &store_config,
+        &format!("crosstalk-{role}-{}", std::process::id()),
+    );
     let side = postgres::capture_side(config, role, pool, &blobs, &reader).await?;
     let status = postgres::initial_status();
     let late = postgres::Late::default();

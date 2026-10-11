@@ -125,17 +125,54 @@ impl StoreProbe {
     }
 }
 
+/// How long the server keeps a session of ours idle inside a transaction
+/// before it ends it: the backstop that releases the row and advisory
+/// locks of a transaction whose client stopped driving it (a task stalled
+/// or abandoned mid-transaction). Every transaction of ours runs its
+/// statements back to back, so a legitimate one never idles this long.
+pub const IDLE_IN_TRANSACTION_TIMEOUT: &str = "30s";
+
+/// The `application_name` a pool's sessions carry when the caller names
+/// none.
+pub const DEFAULT_APPLICATION: &str = "crosstalk";
+
 /// A pool over `config` that opens connections on demand: building it
 /// touches no database, so a process can start (and spool) while Postgres
-/// is down.
+/// is down. Its sessions are named [`DEFAULT_APPLICATION`]; see
+/// [`lazy_pool_named`].
 pub fn lazy_pool(config: &StoreConfig) -> PgPool {
+    lazy_pool_named(config, DEFAULT_APPLICATION)
+}
+
+/// [`lazy_pool`] whose sessions carry `application` as their
+/// `application_name` (`pg_stat_activity` then names the process and role
+/// that owns each session) and end any transaction left idle for
+/// [`IDLE_IN_TRANSACTION_TIMEOUT`] (`idle_in_transaction_session_timeout`,
+/// set on every new connection, so no server setting is needed).
+pub fn lazy_pool_named(config: &StoreConfig, application: &str) -> PgPool {
     let settings = config.pool();
+    let options = config
+        .url()
+        .connect_options()
+        .clone()
+        .application_name(application);
     PgPoolOptions::new()
         .max_connections(settings.max_connections().get())
         .min_connections(settings.min_connections())
         .acquire_timeout(settings.acquire_timeout())
-        .connect_lazy_with(config.url().connect_options().clone())
+        .after_connect(|connection, _meta| {
+            Box::pin(async move {
+                crosstalk_store::sqlx::query(IDLE_IN_TRANSACTION)
+                    .execute(connection)
+                    .await
+                    .map(|_| ())
+            })
+        })
+        .connect_lazy_with(options)
 }
+
+/// The session setting [`lazy_pool_named`] applies to every connection.
+const IDLE_IN_TRANSACTION: &str = "SET idle_in_transaction_session_timeout = '30s'";
 
 /// Why `crosstalk migrate` failed.
 #[derive(Debug, thiserror::Error)]

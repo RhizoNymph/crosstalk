@@ -511,6 +511,15 @@ impl Subscription for PgSubscription {
 
 impl Drop for PgSubscription {
     fn drop(&mut self) {
+        // A take still in flight outlives no subscription: aborted, its
+        // transaction is dropped and rolled back (sqlx flushes the rollback
+        // as the connection goes back to the pool), or, had it committed,
+        // its hold is taken back at the provisional deadline the reaper
+        // already has. A detached take would hold its connection, and maybe
+        // row locks, past the subscription, its bus and its pool.
+        if let Some(taking) = self.taking.take() {
+            taking.abort();
+        }
         if self.abandoned {
             return;
         }
