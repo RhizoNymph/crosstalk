@@ -432,9 +432,26 @@ async fn run_pipeline(start: PipelineStart, mut stop: oneshot::Receiver<()>) -> 
         return tokio::select! {
             _ = &mut stop => Some((live, lock)),
             why = lock.lost() => {
+                // The lock's session failed: a reset connection or a database
+                // outage, or the lock is gone. The pipeline stops, and the
+                // process exits for its supervisor to restart it
+                // (`Running::fatal`); the next start spools until the database
+                // answers, then recovers.
+                let database = match tokio::time::timeout(PROBE, start.pool.acquire()).await {
+                    Ok(Ok(_connection)) => "reachable",
+                    Ok(Err(_)) | Err(_) => "unreachable",
+                };
+                tracing::error!(
+                    cause = "pipeline_lock_lost",
+                    session = %why,
+                    database,
+                    "the pipeline lock's session failed; the pipeline stops and the process exits to be restarted"
+                );
                 status.update(|status| {
                     status.lock = LockState::Lost;
-                    status.phase = PipelinePhase::Stopped(format!("pipeline lock lost: {why}"));
+                    status.phase = PipelinePhase::Stopped(format!(
+                        "pipeline lock lost: {why} (database {database})"
+                    ));
                 });
                 live.shutdown(Instant::now() + Duration::from_secs(5)).await;
                 let _ = stop.await;

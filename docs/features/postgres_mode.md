@@ -153,6 +153,36 @@ how long, the diagnosis) past it. Every Postgres-mode test bounds its
 waits on settles, recovery, deliveries, the lock and shutdowns with it
 (five minutes each), so a stall fails with its cause instead of hanging.
 
+### A Postgres outage restarts the gateway (stopgap)
+
+An outage that drops the pipeline lock's own connection (a database
+restart, a reset connection, a cut link) fails the lock's next ping
+(within `store::lock::PING`, 5 s). The pipeline stops (`pipeline:
+stopped: pipeline lock lost: <why> (database reachable|unreachable)`,
+`pipeline_lock: lost`, 503), logged as a structured error (`cause =
+pipeline_lock_lost`, `session`, `database`). `Running::fatal` resolves
+with `FatalCause::PipelineLockLost`; `serve` shuts down gracefully within
+`Running::shutdown_bound` and exits non-zero. The supervisor (compose:
+`restart: unless-stopped`) starts it again: the proxy listens at once,
+captures spool while the database is down (200 degraded,
+`waiting_for_database`), and once it answers the pipeline recovers and
+the spool drains. Current behaviour: **a Postgres outage restarts the
+gateway, a few seconds of proxy downtime**; nothing captured is lost (the
+spool is on disk). INV-1221 is scoped to a running process accordingly.
+
+Follow-up: resume in process (back to waiting for the database and the
+lock, recovery again, no restart), with a fresh `PgBus` per pipeline
+generation, replaceable `Late` handles and the lock's loss told apart
+from another holder.
+
+`serve` and every `crosstalk` command run on `crosstalk_gateway::runtime`
+(one builder, shared with the tests that must run as `serve` does).
+
+`Pumped::next` keeps its pull's reply in the `Pumped`, so a stage loop
+that drops a `next` future (a command won its `select!`) after the pump
+answered no longer loses the delivery until the ack timeout; settles that
+kept draining could lose it on every redelivery and hang.
+
 ### Settling and shutdown
 
 `Live::settle` is shared. A set with deferred acks (`PgSet`) drains the
@@ -261,6 +291,10 @@ topics,search,projections,alerts}`).
 | `crates/gateway/src/gateway/{postgres,late}.rs` | Postgres-mode start, API before the surface | `PgRunning`, `spawn_pipeline`, `spawn_api`, `SERVE_IDS`, `LateRouter` |
 | `crates/gateway/src/ops/{mod,metrics}.rs` | readiness, health, metrics | `PgOps`, `BusReport`, `SpoolReport` |
 | `crates/gateway/src/config/sections.rs` | `store.bus`, `spool` | `SpoolSection`, `StoreSection::MIN_CONNECTIONS` |
+| `crates/gateway/src/runtime.rs` | the runtime `serve` runs on, shared with the tests | `builder`, `build` |
+| `crates/e2e/src/answers.rs` | the answer set and the renaming of minted ids | `answers`, `Answers::renamed` |
+| `crates/e2e/tests/common/{mod,gateway}.rs` | the Postgres-mode harness and the gateway outage harness | `start_pg`, `uninterrupted`, `Gateway`, `Run`, `outage` |
+| `crates/e2e/tests/{spool_outage,spool_outage_twice,spool_outage_serve_runtime}/main.rs` | the outage stopgap end to end | tests |
 
 ## Tests
 
@@ -286,6 +320,14 @@ topics,search,projections,alerts}`).
   `crosstalk-e2e`'s `postgres::postgres_mode_answers_as_memory_mode_and_after_a_restart`
   (the wiki relay through memory-mode and Postgres-mode `Live`, the same
   `QueryApi` answers, and the same after a restart).
+- Outage stopgap (Postgres, a cuttable `DbLink`, wiki relay through the
+  proxy): `spool_outage::database_cut_mid_stream_spools_then_drains_to_the_uninterrupted_answers`
+  (cut, forwarded unchanged and spooled, `Running::fatal` = lock lost, a
+  graceful stop, a fresh start on the same data directory with the
+  database still down, the drain, every capture in the log once, the
+  uninterrupted run's answers once renamed), `spool_outage_twice::database_cut_twice_drains_to_the_uninterrupted_answers`,
+  and `spool_outage_serve_runtime::database_cut_on_the_serve_runtime_restarts_and_drains_to_the_uninterrupted_answers`
+  (every gateway task on `runtime::builder()`, 2 MiB worker stacks).
 - Memory mode unchanged: every `ct-eval replay` of the bench runs is
   byte-identical to the base build (export, evidence, score, report).
 

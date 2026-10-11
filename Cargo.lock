@@ -648,6 +648,7 @@ dependencies = [
 name = "crosstalk-e2e"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "crosstalk-api",
  "crosstalk-canonical",
  "crosstalk-client",
@@ -660,7 +661,9 @@ dependencies = [
  "crosstalk-spec",
  "crosstalk-store",
  "crosstalk-surface",
+ "crosstalk-testkit",
  "crosstalk-transport",
+ "hyper",
  "serde_json",
  "tempfile",
  "thiserror",

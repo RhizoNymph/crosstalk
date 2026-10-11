@@ -125,6 +125,30 @@ pub enum StartError {
     Pipeline(#[from] crate::pipeline::BuildError),
 }
 
+/// Why a running gateway must stop and be restarted ([`Running::fatal`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Fatal {
+    pub cause: FatalCause,
+    /// What the pipeline status says (`stopped: pipeline lock lost: ...`).
+    pub detail: String,
+}
+
+/// The causes [`Running::fatal`] reports.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FatalCause {
+    /// The pipeline lock's session failed (a reset connection, a database
+    /// outage): the pipeline stopped and does not resume in this process.
+    PipelineLockLost,
+}
+
+impl FatalCause {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::PipelineLockLost => "pipeline_lock_lost",
+        }
+    }
+}
+
 /// How the shutdown went.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct ShutdownReport {
@@ -775,6 +799,34 @@ impl Running {
     /// the pipeline's status.
     pub fn postgres(&self) -> Option<&postgres::PgRunning> {
         self.postgres.as_ref()
+    }
+
+    /// Resolves once the process must stop and be restarted: in Postgres
+    /// mode, when the pipeline lost its lock (the lock's session failed, as
+    /// in a database outage). The pipeline does not resume in process yet;
+    /// `serve` shuts down gracefully and exits non-zero, and its supervisor
+    /// starts it again, which spools until the database answers and then
+    /// recovers. Pending forever otherwise.
+    pub async fn fatal(&self) -> Fatal {
+        if let Some(postgres) = &self.postgres {
+            let mut status = postgres.status.reader();
+            if let Some(status) = status
+                .wait_until(|status| status.lock == crate::live::recovery::LockState::Lost)
+                .await
+            {
+                return Fatal {
+                    cause: FatalCause::PipelineLockLost,
+                    detail: status.pipeline_text(),
+                };
+            }
+        }
+        std::future::pending().await
+    }
+
+    /// How long [`Running::shutdown`] may take: the drain and flush
+    /// timeouts, and a margin for the listeners and the pool.
+    pub fn shutdown_bound(&self) -> Duration {
+        self.drain + self.flush + Duration::from_secs(10)
     }
 
     /// What `GET /readyz` would answer now.

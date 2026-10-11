@@ -20,6 +20,14 @@
 //! its checkpoint while it waits for deliveries) stops that fetch to apply
 //! it. A stage that acks each delivery before it pulls the next never
 //! does that.
+//!
+//! [`Pumped::next`] keeps its pull's reply channel in the `Pumped`, not in
+//! its future: a stage loop that drops a `next` future (a command won its
+//! `select!`) after the pump answered would otherwise drop the delivery
+//! with the channel, held and never acked until the ack timeout, and a
+//! settle that keeps sending drain commands could lose it again on every
+//! redelivery (the restart e2e's settles hung on `live-surface-relay`
+//! holding one delivery). The next `next` call awaits the same reply.
 
 use std::time::Duration;
 
@@ -48,6 +56,8 @@ enum Request {
 pub struct Pumped {
     requests: mpsc::UnboundedSender<Request>,
     task: JoinHandle<()>,
+    /// The reply to the last pull, until a `next` call took it.
+    pending: Option<oneshot::Receiver<Item>>,
 }
 
 impl Drop for Pumped {
@@ -62,7 +72,11 @@ impl Drop for Pumped {
 pub fn pump(subscription: PgSubscription) -> Pumped {
     let (requests, received) = mpsc::unbounded_channel();
     let task = tokio::spawn(run(subscription, received));
-    Pumped { requests, task }
+    Pumped {
+        requests,
+        task,
+        pending: None,
+    }
 }
 
 /// Apply one settle request; a pull is returned to the caller.
@@ -133,10 +147,17 @@ async fn run(mut subscription: PgSubscription, mut requests: mpsc::UnboundedRece
 }
 
 impl Subscription for Pumped {
+    /// Cancel-safe: dropped before its answer came, the pull stays
+    /// pending in `self`, and the next call returns its answer.
     async fn next(&mut self) -> Option<Result<Delivery, BusError>> {
-        let (reply, answer) = oneshot::channel();
-        self.requests.send(Request::Pull(reply)).ok()?;
-        answer.await.ok().flatten()
+        if self.pending.is_none() {
+            let (reply, answer) = oneshot::channel();
+            self.requests.send(Request::Pull(reply)).ok()?;
+            self.pending = Some(answer);
+        }
+        let answer = self.pending.as_mut()?.await;
+        self.pending = None;
+        answer.ok().flatten()
     }
 
     async fn ack(&mut self, id: DeliveryId) -> Result<(), BusError> {

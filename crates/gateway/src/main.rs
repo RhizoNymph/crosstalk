@@ -22,10 +22,7 @@ fn main() -> ExitCode {
         print!("{USAGE}");
         return ExitCode::SUCCESS;
     }
-    let runtime = match tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-    {
+    let runtime = match crosstalk_gateway::runtime::build() {
         Ok(runtime) => runtime,
         Err(error) => {
             eprintln!("crosstalk: starting the tokio runtime: {error}");
@@ -124,14 +121,40 @@ async fn serve(config: &GatewayConfig, role: Role) -> ExitCode {
         Ok(running) => running,
         Err(error) => return fail("starting the gateway", &error),
     };
-    match shutdown_signal().await {
-        Ok(signal) => tracing::info!(signal, "shutdown requested"),
-        Err(error) => {
-            tracing::error!(error = %error, "cannot listen for shutdown signals; stopping")
+    let fatal = tokio::select! {
+        signal = shutdown_signal() => {
+            match signal {
+                Ok(signal) => tracing::info!(signal, "shutdown requested"),
+                Err(error) => {
+                    tracing::error!(error = %error, "cannot listen for shutdown signals; stopping")
+                }
+            }
+            None
         }
+        fatal = running.fatal() => {
+            tracing::error!(
+                cause = fatal.cause.label(),
+                detail = %fatal.detail,
+                "the pipeline stopped; shutting down to exit non-zero for a restart"
+            );
+            Some(fatal)
+        }
+    };
+    let bound = running.shutdown_bound();
+    if tokio::time::timeout(bound, running.shutdown())
+        .await
+        .is_err()
+    {
+        tracing::error!(
+            bound_ms = u64::try_from(bound.as_millis()).unwrap_or(u64::MAX),
+            "the shutdown did not finish in time; exiting"
+        );
+        return ExitCode::FAILURE;
     }
-    running.shutdown().await;
-    ExitCode::SUCCESS
+    match fatal {
+        Some(_) => ExitCode::FAILURE,
+        None => ExitCode::SUCCESS,
+    }
 }
 
 /// Wait for SIGINT or SIGTERM.
