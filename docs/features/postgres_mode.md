@@ -357,7 +357,10 @@ there let `spool_outage_twice`'s second cut land while L3 was handling the
 third exchange; the next process's `recover_held` delayed that delivery
 by its backoff and the drained fourth exchange, taken first, started the
 conversation the third should have (an extra conversation, agent B's id
-minted from the fourth exchange). `Live::kill` stops as a killed process would (every task
+minted from the fourth exchange). L3 now threads the third into the
+conversation it opens, before the fourth, whatever order they arrive in
+(`reconstruct.thread.order-independent`; `crates/e2e/tests/reorder`);
+B's id still comes from the fourth. `Live::kill` stops as a killed process would (every task
 aborted, nothing acked or checkpointed, the bus's tasks stopped without
 touching its tables), for restart tests.
 
@@ -645,6 +648,7 @@ on `crates/api/tests/support/pg_world.rs`:
 | `crates/e2e/tests/common/{mod,gateway}.rs` | the Postgres-mode harness and the gateway outage harness | `start_pg`, `uninterrupted`, `Gateway`, `Run`, `outage` |
 | `crates/e2e/tests/restart/main.rs` | kill and restart, cursors, ids (W9) | tests |
 | `crates/e2e/tests/{spool,spool_outage,spool_outage_twice,spool_kill,spool_outage_serve_runtime}/main.rs` | the spool through the gateway (W9) | tests |
+| `crates/e2e/tests/reorder/main.rs` | the relay's third exchange delivered after its fourth, memory and Postgres mode: the in-order threads and the uninterrupted answers, agents by role | tests |
 | `crates/gateway/src/main.rs`, `crates/gateway/src/gateway/mod.rs` | `serve` exits non-zero once the pipeline's lock is lost (stopgap) | `Running::fatal`, `Fatal`, `FatalCause`, `Running::shutdown_bound` |
 | `crates/api/tests/support/pg_world.rs`, `crates/{api,client}/tests/conformance_pg.rs` | conformance over Postgres (W9): a clone of the template per test | `Databases`, `provision`, `PgWorld`, `Forwarding`, `SeedClock`, `WAIT`, `TEMPLATE_WAIT`, `CLONE_IDS` |
 | `crates/api/tests/support/pg_world/template.rs` | the template seeded once per process and access config | `template`, `Template`, `PgSeeding`, `RecordingBlobs` |

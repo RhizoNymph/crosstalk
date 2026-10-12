@@ -37,10 +37,12 @@ unit = [
     "crosstalk_reconstruct::tests::order_props::consumer_threads_a_late_first_exchange_as_in_order",
     "crosstalk_reconstruct::tests::order_arrival::late_arrival_undoes_newest_first_and_replays_by_key",
     "crosstalk_reconstruct::tests::order_arrival::beyond_the_window_threads_where_it_arrived",
+    "crosstalk_e2e::reorder::third_exchange_after_the_fourth_answers_as_uninterrupted",
 ]
 integration = [
     "crosstalk_reconstruct::tests::pg_order::pg_third_exchange_after_the_fourth_stores_the_in_order_conversations",
     "crosstalk_reconstruct::tests::pg_order::pg_out_of_order_scripts_store_the_in_order_conversations",
+    "crosstalk_e2e::reorder::pg_third_exchange_after_the_fourth_answers_as_uninterrupted",
 ]
 
 [evidence-review]

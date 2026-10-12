@@ -353,7 +353,12 @@ stable per-corpus API key.
   window's checks, and a store past the window still threading every
   exchange. `tests::pg_order` (gated): the forensic case and other orders
   of it, and generated scripts reversed and in two seeded orders, on
-  Postgres against in-order delivery in memory.
+  Postgres against in-order delivery in memory. End to end,
+  `crosstalk_e2e::reorder` feeds the wiki relay with B's first exchange
+  after its second (memory and Postgres mode) and gets the in-order
+  threads and the uninterrupted answers with agents named by role; the
+  exact comparison (agent ids included) is an ignored test until agent
+  ids are re-anchored.
 - `tests::evidence`, `tests::consumer`, `tests::consumer_props`,
   `tests::table`: derivation, attribution, parents, conflicts, merges and
   conversations, the store's decisions without a database.
