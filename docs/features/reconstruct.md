@@ -404,7 +404,7 @@ stable per-corpus API key.
   arrived later and rethreaded it (INV-187's "first threading" holds for
   deliveries whose first arrivals are in turn-key order).
 - The stored result for a set of exchanges is the turn-key-order result
-  (`reconstruct.thread.order-independent`, pending number), within the
+  (`reconstruct.thread.order-independent`, INV-1235), within the
   reorder window; before each call the cluster's turns were taken in key
   order except where an arrival was stranded, so the turns a rewind undoes
   are the newest of their conversations.
