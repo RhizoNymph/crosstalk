@@ -1029,7 +1029,8 @@ Features Index:
       stalls, disconnects, withholds or fails on command and records what
       it received; a hyper fake harness client that collects responses
       chunk by chunk; and DbLink, a loopback TCP relay to the test database
-      that a test cuts and restores to simulate an outage.
+      that a test cuts (resets), partitions (silently stalls) and restores
+      to simulate an outage.
     entry_points:
       - crates/testkit/src/lib.rs
       - crates/testkit/src/corpus/anthropic.rs

@@ -425,6 +425,15 @@ forwarding and spooling meanwhile) with the server's
 `tcp_keepalives_count=3`, which deploy/postgres sets (crosstalk-infra).
 Without them the wait follows the OS keepalive defaults, hours.
 
+The gateway notices a partition of its own lock session within 9 s (a
+5 s ping interval plus a 4 s ping deadline, `store::lock::DETECTION`)
+and reports `pipeline_lock: lost` within 11 s. That must stay strictly
+below the server's reap of the partitioned session (about 25 s with the
+settings above, or `tcp_user_timeout=25000`), since once reaped the lock
+is free for another process (INV-1236). Raising the server's keepalives
+is safe; lowering them below about 16 s (the report plus a 5 s stop) is
+not, unless the gateway's `PING` and `PING_TIMEOUT` shrink with them.
+
 ## Invariants and constraints
 
 - **Secrets never live in a tracked file.**

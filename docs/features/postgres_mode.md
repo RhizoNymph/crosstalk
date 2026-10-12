@@ -55,7 +55,8 @@ lazy pool (no connection yet) ─▶ PgBus::new ─▶ SpoolingBus::open(<data d
 pipeline task:
    wait for the database (status waiting_for_database)
    ─▶ migrations::check_heads: every layer's applied head == the binary's (behind: not ready, re-checked)
-   ─▶ PipelineLock::try_take (held elsewhere: not ready, retried; its own connection, pinged)
+   ─▶ PipelineLock::try_take within TAKE_TIMEOUT (held elsewhere or timed out: not ready, retried;
+        its own connection, pinged every PING with a PING_TIMEOUT deadline; watched from here on)
    ─▶ Live::start_pg:
         recovering_bus     PgBus::recover_held
         relaying_outboxes  PgStores::open (L6 outboxes flushed), PgAgents::flush_outbox,
@@ -163,10 +164,45 @@ waits on settles, recovery, deliveries, the lock and shutdowns with it
 
 An outage that drops the pipeline lock's own connection (a database
 restart, a reset connection, a cut link) fails the lock's next ping
-(within `store::lock::PING`, 5 s). The pipeline stops (`pipeline:
-stopped: pipeline lock lost: <why> (database reachable|unreachable)`,
-`pipeline_lock: lost`, 503), logged as a structured error (`cause =
-pipeline_lock_lost`, `session`, `database`). `Running::fatal` resolves
+(within `store::lock::PING`, 5 s). A silent partition (nothing answered,
+nothing reset) times the next ping out instead: each ping must answer
+within `store::lock::PING_TIMEOUT` (4 s), so either way the holder
+notices within `store::lock::DETECTION` = `PING + PING_TIMEOUT` (9 s)
+and `PipelineLock::lost` resolves with a typed `LockLoss`
+(`PingFailed { failure }`, `PingTimedOut { after }` or `HolderStopped`).
+The holder reports first, then drops the connection unclosed. The
+pipeline stops (`pipeline: stopped: pipeline lock lost: <why> (database
+reachable|unreachable)`, `pipeline_lock: lost`, 503), logged as a
+structured error (`cause = pipeline_lock_lost`, `reason =
+ping_failed|ping_timed_out|holder_stopped`, `session`, `database`),
+within `gateway::postgres::LOST_REPORTED` (`DETECTION` plus the 2 s
+reachability probe, 11 s) of the session going silent, and the live
+process gets 5 s more to stop. The loss is watched from the moment the
+lock is taken, through `Live::start_pg` and the API router's setup, not
+only once the pipeline runs: a start under way is not dropped half done,
+but `pipeline_lock` reads `lost` at once and the start is shut down when
+it ends.
+
+**The bound must stay below the server's reap (INV-1236).** The server
+releases a partitioned session's advisory lock when it reaps the session,
+`store::lock::SERVER_REAP`: about 25 s with deploy's
+`tcp_keepalives_idle=10` plus `tcp_keepalives_interval=5` ×
+`tcp_keepalives_count=3`, and `tcp_user_timeout=25000`. From then on
+another process may take the lock; a holder that had not noticed would
+run a second pipeline on the same database (on the node0 bench run
+20261012T180130Z, before the deadline, the gateway read `pipeline_lock:
+held` and `pipeline: running` for about 33 s after the server had reaped
+its session, 12 s past the link's return). Compile-time assertions keep
+`DETECTION < SERVER_REAP` (in `store::lock`) and `LOST_REPORTED` plus the
+5 s stop below it (in `gateway::postgres`). Change `PING`,
+`PING_TIMEOUT` or the server's keepalives only together. Taking the lock
+is bounded too (`store::lock::TAKE_TIMEOUT`, 10 s, `TakeError::TimedOut`):
+a connect or `pg_try_advisory_lock` across a partition is retried
+instead of hanging the start. Evidence:
+`integration::lock::pg_a_silently_partitioned_lock_session_is_lost_within_the_bound`
+(the lock's connection through a `DbLink` partitioned silently: failed
+before the fix), `pg_a_running_pipeline_reports_its_partitioned_lock_lost_within_the_bound`
+and `pg_taking_the_lock_across_a_silent_partition_times_out`. `Running::fatal` resolves
 with `FatalCause::PipelineLockLost`; `serve` shuts down gracefully within
 `Running::shutdown_bound` and exits non-zero. The supervisor (compose:
 `restart: unless-stopped`) starts it again: the proxy listens at once,
@@ -186,8 +222,9 @@ server's `tcp_keepalives_idle=10`, `tcp_keepalives_interval=5`,
 is about 25 s. Meanwhile the restarted gateway reports `pipeline_lock:
 held elsewhere`, keeps forwarding and spooling, and takes the lock once
 the server reaps the session; nothing terminates another backend. The
-gateway sets no client-side keepalives: its own side already sees the
-cut within the lock's 5 s ping. `spool_outage_twice` allows the lock
+gateway sets no client-side keepalives (sqlx 0.9 has no option for
+them): its own side sees a cut or a silent partition within the lock's
+`DETECTION` (9 s), the ping's interval plus its deadline. `spool_outage_twice` allows the lock
 `LOCK_RELEASE` (60 s) to come free and otherwise fails naming every
 session on the database, which one holds the lock, and the server's
 connection count and `tcp_keepalives_*` (`common::gateway::sessions`, read
@@ -242,7 +279,7 @@ future, a runtime shutdown or `Live::kill` leaves behind.
 | exchange log consumer `crates/gateway/src/log/consumer.rs:68` | yes (not raced) | no | nothing |
 | surface relay into the hosted surface `crates/api/src/in_process/mod.rs:522` | yes (mpsc) | no in its branches | node facts are rebuilt at the next start |
 | outbox forwarder (memory set) `crates/gateway/src/live/relay.rs:33` | yes (mpsc) | no | memory mode only |
-| pipeline lock holder `crates/gateway/src/store/lock.rs` (`hold`) | yes | its own session (advisory lock), no transaction | dropped: the connection closes and the server releases the lock; a partition: released when the server reaps the session (tcp keepalives, about 25 s) |
+| pipeline lock holder `crates/gateway/src/store/lock.rs` (`hold`) | yes | its own session (advisory lock), no transaction | each ping bounded by `PING_TIMEOUT`; a failed or timed-out ping reports `LockLoss` within `DETECTION` (9 s), then drops the connection. Dropped: the connection closes and the server releases the lock; a partition: released when the server reaps the session (`SERVER_REAP`, tcp keepalives, about 25 s), after the holder has stopped (INV-1236) |
 | `Live::shutdown` `crates/gateway/src/live/mod.rs:547`, `:562`, `:620`; `Live::kill` | not by design | aborted tasks may hold a transaction | rolled back on the connection's return (the runtime is alive) or when the socket closes; the backstop ends any left idle |
 | settle and quiet `crates/gateway/src/live/settle.rs`, recovery `Live::start_pg` | yes | per statement only | nothing |
 
@@ -721,6 +758,7 @@ on `crates/api/tests/support/pg_world.rs`:
 | INV-1219 `surface.cursor.survives-restart` | integration `crosstalk_e2e::restart::cursors_resolve_after_restart` (passed on node0; flag pending a green node0 run on this branch) |
 | INV-1210 `transport.spool.bounded` | integration `crosstalk_e2e::spool::full_spool_refuses_and_proxy_still_forwards` (no database; ran; flag pending with the others) |
 | INV-1231 `transport.stage-pump.no-dropped-delivery` | unit `crosstalk_gateway::live::pg::pump::tests::a_next_dropped_after_its_answer_keeps_the_delivery` (ran) |
+| INV-1236 `transport.pipeline-lock.loss-detected-before-reap` | unit `crosstalk_gateway::store::lock::tests::detection_is_one_ping_and_its_deadline` (ran); integration `crosstalk_gateway::integration::lock::pg_a_silently_partitioned_lock_session_is_lost_within_the_bound` (failed on node0 before the fix) and `pg_a_running_pipeline_reports_its_partitioned_lock_lost_within_the_bound` |
 | INV-1233 `transport.settle.quiet-covers-unadmitted` | integration `crosstalk_gateway::integration::pg_quiet_counts_entries_no_group_admitted_yet` (ran on node0; failed before the fix) |
 | INV-1221 `ingress.proxy.forwarding-independent-of-capture-store` | `crosstalk_gateway::postgres_down::proxy_forwards_through_outage_and_full_spool` (ran) |
 | INV-581 `topology.frontier.covers-pending` | `crosstalk_gateway::integration::pg_frontier_covers_pending_deliveries` (Postgres, not run) |
