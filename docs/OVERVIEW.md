@@ -804,7 +804,11 @@ Features Index:
       to DbFailure (unique, foreign-key and check violations, retryable
       serialization failures and deadlocks, connection loss, pool timeout)
       for layers to map into spec errors; retry_serializable runs a
-      SERIALIZABLE transaction with bounded, backed-off retries. TestDb
+      SERIALIZABLE transaction with bounded, backed-off retries.
+      ColumnWindow maps a spec TimeWindow onto a bigint time column for
+      every layer's windowed reads: an end past i64::MAX is no upper bound
+      (a row at i64::MAX kept), a start past it reads empty, never an
+      error. TestDb
       creates a fresh database per test from TEST_DATABASE_URL and drops it
       on close or drop; a suite with expensive shared contents builds them
       once into a template (TestDb::create_template, freeze into a
@@ -816,6 +820,7 @@ Features Index:
     entry_points:
       - crates/store/src/lib.rs
       - crates/store/src/migrate.rs
+      - crates/store/src/window.rs
       - crates/store/src/test_db/mod.rs
       - crates/store/src/test_db/template.rs
       - scripts/test-db.sh

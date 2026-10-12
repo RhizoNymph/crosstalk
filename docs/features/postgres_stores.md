@@ -190,8 +190,11 @@ layer, created by `crosstalk_store::migrate` with
 embedded with `sqlx::migrate!("./migrations")`; runtime queries (no
 `query!`) qualify every table with the schema; ids are ULID text in
 `COLLATE "C"` columns (L4 keeps its 16-byte `bytea`); times are
-microseconds since the epoch in `bigint`; spec values are their wire JSON
-in `text` (never `jsonb`, which rewrites the text and refuses `\u0000`);
+microseconds since the epoch in `bigint`, and a windowed read binds its
+window through `crosstalk_store::ColumnWindow` (an end past `i64::MAX` is
+no bound, a start past it reads empty; see `store.md`); spec values are
+their wire JSON in `text` (never `jsonb`, which rewrites the text and
+refuses `\u0000`);
 every write is one `SERIALIZABLE` transaction under `retry_serializable`
 unless noted. Applied migrations are never edited; every change below is a
 new numbered file. The DDL for stores that do not exist yet (bus, topics,
@@ -1531,3 +1534,6 @@ marked):
 - The frontier counts every spooled envelope as pending.
 - No new Postgres extension; `vector` and `pg_trgm` only.
 - No test prints, copies or commits `TEST_DATABASE_URL`.
+- Every windowed read takes any valid `TimeWindow`: an end past the
+  `bigint` column is no upper bound, a start past it reads empty, and a
+  cursor binds the window as microseconds (`ColumnWindow`).

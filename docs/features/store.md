@@ -23,6 +23,8 @@ classifies it `Open`), and it depends on no layer crate, only on
 - `ensure_extensions`: `vector` (pgvector) and `pg_trgm`.
 - `StoreError`, `DbFailure` and `classify(&sqlx::Error)`.
 - `retry_serializable`: a `SERIALIZABLE` transaction with bounded retries.
+- `ColumnWindow`: a spec `TimeWindow` as bounds on a `bigint` time column,
+  which every layer's windowed reads bind.
 - `TestDb`: a fresh database per test on the `TEST_DATABASE_URL` server, and
   `scripts/test-db.sh`, which starts that server.
 
@@ -266,6 +268,45 @@ The default is 5 attempts, 5 ms initial and 200 ms max. The body is
 spec trait future (`retry_future_is_send`). The body can run several times,
 so it must have no side effects outside the transaction.
 
+### Time windows on `bigint` columns
+
+Every layer stores a time as Unix microseconds in a `bigint` column, so a
+stored time lies in `0..=i64::MAX`: a later `Timestamp` does not encode,
+and storing one is an error. A spec `TimeWindow` is any half-open
+`[start, end)` over `u64` with `start < end`, and the in-memory stores
+accept all of them, so a windowed Postgres read must too.
+`ColumnWindow::of(window)` maps the window onto the column:
+
+| Window | `ColumnWindow` | The read |
+| --- | --- | --- |
+| `start` and `end` at most `i64::MAX` | `Within(bounds)`, both bounds as given | exactly as before |
+| `end` past `i64::MAX` | `Within(bounds)`, `bounds.end()` is `None` | every stored time `>= start`, a row at exactly `i64::MAX` included |
+| `start` past `i64::MAX` | `Beyond` | no storable time: an empty result or page, or the zero counts the read gives an empty window; never an error |
+
+Clamping `end` to `i64::MAX` instead would drop a row stored at exactly
+`i64::MAX`, which `[start, u64::MAX)` contains. A read binds
+`bounds.start()` and `bounds.end()` (an `Option<i64>`, `NULL` when
+unbounded) and tests
+
+```sql
+t >= $start AND ($end::bigint IS NULL OR t < $end)
+```
+
+and on `Beyond` skips the statement and answers empty (a list still
+checks its cursor first, so a foreign cursor stays `InvalidCursor`).
+`ColumnBounds` is built only by `ColumnWindow::of`, so `start < end`
+whenever there is an end. `ColumnWindow::contains(stored)` is the same test
+in Rust; a unit test checks that it agrees with `TimeWindow::contains` for
+every window and stored time around `0`, `i64::MAX` and `u64::MAX`.
+
+Cursor bindings that include a window bind it as its two `u64` microsecond
+counts, never as wire JSON: a `Timestamp` past `wire::time::MAX` (year
+9999) has no RFC 3339 text, so serializing such a window fails. Over HTTP
+a window is decoded from RFC 3339 text and so never exceeds
+`wire::time::MAX`, which is below `i64::MAX`; windows past the column come
+from in-process callers (the conformance world reads
+`[0, u64::MAX)`).
+
 ### Test databases
 
 `TestDb::new().await`:
@@ -421,6 +462,10 @@ checks still run.
   never retries an `Abort`.
 - `TestDb` exists only on a multi-threaded runtime, so its `Drop` can always
   run teardown.
+- A windowed read never refuses a valid `TimeWindow` for its size: an end
+  past `i64::MAX` is no upper bound (a row at `i64::MAX` is kept) and a
+  start past it reads empty (`ColumnWindow`). In-range windows read exactly
+  their `[start, end)`.
 - No `unwrap` or `expect` outside tests; `unsafe` is forbidden workspace-wide.
 
 ## Files
@@ -435,6 +480,7 @@ checks still run.
 | `crates/store/src/migrate.rs` | Per-layer migration runner | `migrate`, `Migrations` |
 | `crates/store/src/extensions.rs` | Required extensions | `Extension`, `InstalledExtension`, `ensure_extensions`, `ensure_extension` |
 | `crates/store/src/error.rs` | Errors and classification | `StoreError`, `DbFailure`, `ExtensionProblem`, `classify` |
+| `crates/store/src/window.rs` | A `TimeWindow` as bounds on a `bigint` time column | `ColumnWindow` (`of`, `bounds`, `contains`), `ColumnBounds` (`start`, `end`, `contains`) |
 | `crates/store/src/retry.rs` | Serializable retries | `retry_serializable`, `SerializableRetry`, `InvalidSerializableRetry`, `TxError`, `TxFuture`, `SerializableError` |
 | `crates/store/src/test_db/mod.rs` | Test database harness | `TestDb`, `TestDbName`, `TestDbError`, `RuntimeProblem`, `TEST_DB_PREFIX`, `test_server` |
 | `crates/store/src/test_db/template.rs` | Template databases | `TestDb::{create_template, freeze}`, `TemplateDb`, `TemplateStep`, `drop_stale_templates`, `TEST_TEMPLATE_PREFIX`, `STALE_TEMPLATE_AGE` |
@@ -445,7 +491,7 @@ checks still run.
 
 ## Tests
 
-Unit tests (no database), 61 of them:
+Unit tests (no database), 66 of them:
 
 - `config`: URL parsing and scheme checks, missing and non-unicode
   variables, no password in `Debug` or errors, `PoolSettings` JSON shapes
@@ -459,6 +505,10 @@ Unit tests (no database), 61 of them:
 - `extensions`: the required set, idempotent DDL in `public`, no TimescaleDB.
 - `retry`: backoff doubling, cap and overflow; the policy constructor; the
   future is `Send`.
+- `window`: in-range windows keep both bounds; an end past `i64::MAX` is
+  unbounded; a start past it is `Beyond`; an unbounded end keeps a time
+  stored at `i64::MAX`; the bounds keep exactly what `TimeWindow::contains`
+  does.
 - `test_db`: names are unique, safe and at most 63 bytes; the runtime checks;
   `block_in_place` teardown inside a multi-threaded `#[tokio::test]`;
   template names parse back to pid and birth and nothing else parses; the
