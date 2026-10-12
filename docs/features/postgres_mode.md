@@ -308,7 +308,13 @@ What happens to a held row nobody acks (`crates/transport/src/pg/reaper.rs`,
 - When the bus's tasks are stopped (`Live::shutdown`/`kill`, the
   lock-loss stopgap), nothing reaps: a held row stays held until the next
   process's `recover_held`, which delays it with the attempt counted, or
-  dead-letters it on its last attempt.
+  dead-letters it on its last attempt. The delay is the group's backoff,
+  so an envelope published after it (a drained spool record) is taken
+  first: L2 promises no order (`transport.ordering.unconstrained`), and
+  L3's threading depends on it (a later turn threaded first starts the
+  conversation; the earlier one then starts another). An outage that
+  interrupts a delivery can therefore change the answers; the outage
+  tests cut only a settled pipeline.
 
 So a single lost race delays an event by at most about 95 s and loses
 nothing; only five losses of one delivery dead-letter it. With every
@@ -318,11 +324,35 @@ consumer cancel-safe (the table above), no race is known to lose one.
 
 `Live::settle` is shared. A set with deferred acks (`PgSet`) drains the
 stages (the flow consumer checkpoints and acks on a drain) before it
-reads the groups; quiet means no pending delivery in any slot's group
-(`PgBus::group_stats`), nothing in the spool, and no row in the four
-store outboxes. Shutdown drains the stages the same way, stops the bus,
-joins the stages; the gateway then closes the spool's drainer, the bus
-and the pool. `Live::kill` stops as a killed process would (every task
+reads the groups; quiet (`PgQuiet::busy`) means no row in the four store
+outboxes, nothing in the spool, no log entry a slot's group takes but has
+not admitted yet (past its `admitted_through`), and no pending delivery
+in any slot's group (`PgBus::group_stats`), read in that order: an
+envelope goes outbox row ─▶ spool record ─▶ log entry ─▶ delivery, each
+step committed before the earlier copy goes, so one that moves between
+two reads is seen by the later one. Shutdown drains the stages the same
+way, stops the bus, joins the stages; the gateway then closes the spool's
+drainer, the bus and the pool.
+
+The unadmitted entries were missing until the node0 loop on b170b79
+(`spool_outage_twice` 3 of 10, `restart`'s `killed_while_feeding` 1 of
+10). A group admits log entries into deliveries only when its consumer
+pulls, so between L6 committing `TransmissionClassified` (and acking its
+own delivery) and L7 and L5 taking it, every slot's group read as empty
+and two quiet rounds could fall in that window: the settle returned, the
+answers were read without the L7 edge (and once with the transmission
+still `Confirmed`), and the edge was stored when the process stopped,
+after the read (the database matched a passing run's row for row). After
+a restart, all four captures of `killed_while_feeding` sat in the log
+unadmitted when the last process's first settle began, which read every
+answer empty. `integration::pg_quiet_counts_entries_no_group_admitted_yet`
+pins it. The gateway harness's `Gateway::settled` (`crates/e2e/tests/common/gateway.rs`)
+had the same gap and counts `UNADMITTED_ENTRIES` too: returning early
+there let `spool_outage_twice`'s second cut land while L3 was handling the
+third exchange; the next process's `recover_held` delayed that delivery
+by its backoff and the drained fourth exchange, taken first, started the
+conversation the third should have (an extra conversation, agent B's id
+minted from the fourth exchange). `Live::kill` stops as a killed process would (every task
 aborted, nothing acked or checkpointed, the bus's tasks stopped without
 touching its tables), for restart tests.
 
@@ -636,6 +666,8 @@ on `crates/api/tests/support/pg_world.rs`:
   `integration::pg_second_pipeline_waits_while_the_lock_is_held_elsewhere`,
   `integration::pg_frontier_covers_pending_deliveries` (INV-581),
   `integration::pg_frontier_covers_the_spool`,
+  `integration::pg_quiet_counts_entries_no_group_admitted_yet` (a settle
+  is busy while a slot's group has a log entry it has not admitted),
   `integration::pg_watermark_survives_a_restart`, and
   `crosstalk-e2e`'s `postgres::postgres_mode_answers_as_memory_mode_and_after_a_restart`
   (the wiki relay through memory-mode and Postgres-mode `Live`, the same
@@ -675,6 +707,7 @@ on `crates/api/tests/support/pg_world.rs`:
 | INV-1219 `surface.cursor.survives-restart` | integration `crosstalk_e2e::restart::cursors_resolve_after_restart` (passed on node0; flag pending a green node0 run on this branch) |
 | INV-1210 `transport.spool.bounded` | integration `crosstalk_e2e::spool::full_spool_refuses_and_proxy_still_forwards` (no database; ran; flag pending with the others) |
 | INV-X `transport.stage-pump.no-dropped-delivery` | unit `crosstalk_gateway::live::pg::pump::tests::a_next_dropped_after_its_answer_keeps_the_delivery` (ran) |
+| INV-X `transport.settle.quiet-covers-unadmitted` | integration `crosstalk_gateway::integration::pg_quiet_counts_entries_no_group_admitted_yet` (ran on node0; failed before the fix) |
 | INV-1221 `ingress.proxy.forwarding-independent-of-capture-store` | `crosstalk_gateway::postgres_down::proxy_forwards_through_outage_and_full_spool` (ran) |
 | INV-581 `topology.frontier.covers-pending` | `crosstalk_gateway::integration::pg_frontier_covers_pending_deliveries` (Postgres, not run) |
 | INV-1202 `transport.consumer.derived-envelope-ids` | `crosstalk_gateway::dst::classifier_redelivery_republishes_the_same_envelope_ids` (ran; the flag covers the whole list, left for the merger) |
