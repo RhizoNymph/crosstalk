@@ -4,6 +4,8 @@
 //! bucket-aligned. Rows are resolved and filtered as the fold does, with
 //! each transmission's verdict read in the same snapshot, then listed
 //! newest `confirmed_at` first (ties by transmission id, descending).
+//! The window is read on `at_micros` through `ColumnWindow`: an end past
+//! `i64::MAX` is no bound, and a window starting past it lists nothing.
 //!
 //! **Cursors** are rows of `topology.cursors`: an opaque random token, the
 //! request it was issued for (the edge, window and filter as JSON) and
@@ -22,6 +24,7 @@ use crosstalk_spec::ids::TransmissionId;
 use crosstalk_spec::interfaces::l7_topology::EdgeQueryError;
 use crosstalk_spec::paging::{Cursor, EdgeTransmissionList, Page, PageRequest};
 use crosstalk_spec::support::{NonEmpty, TimeWindow, Timestamp};
+use crosstalk_store::ColumnWindow;
 use sqlx::Row;
 
 use super::PgEdgeStore;
@@ -37,12 +40,14 @@ struct Resume {
     transmission: TransmissionId,
 }
 
-/// The request a cursor is bound to, as stored.
+/// The request a cursor is bound to, as stored: the window in
+/// microseconds, since one past `wire::time::MAX` has no text.
 fn binding(
     edge: &EdgeSelector,
     window: TimeWindow,
     filter: &TopologyFilter,
 ) -> Result<String, DbError> {
+    let window = (window.start().as_micros(), window.end().as_micros());
     serde_json::to_string(&(edge, window, filter))
         .map_err(|error| DbError::inconsistent(format!("request does not encode: {error}")))
 }
@@ -89,17 +94,23 @@ impl<V: TopologyEnv> PgEdgeStore<V> {
                 (version, Some(resume))
             }
         };
-        let stored = sqlx::query(
-            "SELECT c.transmission, c.from_agent, c.to_agent, c.route, c.topic, c.at_micros, \
-             c.matched_bytes, coalesce(v.verdict = 1, false) AS false_detection \
-             FROM topology.contributions c LEFT JOIN topology.verdicts v ON v.transmission = c.transmission \
-             WHERE c.version = $1 AND c.at_micros >= $2 AND c.at_micros < $3",
-        )
-        .bind(codec::version(version))
-        .bind(codec::time(window.start())?)
-        .bind(codec::time(window.end())?)
-        .fetch_all(&mut *snapshot)
-        .await?;
+        let stored = match ColumnWindow::of(window) {
+            ColumnWindow::Beyond => Vec::new(),
+            ColumnWindow::Within(bounds) => {
+                sqlx::query(
+                    "SELECT c.transmission, c.from_agent, c.to_agent, c.route, c.topic, c.at_micros, \
+                     c.matched_bytes, coalesce(v.verdict = 1, false) AS false_detection \
+                     FROM topology.contributions c LEFT JOIN topology.verdicts v ON v.transmission = c.transmission \
+                     WHERE c.version = $1 AND c.at_micros >= $2 \
+                     AND ($3::bigint IS NULL OR c.at_micros < $3)",
+                )
+                .bind(codec::version(version))
+                .bind(bounds.start())
+                .bind(bounds.end())
+                .fetch_all(&mut *snapshot)
+                .await?
+            }
+        };
         snapshot.commit().await?;
 
         let aliases = EnvAliases(env);

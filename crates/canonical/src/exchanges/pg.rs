@@ -1,7 +1,9 @@
 //! [`PgExchanges`]: L1's exchange store in the `canonical` schema. `put`
 //! inserts the record once (`ON CONFLICT DO NOTHING`); the list reads the
 //! window's exchanges after the cursor, newest first, from the
-//! `(started_at, id)` index.
+//! `(started_at, id)` index. A window ending past the `bigint` column has
+//! no upper bound there, and one starting past it lists nothing
+//! (`crosstalk_store::ColumnWindow`).
 
 use std::collections::BTreeMap;
 
@@ -12,7 +14,7 @@ use crosstalk_spec::interfaces::l1_canonical::exchanges::{
 };
 use crosstalk_spec::paging::{ExchangeList, Page, PageRequest};
 use crosstalk_spec::support::Timestamp;
-use crosstalk_store::{Layer, Migrations, StoreError};
+use crosstalk_store::{ColumnWindow, Layer, Migrations, StoreError};
 use sqlx::PgPool;
 
 use super::{Cursors, DEFAULT_CURSOR_KEY};
@@ -113,9 +115,11 @@ impl ExchangeReads for PgExchanges {
             .as_ref()
             .map(|cursor| self.cursors.resume(query, cursor))
             .transpose()?;
-        let (start, end) = match query.window {
-            Some(window) => (Some(micros(window.start())?), Some(micros(window.end())?)),
+        let (start, end) = match query.window.map(ColumnWindow::of) {
             None => (None, None),
+            Some(ColumnWindow::Within(bounds)) => (Some(bounds.start()), bounds.end()),
+            // The window starts past every stored time: nothing to read.
+            Some(ColumnWindow::Beyond) => return self.cursors.page(query, page.size, Vec::new()),
         };
         let (after_at, after_id) = match after {
             Some((at, id)) => (Some(micros(at)?), Some(id.ulid_text())),

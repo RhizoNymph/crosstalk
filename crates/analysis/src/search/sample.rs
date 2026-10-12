@@ -7,7 +7,9 @@
 //! keyed by `derive_key("crosstalk projection sample v1", seed)` over the
 //! transmission's ULID, little-endian), in ascending key order. The
 //! candidates are read in one `REPEATABLE READ` snapshot and filtered in
-//! Rust like a search's.
+//! Rust like a search's. The window is read on the `bigint` column through
+//! `crosstalk_store::ColumnWindow`: an end past it is no bound, and a start
+//! past it samples nothing.
 
 use crosstalk_spec::aggregates::projection::{FitFailure, PointRoute, ProjectionSpec};
 use crosstalk_spec::aggregates::topic::Embedding;
@@ -16,10 +18,10 @@ use crosstalk_spec::interfaces::l3_reconstruction::AgentDirectory;
 use crosstalk_spec::interfaces::l5_flow::ChannelDirectory;
 use crosstalk_spec::interfaces::l6_analysis::{ProjectionSource, Sample, SampleError, SampleRow};
 use crosstalk_spec::interfaces::l7_topology::WatermarkRead;
+use crosstalk_store::ColumnWindow;
 
 use super::{Candidate, PgSearchIndex, TopicAssignments, admitted, aliases, retains};
 use crate::pg::StorageFailure;
-use crate::pg::codec::micros;
 
 /// The spec's sample key of `transmission` under `seed`.
 pub fn sample_key(seed: u64, transmission: TransmissionId) -> [u8; 32] {
@@ -98,22 +100,25 @@ where
             }));
         }
         let watermark = self.watermark.current_watermark();
-        let window = spec.window();
-        let rows: Vec<Row> = sqlx::query_as(
-            "SELECT d.transmission, d.from_agent, d.to_agent, d.route, d.confirmed_at, v.verdict, e.embedding::real[] \
-               FROM analysis.search_docs AS d \
-               JOIN analysis.search_embeddings AS e \
-                 ON e.transmission = d.transmission AND e.model_name = $1 AND e.model_dimension = $2 \
-               LEFT JOIN analysis.search_verdicts AS v ON v.transmission = d.transmission \
-              WHERE d.confirmed_at >= $3 AND d.confirmed_at < $4",
-        )
-        .bind(&model.name)
-        .bind(dimension)
-        .bind(micros("window start", window.start()).map_err(sample_error)?)
-        .bind(micros("window end", window.end()).map_err(sample_error)?)
-        .fetch_all(&mut *tx)
-        .await
-        .map_err(sample_error)?;
+        // A window starting past every stored confirmation samples nothing.
+        let rows: Vec<Row> = match ColumnWindow::of(spec.window()).bounds() {
+            None => Vec::new(),
+            Some(bounds) => sqlx::query_as(
+                "SELECT d.transmission, d.from_agent, d.to_agent, d.route, d.confirmed_at, v.verdict, e.embedding::real[] \
+                   FROM analysis.search_docs AS d \
+                   JOIN analysis.search_embeddings AS e \
+                     ON e.transmission = d.transmission AND e.model_name = $1 AND e.model_dimension = $2 \
+                   LEFT JOIN analysis.search_verdicts AS v ON v.transmission = d.transmission \
+                  WHERE d.confirmed_at >= $3 AND ($4::bigint IS NULL OR d.confirmed_at < $4)",
+            )
+            .bind(&model.name)
+            .bind(dimension)
+            .bind(bounds.start())
+            .bind(bounds.end())
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(sample_error)?,
+        };
         tx.commit().await.map_err(sample_error)?;
         let mut candidates = Vec::with_capacity(rows.len());
         for (id, from, to, route, at, verdict, values) in rows {

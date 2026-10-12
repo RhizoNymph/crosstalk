@@ -26,7 +26,7 @@ use crosstalk_spec::interfaces::l8_surface::{
     SinkError, SinkKind,
 };
 use crosstalk_spec::paging::{AuditList, PageRequest, PageSize};
-use crosstalk_spec::support::{Blake3, Clock, Timestamp};
+use crosstalk_spec::support::{Blake3, Clock, TimeWindow, Timestamp};
 use crosstalk_store::DatabaseUrl;
 use sqlx::PgPool;
 use sqlx::postgres::PgPoolOptions;
@@ -434,4 +434,71 @@ async fn pg_sinks_survive_restart_and_reconfiguration() {
         registry.record_delivery(sink(3), Ok(ts(9))).await,
         Err(crosstalk_spec::interfaces::l8_surface::sinks::SinkRegistryError::UnknownSink(sink(3)))
     );
+}
+
+/// Every entry `filter` keeps, in pages of `size`.
+async fn filtered(log: &PgAuditLog, filter: &AuditFilter, size: u16) -> Vec<AuditEntry> {
+    let mut request = first::<AuditList>(size);
+    let mut entries = Vec::new();
+    loop {
+        let page = ok("query", log.query(filter, &request)).await;
+        let (items, next) = page.into_parts();
+        entries.extend(items);
+        match next {
+            Some(next) => request.after = Some(next),
+            None => return entries,
+        }
+    }
+}
+
+fn in_window(start: u64, end: u64) -> AuditFilter {
+    match TimeWindow::new(ts(start), ts(end)) {
+        Ok(window) => AuditFilter {
+            window: Some(window),
+            ..AuditFilter::default()
+        },
+        Err(error) => panic!("{start}..{end}: {error:?}"),
+    }
+}
+
+/// A window ending past the `bigint` `at` column keeps what a bounded
+/// window covering the same entries does, its cursors bound to it; one
+/// starting past the column keeps nothing.
+#[tokio::test(flavor = "multi_thread")]
+async fn pg_audit_query_reads_an_end_past_the_column_as_unbounded() {
+    let Some(db) = database("pg_audit_query_reads_an_end_past_the_column_as_unbounded").await
+    else {
+        return;
+    };
+    let mut log = PgAuditLog::new(db.pool().clone(), retry(), &secret());
+    for n in 1..=5 {
+        let entry = config_entry(
+            audit_id(n),
+            10 * n,
+            ConfigChange::RemoveSink { sink: sink(n) },
+        );
+        ok("append", log.append(entry)).await;
+    }
+    let past = i64::MAX.unsigned_abs() + 1;
+    let max = crosstalk_spec::wire::time::MAX.as_micros();
+    for start in [0, 25] {
+        let want = filtered(&log, &in_window(start, max), 100).await;
+        assert!(!want.is_empty(), "entries from {start}");
+        for end in [past, u64::MAX] {
+            for size in [1, 2, 100] {
+                assert_eq!(
+                    filtered(&log, &in_window(start, end), size).await,
+                    want,
+                    "{start}..{end} at page size {size}"
+                );
+            }
+        }
+    }
+    for (start, end) in [(past, u64::MAX), (u64::MAX - 1, u64::MAX)] {
+        assert_eq!(
+            filtered(&log, &in_window(start, end), 100).await,
+            Vec::new(),
+            "{start}..{end}"
+        );
+    }
 }

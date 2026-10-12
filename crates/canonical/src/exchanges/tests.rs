@@ -163,3 +163,64 @@ async fn pg_exchange_store_agrees_with_memory() {
         .await
         .unwrap_or_else(|error| panic!("close: {error:?}"));
 }
+
+/// The first time a `bigint` column cannot hold.
+const PAST: u64 = i64::MAX.unsigned_abs() + 1;
+
+fn window(start: u64, end: u64) -> ExchangeQuery {
+    ExchangeQuery {
+        window: Some(
+            TimeWindow::new(Timestamp::from_micros(start), Timestamp::from_micros(end))
+                .unwrap_or_else(|error| panic!("{error:?}")),
+        ),
+    }
+}
+
+/// On Postgres, a window ending past the `bigint` column lists what a
+/// bounded window covering the same exchanges does, its cursors bound to
+/// it; one starting past the column lists nothing.
+#[tokio::test(flavor = "multi_thread")]
+async fn pg_exchange_list_reads_an_end_past_the_column_as_unbounded() {
+    let db = match TestDb::new_or_skip("pg_exchange_list_reads_an_end_past_the_column_as_unbounded")
+        .await
+    {
+        Ok(Some(db)) => db,
+        Ok(None) => return,
+        Err(error) => panic!("test database: {error:?}"),
+    };
+    db.migrate(Layer::Canonical, Migrations::Embedded(&MIGRATIONS))
+        .await
+        .unwrap_or_else(|error| panic!("L1 migrations: {error:?}"));
+    let mut store = PgExchanges::new(db.pool().clone());
+    let mut ids = Ids::new();
+    for started in [10, 20, 20, 30, 40] {
+        store
+            .put(exchange(&mut ids, started))
+            .await
+            .unwrap_or_else(|error| panic!("put: {error:?}"));
+    }
+    let max = crosstalk_spec::wire::time::MAX.as_micros();
+    for start in [0, at(20).as_micros()] {
+        let want = traverse(&store, &window(start, max), 500).await;
+        assert!(!want.is_empty(), "exchanges from {start}");
+        for end in [PAST, u64::MAX] {
+            for size in [1, 2, 500] {
+                assert_eq!(
+                    traverse(&store, &window(start, end), size).await,
+                    want,
+                    "{start}..{end} at page size {size}"
+                );
+            }
+        }
+    }
+    for (start, end) in [(PAST, u64::MAX), (u64::MAX - 1, u64::MAX)] {
+        assert_eq!(
+            traverse(&store, &window(start, end), 500).await,
+            Vec::new(),
+            "{start}..{end}"
+        );
+    }
+    db.close()
+        .await
+        .unwrap_or_else(|error| panic!("close: {error:?}"));
+}

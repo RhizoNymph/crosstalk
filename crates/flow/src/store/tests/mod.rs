@@ -11,3 +11,4 @@ mod modify;
 mod registry;
 pub(crate) mod support;
 mod verdicts;
+mod windows;

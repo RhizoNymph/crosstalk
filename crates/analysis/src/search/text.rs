@@ -8,7 +8,7 @@
 //! | `$1` | `text` | the query text (text and hybrid modes) |
 //! | `$2` | `real[]` | the query embedding (semantic and hybrid modes) |
 //! | `$3`, `$4` | `text`, `integer` | the query embedding's model |
-//! | `$5`, `$6` | `bigint` | the window's start and end, or NULL |
+//! | `$5`, `$6` | `bigint` | the window's start and end, or NULL (no window, or an end past the column) |
 //! | `$7`, `$8` | `real`, `text` | the last hit served (score, transmission), or NULL |
 //! | `$9` | `bigint` | how many candidates to return |
 //!

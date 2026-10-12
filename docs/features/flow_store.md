@@ -114,6 +114,10 @@ created_at, superseded_by, state, route, channel_id, opened_at, confirmed,
 verdict) are derived from the value in the same statement, by one function
 per table, and carry the indexes and checks. Ids are ULID text in `"C"`
 collation (text order is id order); times are microseconds in `BIGINT`.
+A read's window goes through `crosstalk_store::ColumnWindow`: an end past
+`i64::MAX` is no bound, and a start past it reads nothing (`list` and
+`resource_use` an empty page, `quality` an empty tally) instead of a
+`Store` error.
 
 **Domain logic stays in the spec.** Promotion runs `promotion::plan` (and the
 preview `promotion::coverage`) over every stored channel, read in registry
@@ -139,7 +143,9 @@ skips one); the model test uses the reference's sequence so declared ids
 compare equal.
 
 **Cursors.** A token (`fl-<list>-<n>`) names a row in `flow.cursors` holding
-the list, the binding (the canonical channel, window or filter as JSON) and
+the list, the binding (the canonical channel, window or filter as JSON; a
+window, also the channel filter's, as its two microsecond counts, since one
+past `wire::time::MAX` has no text) and
 the last sort key served. A token from another list, another binding or
 another database is `InvalidCursor`. Tokens survive restarts and work on
 every node.
@@ -281,6 +287,9 @@ recorded, not what was saved.
   writes both in one transaction.
 - No `unwrap`/`expect` outside tests; every stored value that fails to
   decode is a typed `CodecError` surfaced as the operation's `Store` error.
+- `list`, `quality`, `resource_use` and `channels` take any valid window:
+  an end past `i64::MAX` reads as unbounded, a start past it as empty, and
+  their cursors still bind it (`ColumnWindow`).
 
 ## Tests
 
@@ -303,6 +312,10 @@ recorded, not what was saved.
   `integration::outbox::outbox_relay_publishes_each_event_once_under_its_stamped_id`
   (a relay failing, or dropped after the stamp and after a publish before
   its delete; a new relay publishes each event once under its stamp).
+- Windows (Postgres): `tests::windows` — `list` and `quality`, and
+  `resource_use` and `channels`, with an end past `i64::MAX` read the same
+  as a bounded window covering the rows, at several page sizes, and a
+  start past it reads empty.
 
 ## Transmission holding
 

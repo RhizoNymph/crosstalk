@@ -41,7 +41,7 @@ use crosstalk_spec::interfaces::l5_flow::verdicts::{TransmissionVerdicts, Verdic
 use crosstalk_spec::interfaces::l8_surface::summary::TransmissionStateKind;
 use crosstalk_spec::paging::{Page, PageRequest, TransmissionList};
 use crosstalk_spec::support::{TimeWindow, Timestamp};
-use crosstalk_store::{SerializableRetry, TxError, retry_serializable};
+use crosstalk_store::{ColumnWindow, SerializableRetry, TxError, retry_serializable};
 use sqlx::{PgConnection, PgPool};
 
 use super::codec::{from_json, id_text, json, micros};
@@ -360,19 +360,19 @@ impl<D: Send + Sync, S: EventSink> TransmissionStore for PgTransmissionStore<D, 
     }
 
     /// `flow.transmissions` in one `REPEATABLE READ` snapshot: the window
-    /// on `opened_at` (half-open, as `TimeWindow::contains`), the states by
-    /// their column, the channel resolved through `flow.channels`'
-    /// supersessions on both sides (one hop: a superseding channel is never
-    /// superseded), newest id first, keyset-paged on the id. The cursor
-    /// binds the query as given (`flow.cursors`).
+    /// on `opened_at` (half-open, as `TimeWindow::contains`; an end past the
+    /// column is no bound and a start past it no rows, `ColumnWindow`), the
+    /// states by their column, the channel resolved through
+    /// `flow.channels`' supersessions on both sides (one hop: a superseding
+    /// channel is never superseded), newest id first, keyset-paged on the
+    /// id. The cursor binds the query as given (`flow.cursors`).
     async fn list(
         &self,
         query: &TransmissionQuery,
         page: &PageRequest<TransmissionList>,
     ) -> Result<Page<Transmission, TransmissionList>, TransmissionStoreError> {
         let binding = list_binding(query).map_err(failed)?;
-        let start = micros("list window start", query.window.start()).map_err(failed)?;
-        let end = micros("list window end", query.window.end()).map_err(failed)?;
+        let window = ColumnWindow::of(query.window);
         let states: Option<Vec<&'static str>> = query
             .states
             .as_ref()
@@ -397,25 +397,29 @@ impl<D: Send + Sync, S: EventSink> TransmissionStore for PgTransmissionStore<D, 
             )),
         };
         let limit = i64::from(page.size.get().get()) + 1;
-        let rows: Vec<(String,)> = sqlx::query_as(
-            "SELECT t.transmission FROM flow.transmissions t \
-             LEFT JOIN flow.channels c ON c.id = t.channel_id \
-             WHERE t.opened_at >= $1 AND t.opened_at < $2 \
-               AND ($3::text[] IS NULL OR t.state = ANY($3::text[])) \
-               AND ($4::text IS NULL OR (t.route = 'channel' \
-                    AND coalesce(c.superseded_by, t.channel_id) = $4::text)) \
-               AND ($5::text IS NULL OR t.id < $5::text) \
-             ORDER BY t.id DESC LIMIT $6",
-        )
-        .bind(start)
-        .bind(end)
-        .bind(states)
-        .bind(channel)
-        .bind(after)
-        .bind(limit)
-        .fetch_all(&mut *tx)
-        .await
-        .map_err(failed)?;
+        // A window starting past the column holds no stored transmission.
+        let rows: Vec<(String,)> = match window.bounds() {
+            None => Vec::new(),
+            Some(bounds) => sqlx::query_as(
+                "SELECT t.transmission FROM flow.transmissions t \
+                 LEFT JOIN flow.channels c ON c.id = t.channel_id \
+                 WHERE t.opened_at >= $1 AND ($2::bigint IS NULL OR t.opened_at < $2) \
+                   AND ($3::text[] IS NULL OR t.state = ANY($3::text[])) \
+                   AND ($4::text IS NULL OR (t.route = 'channel' \
+                        AND coalesce(c.superseded_by, t.channel_id) = $4::text)) \
+                   AND ($5::text IS NULL OR t.id < $5::text) \
+                 ORDER BY t.id DESC LIMIT $6",
+            )
+            .bind(bounds.start())
+            .bind(bounds.end())
+            .bind(states)
+            .bind(channel)
+            .bind(after)
+            .bind(limit)
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(failed)?,
+        };
         tx.commit().await.map_err(failed)?;
         let mut items = Vec::with_capacity(rows.len());
         for (text,) in rows {
@@ -601,20 +605,22 @@ impl<D: AgentDirectory + Send + Sync, S: EventSink> TransmissionVerdicts
     }
 
     async fn quality(&self, window: TimeWindow) -> Result<DetectionQuality, VerdictError> {
-        let start = micros("window.start", window.start()).map_err(failed)?;
-        let end = micros("window.end", window.end()).map_err(failed)?;
-        let rows: Vec<(String, Option<String>)> = sqlx::query_as(
-            "SELECT t.transmission, v.verdict FROM flow.transmissions t \
-             LEFT JOIN LATERAL (SELECT verdict FROM flow.verdicts \
-                                WHERE transmission_id = t.id \
-                                ORDER BY revision DESC LIMIT 1) v ON true \
-             WHERE t.opened_at >= $1 AND t.opened_at < $2",
-        )
-        .bind(start)
-        .bind(end)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(failed)?;
+        // A window starting past the column tallies nothing.
+        let rows: Vec<(String, Option<String>)> = match ColumnWindow::of(window).bounds() {
+            None => Vec::new(),
+            Some(bounds) => sqlx::query_as(
+                "SELECT t.transmission, v.verdict FROM flow.transmissions t \
+                 LEFT JOIN LATERAL (SELECT verdict FROM flow.verdicts \
+                                    WHERE transmission_id = t.id \
+                                    ORDER BY revision DESC LIMIT 1) v ON true \
+                 WHERE t.opened_at >= $1 AND ($2::bigint IS NULL OR t.opened_at < $2)",
+            )
+            .bind(bounds.start())
+            .bind(bounds.end())
+            .fetch_all(&self.pool)
+            .await
+            .map_err(failed)?,
+        };
         let mut judged = Vec::with_capacity(rows.len());
         for (transmission, verdict) in rows {
             let transmission: Transmission =
