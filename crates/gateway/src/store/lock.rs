@@ -9,16 +9,39 @@
 //! the lock taken and stays not ready (`pipeline_lock: held elsewhere`),
 //! consuming and relaying nothing.
 //!
-//! The holder pings its connection every [`PING`]. A failed ping means the
-//! session (and so the lock) may be gone: [`PipelineLock::lost`] resolves
-//! and the pipeline stops, since another process may take the lock now.
-//! Dropping the lock closes the connection, which releases it.
+//! The holder pings its connection every [`PING`], and each ping must
+//! answer within [`PING_TIMEOUT`]. A failed ping, or one that does not
+//! answer in time, means the session (and so the lock) may be gone:
+//! [`PipelineLock::lost`] resolves with a [`LockLoss`] naming which, and
+//! the pipeline stops, since another process may take the lock now. The
+//! holder reports first, then drops the connection without a polite close
+//! (a close would wait on the same dead link).
+//!
+//! # The detection bound (INV-1236)
+//!
+//! A silent network partition answers nothing and resets nothing, so
+//! without a deadline a ping waits until TCP gives up (minutes) or the
+//! link heals. The server meanwhile reaps the partitioned session, and
+//! with it the advisory lock, after [`SERVER_REAP`] (deploy's
+//! `tcp_keepalives_idle=10`, `tcp_keepalives_interval=5`,
+//! `tcp_keepalives_count=3`, `tcp_user_timeout=25000`: about 25 s). From
+//! then on another process may take the lock while this one still runs
+//! its pipeline. So the holder must notice first: a partition that starts
+//! just after a ping answered is caught by the next ping, [`PING`] later,
+//! timing out [`PING_TIMEOUT`] after that. [`DETECTION`], their sum, is
+//! the worst case, and a compile-time assertion keeps it strictly below
+//! [`SERVER_REAP`]. Lengthen [`PING`] or [`PING_TIMEOUT`], or shorten the
+//! server's keepalives, only together.
+//!
+//! Taking the lock is bounded too ([`TAKE_TIMEOUT`]): a connect or
+//! `pg_try_advisory_lock` across a partition fails as
+//! [`TakeError::TimedOut`] instead of hanging the pipeline's start.
 
 use std::time::Duration;
 
 use crosstalk_store::sqlx::postgres::PgConnection;
 use crosstalk_store::sqlx::{self, Connection};
-use crosstalk_store::{DatabaseUrl, StoreError};
+use crosstalk_store::{DatabaseUrl, DbFailure, StoreError};
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
@@ -28,11 +51,71 @@ pub const PIPELINE_LOCK: i64 = 0x6372_6f73_7374_616c;
 /// How often the holder checks its session.
 pub const PING: Duration = Duration::from_secs(5);
 
+/// How long one ping may wait for its answer before the session counts as
+/// failed. Shorter than [`PING`], so pings never overlap.
+pub const PING_TIMEOUT: Duration = Duration::from_secs(4);
+
+/// The worst case from a silent partition of the lock's session to
+/// [`PipelineLock::lost`] resolving: one [`PING`] interval, then a ping
+/// that times out.
+pub const DETECTION: Duration = PING.saturating_add(PING_TIMEOUT);
+
+/// How long the server keeps a silently partitioned session, and its
+/// advisory lock, with deploy's settings: `tcp_keepalives_idle` 10 s plus
+/// `tcp_keepalives_interval` 5 s × `tcp_keepalives_count` 3, the same as
+/// `tcp_user_timeout` 25000 ms (`docs/features/deploy.md`).
+pub const SERVER_REAP: Duration = Duration::from_secs(25);
+
+/// How long taking the lock (connect and `pg_try_advisory_lock`) may take.
+pub const TAKE_TIMEOUT: Duration = Duration::from_secs(10);
+
+// INV-1236: the holder notices a lost session strictly before the server
+// can hand the lock to another process.
+const _: () = assert!(DETECTION.as_millis() < SERVER_REAP.as_millis());
+const _: () = assert!(PING_TIMEOUT.as_millis() < PING.as_millis());
+
+/// Why the lock may be lost.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum LockLoss {
+    /// A ping failed: the connection reset, closed, or the server refused.
+    #[error("the lock's session failed a ping: {failure}")]
+    PingFailed { failure: DbFailure },
+    /// A ping did not answer within [`PING_TIMEOUT`]: a silent partition,
+    /// or a server too stalled to answer.
+    #[error("the lock's session did not answer a ping within {after:?}")]
+    PingTimedOut { after: Duration },
+    /// The holder task ended without reporting (it panicked).
+    #[error("the lock holder stopped")]
+    HolderStopped,
+}
+
+impl LockLoss {
+    /// A stable label for logs and metrics.
+    pub fn reason(&self) -> &'static str {
+        match self {
+            Self::PingFailed { .. } => "ping_failed",
+            Self::PingTimedOut { .. } => "ping_timed_out",
+            Self::HolderStopped => "holder_stopped",
+        }
+    }
+}
+
+/// Why taking the lock failed (as opposed to finding it held elsewhere).
+#[derive(Debug, thiserror::Error)]
+pub enum TakeError {
+    /// Connecting or the lock's statement failed.
+    #[error(transparent)]
+    Store(#[from] StoreError),
+    /// Connecting and taking did not finish within [`TAKE_TIMEOUT`].
+    #[error("taking the pipeline lock did not finish within {after:?}")]
+    TimedOut { after: Duration },
+}
+
 /// The held lock: a task owning the connection. Dropped, it releases.
 #[derive(Debug)]
 pub struct PipelineLock {
     holder: JoinHandle<()>,
-    lost: Option<oneshot::Receiver<String>>,
+    lost: Option<oneshot::Receiver<LockLoss>>,
 }
 
 impl Drop for PipelineLock {
@@ -42,24 +125,27 @@ impl Drop for PipelineLock {
 }
 
 impl PipelineLock {
-    /// Try to take the lock on a new connection to `url`. `None` when
-    /// another session holds it.
-    pub async fn try_take(url: &DatabaseUrl) -> Result<Option<Self>, StoreError> {
-        let options = url
-            .connect_options()
-            .clone()
-            .application_name(&format!("crosstalk-pipeline-lock-{}", std::process::id()));
-        let mut connection = PgConnection::connect_with(&options).await?;
-        let (taken,): (bool,) = sqlx::query_as("SELECT pg_try_advisory_lock($1)")
-            .bind(PIPELINE_LOCK)
-            .fetch_one(&mut connection)
-            .await?;
-        if !taken {
-            // Closing politely or not, the session never held the lock.
-            let _ = connection.close().await;
+    /// Try to take the lock on a new connection to `url`, within
+    /// [`TAKE_TIMEOUT`]. `None` when another session holds it.
+    ///
+    /// Timed out after the server granted the lock, the dropped session
+    /// keeps it until the server notices (at most [`SERVER_REAP`] across a
+    /// partition); the next try finds it held elsewhere until then.
+    pub async fn try_take(url: &DatabaseUrl) -> Result<Option<Self>, TakeError> {
+        let connection = tokio::time::timeout(TAKE_TIMEOUT, take(url))
+            .await
+            .map_err(|_| TakeError::TimedOut {
+                after: TAKE_TIMEOUT,
+            })??;
+        let Some(connection) = connection else {
             return Ok(None);
-        }
-        tracing::info!("pipeline lock taken");
+        };
+        tracing::info!(
+            ping = ?PING,
+            ping_timeout = ?PING_TIMEOUT,
+            detection = ?DETECTION,
+            "pipeline lock taken"
+        );
         let (lost_tx, lost) = oneshot::channel();
         let holder = tokio::spawn(hold(connection, lost_tx));
         Ok(Some(Self {
@@ -69,29 +155,99 @@ impl PipelineLock {
     }
 
     /// Resolves with why once the lock may be lost (its session failed a
-    /// ping). Pending forever after the first call.
-    pub async fn lost(&mut self) -> String {
+    /// ping or did not answer one in time), at most [`DETECTION`] after
+    /// the session went silent. Pending forever after the first call.
+    pub async fn lost(&mut self) -> LockLoss {
         match self.lost.take() {
-            Some(lost) => lost
-                .await
-                .unwrap_or_else(|_| "the lock holder stopped".to_owned()),
+            Some(lost) => lost.await.unwrap_or(LockLoss::HolderStopped),
             None => std::future::pending().await,
         }
     }
 }
 
-/// Keep `connection` alive, pinging it every [`PING`]; report the first
-/// failure and end (dropping the connection).
-async fn hold(mut connection: PgConnection, lost: oneshot::Sender<String>) {
+/// Connect and try the lock: the connection when taken, `None` when held
+/// elsewhere.
+async fn take(url: &DatabaseUrl) -> Result<Option<PgConnection>, StoreError> {
+    let options = url
+        .connect_options()
+        .clone()
+        .application_name(&format!("crosstalk-pipeline-lock-{}", std::process::id()));
+    let mut connection = PgConnection::connect_with(&options).await?;
+    let (taken,): (bool,) = sqlx::query_as("SELECT pg_try_advisory_lock($1)")
+        .bind(PIPELINE_LOCK)
+        .fetch_one(&mut connection)
+        .await?;
+    if !taken {
+        // Closing politely or not, the session never held the lock.
+        let _ = tokio::time::timeout(PING_TIMEOUT, connection.close()).await;
+        return Ok(None);
+    }
+    Ok(Some(connection))
+}
+
+/// Keep `connection` alive, pinging it every [`PING`] with a deadline of
+/// [`PING_TIMEOUT`]; report the first failure or timeout, then end,
+/// dropping the connection.
+async fn hold(mut connection: PgConnection, lost: oneshot::Sender<LockLoss>) {
     let mut ticker = tokio::time::interval(PING);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    loop {
+    let loss = loop {
         ticker.tick().await;
-        if let Err(error) = connection.ping().await {
-            let why = crosstalk_store::classify(&error).to_string();
-            tracing::error!(error = %why, "pipeline lock session failed; the pipeline stops");
-            let _ = lost.send(why);
-            return;
+        match tokio::time::timeout(PING_TIMEOUT, connection.ping()).await {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                break LockLoss::PingFailed {
+                    failure: crosstalk_store::classify(&error),
+                };
+            }
+            Err(_) => {
+                break LockLoss::PingTimedOut {
+                    after: PING_TIMEOUT,
+                };
+            }
         }
+    };
+    tracing::error!(
+        reason = loss.reason(),
+        detail = %loss,
+        detection = ?DETECTION,
+        server_reap = ?SERVER_REAP,
+        "pipeline lock session failed; the pipeline stops"
+    );
+    let _ = lost.send(loss);
+    // Report first, then let go: dropped, not closed, since a polite close
+    // would wait on the same dead link.
+    drop(connection);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn detection_is_one_ping_and_its_deadline() {
+        assert_eq!(DETECTION, PING + PING_TIMEOUT);
+        assert!(DETECTION <= Duration::from_secs(10), "{DETECTION:?}");
+        assert!(DETECTION < SERVER_REAP);
+    }
+
+    #[test]
+    fn each_loss_has_a_distinct_reason() {
+        let losses = [
+            LockLoss::PingFailed {
+                failure: DbFailure::ConnectionLost,
+            },
+            LockLoss::PingTimedOut {
+                after: PING_TIMEOUT,
+            },
+            LockLoss::HolderStopped,
+        ];
+        let reasons: std::collections::HashSet<_> = losses.iter().map(LockLoss::reason).collect();
+        assert_eq!(reasons.len(), losses.len());
+        assert!(
+            losses[1].to_string().contains("did not answer a ping"),
+            "{}",
+            losses[1]
+        );
     }
 }

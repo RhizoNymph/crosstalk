@@ -51,7 +51,7 @@ use crate::log::ExchangeLog;
 use crate::pipeline::{Bodies, Deps, Pipeline, Settings};
 use crate::role::Role;
 use crate::spool::{Gate, Gated, LiveBus};
-use crate::store::lock::PipelineLock;
+use crate::store::lock::{DETECTION, LockLoss, PipelineLock, SERVER_REAP};
 use crate::store::migrations;
 use crate::tasks::Tasks;
 
@@ -66,6 +66,20 @@ const RETRY: Duration = Duration::from_secs(2);
 
 /// How long a reachability probe waits for a pooled connection.
 const PROBE: Duration = Duration::from_secs(2);
+
+/// How long the live process may take to shut down once the lock is lost.
+const LOST_SHUTDOWN: Duration = Duration::from_secs(5);
+
+/// The worst case from a silent partition of the lock's session to
+/// `pipeline_lock: lost` (the lock holder's [`DETECTION`], then the
+/// reachability probe).
+pub const LOST_REPORTED: Duration = DETECTION.saturating_add(PROBE);
+
+// INV-1236: the pipeline has reported the loss and finished stopping
+// before the server can reap the session and hand the lock to another
+// process.
+const _: () =
+    assert!(LOST_REPORTED.saturating_add(LOST_SHUTDOWN).as_millis() < SERVER_REAP.as_millis());
 
 /// How often the `api` role rebuilds its node facts from the stores.
 const NODES_EVERY: Duration = Duration::from_secs(5);
@@ -364,101 +378,159 @@ async fn run_pipeline(start: PipelineStart, mut stop: oneshot::Receiver<()>) -> 
             }
         };
         status.update(|status| status.lock = LockState::Held);
-        let config = match live_config(&start).await {
-            Ok(config) => config,
-            Err(error) => {
-                status.phase(PipelinePhase::Stopped(error.to_string()));
-                tracing::error!(error = %error, "the live process's config failed");
+        // The lock may be lost while the live process starts (recovery
+        // waits on the database): watched from here on, so `pipeline_lock`
+        // never reads `held` past the detection bound. A start under way is
+        // not dropped half done; once it ends, it is shut down.
+        let mut lock = lock;
+        let mut lost: Option<LockLoss> = None;
+        let started = {
+            let starting = start_live(&start, &status);
+            tokio::pin!(starting);
+            loop {
+                tokio::select! {
+                    started = &mut starting => break started,
+                    why = lock.lost() => {
+                        report_lost(&start, &status, &why).await;
+                        lost = Some(why);
+                    }
+                }
+            }
+        };
+        let live = match (started, lost) {
+            (Ok(live), Some(_)) => {
+                live.shutdown(Instant::now() + LOST_SHUTDOWN).await;
                 let _ = stop.await;
                 return None;
             }
-        };
-        let started = Live::start_pg(
-            config,
-            crate::live::pg::PgParts {
-                pool: start.pool.clone(),
-                bus: start.bus.clone(),
-                spool: start.spool.clone(),
-                gate: start.gate.clone(),
-                pipeline: Some(Arc::clone(&start.pipeline)),
-                secret: Arc::clone(&start.secret),
-                ids: SERVE_IDS,
-                retry: SerializableRetry::default(),
-                status: status.clone(),
-            },
-        )
-        .await;
-        let live = match started {
-            Ok(live) => live,
-            Err(error) => {
-                tracing::error!(error = %error, "the live process did not start");
-                status.phase(PipelinePhase::Stopped(error.to_string()));
+            (Err(_), Some(_)) => {
+                let _ = stop.await;
+                return None;
+            }
+            (Ok(live), None) => live,
+            (Err(StartFailed::Permanent), None) => {
                 drop(lock);
-                if error.is_permanent() {
-                    let _ = stop.await;
-                    return None;
-                }
+                let _ = stop.await;
+                return None;
+            }
+            (Err(StartFailed::Retry), None) => {
+                drop(lock);
                 if pause(&mut stop).await {
                     return None;
                 }
                 continue;
             }
         };
-        let _ = start.late.reporter.set(live.reporter());
-        let _ = start.late.stages.set(live.stages_running());
-        let _ = start.late.log_tasks.set(live.tasks().clone());
-        if let Some(api) = &start.api {
-            match live.stores().operators.directory().await {
-                Ok(Some(directory)) => {
-                    let auth = Auth::fixed(directory, api.tokens.clone());
-                    let http = HttpConfig {
-                        frame_retention: live.surface().config().frame_retention,
-                        clock: Arc::clone(&api.clock),
-                    };
-                    start
-                        .late
-                        .router
-                        .set(HttpApi::new(Arc::clone(live.surface()), auth, http).router());
-                }
-                Ok(None) => {
-                    tracing::error!("no operator directory stored; the API stays unavailable")
-                }
-                Err(error) => {
-                    tracing::error!(error = ?error, "reading the operator directory failed; the API stays unavailable");
-                }
-            }
-        }
-        let mut lock = lock;
         return tokio::select! {
             _ = &mut stop => Some((live, lock)),
             why = lock.lost() => {
-                // The lock's session failed: a reset connection or a database
-                // outage, or the lock is gone. The pipeline stops, and the
-                // process exits for its supervisor to restart it
-                // (`Running::fatal`); the next start spools until the database
-                // answers, then recovers.
-                let database = match tokio::time::timeout(PROBE, start.pool.acquire()).await {
-                    Ok(Ok(_connection)) => "reachable",
-                    Ok(Err(_)) | Err(_) => "unreachable",
-                };
-                tracing::error!(
-                    cause = "pipeline_lock_lost",
-                    session = %why,
-                    database,
-                    "the pipeline lock's session failed; the pipeline stops and the process exits to be restarted"
-                );
-                status.update(|status| {
-                    status.lock = LockState::Lost;
-                    status.phase = PipelinePhase::Stopped(format!(
-                        "pipeline lock lost: {why} (database {database})"
-                    ));
-                });
-                live.shutdown(Instant::now() + Duration::from_secs(5)).await;
+                // The lock's session failed or went silent: a reset
+                // connection, a partition or a database outage. The
+                // pipeline stops, and the process exits for its supervisor
+                // to restart it (`Running::fatal`); the next start spools
+                // until the database answers, then recovers.
+                report_lost(&start, &status, &why).await;
+                live.shutdown(Instant::now() + LOST_SHUTDOWN).await;
                 let _ = stop.await;
                 None
             }
         };
     }
+}
+
+/// Why the live process did not start: [`StartFailed::Permanent`] waits
+/// for shutdown, [`StartFailed::Retry`] tries again after a pause.
+enum StartFailed {
+    Permanent,
+    Retry,
+}
+
+/// Start the live process on the held lock and set the API router.
+async fn start_live(
+    start: &PipelineStart,
+    status: &StatusReporter,
+) -> Result<Live<PgSet>, StartFailed> {
+    let config = match live_config(start).await {
+        Ok(config) => config,
+        Err(error) => {
+            status.phase(PipelinePhase::Stopped(error.to_string()));
+            tracing::error!(error = %error, "the live process's config failed");
+            return Err(StartFailed::Permanent);
+        }
+    };
+    let started = Live::start_pg(
+        config,
+        crate::live::pg::PgParts {
+            pool: start.pool.clone(),
+            bus: start.bus.clone(),
+            spool: start.spool.clone(),
+            gate: start.gate.clone(),
+            pipeline: Some(Arc::clone(&start.pipeline)),
+            secret: Arc::clone(&start.secret),
+            ids: SERVE_IDS,
+            retry: SerializableRetry::default(),
+            status: status.clone(),
+        },
+    )
+    .await;
+    let live = match started {
+        Ok(live) => live,
+        Err(error) => {
+            tracing::error!(error = %error, "the live process did not start");
+            status.phase(PipelinePhase::Stopped(error.to_string()));
+            return Err(match error.is_permanent() {
+                true => StartFailed::Permanent,
+                false => StartFailed::Retry,
+            });
+        }
+    };
+    let _ = start.late.reporter.set(live.reporter());
+    let _ = start.late.stages.set(live.stages_running());
+    let _ = start.late.log_tasks.set(live.tasks().clone());
+    if let Some(api) = &start.api {
+        match live.stores().operators.directory().await {
+            Ok(Some(directory)) => {
+                let auth = Auth::fixed(directory, api.tokens.clone());
+                let http = HttpConfig {
+                    frame_retention: live.surface().config().frame_retention,
+                    clock: Arc::clone(&api.clock),
+                };
+                start
+                    .late
+                    .router
+                    .set(HttpApi::new(Arc::clone(live.surface()), auth, http).router());
+            }
+            Ok(None) => {
+                tracing::error!("no operator directory stored; the API stays unavailable")
+            }
+            Err(error) => {
+                tracing::error!(error = ?error, "reading the operator directory failed; the API stays unavailable");
+            }
+        }
+    }
+    Ok(live)
+}
+
+/// Report the lock lost: `pipeline_lock: lost` and the pipeline stopped,
+/// which `Running::fatal` turns into the process's exit. Within
+/// [`LOST_REPORTED`] of the session going silent.
+async fn report_lost(start: &PipelineStart, status: &StatusReporter, why: &LockLoss) {
+    let database = match tokio::time::timeout(PROBE, start.pool.acquire()).await {
+        Ok(Ok(_connection)) => "reachable",
+        Ok(Err(_)) | Err(_) => "unreachable",
+    };
+    tracing::error!(
+        cause = "pipeline_lock_lost",
+        reason = why.reason(),
+        session = %why,
+        database,
+        "the pipeline lock's session failed; the pipeline stops and the process exits to be restarted"
+    );
+    status.update(|status| {
+        status.lock = LockState::Lost;
+        status.phase =
+            PipelinePhase::Stopped(format!("pipeline lock lost: {why} (database {database})"));
+    });
 }
 
 /// What the `api` role's surface is built from.
