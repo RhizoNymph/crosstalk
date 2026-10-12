@@ -236,6 +236,71 @@ async fn pg_held_delivery_redelivered_after_restart() {
     db.close().await.expect("drop the test database");
 }
 
+/// `transport.restart.recovered-ready-first`: a delivery held by a process
+/// that died is `ready` as soon as the next process's `recover_held`
+/// returns, with no backoff, so a single consumer takes it before entries
+/// published after it: one the dead process published after its take, and
+/// one the new process publishes after recovery (a drained spool record).
+/// With the group's backoff (10 s here) the later entries were taken first,
+/// and L3 threaded an outage's interrupted exchange after the next one.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn pg_recovered_hold_is_ready_and_taken_first() {
+    let Some(db) = database("pg_recovered_hold_is_ready_and_taken_first").await else {
+        return;
+    };
+    let flow = group("flow");
+    let slow = retry(5, 10 * SECOND, 30 * SECOND);
+    {
+        let bus = process(&db, config()).await;
+        let mut sub = bus
+            .subscribe(&[Subject::Changed], flow.clone(), slow)
+            .await
+            .expect("subscribe");
+        bus.publish(changed(1)).await.expect("publish");
+        assert_eq!(next_soon(&mut sub).await.envelope, changed(1));
+        bus.publish(changed(2)).await.expect("publish");
+        // Killed while holding changed(1); changed(2) is in the log.
+        sub.abandon();
+    }
+
+    let pool = pool(db.url().connect_options().clone()).await;
+    let bus = PgBus::new(pool, Arc::new(SystemClock), config()).expect("bus starts");
+    let recovered = bus.recover_held().await.expect("recovers");
+    assert_eq!((recovered.redelivered, recovered.dead_lettered), (1, 0));
+    let rows: Vec<(i32, String, Option<i64>)> = sqlx::query_as(
+        "SELECT attempt, state, available_at FROM transport.deliveries WHERE group_name = 'flow'",
+    )
+    .fetch_all(db.pool())
+    .await
+    .expect("reads deliveries");
+    assert_eq!(
+        rows,
+        vec![(1, "ready".to_owned(), None)],
+        "the recovered hold is ready at once, its attempt kept"
+    );
+
+    let mut sub = bus
+        .subscribe(&[Subject::Changed], flow, slow)
+        .await
+        .expect("subscribe");
+    bus.publish(changed(3)).await.expect("publish");
+    let mut got = Vec::new();
+    for _ in 0..3 {
+        // Each within 20 s; the order is what is checked.
+        let delivery = next_soon(&mut sub).await;
+        got.push((delivery.envelope.clone(), delivery.attempt.get()));
+        sub.ack(delivery.id).await.expect("ack");
+    }
+    assert_eq!(
+        got,
+        vec![(changed(1), 2), (changed(2), 1), (changed(3), 1)],
+        "the recovered hold is taken first, at its next attempt"
+    );
+    drop(sub);
+    bus.shutdown();
+    db.close().await.expect("drop the test database");
+}
+
 /// Dead letters survive a restart, and a replay in the next process
 /// delivers the letter at attempt 1.
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
