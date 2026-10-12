@@ -1,0 +1,49 @@
+[invariant]
+id = "reconstruct.thread.order-independent"
+statement = "For a set of exchanges attributed within one agent cluster, a conversation store's stored conversations (agent, origin, source, times and history), transcripts, turns and each exchange's recorded ThreadOutcome are the same for every order in which the exchanges are threaded as for threading them in TurnKey order (when each ended, then its exchange id), as long as no exchange is threaded after one that ended more than the store's reorder window after it; conversations are identified by the exchange whose turn opened them, and the deltas published when each exchange arrived are not revised."
+kind = "coordination"
+requires = ["property", "unit", "integration"]
+rationale = """
+L2 promises no delivery order (transport.ordering.unconstrained): a retry,
+a nack, a second take or a delivery cut by an outage and redelivered after
+later ones hands L3 an exchange after exchanges that ended after it. In a
+node0 forensic run an outage cut a session's first exchange; redelivered
+after the second, the second opened the conversation the first should
+have, and the session had two conversations. Threading decides each
+exchange against what is stored, so without a defined order the stored
+result is a function of arrival order. The store defines it by TurnKey
+order, which keeps every continuation after what it continues and, with no
+fault, is the order capture publishes in; a late exchange undoes the
+cluster's later turns, is threaded, and threads them again from their kept
+calls (thread::order). Calls are kept for the reorder window (a day by
+default), so the guarantee is bounded by it; a later arrival is threaded
+where it arrived. Ids minted at an exchange's first arrival (a
+conversation's, and the agent the consumer creates for a new caller) are
+drawn in arrival order and are not covered; nor are attribution decisions
+(merges, reviews), which depend on the agent store. A rewound exchange's
+recorded outcome changes, but its ConversationDelta was published when it
+arrived and is not published again.
+"""
+
+[evidence]
+property = [
+    "crosstalk_reconstruct::tests::order_props::any_delivery_order_stores_the_in_order_conversations",
+    "crosstalk_reconstruct::tests::order_props::any_delivery_order_stores_the_in_order_forks",
+    "crosstalk_reconstruct::tests::order_props::any_delivery_order_stores_the_in_order_compactions",
+]
+unit = [
+    "crosstalk_reconstruct::tests::order_props::third_exchange_after_the_fourth_stores_the_in_order_conversations",
+    "crosstalk_reconstruct::tests::order_props::late_middle_turn_joins_between_its_neighbours",
+    "crosstalk_reconstruct::tests::order_props::consumer_threads_a_late_first_exchange_as_in_order",
+    "crosstalk_reconstruct::tests::order_arrival::late_arrival_undoes_newest_first_and_replays_by_key",
+    "crosstalk_reconstruct::tests::order_arrival::beyond_the_window_threads_where_it_arrived",
+]
+integration = [
+    "crosstalk_reconstruct::tests::pg_order::pg_third_exchange_after_the_fourth_stores_the_in_order_conversations",
+    "crosstalk_reconstruct::tests::pg_order::pg_out_of_order_scripts_store_the_in_order_conversations",
+]
+
+[evidence-review]
+property = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

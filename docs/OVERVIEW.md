@@ -1466,7 +1466,11 @@ Features Index:
       scope, system turns anywhere, every message kept in order under an
       ordinal, a per-agent seen-message set within a configured retention
       that keeps history replayed from another conversation out of a
-      delta's new inputs, INV-1100); and the reconstruct consumer (ExchangeCaptured in;
+      delta's new inputs, INV-1100; delivery-order tolerance: a store holds
+      the result of threading its exchanges in turn-key order, when each
+      ended then its id, whatever order they arrived in, by undoing and
+      rethreading a late exchange's later turns from calls kept for a reorder
+      window, reconstruct.thread.order-independent); and the reconstruct consumer (ExchangeCaptured in;
       ConversationDelta out under an envelope id derived from the
       exchange; AgentSeen staged by the agent store's create or attach). Replays AI Village's Claude Code stream and lmcache's
       interleaved re-runs as ignored fixture tests.
@@ -1474,6 +1478,7 @@ Features Index:
       - crates/reconstruct/src/lib.rs
       - crates/reconstruct/src/agents/mod.rs
       - crates/reconstruct/src/thread/mod.rs
+      - crates/reconstruct/src/thread/order.rs
       - crates/reconstruct/src/consumer/mod.rs
       - crates/reconstruct/src/evidence/mod.rs
     depends_on: [type_spec, store, memory, transport, sim, testkit]

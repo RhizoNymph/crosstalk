@@ -310,11 +310,16 @@ What happens to a held row nobody acks (`crates/transport/src/pg/reaper.rs`,
   process's `recover_held`, which delays it with the attempt counted, or
   dead-letters it on its last attempt. The delay is the group's backoff,
   so an envelope published after it (a drained spool record) is taken
-  first: L2 promises no order (`transport.ordering.unconstrained`), and
-  L3's threading depends on it (a later turn threaded first starts the
-  conversation; the earlier one then starts another). An outage that
-  interrupts a delivery can therefore change the answers; the outage
-  tests cut only a settled pipeline.
+  first: L2 promises no order (`transport.ordering.unconstrained`). L3's
+  conversation stores now hold the turn-key-order result whatever the
+  arrival order, within the reorder window
+  (`reconstruct.thread.order-independent`, [reconstruct](reconstruct.md#delivery-order)):
+  the earlier turn arriving second rewinds the later one and both land in
+  one conversation. What arrival order still decides: the later turn's
+  delta was published when it arrived (L4 and L5 keep it), and a new
+  agent's id and first-seen time come from the first of its exchanges L3
+  handled. An outage that interrupts a delivery can therefore still change
+  the answers; the outage tests cut only a settled pipeline.
 
 So a single lost race delays an event by at most about 95 s and loses
 nothing; only five losses of one delivery dead-letter it. With every
