@@ -1694,6 +1694,7 @@ Features Index:
       the exchanges behind every confirmed transmission as L1 captured
       them, under the world's own exchange ids and bodies, in sessions
       with pauses, compactions, forks, failed attempts and tool calls,
+      causal (each request starts after the replies it carries ended),
       which crosstalk_api::world threads (L3) and scans (L4) into the
       conversation reads.
     entry_points:
