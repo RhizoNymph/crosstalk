@@ -5,12 +5,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex, MutexGuard};
 
-use crosstalk_spec::batch::IdBatch;
-use crosstalk_spec::derived::provenance::span::{
-    Origin, OriginatedSpan, RelaySource, SpanEvent, SpanState,
-};
+use crosstalk_spec::derived::provenance::span::{RelaySource, SpanEvent, SpanState};
 use crosstalk_spec::ids::{ExchangeId, MessageHash, SpanId};
-use crosstalk_spec::interfaces::l4_provenance::{IndexedSpan, SpanIndex, SpanIndexError};
+use crosstalk_spec::interfaces::l4_provenance::IndexedSpan;
 use crosstalk_spec::support::Timestamp;
 
 use super::{
@@ -33,6 +30,9 @@ struct Tables {
     relayed_from: BTreeMap<SpanId, Vec<SpanId>>,
     /// Every recorded coincidence.
     coincidences: BTreeSet<Coincidence>,
+    /// Span-index records of spans no scan had committed when recorded
+    /// (`record_indexed`).
+    recorded: BTreeMap<SpanId, IndexedSpan>,
 }
 
 /// L4's records in memory.
@@ -79,44 +79,6 @@ fn advance(record: &mut SpanRecord, event: SpanEvent) -> Result<(), ProvenanceSt
         .map_err(ProvenanceStoreError::Transition)?;
     record.span.state = next;
     Ok(())
-}
-
-/// The spec's `SpanIndex` over the spans the scans committed: `commit_scan`
-/// already wrote every classified span, so `record` adds nothing (it is
-/// idempotent by construction), and `spans` reads back the indexed ones as
-/// recorded: the originated ones (`Originated`, `Indexed`, `Propagated` or
-/// `Expired`) and the forwarded ones committed with forwarding on
-/// (`Relayed` from an input, `provenance.index.forwarded-indexed`). Spans relayed from another span,
-/// common spans and unknown ids are absent.
-impl SpanIndex for MemoryProvenanceStore {
-    async fn record(&mut self, _span: &OriginatedSpan) -> Result<(), SpanIndexError> {
-        Ok(())
-    }
-
-    async fn spans(
-        &self,
-        ids: &IdBatch<SpanId>,
-    ) -> Result<BTreeMap<SpanId, IndexedSpan>, SpanIndexError> {
-        let tables = self.lock();
-        Ok(ids
-            .ids()
-            .iter()
-            .filter_map(|id| tables.spans.get(id))
-            .filter(|record| {
-                record.span.state.origin() == Some(Origin::Originated) || record.forward.is_some()
-            })
-            .map(|record| {
-                (
-                    record.span.id,
-                    IndexedSpan {
-                        exchange: record.span.exchange,
-                        author: record.span.agent,
-                        location: record.span.location,
-                    },
-                )
-            })
-            .collect())
-    }
 }
 
 impl ProvenanceStore for MemoryProvenanceStore {
@@ -195,6 +157,29 @@ impl ProvenanceStore for MemoryProvenanceStore {
 
     async fn span(&self, id: SpanId) -> Result<Option<SpanRecord>, ProvenanceStoreError> {
         Ok(self.lock().spans.get(&id).cloned())
+    }
+
+    async fn record_indexed(
+        &mut self,
+        id: SpanId,
+        span: IndexedSpan,
+    ) -> Result<(), ProvenanceStoreError> {
+        let mut tables = self.lock();
+        if !tables.spans.contains_key(&id) {
+            tables.recorded.entry(id).or_insert(span);
+        }
+        Ok(())
+    }
+
+    async fn recorded_indexed(
+        &self,
+        ids: &[SpanId],
+    ) -> Result<BTreeMap<SpanId, IndexedSpan>, ProvenanceStoreError> {
+        let tables = self.lock();
+        Ok(ids
+            .iter()
+            .filter_map(|id| tables.recorded.get(id).map(|span| (*id, *span)))
+            .collect())
     }
 
     async fn exchange_spans(

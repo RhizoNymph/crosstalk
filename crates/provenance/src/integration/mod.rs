@@ -42,7 +42,8 @@ pub async fn truncate(pool: &PgPool) {
     let emptied = sqlx::query(
         "TRUNCATE provenance.exchanges, provenance.exchange_requests, \
          provenance.scanned_messages, provenance.spans, provenance.matches, \
-         provenance.postings, provenance.observations, provenance.observed CASCADE",
+         provenance.postings, provenance.observations, provenance.observed, \
+         provenance.recorded_spans CASCADE",
     )
     .execute(pool)
     .await;

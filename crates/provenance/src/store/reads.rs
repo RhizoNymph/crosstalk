@@ -1,7 +1,7 @@
 //! The spec's L4 reads over L4's records: [`ProvenanceReads`] (scan
 //! status, output spans of every origin with their state, matches by
-//! reader exchange, a span's readers, paged) and, on Postgres,
-//! [`SpanIndex`] over the committed spans.
+//! reader exchange, a span's readers, paged) and [`SpanIndex`] over the
+//! committed spans and the spans recorded with no scan behind them.
 //!
 //! Both stores answer through the same functions over [`ProvenanceStore`],
 //! so they agree by construction; the stores differ only in how they read
@@ -271,38 +271,87 @@ impl ProvenanceReads for MemoryProvenanceStore {
     }
 }
 
-/// The spec's `SpanIndex` over the spans the scans committed, as
-/// [`MemoryProvenanceStore`]'s: `record` adds nothing (`commit_scan`
-/// wrote every classified span), and `spans` reads back the originated and
-/// forwarded ones as recorded.
-impl SpanIndex for PgProvenanceStore {
-    async fn record(&mut self, _span: &OriginatedSpan) -> Result<(), SpanIndexError> {
-        Ok(())
+fn index_failed(error: ProvenanceStoreError) -> SpanIndexError {
+    SpanIndexError::Store {
+        reason: error.to_string(),
+    }
+}
+
+/// `SpanIndex::record` on either store: a span a scan committed already
+/// has its record (`commit_scan` wrote every classified span), so only a
+/// span no scan committed is kept, as its index record
+/// ([`ProvenanceStore::record_indexed`]), once.
+async fn record_span<S: ProvenanceStore>(
+    store: &mut S,
+    span: &OriginatedSpan,
+) -> Result<(), SpanIndexError> {
+    store
+        .record_indexed(span.span().id, IndexedSpan::of(span))
+        .await
+        .map_err(index_failed)
+}
+
+/// `SpanIndex::spans` on either store: the originated and forwarded spans
+/// the scans committed, as committed, and the spans recorded with no scan
+/// behind them. A recorded span was kept only while no scan had committed
+/// it, so its record is the first and wins over a later commit
+/// (`provenance.span-index.spans-as-recorded`).
+async fn indexed_spans<S: ProvenanceStore>(
+    store: &S,
+    ids: &IdBatch<SpanId>,
+) -> Result<BTreeMap<SpanId, IndexedSpan>, SpanIndexError> {
+    let committed = ProvenanceStore::spans(store, ids.ids())
+        .await
+        .map_err(index_failed)?;
+    let mut spans: BTreeMap<SpanId, IndexedSpan> = committed
+        .into_iter()
+        .filter(indexed)
+        .map(|record| {
+            (
+                record.span.id,
+                IndexedSpan {
+                    exchange: record.span.exchange,
+                    author: record.span.agent,
+                    location: record.span.location,
+                },
+            )
+        })
+        .collect();
+    spans.extend(
+        store
+            .recorded_indexed(ids.ids())
+            .await
+            .map_err(index_failed)?,
+    );
+    Ok(spans)
+}
+
+/// The spec's `SpanIndex` over L4's records ([`record_span`],
+/// [`indexed_spans`]).
+impl SpanIndex for MemoryProvenanceStore {
+    async fn record(&mut self, span: &OriginatedSpan) -> Result<(), SpanIndexError> {
+        record_span(self, span).await
     }
 
     async fn spans(
         &self,
         ids: &IdBatch<SpanId>,
     ) -> Result<BTreeMap<SpanId, IndexedSpan>, SpanIndexError> {
-        let records = ProvenanceStore::spans(self, ids.ids())
-            .await
-            .map_err(|error| SpanIndexError::Store {
-                reason: error.to_string(),
-            })?;
-        Ok(records
-            .into_iter()
-            .filter(indexed)
-            .map(|record| {
-                (
-                    record.span.id,
-                    IndexedSpan {
-                        exchange: record.span.exchange,
-                        author: record.span.agent,
-                        location: record.span.location,
-                    },
-                )
-            })
-            .collect())
+        indexed_spans(self, ids).await
+    }
+}
+
+/// The spec's `SpanIndex` over L4's records, as [`MemoryProvenanceStore`]'s.
+impl SpanIndex for PgProvenanceStore {
+    async fn record(&mut self, span: &OriginatedSpan) -> Result<(), SpanIndexError> {
+        record_span(self, span).await
+    }
+
+    async fn spans(
+        &self,
+        ids: &IdBatch<SpanId>,
+    ) -> Result<BTreeMap<SpanId, IndexedSpan>, SpanIndexError> {
+        indexed_spans(self, ids).await
     }
 }
 
