@@ -175,6 +175,24 @@ pub enum LiveError {
     CaptureOutsidePipeline,
 }
 
+impl LiveError {
+    /// Whether the failure needs an operator rather than a retry: the
+    /// config contradicts itself or the stored snapshot cannot be read.
+    /// Anything else (the database out of reach, connections short, a
+    /// recovery step failing) may pass, and `serve` retries it.
+    pub fn is_permanent(&self) -> bool {
+        matches!(
+            self,
+            Self::Restore(crosstalk_flow::consumer::FlowRestoreError::IncompatibleSnapshot(_))
+                | Self::Flow(_)
+                | Self::AckTimeout { .. }
+                | Self::UnackedAboveCapacity { .. }
+                | Self::TooManyShards(_)
+                | Self::CaptureOutsidePipeline
+        )
+    }
+}
+
 /// How a live process drained on shutdown.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LiveDrained {

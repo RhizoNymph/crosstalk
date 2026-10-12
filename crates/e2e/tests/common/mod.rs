@@ -264,32 +264,17 @@ pub async fn server_connections(db: &TestDb) -> String {
     format!("max_connections {max:?}; client backends by application: {rows:?}")
 }
 
-/// Whether a start failed for want of a database connection (a pool
-/// timed out, or a connection refused): what `serve`'s pipeline task
-/// retries, as this harness does.
-fn wants_a_connection(error: &crosstalk_gateway::live::LiveError) -> bool {
-    let text = format!("{error} {error:?}");
-    [
-        "pool timed out",
-        "PoolTimedOut",
-        "connection lost",
-        "ConnectionLost",
-        "too many clients",
-    ]
-    .iter()
-    .any(|sign| text.contains(sign))
-}
-
 /// A Postgres-mode live process over `db` and `volume` minting ids from
 /// `ids`; its recovery bounded by [`WAIT`].
 pub async fn start_pg(db: &TestDb, volume: &Volume, ids: PgIds) -> Live<PgSet> {
     start_pg_on(db, pipeline_pool(db), volume, ids).await
 }
 
-/// [`start_pg`] over `pool`. A start that fails for want of a connection
-/// (the server busy, a killed process's sessions not yet gone) is retried
-/// every second, as `serve`'s pipeline task retries it, until [`WAIT`];
-/// past it the test fails with the server's connections.
+/// [`start_pg`] over `pool`. A start that fails for anything short of a
+/// permanent failure (the server busy, a killed process's sessions not
+/// yet gone, the bus's recovery finding no connection) is retried every
+/// second, as `serve`'s pipeline task retries it, until [`WAIT`]; past it
+/// the test fails with the server's connections.
 pub async fn start_pg_on(db: &TestDb, pool: PgPool, volume: &Volume, ids: PgIds) -> Live<PgSet> {
     let deadline = Instant::now() + WAIT;
     loop {
@@ -305,7 +290,7 @@ pub async fn start_pg_on(db: &TestDb, pool: PgPool, volume: &Volume, ids: PgIds)
         .unwrap_or_else(|stalled| panic!("{stalled}"));
         match started {
             Ok(live) => return live,
-            Err(error) if wants_a_connection(&error) && Instant::now() < deadline => {
+            Err(error) if !error.is_permanent() && Instant::now() < deadline => {
                 eprintln!(
                     "the live process did not start ({error}); retrying. {}",
                     server_connections(db).await

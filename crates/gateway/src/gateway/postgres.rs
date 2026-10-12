@@ -394,7 +394,7 @@ async fn run_pipeline(start: PipelineStart, mut stop: oneshot::Receiver<()>) -> 
                 tracing::error!(error = %error, "the live process did not start");
                 status.phase(PipelinePhase::Stopped(error.to_string()));
                 drop(lock);
-                if permanent(&error) {
+                if error.is_permanent() {
                     let _ = stop.await;
                     return None;
                 }
@@ -459,19 +459,6 @@ async fn run_pipeline(start: PipelineStart, mut stop: oneshot::Receiver<()>) -> 
             }
         };
     }
-}
-
-/// Whether a start failure needs an operator rather than a retry.
-fn permanent(error: &LiveError) -> bool {
-    matches!(
-        error,
-        LiveError::Restore(crosstalk_flow::consumer::FlowRestoreError::IncompatibleSnapshot(_))
-            | LiveError::Flow(_)
-            | LiveError::AckTimeout { .. }
-            | LiveError::UnackedAboveCapacity { .. }
-            | LiveError::TooManyShards(_)
-            | LiveError::CaptureOutsidePipeline
-    )
 }
 
 /// What the `api` role's surface is built from.
