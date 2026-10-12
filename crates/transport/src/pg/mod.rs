@@ -19,9 +19,10 @@
 //! `publish` never waits for room (only `MpscBus` has backpressure);
 //! groups, deliveries and dead letters survive the process; and a delivery
 //! held by a process that stopped is returned by the next process's
-//! [`PgBus::recover_held`] (`transport.restart.held-redelivered`), which
-//! is safe because one pipeline process holds the database (the gateway's
-//! pipeline lock).
+//! [`PgBus::recover_held`] (`transport.restart.held-redelivered`), ready
+//! at once and so taken before anything published after it
+//! (`transport.restart.recovered-ready-first`). That is safe because one
+//! pipeline process holds the database (the gateway's pipeline lock).
 //!
 //! Time: delays and due times are read from the injected [`Clock`], never
 //! from `now()` in SQL; ack deadlines are tokio `Instant`s in process
@@ -144,7 +145,7 @@ impl Drop for Tasks {
 /// How many deliveries [`PgBus::recover_held`] returned.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct Recovered {
-    /// Held deliveries made delayed, their attempt counted.
+    /// Held deliveries made ready at once, their attempt counted.
     pub redelivered: u64,
     /// Held deliveries on their last attempt, dead-lettered.
     pub dead_lettered: u64,
@@ -207,13 +208,16 @@ impl PgBus {
     }
 
     /// Return every delivery a stopped process left `held`: each becomes
-    /// `delayed` by its group's backoff with the attempt counted, or, on
-    /// its group's last attempt, a dead letter. Run at start, before any
-    /// subscription of this process exists; it assumes no other process
-    /// holds deliveries (the pipeline lock).
+    /// `ready` at once, with no backoff and its attempt counted (the take
+    /// already counted it), or, on its group's last attempt, a dead letter.
+    /// Takes go by `seq`, so a recovered delivery is taken before any entry
+    /// published after it (`transport.restart.recovered-ready-first`).
+    /// Only this restart case skips the backoff: a nack, an ack timeout, a
+    /// dropped subscription and the stale-hold sweep all delay. Run at
+    /// start, before any subscription of this process exists; it assumes
+    /// no other process holds deliveries (the pipeline lock).
     pub async fn recover_held(&self) -> Result<Recovered, BusError> {
         let shared = &self.shared;
-        let now = shared.now_micros();
         let result: Result<Recovered, sqlx::Error> = async {
             let mut tx = shared.pool.begin().await?;
             let dead = sqlx::query(
@@ -234,16 +238,15 @@ impl PgBus {
             .execute(&mut *tx)
             .await?
             .rows_affected();
+            // Ready at once, no backoff: the take order is by seq, so the
+            // recovered row goes ahead of every entry published after it
+            // (`transport.restart.recovered-ready-first`). The attempt is
+            // left as the dead holder was given it: it already counted.
             let redelivered = sqlx::query(
-                "UPDATE transport.deliveries d SET state = 'delayed', last_error = $1, \
-                 available_at = $2 + least(g.max_backoff_micros::numeric, \
-                     g.initial_backoff_micros::numeric \
-                     * (2::numeric ^ least(greatest(d.attempt - 1, 0), 31)))::bigint \
-                 FROM transport.groups g \
-                 WHERE d.state = 'held' AND g.name = d.group_name",
+                "UPDATE transport.deliveries SET state = 'ready', available_at = NULL, last_error = $1 \
+                 WHERE state = 'held'",
             )
             .bind(RESTART_REASON)
-            .bind(now)
             .execute(&mut *tx)
             .await?
             .rows_affected();
