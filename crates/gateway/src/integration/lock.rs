@@ -59,7 +59,10 @@ async fn pg_a_silently_partitioned_lock_session_is_lost_within_the_bound() {
             )
         });
     let detected = partitioned.elapsed();
-    tracing::info!(?detected, reason = why.reason(), %why, "lock loss detected");
+    eprintln!(
+        "lock loss detected after {detected:?} (bound {BOUND:?}): reason={} {why}",
+        why.reason()
+    );
     assert_eq!(
         why,
         LockLoss::PingTimedOut {
@@ -114,7 +117,7 @@ async fn pg_taking_the_lock_across_a_silent_partition_times_out() {
         matches!(taken, Err(TakeError::TimedOut { after }) if after == TAKE_TIMEOUT),
         "{taken:?}"
     );
-    tracing::info!(?took, "taking the lock timed out");
+    eprintln!("taking the lock timed out after {took:?} (bound {TAKE_TIMEOUT:?})");
     drop(link);
     db.close().await.expect("drops");
 }
@@ -163,7 +166,10 @@ async fn pg_a_running_pipeline_reports_its_partitioned_lock_lost_within_the_boun
     })
     .expect("the reporter lives");
     let reported = partitioned.elapsed();
-    tracing::info!(?reported, pipeline = %lost.pipeline_text(), "lock loss reported");
+    eprintln!(
+        "pipeline_lock lost reported after {reported:?} (bound {LOST_REPORTED:?}): {}",
+        lost.pipeline_text()
+    );
     assert!(
         matches!(&lost.phase, PipelinePhase::Stopped(why) if why.contains("did not answer a ping")),
         "{:?}",
