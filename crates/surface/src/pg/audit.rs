@@ -15,6 +15,10 @@
 //! query               ─ newest first by (at, id), keyset after the cursor's (at, id)
 //! ```
 //!
+//! The window is read on the `bigint` `at` column through
+//! `crosstalk_store::ColumnWindow`: an end past `i64::MAX` is no bound, and
+//! a window starting past it keeps no entry (an empty page, not an error).
+//!
 //! A cursor is `hex(at i64 BE ‖ id u128 BE)_hex(MAC)`, the MAC keyed by the
 //! key derived from the deployment secret under [`AUDIT_CURSOR_LABEL`]
 //! over a digest of the filter, so it survives a restart and a cursor
@@ -30,7 +34,7 @@ use crosstalk_spec::interfaces::l8_surface::audit::{
 };
 use crosstalk_spec::paging::{AuditList, Page, PageRequest};
 use crosstalk_spec::support::NonEmpty;
-use crosstalk_store::{SerializableRetry, TxError, retry_serializable};
+use crosstalk_store::{ColumnWindow, SerializableRetry, TxError, retry_serializable};
 use sqlx::{PgConnection, PgPool, Row};
 
 use super::codec::{CodecError, from_json, micros, to_json};
@@ -227,9 +231,18 @@ async fn delete_intent(conn: &mut PgConnection, id: AuditId) -> Result<(), TxErr
     Ok(())
 }
 
-/// The filter's digest, which a cursor is bound to: its wire JSON.
+/// The filter's digest, which a cursor is bound to: its wire JSON without
+/// the window, and the window in microseconds (one past
+/// `wire::time::MAX` has no text).
 fn filter_digest(filter: &AuditFilter) -> Result<[u8; 32], AuditError> {
-    let text = to_json("audit filter", filter)
+    let window = filter
+        .window
+        .map(|window| (window.start().as_micros(), window.end().as_micros()));
+    let rest = AuditFilter {
+        window: None,
+        ..filter.clone()
+    };
+    let text = to_json("audit filter", &(rest, window))
         .map_err(|error| store_error(&StorageFailure::Codec(error)))?;
     Ok(RequestDigest::new("audit").bytes(text.as_bytes()).finish())
 }
@@ -252,7 +265,8 @@ fn parse_position(bytes: &[u8]) -> Option<(i64, AuditId)> {
     Some((at, AuditId::from_ulid(id)))
 }
 
-/// The query's bind values for `filter`.
+/// The query's bind values for `filter`. The window is its bounds on the
+/// `at` column, `until` `None` for a window ending past it.
 struct FilterBinds {
     any_author: bool,
     config: bool,
@@ -263,7 +277,9 @@ struct FilterBinds {
 }
 
 impl FilterBinds {
-    fn of(filter: &AuditFilter) -> Result<Self, CodecError> {
+    /// `None` when the window starts past the `at` column: no stored entry
+    /// lies in it.
+    fn of(filter: &AuditFilter) -> Result<Option<Self>, CodecError> {
         let operators = filter
             .by
             .iter()
@@ -272,21 +288,19 @@ impl FilterBinds {
                 AuditAuthor::Config => None,
             })
             .collect();
-        let (from, until) = match filter.window {
+        let (from, until) = match filter.window.map(ColumnWindow::of) {
             None => (None, None),
-            Some(window) => (
-                Some(micros("window start", window.start())?),
-                Some(micros("window end", window.end())?),
-            ),
+            Some(ColumnWindow::Within(bounds)) => (Some(bounds.start()), bounds.end()),
+            Some(ColumnWindow::Beyond) => return Ok(None),
         };
-        Ok(Self {
+        Ok(Some(Self {
             any_author: filter.by.is_empty(),
             config: filter.by.contains(&AuditAuthor::Config),
             operators,
             subject: filter.subject.as_ref().map(subject_text).transpose()?,
             from,
             until,
-        })
+        }))
     }
 }
 
@@ -318,6 +332,9 @@ impl AuditLog for PgAuditLog {
         };
         let binds =
             FilterBinds::of(filter).map_err(|error| store_error(&StorageFailure::Codec(error)))?;
+        let Some(binds) = binds else {
+            return page_of(&self.cursors, page, &digest, Vec::new());
+        };
         let size = page.size.get().get();
         let rows = sqlx::query(
             "SELECT a.at, a.entry FROM surface.audit a \
