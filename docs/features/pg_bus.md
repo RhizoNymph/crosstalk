@@ -253,7 +253,7 @@ checkpoint interval; W8 checks that at start.
 | INV-1203 `transport.durability.pg-publish-persisted` | `integration::pg_publish_survives_restart` |
 | INV-1204 `transport.publish.idempotent-on-id` | `integration::pg_publish_is_idempotent_on_id` |
 | INV-1205 `transport.restart.held-redelivered` | `integration::pg_held_delivery_redelivered_after_restart` |
-| INV-X `transport.restart.recovered-ready-first` | `integration::pg_recovered_hold_is_ready_and_taken_first` |
+| INV-1234 `transport.restart.recovered-ready-first` | `integration::pg_recovered_hold_is_ready_and_taken_first` |
 | INV-X `transport.retention.prune-keeps-unfinished` | `integration::pg_prune_never_drops_an_unacked_event` |
 
 All four are Postgres integration tests, written but not run by the

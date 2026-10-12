@@ -18,4 +18,4 @@ integration = "crosstalk_e2e::restart::cursors_resolve_after_restart"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }
-integration = { agent = "false", human = "false" }
+integration = { agent = "true", human = "false" }

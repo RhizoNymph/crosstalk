@@ -720,8 +720,8 @@ on `crates/api/tests/support/pg_world.rs`:
 | INV-1220 `surface.ids.unique-across-restart` | unit `crosstalk_gateway::live::tests::serve_seeds_id_generators_from_entropy` (ran); integration `crosstalk_e2e::restart::minted_ids_never_collide_after_restart` (passed on node0 at d8f5412; flag pending a green node0 run on this branch) |
 | INV-1219 `surface.cursor.survives-restart` | integration `crosstalk_e2e::restart::cursors_resolve_after_restart` (passed on node0; flag pending a green node0 run on this branch) |
 | INV-1210 `transport.spool.bounded` | integration `crosstalk_e2e::spool::full_spool_refuses_and_proxy_still_forwards` (no database; ran; flag pending with the others) |
-| INV-X `transport.stage-pump.no-dropped-delivery` | unit `crosstalk_gateway::live::pg::pump::tests::a_next_dropped_after_its_answer_keeps_the_delivery` (ran) |
-| INV-X `transport.settle.quiet-covers-unadmitted` | integration `crosstalk_gateway::integration::pg_quiet_counts_entries_no_group_admitted_yet` (ran on node0; failed before the fix) |
+| INV-1231 `transport.stage-pump.no-dropped-delivery` | unit `crosstalk_gateway::live::pg::pump::tests::a_next_dropped_after_its_answer_keeps_the_delivery` (ran) |
+| INV-1233 `transport.settle.quiet-covers-unadmitted` | integration `crosstalk_gateway::integration::pg_quiet_counts_entries_no_group_admitted_yet` (ran on node0; failed before the fix) |
 | INV-1221 `ingress.proxy.forwarding-independent-of-capture-store` | `crosstalk_gateway::postgres_down::proxy_forwards_through_outage_and_full_spool` (ran) |
 | INV-581 `topology.frontier.covers-pending` | `crosstalk_gateway::integration::pg_frontier_covers_pending_deliveries` (Postgres, not run) |
 | INV-1202 `transport.consumer.derived-envelope-ids` | `crosstalk_gateway::dst::classifier_redelivery_republishes_the_same_envelope_ids` (ran; the flag covers the whole list, left for the merger) |

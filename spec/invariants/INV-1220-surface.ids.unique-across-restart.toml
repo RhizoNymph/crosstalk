@@ -19,4 +19,4 @@ integration = "crosstalk_e2e::restart::minted_ids_never_collide_after_restart"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }
-integration = { agent = "false", human = "false" }
+integration = { agent = "true", human = "false" }
