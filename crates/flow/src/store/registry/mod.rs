@@ -279,7 +279,9 @@ impl<D: AgentDirectory + Send + Sync, S: EventSink> ChannelRegistry for PgChanne
             .await
             .map_err(failed)?
             .ok_or(RegistryError::UnknownChannel(channel))?;
-        let binding = json("resource use binding", &(canonical, window)).map_err(failed)?;
+        // The window as microseconds: one past `wire::time::MAX` has no text.
+        let bounds = (window.start().as_micros(), window.end().as_micros());
+        let binding = json("resource use binding", &(canonical, bounds)).map_err(failed)?;
         let after: Option<ResourceId> =
             cursor::resolve(&mut conn, List::ResourceUse, &binding, page.after.as_ref())
                 .await
@@ -406,7 +408,15 @@ impl<D: AgentDirectory + Send + Sync, S: EventSink> ChannelReads for PgChannelRe
         filter: &ChannelFilter,
         page: &PageRequest<ChannelList>,
     ) -> Result<Page<ChannelWithTraffic, ChannelList>, RegistryError> {
-        let binding = json("channel filter", filter).map_err(failed)?;
+        // The window as microseconds: one past `wire::time::MAX` has no text.
+        let window = filter
+            .window
+            .map(|window| (window.start().as_micros(), window.end().as_micros()));
+        let rest = ChannelFilter {
+            window: None,
+            ..filter.clone()
+        };
+        let binding = json("channel filter", &(rest, window)).map_err(failed)?;
         let mut tx = self.snapshot::<RegistryError>().await?;
         let after: Option<reads::ChannelKey> =
             cursor::resolve(&mut tx, List::Channels, &binding, page.after.as_ref())

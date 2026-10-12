@@ -27,6 +27,7 @@ use crosstalk_spec::interfaces::l5_flow::channels::ChannelWithTraffic;
 use crosstalk_spec::interfaces::l8_surface::channel_traffic::ChannelTransmissionFilter;
 use crosstalk_spec::interfaces::l8_surface::lists::ChannelFilter;
 use crosstalk_spec::support::{TimeWindow, Timestamp};
+use crosstalk_store::ColumnWindow;
 use sqlx::PgConnection;
 
 use super::rows::{self, StoredChannel};
@@ -214,10 +215,12 @@ pub(crate) async fn resource_use(
     limit: usize,
     agent: &(impl Fn(AgentId) -> AgentId + Copy),
 ) -> Result<Result<Vec<ResourceUse>, RegistryError>, Fault> {
-    let start = micros("window.start", window.start())?;
-    let end = micros("window.end", window.end())?;
+    // A window starting past the column holds no access.
+    let Some(bounds) = ColumnWindow::of(window).bounds() else {
+        return Ok(Ok(Vec::new()));
+    };
     // One statement: the page of resources, then their access counts per
-    // agent and kind in the window.
+    // agent and kind in the window (no end past the column).
     let rows: Vec<(String, String, String, String, i64)> = sqlx::query_as(
         "WITH page AS ( \
              SELECT r.id, r.resource FROM flow.resources r \
@@ -225,16 +228,18 @@ pub(crate) async fn resource_use(
              WHERE (c.id = $1 OR c.superseded_by = $1) \
                AND ($2::text IS NULL OR r.id < $2::text COLLATE \"C\") \
                AND EXISTS (SELECT 1 FROM flow.accesses a \
-                           WHERE a.resource_id = r.id AND a.at >= $3 AND a.at < $4) \
+                           WHERE a.resource_id = r.id AND a.at >= $3 \
+                             AND ($4::bigint IS NULL OR a.at < $4)) \
              ORDER BY r.id DESC LIMIT $5) \
          SELECT p.id, p.resource, a.agent, a.kind, count(*) FROM page p \
-         JOIN flow.accesses a ON a.resource_id = p.id AND a.at >= $3 AND a.at < $4 \
+         JOIN flow.accesses a ON a.resource_id = p.id AND a.at >= $3 \
+             AND ($4::bigint IS NULL OR a.at < $4) \
          GROUP BY p.id, p.resource, a.agent, a.kind ORDER BY p.id DESC",
     )
     .bind(id_text(canonical))
     .bind(after.map(id_text))
-    .bind(start)
-    .bind(end)
+    .bind(bounds.start())
+    .bind(bounds.end())
     .bind(i64::try_from(limit).unwrap_or(i64::MAX))
     .fetch_all(&mut *conn)
     .await?;
