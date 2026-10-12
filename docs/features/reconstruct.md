@@ -241,6 +241,23 @@ arrival(later, turn counts, kept calls):
   retention plus the window, a rethreaded turn sees exactly the sightings
   of the turns before it in key order.
 
+### Known limitations (deferred until after the post)
+
+- **Ids depend on arrival order.** A new agent's id, `first_seen` and
+  state times come from the first of its exchanges L3 handles, not the
+  earliest; a conversation keeps the id minted when its opening exchange
+  first arrived, and the monotonic generator gives a late exchange's id
+  the later millisecond. In the node0 forensic case B's id carries the
+  fourth exchange's millisecond.
+  `crosstalk_e2e::reorder::exact_answers_need_agent_ids_from_the_earliest_exchange`
+  (ignored) demonstrates it; re-anchoring needs downstream support,
+  since the later exchange's delta has already published the id.
+- **INV-187 wording.** `reconstruct.thread.rethread-idempotent` says a
+  rethread returns "the outcome of its first threading". It returns the
+  recorded outcome, which a late earlier exchange can change; the
+  statement holds when first arrivals are in turn-key order. INV-187 is
+  left as is.
+
 ### The seen-message set
 
 - What counts as seen in a conversation: every non-system message a write

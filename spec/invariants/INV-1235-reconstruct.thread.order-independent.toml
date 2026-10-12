@@ -23,6 +23,18 @@ drawn in arrival order and are not covered; nor are attribution decisions
 (merges, reviews), which depend on the agent store. A rewound exchange's
 recorded outcome changes, but its ConversationDelta was published when it
 arrived and is not published again.
+
+Known limitation, deferred until after the post: agent and conversation
+ids still depend on arrival order. A new agent's id (and its first_seen
+and state times) comes from the first of its exchanges L3 handles, and a
+conversation keeps the id minted when its opening exchange first arrived;
+with a monotonic generator a late exchange's id carries the later
+millisecond. crosstalk_e2e::reorder::exact_answers_need_agent_ids_from_the_earliest_exchange
+(ignored) demonstrates it. Related wording issue: INV-187
+(reconstruct.thread.rethread-idempotent) says a rethread returns the
+outcome of the exchange's first threading; it returns the recorded
+outcome, which a late earlier exchange can change. INV-187 holds as
+stated when first arrivals are in turn-key order and is left unedited.
 """
 
 [evidence]
