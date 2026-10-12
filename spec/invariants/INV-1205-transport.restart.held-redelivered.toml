@@ -8,7 +8,10 @@ A crash between next and ack must neither lose the delivery nor retry it
 forever: counting the attempt, as MpscBus counts a dropped subscription,
 lets a delivery that crashes its consumer reach max_attempts and be
 dead-lettered. Resetting held rows at start is safe because only one
-pipeline process holds the database's pipeline lock.
+pipeline process holds the database's pipeline lock. The recovered row
+is ready at once, not delayed by the backoff
+(transport.restart.recovered-ready-first); the attempt it carries is the
+one the stopped holder was given, so recovery adds none of its own.
 """
 
 [evidence]

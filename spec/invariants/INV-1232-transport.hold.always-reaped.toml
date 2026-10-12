@@ -20,4 +20,4 @@ database (the pipeline lock) makes a hold that old abandoned.
 integration = "crosstalk_transport::integration::pg_a_hold_no_reaper_tracks_is_swept_and_redelivered"
 
 [evidence-review]
-integration = { agent = "false", human = "false" }
+integration = { agent = "true", human = "false" }

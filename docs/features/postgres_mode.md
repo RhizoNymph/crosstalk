@@ -109,7 +109,7 @@ acks).
 ### The bus clock
 
 `PgBus` times its delays (a nacked or timed-out delivery's
-`available_at`, a recovered hold's backoff) with the wall clock
+`available_at`) with the wall clock
 (`live::pg::bus_clock`), whatever clock the live process runs on, as
 `MpscBus` times its retries on tokio time. A delayed delivery becomes
 ready only once the bus clock passes its `available_at`; under a manual
@@ -307,19 +307,32 @@ What happens to a held row nobody acks (`crates/transport/src/pg/reaper.rs`,
   at start).
 - When the bus's tasks are stopped (`Live::shutdown`/`kill`, the
   lock-loss stopgap), nothing reaps: a held row stays held until the next
-  process's `recover_held`, which delays it with the attempt counted, or
-  dead-letters it on its last attempt. The delay is the group's backoff,
-  so an envelope published after it (a drained spool record) is taken
-  first: L2 promises no order (`transport.ordering.unconstrained`). L3's
-  conversation stores now hold the turn-key-order result whatever the
-  arrival order, within the reorder window
-  (`reconstruct.thread.order-independent`, [reconstruct](reconstruct.md#delivery-order)):
-  the earlier turn arriving second rewinds the later one and both land in
-  one conversation. What arrival order still decides: the later turn's
-  delta was published when it arrived (L4 and L5 keep it), and a new
-  agent's id and first-seen time come from the first of its exchanges L3
-  handled. An outage that interrupts a delivery can therefore still change
-  the answers; the outage tests cut only a settled pipeline.
+  process's `recover_held`, which makes it `ready` at once, with no
+  backoff and the attempt counted (the dead holder's take counted it;
+  recovery adds none), or dead-letters it on its last attempt. Takes go
+  by log `seq`, so a single consumer of the group takes, after a restart:
+  every `ready` row in `seq` order, the recovered ones among them (each
+  ahead of every entry published after it, a drained spool record
+  included), then entries admitted from the log as it pulls, in `seq`
+  order; a row a live process delayed before the stop (a nack, an ack
+  timeout) joins in `seq` order once its `available_at` passes
+  (`transport.restart.recovered-ready-first`).
+  Until this fix the recovered row was delayed by the group's backoff,
+  so the drained record was taken first: L2 promises no order
+  (`transport.ordering.unconstrained`), and L3 threads by arrival (a
+  later turn threaded first starts the conversation; the earlier one then
+  starts another), so an outage that interrupted a delivery changed the
+  answers. That exposure is closed at L2 for the restart case. Other
+  redeliveries in a live process (a nack, an ack timeout, a dropped
+  subscription, the stale-hold sweep) keep their backoff and can still
+  reorder. L3's conversation stores hold the turn-key-order result
+  whatever the arrival order, within the reorder window
+  (`reconstruct.thread.order-independent`,
+  [reconstruct](reconstruct.md#delivery-order)): an earlier turn arriving
+  second rewinds the later one and both land in one conversation. What
+  arrival order still decides: the later turn's delta was published when
+  it arrived (L4 and L5 keep it), and a new agent's id and first-seen
+  time come from the first of its exchanges L3 handled.
 
 So a single lost race delays an event by at most about 95 s and loses
 nothing; only five losses of one delivery dead-letter it. With every
@@ -357,10 +370,13 @@ there let `spool_outage_twice`'s second cut land while L3 was handling the
 third exchange; the next process's `recover_held` delayed that delivery
 by its backoff and the drained fourth exchange, taken first, started the
 conversation the third should have (an extra conversation, agent B's id
-minted from the fourth exchange). L3 now threads the third into the
-conversation it opens, before the fourth, whatever order they arrive in
-(`reconstruct.thread.order-independent`; `crates/e2e/tests/reorder`);
-B's id still comes from the fourth. `Live::kill` stops as a killed process would (every task
+minted from the fourth exchange). `recover_held` now makes that delivery
+ready at once, so the third exchange is taken first
+(`integration::pg_recovered_hold_is_ready_and_taken_first`); and L3 threads
+the third into the conversation it opens, before the fourth, whatever
+order they arrive in (`reconstruct.thread.order-independent`;
+`crates/e2e/tests/reorder`), though B's id would still come from the
+fourth. `Live::kill` stops as a killed process would (every task
 aborted, nothing acked or checkpointed, the bus's tasks stopped without
 touching its tables), for restart tests.
 
@@ -715,8 +731,8 @@ on `crates/api/tests/support/pg_world.rs`:
 | INV-1220 `surface.ids.unique-across-restart` | unit `crosstalk_gateway::live::tests::serve_seeds_id_generators_from_entropy` (ran); integration `crosstalk_e2e::restart::minted_ids_never_collide_after_restart` (passed on node0 at d8f5412; flag pending a green node0 run on this branch) |
 | INV-1219 `surface.cursor.survives-restart` | integration `crosstalk_e2e::restart::cursors_resolve_after_restart` (passed on node0; flag pending a green node0 run on this branch) |
 | INV-1210 `transport.spool.bounded` | integration `crosstalk_e2e::spool::full_spool_refuses_and_proxy_still_forwards` (no database; ran; flag pending with the others) |
-| INV-X `transport.stage-pump.no-dropped-delivery` | unit `crosstalk_gateway::live::pg::pump::tests::a_next_dropped_after_its_answer_keeps_the_delivery` (ran) |
-| INV-X `transport.settle.quiet-covers-unadmitted` | integration `crosstalk_gateway::integration::pg_quiet_counts_entries_no_group_admitted_yet` (ran on node0; failed before the fix) |
+| INV-1231 `transport.stage-pump.no-dropped-delivery` | unit `crosstalk_gateway::live::pg::pump::tests::a_next_dropped_after_its_answer_keeps_the_delivery` (ran) |
+| INV-1233 `transport.settle.quiet-covers-unadmitted` | integration `crosstalk_gateway::integration::pg_quiet_counts_entries_no_group_admitted_yet` (ran on node0; failed before the fix) |
 | INV-1221 `ingress.proxy.forwarding-independent-of-capture-store` | `crosstalk_gateway::postgres_down::proxy_forwards_through_outage_and_full_spool` (ran) |
 | INV-581 `topology.frontier.covers-pending` | `crosstalk_gateway::integration::pg_frontier_covers_pending_deliveries` (Postgres, not run) |
 | INV-1202 `transport.consumer.derived-envelope-ids` | `crosstalk_gateway::dst::classifier_redelivery_republishes_the_same_envelope_ids` (ran; the flag covers the whole list, left for the merger) |
