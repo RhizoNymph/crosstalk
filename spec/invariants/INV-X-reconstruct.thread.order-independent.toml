@@ -48,4 +48,4 @@ integration = [
 [evidence-review]
 property = { agent = "true", human = "false" }
 unit = { agent = "true", human = "false" }
-integration = { agent = "false", human = "false" }
+integration = { agent = "true", human = "false" }
