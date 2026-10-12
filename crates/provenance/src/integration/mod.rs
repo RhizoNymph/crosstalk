@@ -8,6 +8,7 @@ mod index;
 mod reads;
 mod restart;
 mod rules;
+mod span_index;
 
 use std::time::Duration;
 
