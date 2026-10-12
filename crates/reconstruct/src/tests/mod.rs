@@ -8,6 +8,7 @@ mod cursor_keys;
 mod dst;
 mod evidence;
 mod fixtures;
+mod order_arrival;
 mod order_props;
 mod order_view;
 mod pg;

@@ -57,9 +57,7 @@ async fn delivered(
     order: &[usize],
 ) -> Result<L3View, TestCaseError> {
     let store = MemoryConversations::new();
-    let mut threader = harness
-        .scene
-        .threader_in(store.clone(), harness.clusters());
+    let mut threader = harness.scene.threader_in(store.clone(), harness.clusters());
     for index in order {
         let (exchange, agent) = &exchanges[*index];
         threader
@@ -134,7 +132,11 @@ fn permutation_draws_every_order_of_three() {
 /// writes the page (two exchanges), B reads it and answers (two
 /// exchanges), each later exchange of a session carrying the history
 /// before it.
-pub(crate) async fn relay(scene: &mut Scene, a: &ClientContext, b: &ClientContext) -> Vec<Exchange> {
+pub(crate) async fn relay(
+    scene: &mut Scene,
+    a: &ClientContext,
+    b: &ClientContext,
+) -> Vec<Exchange> {
     let a_ask = scene.user("publish the rollback runbook").await;
     let a_call = scene.assistant("I'll publish it").await;
     let a_saved = scene.tool("write", "saved").await;
@@ -185,7 +187,11 @@ async fn third_exchange_after_the_fourth_stores_the_in_order_conversations() {
             let (exchange, agent) = &exchanges[index];
             threader.thread(exchange, *agent).await.expect("threads");
         }
-        views.push(view(&store, &mut threader, &exchanges).await.expect("reads"));
+        views.push(
+            view(&store, &mut threader, &exchanges)
+                .await
+                .expect("reads"),
+        );
     }
     assert_eq!(views[1], views[0]);
     let in_order = &views[0];
@@ -232,7 +238,9 @@ async fn late_middle_turn_joins_between_its_neighbours() {
         let (exchange, agent) = &exchanges[index];
         threader.thread(exchange, *agent).await.expect("threads");
     }
-    let got = view(&store, &mut threader, &exchanges).await.expect("reads");
+    let got = view(&store, &mut threader, &exchanges)
+        .await
+        .expect("reads");
     assert_eq!(got.conversation_count(), 1);
     let last = got
         .outcomes
@@ -260,9 +268,12 @@ fn agents_by_first_exchange(view: &L3View) -> BTreeMap<AgentId, ExchangeId> {
     first
 }
 
-/// The view's conversations as (opening exchange, each turn's exchange
-/// and outcome, the agent named by its first exchange).
-fn shape(view: &L3View) -> Vec<(ExchangeId, Vec<(ExchangeId, ThreadOutcomeKind)>, ExchangeId)> {
+/// A conversation as (opening exchange, each turn's exchange and outcome,
+/// its agent named by the agent's first exchange).
+type Shape = (ExchangeId, Vec<(ExchangeId, ThreadOutcomeKind)>, ExchangeId);
+
+/// The view's conversations as [`Shape`]s.
+fn shape(view: &L3View) -> Vec<Shape> {
     let agents = agents_by_first_exchange(view);
     view.conversations
         .iter()
@@ -274,10 +285,7 @@ fn shape(view: &L3View) -> Vec<(ExchangeId, Vec<(ExchangeId, ThreadOutcomeKind)>
                     .iter()
                     .map(|turn| (turn.exchange, turn.outcome))
                     .collect(),
-                agents
-                    .get(&conversation.agent)
-                    .copied()
-                    .unwrap_or(*opening),
+                agents.get(&conversation.agent).copied().unwrap_or(*opening),
             )
         })
         .collect()
