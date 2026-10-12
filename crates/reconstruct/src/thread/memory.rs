@@ -3,19 +3,23 @@
 //! reference the Postgres store is model-tested against.
 //!
 //! One `tokio::sync::Mutex` guards the whole state; a threading call takes
-//! it once, decides (`plan`) and applies the write before
-//! releasing it, so calls are serializable.
+//! it once, decides (`plan`) and applies the write, rewinding and
+//! rethreading later turns when the exchange arrived late (`super::order`,
+//! its `rewind` submodule), before releasing it, so calls are
+//! serializable.
 //!
 //! The seen-message set (`reconstruct.delta.excludes-seen-elsewhere`)
-//! keeps, per attributed agent and message, the latest time it was seen in
-//! each conversation; sightings older than the retention behind the latest
-//! exchange threaded are forgotten after each write, so the set stays
-//! bounded by the retention.
+//! keeps, per attributed agent and message, the time each exchange saw it
+//! in each conversation; sightings older than the retention and the
+//! reorder window behind the latest exchange threaded are forgotten after
+//! each write, so the set stays bounded.
 //!
 //! Each write also records its turn (the spec's `ConversationReads`, read
-//! in its `reads` submodule).
+//! in its `reads` submodule), the turn's place in threading order, and the
+//! call itself, kept for the reorder window.
 
 mod reads;
+mod rewind;
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::sync::Arc;
@@ -32,7 +36,8 @@ use tokio::sync::Mutex;
 use super::config::{SeenRetention, ThreadConfig};
 
 use super::history::{ChainHash, Entry};
-use super::plan::{Extension, Planned, Target, ThreadReads, Write, plan};
+use super::order::{ReorderWindow, ThreadCall, TurnKey};
+use super::plan::{Extension, Target, ThreadReads, Write};
 use super::reads::{Cursors, TurnRow};
 use super::store::{ConversationStore, ResponseKey, ThreadInput, TranscriptEntry};
 use crate::error::{StorageFailure, StoreReason, TxFailure};
@@ -44,11 +49,28 @@ struct Stored {
     history_len: u32,
     head: Option<ChainHash>,
     last_system: Option<MessageHash>,
-    updated: u64,
+    /// Its last turn's key: the latest of the cluster's conversations in
+    /// threading order is the one with the greatest.
+    last_key: TurnKey,
     source: TrafficSource,
     started_at: Timestamp,
     last_turn_at: Timestamp,
 }
+
+/// Where a threaded exchange's turn falls in threading order, and what
+/// undoing it restores.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct TurnMeta {
+    /// When the store took it, among all calls.
+    seq: u64,
+    key: TurnKey,
+    agent: AgentId,
+    /// The conversation's last system message once it was threaded.
+    last_system: Option<MessageHash>,
+}
+
+/// One sighting: an agent saw a message in a conversation at a time.
+type Sighting = (AgentId, MessageHash, ConversationId, Timestamp);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct StoredEntry {
@@ -74,29 +96,79 @@ impl StoredEntry {
     }
 }
 
+/// How many entries of each conversation hold a value.
+type Holders = BTreeMap<ConversationId, u32>;
+
 /// Every conversation and the indexes the decision looks up.
 #[derive(Debug, Default)]
 struct State {
     conversations: BTreeMap<ConversationId, Stored>,
     entries: BTreeMap<ConversationId, Vec<StoredEntry>>,
     heads: HashMap<ChainHash, BTreeSet<ConversationId>>,
-    chains: HashMap<ChainHash, BTreeSet<ConversationId>>,
-    holders: HashMap<MessageHash, BTreeSet<ConversationId>>,
-    outputs: HashMap<MessageHash, BTreeSet<ConversationId>>,
+    chains: HashMap<ChainHash, Holders>,
+    holders: HashMap<MessageHash, Holders>,
+    outputs: HashMap<MessageHash, Holders>,
     records: HashMap<ExchangeId, ThreadOutcome>,
     /// Each conversation's turns, in threading order.
     turns: HashMap<ConversationId, Vec<TurnRow>>,
     /// Where each threaded exchange is: its conversation and turn.
     turn_of: HashMap<ExchangeId, (ConversationId, u32)>,
-    responses: HashMap<ResponseKey, (ConversationId, u32)>,
-    updates: u64,
-    /// Each attributed agent's sightings of a message: the latest time it
-    /// was seen in each conversation.
-    seen: HashMap<(AgentId, MessageHash), HashMap<ConversationId, Timestamp>>,
+    /// Each threaded exchange's place in threading order.
+    turn_meta: HashMap<ExchangeId, TurnMeta>,
+    /// Every threaded exchange's key.
+    by_key: BTreeSet<TurnKey>,
+    /// Every threaded exchange by when the store took it.
+    by_seq: BTreeMap<u64, ExchangeId>,
+    next_seq: u64,
+    /// Each filed response: its conversation, history length and the
+    /// exchange that filed it.
+    responses: HashMap<ResponseKey, (ConversationId, u32, ExchangeId)>,
+    /// The response each exchange filed.
+    filed: HashMap<ExchangeId, ResponseKey>,
+    /// Each attributed agent's sightings of a message: the time each
+    /// exchange saw it in each conversation.
+    seen: HashMap<(AgentId, MessageHash), HashMap<(ConversationId, ExchangeId), Timestamp>>,
     /// The same sightings ordered by time, to forget the oldest.
-    seen_by_time: BTreeSet<(Timestamp, AgentId, MessageHash, ConversationId)>,
+    seen_by_time: BTreeSet<(Timestamp, AgentId, MessageHash, ConversationId, ExchangeId)>,
+    /// The sightings each exchange recorded, while its call is kept.
+    seen_by_exchange: HashMap<ExchangeId, Vec<Sighting>>,
     /// The latest exchange start threaded.
     horizon: Option<Timestamp>,
+    /// Each call kept to be threaded again, and the same per attributed
+    /// agent by end.
+    calls: HashMap<ExchangeId, ThreadCall>,
+    calls_by_end: HashMap<AgentId, BTreeSet<(Timestamp, ExchangeId)>>,
+}
+
+fn hold<K: std::hash::Hash + Eq>(
+    index: &mut HashMap<K, Holders>,
+    key: K,
+    conversation: ConversationId,
+) {
+    *index
+        .entry(key)
+        .or_default()
+        .entry(conversation)
+        .or_default() += 1;
+}
+
+fn release<K: std::hash::Hash + Eq>(
+    index: &mut HashMap<K, Holders>,
+    key: &K,
+    conversation: ConversationId,
+) {
+    let Some(holders) = index.get_mut(key) else {
+        return;
+    };
+    if let Some(count) = holders.get_mut(&conversation) {
+        *count = count.saturating_sub(1);
+        if *count == 0 {
+            holders.remove(&conversation);
+        }
+    }
+    if holders.is_empty() {
+        index.remove(key);
+    }
 }
 
 impl State {
@@ -111,64 +183,103 @@ impl State {
             .into_iter()
             .filter_map(|id| self.conversations.get(id).map(|stored| (id, stored)))
             .filter(|(_, stored)| members.contains(&stored.agent))
-            .max_by_key(|(_, stored)| stored.updated)
+            .max_by_key(|(_, stored)| stored.last_key)
             .map(|(id, _)| *id)
     }
 
     fn index(&mut self, conversation: ConversationId, entry: &StoredEntry) {
         if let Some((_, chain)) = entry.history {
-            self.chains.entry(chain).or_default().insert(conversation);
-            self.holders
-                .entry(entry.entry.message)
-                .or_default()
-                .insert(conversation);
+            hold(&mut self.chains, chain, conversation);
+            hold(&mut self.holders, entry.entry.message, conversation);
         }
         if entry.output {
-            self.outputs
-                .entry(entry.entry.message)
-                .or_default()
-                .insert(conversation);
+            hold(&mut self.outputs, entry.entry.message, conversation);
         }
     }
 
-    /// Record that `agent` saw `messages` in `conversation` at `at`, then
-    /// forget every sighting older than `retention` behind the latest
-    /// exchange threaded.
+    fn unindex(&mut self, conversation: ConversationId, entry: &StoredEntry) {
+        if let Some((_, chain)) = entry.history {
+            release(&mut self.chains, &chain, conversation);
+            release(&mut self.holders, &entry.entry.message, conversation);
+        }
+        if entry.output {
+            release(&mut self.outputs, &entry.entry.message, conversation);
+        }
+    }
+
+    /// Forget one sighting.
+    fn unsee(&mut self, (agent, message, conversation, at): Sighting, exchange: ExchangeId) {
+        self.seen_by_time
+            .remove(&(at, agent, message, conversation, exchange));
+        if let Some(sightings) = self.seen.get_mut(&(agent, message)) {
+            sightings.remove(&(conversation, exchange));
+            if sightings.is_empty() {
+                self.seen.remove(&(agent, message));
+            }
+        }
+    }
+
+    /// Record that `input`'s agent saw `messages` in `conversation`, then
+    /// forget every sighting older than `retention` and `window` behind
+    /// the latest exchange threaded.
     fn see(
         &mut self,
-        agent: AgentId,
+        input: &ThreadInput,
         conversation: ConversationId,
         messages: &[MessageHash],
-        at: Timestamp,
         retention: SeenRetention,
+        window: ReorderWindow,
     ) {
+        let (agent, at, exchange) = (input.agent, input.at, input.exchange);
+        let mut recorded = Vec::with_capacity(messages.len());
         for message in messages {
-            let sightings = self.seen.entry((agent, *message)).or_default();
-            let previous = sightings.get(&conversation).copied();
-            if previous.is_some_and(|previous| previous >= at) {
-                continue;
-            }
-            sightings.insert(conversation, at);
-            if let Some(previous) = previous {
-                self.seen_by_time
-                    .remove(&(previous, agent, *message, conversation));
-            }
+            self.seen
+                .entry((agent, *message))
+                .or_default()
+                .insert((conversation, exchange), at);
             self.seen_by_time
-                .insert((at, agent, *message, conversation));
+                .insert((at, agent, *message, conversation, exchange));
+            recorded.push((agent, *message, conversation, at));
         }
+        self.seen_by_exchange.insert(exchange, recorded);
         let horizon = self.horizon.map_or(at, |horizon| horizon.max(at));
         self.horizon = Some(horizon);
-        let cutoff = retention.cutoff(horizon);
-        while let Some(&(time, agent, message, conversation)) = self.seen_by_time.first() {
+        let cutoff = window.before(retention.cutoff(horizon));
+        while let Some(&(time, agent, message, conversation, exchange)) = self.seen_by_time.first()
+        {
             if time >= cutoff {
                 break;
             }
-            self.seen_by_time.pop_first();
-            if let Some(sightings) = self.seen.get_mut(&(agent, message)) {
-                sightings.remove(&conversation);
-                if sightings.is_empty() {
-                    self.seen.remove(&(agent, message));
+            self.unsee((agent, message, conversation, time), exchange);
+        }
+    }
+
+    /// Keep `input`'s call, and forget every call of its cluster that
+    /// ended more than `window` before it (with what undoing its turn
+    /// would need).
+    fn keep(&mut self, input: &ThreadInput, window: ReorderWindow) {
+        self.calls.insert(input.exchange, ThreadCall::of(input));
+        self.calls_by_end
+            .entry(input.agent)
+            .or_default()
+            .insert((input.ended_at, input.exchange));
+        let cutoff = window.before(input.ended_at);
+        for member in &input.members {
+            let Some(kept) = self.calls_by_end.get_mut(member) else {
+                continue;
+            };
+            let mut forgotten = Vec::new();
+            while let Some(&(ended, exchange)) = kept.first() {
+                if ended >= cutoff {
+                    break;
                 }
+                kept.pop_first();
+                forgotten.push(exchange);
+            }
+            for exchange in forgotten {
+                self.calls.remove(&exchange);
+                self.seen_by_exchange.remove(&exchange);
+                self.filed.remove(&exchange);
             }
         }
     }
@@ -178,9 +289,11 @@ impl State {
         input: &ThreadInput,
         write: &Write,
         retention: SeenRetention,
+        window: ReorderWindow,
     ) -> Result<(), StorageFailure> {
         let exchange = input.exchange;
-        self.updates += 1;
+        let seq = self.next_seq;
+        self.next_seq += 1;
         let id = write.conversation;
         match write.target {
             Target::New {
@@ -215,7 +328,7 @@ impl State {
                         history_len: 0,
                         head: None,
                         last_system: None,
-                        updated: 0,
+                        last_key: input.key(),
                         source: input.source.clone(),
                         started_at: input.at,
                         last_turn_at: input.at,
@@ -258,7 +371,17 @@ impl State {
             history_end: write.history_len,
         });
         self.turn_of.insert(exchange, (id, turn));
-        let updates = self.updates;
+        self.turn_meta.insert(
+            exchange,
+            TurnMeta {
+                seq,
+                key: input.key(),
+                agent: input.agent,
+                last_system: write.last_system,
+            },
+        );
+        self.by_key.insert(input.key());
+        self.by_seq.insert(seq, exchange);
         let stored =
             self.conversations
                 .get_mut(&id)
@@ -269,7 +392,7 @@ impl State {
         stored.history_len = write.history_len;
         stored.head = write.head;
         stored.last_system = write.last_system;
-        stored.updated = updates;
+        stored.last_key = input.key();
         stored.last_turn_at = input.at;
         if let Some(old) = old_head
             && let Some(set) = self.heads.get_mut(&old)
@@ -280,10 +403,14 @@ impl State {
             self.heads.entry(head).or_default().insert(id);
         }
         self.records.insert(exchange, write.outcome.clone());
-        if let Some((key, len)) = &write.response {
-            self.responses.entry(key.clone()).or_insert((id, *len));
+        if let Some((key, len)) = &write.response
+            && !self.responses.contains_key(key)
+        {
+            self.responses.insert(key.clone(), (id, *len, exchange));
+            self.filed.insert(exchange, key.clone());
         }
-        self.see(input.agent, id, &write.seen, input.at, retention);
+        self.see(input, id, &write.seen, retention, window);
+        self.keep(input, window);
         Ok(())
     }
 }
@@ -355,7 +482,7 @@ impl ThreadReads for Reads<'_> {
                 break;
             }
             if let Some(candidates) = self.state.chains.get(chain)
-                && let Some(conversation) = self.state.latest_of(members, candidates)
+                && let Some(conversation) = self.state.latest_of(members, candidates.keys())
             {
                 return Ok(Some((conversation, (index + 1) as u32)));
             }
@@ -372,7 +499,7 @@ impl ThreadReads for Reads<'_> {
             .state
             .responses
             .get(key)
-            .copied()
+            .map(|(conversation, len, _)| (*conversation, *len))
             .filter(|(conversation, _)| {
                 self.state
                     .conversations
@@ -409,7 +536,7 @@ impl ThreadReads for Reads<'_> {
             .state
             .outputs
             .get(&message)
-            .and_then(|candidates| self.state.latest_of(members, candidates)))
+            .and_then(|candidates| self.state.latest_of(members, candidates.keys())))
     }
 
     async fn holder(
@@ -420,7 +547,7 @@ impl ThreadReads for Reads<'_> {
         let candidates: BTreeSet<ConversationId> = messages
             .iter()
             .filter_map(|message| self.state.holders.get(message))
-            .flatten()
+            .flat_map(BTreeMap::keys)
             .copied()
             .collect();
         Ok(self.state.latest_of(members, &candidates))
@@ -447,9 +574,9 @@ impl ThreadReads for Reads<'_> {
                         .seen
                         .get(&(*agent, *message))
                         .is_some_and(|sightings| {
-                            sightings
-                                .iter()
-                                .any(|(other, at)| *other != conversation && *at >= self.cutoff)
+                            sightings.iter().any(|((other, _), at)| {
+                                *other != conversation && *at >= self.cutoff
+                            })
                         })
                 })
             })
@@ -483,6 +610,7 @@ impl ThreadReads for Reads<'_> {
 pub struct MemoryConversations {
     state: Arc<Mutex<State>>,
     config: ThreadConfig,
+    window: ReorderWindow,
     cursors: Cursors,
 }
 
@@ -497,8 +625,16 @@ impl MemoryConversations {
         Self {
             state: Arc::default(),
             config,
+            window: ReorderWindow::default(),
             cursors: Cursors::default(),
         }
+    }
+
+    /// The same store, keeping each call for `window` to thread it again
+    /// when an exchange that ended before it arrives later.
+    pub fn with_reorder_window(mut self, window: ReorderWindow) -> Self {
+        self.window = window;
+        self
     }
 
     /// The same store, its list cursors tagged with `key`.
@@ -528,23 +664,14 @@ impl ExchangePlacements for MemoryConversations {
 impl ConversationStore for MemoryConversations {
     async fn thread(&self, input: ThreadInput) -> Result<ThreadOutcome, ThreadError> {
         let mut state = self.state.lock().await;
-        let retention = self.config.seen_retention;
-        let mut reads = Reads {
-            state: &state,
-            cutoff: retention.cutoff(input.at),
+        let mut step = rewind::Step {
+            state: &mut state,
+            retention: self.config.seen_retention,
+            window: self.window,
         };
-        let planned = plan(&mut reads, &input)
+        super::order::thread(&mut step, &input)
             .await
-            .map_err(|failure| ThreadError::from_failure(&failure.into()))?;
-        match planned {
-            Planned::Recorded(outcome) => Ok(outcome),
-            Planned::Write(write) => {
-                state
-                    .apply(&input, &write, retention)
-                    .map_err(|failure| ThreadError::from_failure(&failure))?;
-                Ok(write.outcome)
-            }
-        }
+            .map_err(|failure| ThreadError::from_failure(&failure.into()))
     }
 
     async fn conversation(&self, id: ConversationId) -> Result<Option<Conversation>, ThreadError> {
