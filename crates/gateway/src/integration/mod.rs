@@ -499,7 +499,10 @@ async fn pg_quiet_counts_entries_no_group_admitted_yet() {
         )
         .await
         .expect("subscribes");
-    assert!(!quiet.busy(&slots).await.expect("reads"), "nothing published");
+    assert!(
+        !quiet.busy(&slots).await.expect("reads"),
+        "nothing published"
+    );
 
     bus.publish(envelope(1, Timestamp::from_micros(T0)))
         .await
