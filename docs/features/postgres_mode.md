@@ -109,7 +109,7 @@ acks).
 ### The bus clock
 
 `PgBus` times its delays (a nacked or timed-out delivery's
-`available_at`, a recovered hold's backoff) with the wall clock
+`available_at`) with the wall clock
 (`live::pg::bus_clock`), whatever clock the live process runs on, as
 `MpscBus` times its retries on tokio time. A delayed delivery becomes
 ready only once the bus clock passes its `available_at`; under a manual
@@ -307,14 +307,26 @@ What happens to a held row nobody acks (`crates/transport/src/pg/reaper.rs`,
   at start).
 - When the bus's tasks are stopped (`Live::shutdown`/`kill`, the
   lock-loss stopgap), nothing reaps: a held row stays held until the next
-  process's `recover_held`, which delays it with the attempt counted, or
-  dead-letters it on its last attempt. The delay is the group's backoff,
-  so an envelope published after it (a drained spool record) is taken
-  first: L2 promises no order (`transport.ordering.unconstrained`), and
-  L3's threading depends on it (a later turn threaded first starts the
-  conversation; the earlier one then starts another). An outage that
-  interrupts a delivery can therefore change the answers; the outage
-  tests cut only a settled pipeline.
+  process's `recover_held`, which makes it `ready` at once, with no
+  backoff and the attempt counted (the dead holder's take counted it;
+  recovery adds none), or dead-letters it on its last attempt. Takes go
+  by log `seq`, so a single consumer of the group takes, after a restart:
+  every `ready` row in `seq` order, the recovered ones among them (each
+  ahead of every entry published after it, a drained spool record
+  included), then entries admitted from the log as it pulls, in `seq`
+  order; a row a live process delayed before the stop (a nack, an ack
+  timeout) joins in `seq` order once its `available_at` passes
+  (`transport.restart.recovered-ready-first`).
+  Until this fix the recovered row was delayed by the group's backoff,
+  so the drained record was taken first: L2 promises no order
+  (`transport.ordering.unconstrained`), and L3 threads by arrival (a
+  later turn threaded first starts the conversation; the earlier one then
+  starts another), so an outage that interrupted a delivery changed the
+  answers. That exposure is closed at L2 for the restart case. Other
+  redeliveries in a live process (a nack, an ack timeout, a dropped
+  subscription, the stale-hold sweep) keep their backoff and can still
+  reorder; making L3 tolerate a reordered arrival is being done
+  separately.
 
 So a single lost race delays an event by at most about 95 s and loses
 nothing; only five losses of one delivery dead-letter it. With every
@@ -352,7 +364,9 @@ there let `spool_outage_twice`'s second cut land while L3 was handling the
 third exchange; the next process's `recover_held` delayed that delivery
 by its backoff and the drained fourth exchange, taken first, started the
 conversation the third should have (an extra conversation, agent B's id
-minted from the fourth exchange). `Live::kill` stops as a killed process would (every task
+minted from the fourth exchange). `recover_held` now makes that delivery
+ready at once, so the third exchange is taken first
+(`integration::pg_recovered_hold_is_ready_and_taken_first`). `Live::kill` stops as a killed process would (every task
 aborted, nothing acked or checkpointed, the bus's tasks stopped without
 touching its tables), for restart tests.
 

@@ -21,7 +21,8 @@ whenever a `store` is configured (wired by W8: [postgres_mode](postgres_mode.md)
   attempt 1, list newest envelope first with cursors).
 - Durability and restart: `publish` returning `Ok` means the envelope is
   in `transport.events`; groups and deliveries persist; `recover_held`
-  returns deliveries a stopped process held, attempt counted.
+  returns deliveries a stopped process held, ready at once with no
+  backoff, attempt counted.
 - Idempotent publish on `Envelope::id`.
 - `group_stats` (pending count, oldest pending `at`, dead letters, oldest
   dead letter `at` per group) for the frontier and `/healthz`.
@@ -117,8 +118,9 @@ fail(group, seq, attempt, failure)                     one transaction, conditio
 
 recover_held()                                         at start, before consumers subscribe
   held rows on their group's last attempt → dead letters ("process restarted while
-  holding the delivery"); every other held row → delayed by its group's backoff
-  (attempt counted, as MpscBus counts a dropped holder)
+  holding the delivery"); every other held row → ready at once, no backoff,
+  available_at NULL (attempt as the dead holder was given it: the take
+  counted it, as MpscBus counts a dropped holder; recovery adds none)
 
 PgDeadLetters
   put     → the envelope into events (routed = false if new) + upsert the letter
@@ -152,6 +154,21 @@ each notification and each reconnect) and the reaper task. Both stop on
 `shutdown` or when the last `PgBus` handle drops; subscriptions then see
 `None`. Neither touches the database on stop: a dropped bus is a stopped
 process.
+
+Restart order. Takes go by `seq` among `ready` rows. `recover_held` makes
+every recovered hold `ready` with no backoff, so after a restart a single
+consumer of a group takes its `ready` rows (recovered or never taken) in
+`seq` order, then what it admits from the log as it pulls, in `seq`
+order; rows a live process delayed before the stop join once due. A
+recovered delivery is therefore taken before every entry published after
+it, a spool record drained after the outage included
+(`transport.restart.recovered-ready-first`). This is the only redelivery
+without a backoff: a nack, an ack timeout and a dropped holder are
+failures of a live consumer and keep `transport.retry.backoff-floor`.
+The stale-hold sweep keeps it too: it cannot tell a hold a dying process
+committed after the next `recover_held` from one a live taker lost track
+of, and by the time a hold is stale the consumer has taken later entries
+for minutes, so no order is left to restore.
 
 Stale holds. Each hold records `held_at` (bus clock; `0002_held_at.sql`).
 A process that subscribed a group sweeps, every ack timeout, the holds
@@ -221,7 +238,9 @@ checkpoint interval; W8 checks that at start.
 - `integration::*` (Postgres): `pg_publish_survives_restart`,
   `pg_publish_is_idempotent_on_id`,
   `pg_held_delivery_redelivered_after_restart` (and dead-lettering on the
-  last attempt), `pg_dead_letters_persist_and_replay`,
+  last attempt), `pg_recovered_hold_is_ready_and_taken_first` (a
+  recovered hold is ready at once and taken before entries published
+  after it), `pg_dead_letters_persist_and_replay`,
   `pg_prune_never_drops_an_unacked_event`,
   `pg_group_stats_agree_with_deliveries`,
   `pg_group_capacity_bounds_admission`,
@@ -234,6 +253,7 @@ checkpoint interval; W8 checks that at start.
 | INV-1203 `transport.durability.pg-publish-persisted` | `integration::pg_publish_survives_restart` |
 | INV-1204 `transport.publish.idempotent-on-id` | `integration::pg_publish_is_idempotent_on_id` |
 | INV-1205 `transport.restart.held-redelivered` | `integration::pg_held_delivery_redelivered_after_restart` |
+| INV-X `transport.restart.recovered-ready-first` | `integration::pg_recovered_hold_is_ready_and_taken_first` |
 | INV-X `transport.retention.prune-keeps-unfinished` | `integration::pg_prune_never_drops_an_unacked_event` |
 
 All four are Postgres integration tests, written but not run by the

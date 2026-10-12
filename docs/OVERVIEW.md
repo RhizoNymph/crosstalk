@@ -1082,8 +1082,9 @@ Features Index:
       next admits, makes due delays ready and takes a row FOR UPDATE SKIP
       LOCKED in one transaction, waking on LISTEN/NOTIFY or a poll; ack
       deadlines in a reaper task; delays from the injected clock;
-      recover_held returns a stopped process's held deliveries with the
-      attempt counted; group_stats for the frontier; prune for 7-day
+      recover_held returns a stopped process's held deliveries ready at
+      once (no backoff, so taken before later entries) with the attempt
+      counted; group_stats for the frontier; prune for 7-day
       retention behind the slowest group; DrainTarget for the spool. Not
       yet built by serve (W8).
     entry_points:
