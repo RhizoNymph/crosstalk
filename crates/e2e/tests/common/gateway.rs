@@ -37,7 +37,8 @@ use serde_json::Value;
 use tokio::time::Instant;
 
 use super::{
-    PENDING_DELIVERIES, POLL, Volume, WAIT, migrated, passes, read, settle, start_pg, stop_pg,
+    PENDING_DELIVERIES, POLL, UNADMITTED_ENTRIES, Volume, WAIT, migrated, passes, read, settle,
+    start_pg, stop_pg,
 };
 
 pub const PREFIX: &str = "/anthropic";
@@ -467,7 +468,10 @@ impl Gateway {
 
     /// Wait until the pipeline runs on a reachable database with a direct
     /// spool, and nothing is pending: `/readyz` `ok`, the spool empty, no
-    /// delivery held by any group.
+    /// log entry a group has still to admit, no delivery held by any group.
+    /// (Without the log entries it returned while L3 had yet to take the
+    /// third exchange; the next outage then cut L3 mid-delivery, and the
+    /// restart's redelivery let the spooled fourth exchange overtake it.)
     ///
     /// A restarted gateway may find the pipeline lock still held by the
     /// stopped process's session: after a network partition (a `DbLink`
@@ -523,12 +527,18 @@ impl Gateway {
         within(running, what, async {
             let mut quiet = 0;
             while quiet < 2 {
+                // Spool, log, deliveries: an envelope moving from one to
+                // the next between two reads is seen by the later one.
+                let spooled = running.health().spool.map_or(0, |spool| spool.records);
+                let (unadmitted,): (i64,) = sqlx::query_as(UNADMITTED_ENTRIES)
+                    .fetch_one(db.pool())
+                    .await
+                    .expect("reads");
                 let (pending,): (i64,) = sqlx::query_as(PENDING_DELIVERIES)
                     .fetch_one(db.pool())
                     .await
                     .expect("reads");
-                let spooled = running.health().spool.map_or(0, |spool| spool.records);
-                quiet = match pending == 0 && spooled == 0 {
+                quiet = match spooled == 0 && unadmitted == 0 && pending == 0 {
                     true => quiet + 1,
                     false => 0,
                 };

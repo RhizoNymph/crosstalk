@@ -69,6 +69,13 @@ pub const OUTBOX_ROWS: &str = "SELECT (SELECT count(*) FROM reconstruct.outbox) 
 /// Deliveries any group holds, ready, held or delayed.
 pub const PENDING_DELIVERIES: &str = "SELECT count(*) FROM transport.deliveries";
 
+/// Log entries some group takes but has not admitted yet: past its
+/// `admitted_through`, in no delivery row until its consumer pulls again
+/// (as `crosstalk_gateway::live::frontier::unadmitted` reads them).
+pub const UNADMITTED_ENTRIES: &str = "SELECT count(*) FROM transport.groups g \
+     JOIN transport.events e ON e.seq > g.admitted_through \
+         AND e.routed AND e.subject = ANY(g.subjects)";
+
 pub fn secret() -> Arc<KeyedHasher> {
     let secret =
         DeploymentSecret::from_hex(SecretVersion(1), SECRET_HEX).expect("a valid test secret");
