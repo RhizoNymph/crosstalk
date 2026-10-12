@@ -1517,7 +1517,10 @@ Features Index:
       reader message and by origin span, and each exchange's start, read
       back by the L4 stage so a restart loses none) in memory and on
       Postgres, the Postgres pair model-tested against the memory one
-      under every match rule and across a restart; a
+      under every match rule and across a restart, both serving the
+      spec's SpanIndex (spans the scans committed, plus spans recorded
+      with no scan behind them, such as the synthetic world's origin
+      spans); a
       semantic matcher stub until P6.2. Validated on AgentDojo: 9948 of
       9949 exposed injection slots matched.
     entry_points:
@@ -1532,8 +1535,10 @@ Features Index:
       - crates/provenance/src/fingerprint/mod.rs
       - crates/provenance/src/index/pg.rs
       - crates/provenance/src/store/mod.rs
+      - crates/provenance/src/store/reads.rs
       - crates/provenance/migrations/0001_provenance.sql
       - crates/provenance/migrations/0002_forwarded_spans.sql
+      - crates/provenance/migrations/0004_recorded_spans.sql
     depends_on: [type_spec, spec_primitives, store, memory, transport, sim, testkit, workspace]
     doc: docs/features/provenance.md
   deploy:

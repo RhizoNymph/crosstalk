@@ -92,6 +92,11 @@ No evidence slot: `PgEvidence` reads spans from L4's `SpanIndex` and
 accesses and resources from L5's tables (a read-only stopgap read of
 `flow.accesses`/`flow.resources`: the Postgres registry does not
 implement the spec's `AccessStore` yet).
+`PgProvenanceStore`'s `SpanIndex` answers with the spans the scans
+committed and the spans recorded through `SpanIndex::record` with no
+scan behind them (`provenance.recorded_spans`): the conformance world's
+seed records each content match's origin span that way, so the evidence
+page finds it ([provenance.md](provenance.md)).
 
 **Pumped subscriptions.** `PgSubscription::next` dropped while its take
 commits leaves the delivery held until the reaper's provisional deadline.
