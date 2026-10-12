@@ -21,12 +21,13 @@ use crosstalk_spec::interfaces::l6_analysis::{
 };
 use crosstalk_spec::paging::{Page, PageRequest, SearchList};
 use crosstalk_spec::support::{NonEmpty, Similarity, TimeWindow};
+use crosstalk_store::ColumnWindow;
 use sqlx::PgConnection;
 
 use super::text::{Mode, statement};
 use super::{Candidate, PgSearchIndex, TopicAssignments, admitted, current_model, retains};
 use crate::pg::StorageFailure;
-use crate::pg::codec::{id_text, micros, to_json};
+use crate::pg::codec::{id_text, to_json};
 use crate::pg::cursor;
 
 /// The list name search cursors are tagged with.
@@ -187,12 +188,11 @@ where
         after: Option<(f32, TransmissionId)>,
     ) -> Result<Vec<(Candidate, String, f32)>, StorageFailure> {
         let (mode, text, values, model) = query_parts(query);
-        let (start, end) = match window {
-            Some(window) => (
-                Some(micros("window start", window.start())?),
-                Some(micros("window end", window.end())?),
-            ),
+        let (start, end) = match window.map(ColumnWindow::of) {
             None => (None, None),
+            Some(ColumnWindow::Within(bounds)) => (Some(bounds.start()), bounds.end()),
+            // The window starts past every stored confirmation: no candidate.
+            Some(ColumnWindow::Beyond) => return Ok(Vec::new()),
         };
         let rows: Vec<Row> = sqlx::query_as(sqlx::AssertSqlSafe(statement(mode)))
             .bind(text)
