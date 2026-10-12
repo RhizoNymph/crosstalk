@@ -156,12 +156,15 @@ impl PipelineLock {
 
     /// Resolves with why once the lock may be lost (its session failed a
     /// ping or did not answer one in time), at most [`DETECTION`] after
-    /// the session went silent. Pending forever after the first call.
+    /// the session went silent. Cancel safe: a call dropped before the
+    /// loss leaves it for the next call. Pending forever once it resolved.
     pub async fn lost(&mut self) -> LockLoss {
-        match self.lost.take() {
-            Some(lost) => lost.await.unwrap_or(LockLoss::HolderStopped),
-            None => std::future::pending().await,
-        }
+        let Some(lost) = self.lost.as_mut() else {
+            return std::future::pending().await;
+        };
+        let loss = lost.await.unwrap_or(LockLoss::HolderStopped);
+        self.lost = None;
+        loss
     }
 }
 
@@ -229,6 +232,38 @@ mod tests {
         assert_eq!(DETECTION, PING + PING_TIMEOUT);
         assert!(DETECTION <= Duration::from_secs(10), "{DETECTION:?}");
         assert!(DETECTION < SERVER_REAP);
+    }
+
+    /// The pipeline task watches `lost` through the start, drops that
+    /// call, then watches again while running: the loss must reach the
+    /// second call.
+    #[tokio::test]
+    async fn a_dropped_lost_call_leaves_the_loss_for_the_next() {
+        let (lost_tx, lost) = oneshot::channel();
+        let mut lock = PipelineLock {
+            holder: tokio::spawn(std::future::pending()),
+            lost: Some(lost),
+        };
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), lock.lost())
+                .await
+                .is_err(),
+            "nothing lost yet"
+        );
+        let loss = LockLoss::PingTimedOut {
+            after: PING_TIMEOUT,
+        };
+        lost_tx.send(loss.clone()).expect("the lock listens");
+        let reported = tokio::time::timeout(Duration::from_secs(1), lock.lost())
+            .await
+            .expect("the loss reaches the next call");
+        assert_eq!(reported, loss);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(10), lock.lost())
+                .await
+                .is_err(),
+            "pending once reported"
+        );
     }
 
     #[test]
