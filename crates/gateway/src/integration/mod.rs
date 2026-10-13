@@ -5,6 +5,7 @@
 //! and skips, passing, without one.
 
 mod lock;
+mod pool_close;
 
 use std::future::Future;
 use std::num::{NonZeroU16, NonZeroU32};
