@@ -13,10 +13,11 @@ use crosstalk_e2e::answers::Answers;
 use crosstalk_e2e::options;
 use crosstalk_e2e::scenario::{DEFAULT_START, Scenario, WireExchange};
 use crosstalk_gateway::config::GatewayConfig;
-use crosstalk_gateway::gateway::{self, FatalCause, Running, StartError};
+use crosstalk_gateway::gateway::{self, Running, StartError};
 use crosstalk_gateway::live::LiveClock;
 use crosstalk_gateway::live::Slot;
 use crosstalk_gateway::live::pg::diagnose::{DiagnoseFrom, diagnose};
+use crosstalk_gateway::live::recovery::{LockState, PipelinePhase};
 use crosstalk_gateway::role::Role;
 use crosstalk_gateway::store::lock::PIPELINE_LOCK;
 use crosstalk_memory::support::ManualClock;
@@ -312,8 +313,8 @@ pub fn has_line(text: &str, line: &str) {
     );
 }
 
-/// How long a restarted gateway may see `pipeline_lock: held elsewhere`:
-/// the server's reaping of a partitioned session (about 25 s with deploy's
+/// How long a gateway may see `pipeline_lock: held elsewhere`: the
+/// server's reaping of a partitioned session (about 25 s with deploy's
 /// `tcp_keepalives_*`) and a margin.
 pub const LOCK_RELEASE: Duration = Duration::from_secs(60);
 
@@ -439,8 +440,9 @@ impl Gateway {
         .await;
     }
 
-    /// Poll `/readyz` until `ready` holds. A pipeline that stopped (its
-    /// lock lost) fails at once: it would never recover.
+    /// Poll `/readyz` until `ready` holds. A pipeline that stopped fails at
+    /// once: it would never recover. A lost lock does not: the pipeline
+    /// resumes in process.
     pub async fn readyz_until(
         &self,
         what: &str,
@@ -454,7 +456,7 @@ impl Gateway {
                     return body;
                 }
                 let pipeline = body["pipeline"].as_str().unwrap_or_default();
-                if pipeline.starts_with("stopped") || body["pipeline_lock"] == "lost" {
+                if pipeline.starts_with("stopped") {
                     panic!(
                         "{what}: the pipeline stopped and will not recover: {body}\n{}",
                         state(running).await
@@ -473,9 +475,9 @@ impl Gateway {
     /// third exchange; the next outage then cut L3 mid-delivery, and the
     /// restart's redelivery let the spooled fourth exchange overtake it.)
     ///
-    /// A restarted gateway may find the pipeline lock still held by the
-    /// stopped process's session: after a network partition (a `DbLink`
-    /// cut) the server keeps that backend, and its advisory lock, until it
+    /// A resuming gateway may find the pipeline lock still held by its
+    /// abandoned incarnation's session: after a network partition the
+    /// server keeps that backend, and its advisory lock, until it
     /// notices the dead peer, about 25 s with deploy's server keepalives
     /// (`tcp_keepalives_idle=10`, `interval=5`, `count=3`), hours with the
     /// OS defaults. `pipeline_lock: held elsewhere` may last
@@ -492,7 +494,7 @@ impl Gateway {
                 break;
             }
             let pipeline = body["pipeline"].as_str().unwrap_or_default();
-            if pipeline.starts_with("stopped") || body["pipeline_lock"] == "lost" {
+            if pipeline.starts_with("stopped") {
                 panic!(
                     "{what}: the pipeline stopped and will not recover: {body}\n{}\nsessions:\n{}",
                     state(running).await,
@@ -612,22 +614,21 @@ pub async fn uninterrupted(test: &str, scenario: &Scenario) -> Option<[Answers; 
 }
 
 /// A database outage while `gateway` runs: the link cut, `exchanges`
-/// forwarded unchanged and spooled, the pipeline's lock lost
-/// (`Running::fatal`: `serve` exits non-zero there for its supervisor to
-/// restart it), the gateway stopped gracefully, a fresh one started on the
-/// same data directory with the link still cut (the spool recovered from
-/// disk, `/readyz` 200 degraded), then the link restored and the spool
-/// drained. Returns the fresh gateway.
+/// forwarded unchanged and spooled, the pipeline's lock lost and its
+/// incarnation abandoned while the process keeps forwarding and spooling
+/// (`/readyz` 200 degraded, `waiting_for_database`), then the link
+/// restored: the same process takes the lock again, recovers and drains
+/// the spool. Returns the gateway, never restarted.
 pub async fn outage(
     gateway: Gateway,
     db: &TestDb,
     link: &DbLink,
     upstream: &FakeUpstream,
-    restart: (&GatewayConfig, &str),
     exchanges: &[WireExchange],
     captured_before: u64,
 ) -> Gateway {
     let spooled = u64::try_from(exchanges.len()).expect("fits");
+    let before = gateway.running.health().spool.expect("a spool");
     link.cut();
     gateway
         .send(upstream, exchanges, captured_before + spooled)
@@ -641,63 +642,58 @@ pub async fn outage(
     has_line(&text, "crosstalk_spool_state{state=\"spooling\"} 1");
     has_line(&text, &format!("crosstalk_spool_records {spooled}"));
 
-    // The lock's session failed with the connection: the process must
-    // exit to be restarted.
-    let fatal = within(
+    // The lock's session failed with the connection: the incarnation is
+    // abandoned and the process waits for the database, forwarding and
+    // spooling throughout.
+    let mut status = gateway
+        .running
+        .postgres()
+        .expect("postgres mode")
+        .status
+        .reader();
+    let lost = within(
         &gateway.running,
         "the pipeline lock's loss",
-        gateway.running.fatal(),
+        status.wait_until(|status| status.lock == LockState::Lost),
     )
-    .await;
-    assert_eq!(fatal.cause, FatalCause::PipelineLockLost, "{fatal:?}");
-    assert!(
-        fatal.detail.contains("pipeline lock lost"),
-        "{}",
-        fatal.detail
-    );
-    let clock = gateway.clock.clone();
-    let bound = gateway.running.shutdown_bound();
-    if tokio::time::timeout(bound, gateway.running.shutdown())
-        .await
-        .is_err()
-    {
-        panic!("the gateway's shutdown after the lock's loss took over {bound:?}");
-    }
-
-    // The supervisor's restart, the database still down.
-    let (config, url) = restart;
-    let fresh = Gateway {
-        running: start(config, url.to_owned(), &clock).await,
-        clock,
-    };
-    let recovered = fresh.running.health().spool.expect("a spool");
-    assert_eq!(
-        recovered.records, spooled,
-        "recovered from disk: {recovered:?}"
-    );
-    let ready = fresh
-        .readyz_until("the restarted gateway spooling", |status, body| {
+    .await
+    .expect("the reporter lives");
+    assert!(lost.report.lock_losses >= 1, "{lost:?}");
+    let ready = gateway
+        .readyz_until("spooling while the database is down", |status, body| {
             status == StatusCode::OK
                 && body["capture"] == "spooling"
                 && body["pipeline"] == "waiting_for_database"
         })
         .await;
     assert_eq!(ready["status"], "degraded", "{ready}");
+    assert_eq!(ready["pipeline_lock"], "lost", "{ready}");
 
     link.restore();
-    fresh.settled(db, "the drain after the outage").await;
-    let spool = fresh.running.health().spool.expect("a spool");
+    within(
+        &gateway.running,
+        "the resume after the outage",
+        status.wait_until(|status| {
+            status.lock == LockState::Held && status.phase == PipelinePhase::Running
+        }),
+    )
+    .await
+    .expect("the reporter lives");
+    gateway.settled(db, "the drain after the outage").await;
+    let spool = gateway.running.health().spool.expect("a spool");
     assert_eq!(spool.state, "direct");
-    // Each record drained once: the captures recovered from disk, and
-    // whatever the restarted process spooled itself before its gate opened
-    // (recovery relays a store outbox row the stopped process left behind
-    // through the spool). The bus log holds each capture once (`finish`).
+    // Each record drained once: the captures spooled during the outage and
+    // whatever the resumed incarnation's recovery relayed through the
+    // spool. The bus log holds each capture once (`finish`).
     assert_eq!(
-        spool.drained,
-        spooled + spool.appended,
+        spool.drained, spool.appended,
         "every record drained exactly once: {spool:?}"
     );
-    fresh
+    assert!(
+        spool.appended >= before.appended + spooled,
+        "the outage's captures went through the spool: {spool:?}"
+    );
+    gateway
 }
 
 /// A started gateway on `db` through `link`, its first exchange through.
@@ -750,7 +746,6 @@ impl Run {
             &self.db,
             &self.link,
             &self.upstream,
-            (&self.config, &self.url),
             exchanges,
             captured_before,
         )

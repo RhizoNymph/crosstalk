@@ -9,8 +9,8 @@ use crosstalk_memory::support::ManualClock;
 use common::gateway::*;
 use common::migrated;
 
-/// Two outages in a row, each restarting the gateway: the same answers,
-/// every capture once.
+/// Two outages in a row, each a lock lost and resumed in the same
+/// process: the same answers, every capture once.
 #[test]
 fn database_cut_twice_drains_to_the_uninterrupted_answers() {
     common::big_stack(body);

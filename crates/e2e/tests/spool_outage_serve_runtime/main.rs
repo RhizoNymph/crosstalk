@@ -3,10 +3,11 @@
 //! (tokio's default worker count and worker stack size), only its threads
 //! named (`serve-runtime-worker`), so a stack overflow on the outage path
 //! aborts naming them. The harness itself runs on `common::big_stack`; the
-//! gateway's start, sends' capture, stop and restart all run on the serve
-//! runtime. Cut once, the lock's loss (`Running::fatal`), a graceful stop,
-//! a restart on the same data directory with the database still down, the
-//! drain, the uninterrupted run's answers. See `common::gateway`.
+//! gateway's start, sends' capture, the lost lock's abandon, the resume
+//! and the stop all run on the serve runtime. Cut once, the lock's loss
+//! (the incarnation abandoned, the process spooling on with the database
+//! still down), the link restored, the resume in process and the drain,
+//! the uninterrupted run's answers. See `common::gateway`.
 //! Evidence paths: `crosstalk_e2e::spool_outage_serve_runtime::*`.
 
 #[path = "../common/mod.rs"]
@@ -14,7 +15,8 @@ mod common;
 
 use std::time::Duration;
 
-use crosstalk_gateway::gateway::{FatalCause, Running};
+use crosstalk_gateway::gateway::Running;
+use crosstalk_gateway::live::recovery::{LockState, PipelinePhase};
 use crosstalk_memory::support::ManualClock;
 use hyper::StatusCode;
 use tokio::runtime::Runtime;
@@ -54,13 +56,13 @@ async fn stop_on(runtime: &Runtime, running: Running) {
 }
 
 #[test]
-fn database_cut_on_the_serve_runtime_restarts_and_drains_to_the_uninterrupted_answers() {
+fn database_cut_on_the_serve_runtime_resumes_and_drains_to_the_uninterrupted_answers() {
     common::big_stack(body);
 }
 
 async fn body() {
     const TEST: &str =
-        "database_cut_on_the_serve_runtime_restarts_and_drains_to_the_uninterrupted_answers";
+        "database_cut_on_the_serve_runtime_resumes_and_drains_to_the_uninterrupted_answers";
     let scenario = scenario();
     let Some(expected) = uninterrupted(TEST, &scenario).await else {
         return;
@@ -90,30 +92,44 @@ async fn body() {
         .await;
     let spool = gateway.running.health().spool.expect("a spool");
     assert_eq!(spool.records, 2, "{spool:?}");
-    let fatal = within(
+    let mut status = gateway
+        .running
+        .postgres()
+        .expect("postgres mode")
+        .status
+        .reader();
+    within(
         &gateway.running,
         "the pipeline lock's loss",
-        gateway.running.fatal(),
+        status.wait_until(|status| status.lock == LockState::Lost),
     )
-    .await;
-    assert_eq!(fatal.cause, FatalCause::PipelineLockLost, "{fatal:?}");
-    stop_on(&serve, gateway.running).await;
-
-    let fresh = start_on(&serve, &run, &clock).await;
-    let recovered = fresh.running.health().spool.expect("a spool");
-    assert_eq!(recovered.records, 2, "recovered from disk: {recovered:?}");
-    fresh
-        .readyz_until("the restarted gateway spooling", |status, body| {
+    .await
+    .expect("the reporter lives");
+    gateway
+        .readyz_until("spooling while the database is down", |status, body| {
             status == StatusCode::OK
                 && body["capture"] == "spooling"
                 && body["pipeline"] == "waiting_for_database"
         })
         .await;
     run.link.restore();
-    fresh.settled(&run.db, "the drain after the outage").await;
-    fresh.send(&run.upstream, &scenario.exchanges[3..], 1).await;
-    fresh.settled(&run.db, "the last exchange's pipeline").await;
-    stop_on(&serve, fresh.running).await;
+    within(
+        &gateway.running,
+        "the resume after the outage",
+        status.wait_until(|status| {
+            status.lock == LockState::Held && status.phase == PipelinePhase::Running
+        }),
+    )
+    .await
+    .expect("the reporter lives");
+    gateway.settled(&run.db, "the drain after the outage").await;
+    gateway
+        .send(&run.upstream, &scenario.exchanges[3..], 1)
+        .await;
+    gateway
+        .settled(&run.db, "the last exchange's pipeline")
+        .await;
+    stop_on(&serve, gateway.running).await;
     let shut = tokio::task::spawn_blocking(move || {
         serve.shutdown_timeout(Duration::from_secs(30));
     });

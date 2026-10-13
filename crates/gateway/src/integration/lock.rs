@@ -11,7 +11,8 @@ use tokio::time::Instant;
 
 use super::{database, migrated, ops, pipeline_start, start_probe, stop_pipeline, within};
 use crate::gateway::postgres::{self, LOST_REPORTED, Late};
-use crate::live::recovery::{LockState, PipelinePhase};
+use crate::live::recovery::{LockState, LossReason, PipelinePhase};
+use crate::ops::Phase;
 use crate::store::lock::{
     DETECTION, LockLoss, PING_TIMEOUT, PipelineLock, SERVER_REAP, TAKE_TIMEOUT, TakeError,
 };
@@ -124,8 +125,9 @@ async fn pg_taking_the_lock_across_a_silent_partition_times_out() {
 
 /// The node0 bench's bug, end to end in the pipeline task: a running
 /// pipeline whose lock session is silently partitioned reports
-/// `pipeline_lock: lost` and stops within [`LOST_REPORTED`], instead of
-/// reading `held` and `running` until the link heals.
+/// `pipeline_lock: lost` and abandons its incarnation within
+/// [`LOST_REPORTED`], instead of reading `held` and `running` until the
+/// link heals. The process stays ready, degraded: it resumes in process.
 #[tokio::test(flavor = "multi_thread")]
 async fn pg_a_running_pipeline_reports_its_partitioned_lock_lost_within_the_bound() {
     let Some(db) =
@@ -170,13 +172,23 @@ async fn pg_a_running_pipeline_reports_its_partitioned_lock_lost_within_the_boun
         "pipeline_lock lost reported after {reported:?} (bound {LOST_REPORTED:?}): {}",
         lost.pipeline_text()
     );
+    // Read at the loss or just after the abandon (it takes milliseconds).
     assert!(
-        matches!(&lost.phase, PipelinePhase::Stopped(why) if why.contains("did not answer a ping")),
-        "{:?}",
-        lost.phase
+        matches!(
+            lost.phase,
+            PipelinePhase::Abandoning | PipelinePhase::WaitingForDatabase
+        ),
+        "{lost:?}"
     );
+    assert_eq!(
+        lost.report.last_loss.map(|loss| loss.reason),
+        Some(LossReason::PingTimedOut),
+        "{lost:?}"
+    );
+    assert_eq!(lost.report.lock_losses, 1, "{lost:?}");
     let ready = ops.readiness().await;
-    assert!(!ready.ready, "{ready:?}");
+    assert!(ready.ready, "200 degraded while resuming: {ready:?}");
+    assert_eq!(ready.status, Phase::Degraded, "{ready:?}");
     assert_eq!(ready.pipeline_lock.as_deref(), Some("lost"));
 
     stop_pipeline(task, &probe).await;
