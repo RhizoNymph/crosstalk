@@ -13,17 +13,20 @@
 //! the proxy forwards and capture is durable (in the bus, or in a spool
 //! with room), so it stays 200 while the database is down, with `status:
 //! degraded`, `capture: spooling` and `pipeline: waiting_for_database`;
-//! recovery and draining are degraded too. It is 503 when the spool is
-//! full or corrupt, migrations are behind, the pipeline lock is held
-//! elsewhere (or lost), the pipeline stopped, a task stopped, or the
-//! process drains. The `api` role also needs the database reachable and
-//! migrations at head. A backlog never makes a process unready; it is in
-//! `/healthz`.
+//! recovery and draining are degraded too, and so is the way back after a
+//! lost pipeline lock (`pipeline_lock: lost`, `pipeline: abandoning`, then
+//! waiting for the database and the lock, held elsewhere included, then
+//! recovering): capture never stopped. It is 503 when the spool is full or
+//! corrupt, capture stopped, migrations are behind, the pipeline lock is
+//! held elsewhere by a process this one never took it from (a standby),
+//! the pipeline stopped, a task stopped, or the process drains. The `api`
+//! role also needs the database reachable and migrations at head. A
+//! backlog never makes a process unready; it is in `/healthz`.
 
 pub mod metrics;
 
 use std::collections::BTreeMap;
-use std::sync::{Arc, OnceLock};
+use std::sync::Arc;
 
 use bytes::Bytes;
 use crosstalk_ingress::capture::{CaptureCounts, CaptureStats};
@@ -34,6 +37,7 @@ use hyper::{Method, Request, Response, StatusCode};
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
 
+use crate::gateway::late::LateValue;
 use crate::live::recovery::{RecoveryReport, StatusReader};
 use crate::live::{LiveReport, LiveReporter};
 use crate::log::consumer::{LogCounts, LogStats};
@@ -186,17 +190,19 @@ pub struct Readiness {
     /// before the database answered (always `at_head` in memory mode).
     pub migrations: String,
     /// Postgres mode, a pipeline role: `held`, `held elsewhere`, `lost` or
-    /// `not_taken`.
+    /// `not_taken`. `lost` and, after a loss, `held elsewhere` leave the
+    /// process ready, degraded: it resumes in process.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pipeline_lock: Option<String>,
     /// Postgres mode, a role that captures: `durable`, `spooling`,
-    /// `draining (<n> records)`, `dropping: spool full` or `spool corrupt:
-    /// <segment>`.
+    /// `draining (<n> records)`, `dropping: spool full`, `spool corrupt:
+    /// <segment>` or `stopped` (the process drains, or the proxy or
+    /// capture task ended).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub capture: Option<String>,
-    /// Postgres mode: `running`, `waiting_for_database`,
-    /// `waiting_for_migrations`, `waiting_for_lock`, `recovering`,
-    /// `stopped: <why>` (`not_run` for the `api` role).
+    /// Postgres mode: `running`, `abandoning` (the lock was lost),
+    /// `waiting_for_database`, `waiting_for_migrations`, `waiting_for_lock`,
+    /// `recovering`, `stopped: <why>` (`not_run` for the `api` role).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pipeline: Option<String>,
     /// Postgres mode: `pending`, a recovery step, `done` or `failed: <why>`.
@@ -239,8 +245,8 @@ pub struct PgOps {
     pub bus: PgBus,
     /// The spool, for a role that captures.
     pub spool: Option<LiveBus>,
-    /// The live process's counts, once it started.
-    pub live: Arc<OnceLock<LiveReporter>>,
+    /// The running pipeline incarnation's counts, while one runs.
+    pub live: Arc<LateValue<LiveReporter>>,
     /// The `/healthz` clock: the spool's oldest record's age.
     pub clock: Arc<dyn Clock>,
 }
@@ -255,8 +261,13 @@ impl std::fmt::Debug for PgOps {
 
 /// `/readyz`'s `capture` for a spool's state, and whether it blocks. The
 /// spool counts as full while the last capture was refused full and the
-/// spool has not drained back to `direct` since.
-fn capture_text(stats: &SpoolStats, refusing: bool) -> (String, bool) {
+/// spool has not drained back to `direct` since. Capture that no longer
+/// runs (the process drains, or the proxy's or capture's task ended)
+/// reads `stopped`, whatever the spool holds.
+fn capture_text(stats: &SpoolStats, refusing: bool, running: bool) -> (String, bool) {
+    if !running {
+        return ("stopped".to_owned(), true);
+    }
     if refusing && stats.state != SpoolState::Direct {
         return ("dropping: spool full".to_owned(), true);
     }
@@ -267,6 +278,10 @@ fn capture_text(stats: &SpoolStats, refusing: bool) -> (String, bool) {
         SpoolState::Direct => ("durable".to_owned(), false),
     }
 }
+
+/// The tasks capture runs on: the proxy that hands it exchanges and the
+/// capture stage.
+const CAPTURE_TASKS: [&str; 2] = ["proxy", "capture"];
 
 impl Ops {
     /// The counters, the live report, and in Postgres mode what recovery
@@ -296,11 +311,11 @@ impl Ops {
                 .unwrap_or_default(),
             pipeline: self.pipeline.snapshot(),
             log: self.log.snapshot(),
-            live: self
-                .live
-                .as_ref()
-                .or_else(|| postgres.and_then(|pg| pg.live.get()))
-                .map(LiveReporter::report),
+            live: self.live.as_ref().map(LiveReporter::report).or_else(|| {
+                postgres
+                    .and_then(|pg| pg.live.get())
+                    .map(|live| live.report())
+            }),
             bus: None,
             recovery: postgres.map(|pg| pg.status.snapshot().report),
             spool,
@@ -374,10 +389,15 @@ impl Ops {
             };
         };
         let status = pg.status.snapshot();
+        let capture_running = phase != Phase::Draining
+            && tasks
+                .iter()
+                .filter(|task| CAPTURE_TASKS.contains(&task.name.as_str()))
+                .all(|task| task.running);
         let capture = pg
             .spool
             .as_ref()
-            .map(|spool| capture_text(&spool.stats(), self.pipeline.refusing()));
+            .map(|spool| capture_text(&spool.stats(), self.pipeline.refusing(), capture_running));
         let capture_blocked = capture.as_ref().is_some_and(|(_, blocked)| *blocked);
         let capture_degraded = capture
             .as_ref()

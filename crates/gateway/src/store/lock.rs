@@ -13,7 +13,8 @@
 //! answer within [`PING_TIMEOUT`]. A failed ping, or one that does not
 //! answer in time, means the session (and so the lock) may be gone:
 //! [`PipelineLock::lost`] resolves with a [`LockLoss`] naming which, and
-//! the pipeline stops, since another process may take the lock now. The
+//! the pipeline's incarnation is abandoned, since another process may take
+//! the lock now; the process takes the lock again once it is free. The
 //! holder reports first, then drops the connection without a polite close
 //! (a close would wait on the same dead link).
 //!
@@ -44,6 +45,8 @@ use crosstalk_store::sqlx::{self, Connection};
 use crosstalk_store::{DatabaseUrl, DbFailure, StoreError};
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
+
+use crate::live::recovery::LossReason;
 
 /// The advisory lock key (`crosstal` in ASCII).
 pub const PIPELINE_LOCK: i64 = 0x6372_6f73_7374_616c;
@@ -92,10 +95,16 @@ pub enum LockLoss {
 impl LockLoss {
     /// A stable label for logs and metrics.
     pub fn reason(&self) -> &'static str {
+        self.kind().label()
+    }
+
+    /// Which kind of loss, without its detail: what the recovery report
+    /// keeps.
+    pub fn kind(&self) -> LossReason {
         match self {
-            Self::PingFailed { .. } => "ping_failed",
-            Self::PingTimedOut { .. } => "ping_timed_out",
-            Self::HolderStopped => "holder_stopped",
+            Self::PingFailed { .. } => LossReason::PingFailed,
+            Self::PingTimedOut { .. } => LossReason::PingTimedOut,
+            Self::HolderStopped => LossReason::HolderStopped,
         }
     }
 }
@@ -215,7 +224,7 @@ async fn hold(mut connection: PgConnection, lost: oneshot::Sender<LockLoss>) {
         detail = %loss,
         detection = ?DETECTION,
         server_reap = ?SERVER_REAP,
-        "pipeline lock session failed; the pipeline stops"
+        "pipeline lock session failed; the pipeline incarnation is abandoned"
     );
     let _ = lost.send(loss);
     // Report first, then let go: dropped, not closed, since a polite close

@@ -28,9 +28,10 @@
 //! Postgres mode instead ([`postgres`]): the bus is `PgBus` behind the
 //! publish spool, the stores are the Postgres bundle, and the pipeline
 //! starts once the database answers, its migrations are at head and the
-//! pipeline lock is held, after the recovery sequence. Forwarding and
-//! capture start at once either way. Without one, memory mode is kept
-//! (decision Q7).
+//! pipeline lock is held, after the recovery sequence; a lost lock
+//! abandons the pipeline and the process takes it up again in process.
+//! Forwarding and capture start at once either way, and only a shutdown
+//! stops them. Without one, memory mode is kept (decision Q7).
 
 pub mod late;
 pub mod postgres;
@@ -123,30 +124,6 @@ pub enum StartError {
     Spool(crosstalk_transport::SpoolError),
     #[error("building the capture pipeline: {0}")]
     Pipeline(#[from] crate::pipeline::BuildError),
-}
-
-/// Why a running gateway must stop and be restarted ([`Running::fatal`]).
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Fatal {
-    pub cause: FatalCause,
-    /// What the pipeline status says (`stopped: pipeline lock lost: ...`).
-    pub detail: String,
-}
-
-/// The causes [`Running::fatal`] reports.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum FatalCause {
-    /// The pipeline lock's session failed (a reset connection, a database
-    /// outage): the pipeline stopped and does not resume in this process.
-    PipelineLockLost,
-}
-
-impl FatalCause {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::PipelineLockLost => "pipeline_lock_lost",
-        }
-    }
 }
 
 /// How the shutdown went.
@@ -496,6 +473,8 @@ async fn start_postgres(
     };
     if role != Role::Api {
         let log_tasks = Arc::clone(&late.log_tasks);
+        // While no incarnation runs (before the first, after a lost lock)
+        // there is nothing to stop: the probes read running.
         if role.runs_pipeline() {
             tasks.probe("exchange_log", move || {
                 log_tasks
@@ -504,7 +483,9 @@ async fn start_postgres(
             });
         }
         let stages = Arc::clone(&late.stages);
-        tasks.probe("live", move || stages.get().is_none_or(StagesRunning::all));
+        tasks.probe("live", move || {
+            stages.get().as_ref().is_none_or(StagesRunning::all)
+        });
     }
     let (phase, phase_watch) = watch::channel(Phase::Ok);
     let drain = config.shutdown.drain_timeout();
@@ -640,6 +621,7 @@ async fn start_postgres(
         live: None,
         postgres: Some(postgres::PgRunning {
             pool: side.pool,
+            capture_pool: side.capture_pool,
             bus: side.bus,
             spool: side.spool,
             capture,
@@ -804,28 +786,6 @@ impl Running {
         self.postgres.as_ref()
     }
 
-    /// Resolves once the process must stop and be restarted: in Postgres
-    /// mode, when the pipeline lost its lock (the lock's session failed, as
-    /// in a database outage). The pipeline does not resume in process yet;
-    /// `serve` shuts down gracefully and exits non-zero, and its supervisor
-    /// starts it again, which spools until the database answers and then
-    /// recovers. Pending forever otherwise.
-    pub async fn fatal(&self) -> Fatal {
-        if let Some(postgres) = &self.postgres {
-            let mut status = postgres.status.reader();
-            if let Some(status) = status
-                .wait_until(|status| status.lock == crate::live::recovery::LockState::Lost)
-                .await
-            {
-                return Fatal {
-                    cause: FatalCause::PipelineLockLost,
-                    detail: status.pipeline_text(),
-                };
-            }
-        }
-        std::future::pending().await
-    }
-
     /// How long [`Running::shutdown`] may take: the drain and flush
     /// timeouts, and a margin for the listeners and the pool.
     pub fn shutdown_bound(&self) -> Duration {
@@ -881,8 +841,12 @@ impl Running {
         }
         if let Some(store) = self.store {
             store.abort();
-            if let Ok(Some(store)) = store.await {
-                store.close().await;
+            if let Ok(Some(store)) = store.await
+                && tokio::time::timeout(postgres::CLOSE_BOUND, store.close())
+                    .await
+                    .is_err()
+            {
+                tracing::warn!("the store probe's pool did not close in time; dropped");
             }
         }
         let _ = self.stop_ops.send(true);

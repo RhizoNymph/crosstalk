@@ -116,30 +116,20 @@ async fn run(command: Command) -> ExitCode {
     }
 }
 
+/// Serve until SIGINT or SIGTERM, then shut down within the gateway's
+/// bound. Nothing else ends it: a lost pipeline lock is resumed in
+/// process, the proxy listening throughout.
 async fn serve(config: &GatewayConfig, role: Role) -> ExitCode {
     let running = match gateway::start(config, role, env, Arc::new(SystemClock)).await {
         Ok(running) => running,
         Err(error) => return fail("starting the gateway", &error),
     };
-    let fatal = tokio::select! {
-        signal = shutdown_signal() => {
-            match signal {
-                Ok(signal) => tracing::info!(signal, "shutdown requested"),
-                Err(error) => {
-                    tracing::error!(error = %error, "cannot listen for shutdown signals; stopping")
-                }
-            }
-            None
+    match shutdown_signal().await {
+        Ok(signal) => tracing::info!(signal, "shutdown requested"),
+        Err(error) => {
+            tracing::error!(error = %error, "cannot listen for shutdown signals; stopping")
         }
-        fatal = running.fatal() => {
-            tracing::error!(
-                cause = fatal.cause.label(),
-                detail = %fatal.detail,
-                "the pipeline stopped; shutting down to exit non-zero for a restart"
-            );
-            Some(fatal)
-        }
-    };
+    }
     let bound = running.shutdown_bound();
     if tokio::time::timeout(bound, running.shutdown())
         .await
@@ -151,10 +141,7 @@ async fn serve(config: &GatewayConfig, role: Role) -> ExitCode {
         );
         return ExitCode::FAILURE;
     }
-    match fatal {
-        Some(_) => ExitCode::FAILURE,
-        None => ExitCode::SUCCESS,
-    }
+    ExitCode::SUCCESS
 }
 
 /// Wait for SIGINT or SIGTERM.
