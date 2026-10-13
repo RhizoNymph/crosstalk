@@ -51,7 +51,7 @@ RUN --mount=type=cache,sharing=locked,target=/usr/local/cargo/registry \
 # a2a-bench, the scorer, at a release tag of the bench repo, from the same
 # mirror. Bump A2A_BENCH_REF (and fetch the tag into the mirror) to score
 # with a newer bench; every run records the ref and commit in bench.env.
-ARG A2A_BENCH_REF=a2a-bench-v1.1.0
+ARG A2A_BENCH_REF=a2a-bench-v1.1.1
 RUN git clone --quiet /deps/a2a-transmission-bench.git /bench \
     && git -C /bench -c advice.detachedHead=false checkout --quiet "${A2A_BENCH_REF}"
 RUN --mount=type=cache,sharing=locked,target=/usr/local/cargo/registry \
