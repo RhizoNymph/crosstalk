@@ -1,6 +1,6 @@
 [invariant]
 id = "transport.pipeline-lock.loss-detected-before-reap"
-statement = "A pipeline process whose lock session goes silent (a network partition answering nothing and resetting nothing) reports pipeline_lock lost and stops its pipeline within a bound fixed at compile time (the lock's ping interval plus its ping deadline, then the reachability probe and the stop) that is strictly shorter than the server's reap of a partitioned session (about 25 s with deploy's tcp_keepalives idle 10, interval 5, count 3 and tcp_user_timeout 25000)."
+statement = "A pipeline process whose lock session goes silent (a network partition answering nothing and resetting nothing) reports pipeline_lock lost and abandons its pipeline incarnation within a bound fixed at compile time (the lock's ping interval plus its ping deadline, then the reachability probe and the abandon) that is strictly shorter than the server's reap of a partitioned session (about 25 s with deploy's tcp_keepalives idle 10, interval 5, count 3 and tcp_user_timeout 25000)."
 kind = "performance"
 requires = ["unit", "integration"]
 rationale = """
@@ -14,8 +14,10 @@ node0 bench (20261012T180130Z) the gateway reported pipeline_lock held
 for about 33 s after the server had reaped its session. The holder now
 times each ping out after PING_TIMEOUT, and compile-time assertions keep
 PING + PING_TIMEOUT (store::lock::DETECTION), and that plus the probe and
-the stop, below store::lock::SERVER_REAP. Lengthening the ping or its
-deadline, or shortening the server's keepalives, must keep the order.
+the abandon (gateway::postgres::LOST_SHUTDOWN, 1 s: every task aborted and
+joined, nothing drained), below store::lock::SERVER_REAP. Lengthening the
+ping or its deadline, or shortening the server's keepalives, must keep the
+order.
 """
 
 [evidence]

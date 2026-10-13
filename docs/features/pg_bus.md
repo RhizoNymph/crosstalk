@@ -153,7 +153,27 @@ database is down, which the spool needs). It spawns the listener task
 each notification and each reconnect) and the reaper task. Both stop on
 `shutdown` or when the last `PgBus` handle drops; subscriptions then see
 `None`. Neither touches the database on stop: a dropped bus is a stopped
-process.
+process. `PgBus::publisher` runs neither: a bus that only appends (and
+reads its statistics) refuses every subscribe (`PublishRejected`).
+
+Ownership and abandon. A bus owns its subscriptions' takes: each take's
+task registers its abort handle in the bus's take registry
+(`progress::Takes::attach`). `PgBus::abandon(deadline)` is the terminal
+stop a process that lost its pipeline lock uses: the bus closes (waiting
+`next` calls return `None`), the listener and the reaper are aborted and
+joined, and every take in flight is aborted and joined (the registry is
+empty once each take's future has been dropped, and a take's transaction
+lives in that future, so none commits afterwards). The reaper fails
+nothing on the way out and a subscription dropped afterwards nacks
+nothing: every hold stays `held` for the next holder's `recover_held`.
+Close the bus's pool first (the gateway's fence): a connection an aborted
+take gives back to a closed pool is closed, not pinged across a dead link.
+`shutdown` and `abandon` are terminal, so the gateway never reuses a bus:
+each pipeline incarnation builds `PgBus::new` over a pool of its own,
+while capture appends through a `PgBus::publisher` over another pool that
+no incarnation shares (`docs/features/postgres_mode.md`, "Losing the
+pipeline lock"). Report: `Abandoned { tasks_joined, takes_aborted,
+takes_joined }`.
 
 Restart order. Takes go by `seq` among `ready` rows. `recover_held` makes
 every recovered hold `ready` with no backoff, so after a restart a single
@@ -215,7 +235,8 @@ checkpoint interval; W8 checks that at start.
 | File | Role | Key exports |
 | --- | --- | --- |
 | `crates/transport/migrations/0001_bus.sql` | the schema | - |
-| `src/pg/mod.rs` | the bus handle, tasks, recovery, trait impls | `PgBus`, `Recovered`, `MIGRATIONS`, `migrate` |
+| `src/pg/mod.rs` | the bus handle, tasks, recovery, abandon, the publish-only bus, trait impls | `PgBus`, `PgBus::{publisher, abandon}`, `Abandoned`, `Recovered`, `MIGRATIONS`, `migrate` |
+| `src/pg/progress.rs` | each take in flight: its phase, its abort handle; abort and join them all | `Takes::{attach, abort_all, none_by}` (crate), `TakeReport`, `ReaperReport` |
 | `src/pg/config.rs` | config and its checked decode | `PgBusConfig`, `InvalidPgBusConfig` |
 | `src/pg/publish.rs` | log appends, probe | `PUBLISH_LOCK`, `CHANNEL` (crate) |
 | `src/pg/subscription.rs` | subscribe, `next`, ack, nack | `PgSubscription` |
@@ -227,6 +248,7 @@ checkpoint interval; W8 checks that at start.
 | `src/pg/row.rs` | wire forms, error mapping | (crate) |
 | `src/conformance/` | the bus conformance suite over `MpscBus` and `PgBus` | (tests) |
 | `src/integration/mod.rs` | Postgres-only tests and the spool over `PgBus` | (tests) |
+| `src/integration/abandon.rs` | an abandoned bus: takes joined, holds left for recovery | (tests) |
 
 ## Tests
 
@@ -244,7 +266,13 @@ checkpoint interval; W8 checks that at start.
   `pg_prune_never_drops_an_unacked_event`,
   `pg_group_stats_agree_with_deliveries`,
   `pg_group_capacity_bounds_admission`,
-  `pg_publish_while_unreachable_is_disconnected`.
+  `pg_publish_while_unreachable_is_disconnected`,
+  `abandon::pg_an_abandoned_bus_joins_its_takes_and_leaves_its_holds_for_recovery`
+  (a hold and a take in flight at the abandon: every take joined, the
+  hold still held and nothing changed after it; the next bus readies it
+  at once).
+- No database: `pg::tests::a_publish_only_bus_refuses_subscriptions`,
+  `pg::progress::tests::aborted_takes_are_gone_once_none_by_returns`.
 
 ## Invariants and constraints
 
@@ -255,6 +283,7 @@ checkpoint interval; W8 checks that at start.
 | INV-1205 `transport.restart.held-redelivered` | `integration::pg_held_delivery_redelivered_after_restart` |
 | INV-1234 `transport.restart.recovered-ready-first` | `integration::pg_recovered_hold_is_ready_and_taken_first` |
 | INV-X `transport.retention.prune-keeps-unfinished` | `integration::pg_prune_never_drops_an_unacked_event` |
+| INV-1238 `transport.pipeline-lock.no-owner-write-after-abandon` (with the gateway) | `pg::progress::tests::aborted_takes_are_gone_once_none_by_returns`, `integration::abandon::pg_an_abandoned_bus_joins_its_takes_and_leaves_its_holds_for_recovery` |
 
 All four are Postgres integration tests, written but not run by the
 workstream (its sandbox could not reach the test server), so their
@@ -263,6 +292,8 @@ evidence stays `agent = "false"` until they run.
 - `publish` returns `Ok` only after the commit; a log entry exists at most
   once per envelope id.
 - Log appends commit in `seq` order (`PUBLISH_LOCK`).
+- Once `abandon` returns with `takes_joined`, no take of the bus is in
+  flight and none can commit; a publish-only bus never subscribes.
 - A delivery row is in exactly one state; `available_at` is set exactly
   when `delayed` (a table check).
 - Every failure of a hold is conditional on (`held`, attempt), so late,
