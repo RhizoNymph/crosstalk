@@ -35,7 +35,9 @@ and produces no score. See [Pending](#pending) for what is still needed.
 - Scoring logic and the demo-swarm label join. They are the bench repo's
   (`a2a-bench export --dataset demo-swarm` and `a2a-bench score`; since
   `a2a-bench-v1.1.0` labels join captured exchanges by session and tool-use
-  id, and turns are diagnostics only).
+  id, and turns are diagnostics only; since `a2a-bench-v1.1.1` exchanges that
+  start in the same microsecond keep the capture's `(at_us, id)` order, so
+  such a capture is no longer refused as "not exactly the labelled run").
 - Gates for `demo-swarm/<scenario>`. They live in the bench repo's
   `gates/crosstalk-gateway-export.toml`, shipped in the image at
   `/usr/local/share/a2a-bench/gates/`.
