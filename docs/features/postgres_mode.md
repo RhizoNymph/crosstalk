@@ -527,8 +527,16 @@ leave it ready, degraded, and so does the whole way back after a lost
 lock: `held` / `running` ─▶ `lost` / `abandoning` ─▶ `lost` /
 `waiting_for_database` ─▶ `held elsewhere` / `waiting_for_lock` (while
 another session holds it) ─▶ `held` / `recovering` ─▶ `held` / `running`,
-every step 200 degraded, as at a start with the database down. "Full" means the last capture was refused full and the
-spool has not drained back to `direct` since.
+every step 200 degraded, as at a start with the database down.
+
+The two `held elsewhere` answers differ on purpose. A resuming owner
+keeps capturing into the spool for the pipeline it will resume, so taking
+it out of rotation would only refuse traffic it is serving. A standby
+that never held the lock keeps the existing standby contract: its 503
+steers traffic to the process that owns the pipeline.
+
+"Full" means the last capture was refused full and the spool has not
+drained back to `direct` since.
 
 `/healthz` adds `bus.groups.<name>.{pending, oldest_pending_micros,
 dead_letters}` (read from the database; left out while it does not
