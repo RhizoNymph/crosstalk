@@ -28,6 +28,14 @@ schema_config:
         prefix: index_
         period: 24h
 
+# The WAL refuses every write ("Ingester is shutting down") once the disk is
+# fuller than disk_full_threshold (default 0.9). node0's disk is shared with
+# other workloads and sits above 90%, so the default silently drops all logs;
+# only refuse when the disk is nearly out.
+ingester:
+  wal:
+    disk_full_threshold: 0.99
+
 limits_config:
   retention_period: 168h
   ingestion_rate_mb: 16
