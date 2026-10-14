@@ -365,14 +365,36 @@ store section's `pipeline_timeouts` (`store::timeouts::PipelineTimeouts`):
 ```text
 after_connect: session_setup (idle_in_transaction_session_timeout = 30s)
    ─▶ SELECT set_config('statement_timeout', '<statement_ms>ms', false),
-             set_config('lock_timeout', '<lock_ms>ms', false)
+             set_config('lock_timeout', '<lock_ms>ms', false),
+             set_config('crosstalk.statement_timeout', '<statement_ms>ms', false),
+             set_config('crosstalk.retention_timeout', '<retention_ms>ms', false)
    ─▶ fence::join (shared fence, epoch check)
 ```
 
-`{"statement_ms": 60000, "lock_ms": 15000}` by default, each key
-optional; both at least 1 ms, at most 2147483647 ms (the server's range),
-and the lock's at most the statement's (a longer one never fires); a
-refused value is a config parse error. The bus's own tighter bounds keep
+`{"statement_ms": 60000, "lock_ms": 15000, "retention_ms": 900000}` by
+default, each key optional; each at least 1 ms and at most 2147483647 ms
+(the server's range), the lock's at most the statement's (a longer one
+never fires), the retention's at least the statement's; a refused value
+is a config parse error.
+
+**Retention deletes get the longer bound.** The retention deletes are
+single unbatched `DELETE`s whose size grows with how long retention did
+not run; under the 60 s statement bound one could be cancelled every
+round after a long stop, which would silently stop retention. Each runs
+in a transaction that first raises `statement_timeout` with `SET LOCAL`
+to `retention_ms` (`crosstalk_store::raise_for_retention`, reading the
+session's `crosstalk.retention_timeout`) and, where the transaction goes
+on to a pipeline write, puts it back (`restore_after_retention`, from
+`crosstalk.statement_timeout`); `lock_timeout` is left as it is. On a
+session without the settings both are no-ops. Covered: the bus's hourly
+log `prune` (`transport/src/pg/prune.rs`), L4's `PgProvenanceStore::prune`
+(per tick), the fingerprint index's observation age-out
+(`provenance/src/index/pg.rs` `age_out`, raised then restored inside
+`insert`, `observe` and `evict`), the extraction ledger's `expire` (per
+tick), `PgProjectionStore::expire` (lapsed projection frames),
+`PgConversations::forget_seen` and `flow::store::prune_cursors` (no
+pipeline caller today). 15 min covers on the order of 10^8 deleted rows.
+The real follow-up is batching those deletes. The bus's own tighter bounds keep
 theirs: a take's `SET LOCAL lock_timeout` (`take_limit`, 10 s) and the
 reaper's `fail` (2 s). Not bounded: capture's publisher pool (`derived_pool`:
 a stalled append fails at the publish's own client-side `publish_timeout`,
@@ -435,16 +457,12 @@ held rows per group; the outbox relays go batch by batch; the flow
 restore reads one checkpoint row per shard plus the inputs since it (a
 few seconds' worth), and a checkpoint's snapshot of tens of MB writes in
 well under a second; `InProcess::host` reads the agents and channels once.
-None comes near a minute. The retention deletes are the exception to
-watch: the bus's hourly `prune` and the per-tick provenance and ledger
-expiries are single unbatched `DELETE`s. In steady state each deletes an
-hour's or a tick's worth of rows; after the gateway was stopped for days
-at a high capture rate, the first one after the start deletes everything
-that aged out meanwhile. Postgres deletes on the order of 10^5 to 10^6
-indexed rows a second, so a minute covers millions of rows; past that the
-delete is cancelled every round (warn, counted, no data lost, the tables
-grow) until `statement_ms` is raised for the catch-up. Batching those
-deletes is the follow-up.
+None comes near a minute. The retention deletes are the exception: in
+steady state each deletes an hour's or a tick's worth of rows, but after
+the gateway was stopped for days at a high capture rate the first one
+deletes everything that aged out meanwhile. They run under `retention_ms`
+(above): Postgres deletes on the order of 10^5 to 10^6 indexed rows a
+second, so 15 min covers far more than a minute's millions.
 
 **The attempt budget.** A stage whose write is cancelled nacks, and each
 redelivery counts an attempt: a stall that outlasts `bus.retry.max_attempts`
@@ -979,6 +997,7 @@ on `crates/api/tests/support/pg_world.rs`:
 | `crates/gateway/src/store/fence/wait.rs` | a new holder's wait for the fence, over any `FenceSession` (the lock's `PgConnection`) | `wait_for_fence`, `FenceSession`, `Fenced`, `FenceWaitError`, `Blocker` |
 | `crates/transport/migrations/0003_pipeline_epoch.sql` | the one-row epoch table | - |
 | `crates/gateway/src/store/timeouts/mod.rs` | the pipeline's statement and lock bounds: checked, defaulted, read from `store.pipeline_timeouts`, set on each pipeline connection | `PipelineTimeouts` (`new`, `statement`, `lock`, `session_settings`, `apply`, `DEFAULT_STATEMENT`, `DEFAULT_LOCK`), `InvalidPipelineTimeouts` |
+| `crates/store/src/retention.rs` | the longer bound retention deletes raise their transaction to | `raise_for_retention`, `restore_after_retention`, `STATEMENT_BOUND`, `RETENTION_BOUND` |
 | `crates/store/src/timeouts/mod.rs` | a statement cancelled at a bound: its kind, the process's counts | `TimeoutKind`, `TimeoutCounts`, `statement_timeouts`; `DbFailure::TimedOut`, `DbFailure::{is_timeout, is_transient}` (`error.rs`) |
 | `crates/gateway/src/integration/statement_timeouts.rs` | Postgres: the bounds on the pipeline pools only, a statement and a lock wait cancelled, a blocked stage write retried, the reaper past a blocked sweep, `/healthz` within its bound | tests |
 | `crates/gateway/src/gateway/postgres/mod.rs` | Postgres-mode start: the template and capture pools, the incarnation pools that set the statement and lock bounds and join the fence, capture's publish-only bus and spool, the bounded shutdown | `PgRunning`, `CaptureSide`, `capture_side`, `derived_pool`, `incarnation_pool`, `incarnation_pool_bounded`, `close_bounded`, `StopHandle::stop_by`, `PipelineStart`, `Late`, `SERVE_IDS`, `LOST_SHUTDOWN`, `LOST_REPORTED`, `CLOSE_BOUND`, `CAPTURE_CONNECTIONS` |
@@ -1052,7 +1071,9 @@ on `crates/api/tests/support/pg_world.rs`:
   pg_a_stage_write_blocked_past_the_lock_timeout_is_retried_and_completes,
   pg_the_reaper_survives_a_stalled_sweep,
   pg_healthz_answers_within_its_bound_while_group_stats_is_blocked,
-  pg_the_bounds_hold_on_every_connection_of_the_pool}`. No database (run):
+  pg_the_bounds_hold_on_every_connection_of_the_pool,
+  pg_retention_deletes_run_under_the_longer_bound,
+  pg_the_bus_prune_runs_under_the_retention_bound}`. No database (run):
   `store::timeouts::tests::*` (defaults, checks, the store section),
   `ops::health_bound_tests::*` (`/healthz` within its bound against a
   server that never answers; the bus section's JSON; the counts in health
@@ -1096,7 +1117,7 @@ on `crates/api/tests/support/pg_world.rs`:
 | INV-1237 `ingress.capture.never-stopped-by-lock-loss` | integration `crosstalk_e2e::lock_loss::partition::{a_silent_partition,a_postgres_stop,a_partition_past_the_server_reap}_never_stops_capture_and_resumes_in_process` (written; node0 runs pending) |
 | INV-1238 `transport.pipeline-lock.no-owner-write-after-abandon` | unit `crosstalk_transport::pg::progress::tests::aborted_takes_are_gone_once_none_by_returns` (ran); integration `crosstalk_e2e::lock_loss::rival::a_terminated_lock_session_and_a_rival_holder_leave_no_owner_write_after_the_abandon`, `crosstalk_e2e::lock_loss::repeated::repeated_lock_losses_leave_no_pool_listener_or_task_behind`, `crosstalk_transport::integration::abandon::pg_an_abandoned_bus_joins_its_takes_and_leaves_its_holds_for_recovery` (written; node0 runs pending) |
 | INV-1239 `transport.pipeline-lock.no-write-from-an-older-epoch` | unit `crosstalk_gateway::store::fence::tests::the_wait_never_gives_up_and_completes_once_the_fence_is_free`, `a_try_without_an_answer_is_a_lock_loss_within_the_ping_deadline`, `a_failed_try_while_waiting_is_a_lock_loss` (ran); integration `crosstalk_gateway::integration::fence::*` (four) and `crosstalk_e2e::lock_loss::standby::*` (two) (written; node0 runs pending) |
-| INV-1240 `transport.pipeline.statements-bounded` | unit `crosstalk_store::timeouts::tests::*`, `crosstalk_transport::pg::row::timeout_tests::*`, `crosstalk_provenance::pg::timeout_tests::*`, `crosstalk_gateway::store::timeouts::tests::*`, `crosstalk_gateway::ops::health_bound_tests::healthz_answers_within_its_bound_while_the_bus_read_stalls` (ran); integration `crosstalk_gateway::integration::statement_timeouts::*` (seven; written, node0 runs pending) |
+| INV-1240 `transport.pipeline.statements-bounded` | unit `crosstalk_store::timeouts::tests::*`, `crosstalk_transport::pg::row::timeout_tests::*`, `crosstalk_provenance::pg::timeout_tests::*`, `crosstalk_gateway::store::timeouts::tests::*`, `crosstalk_gateway::ops::health_bound_tests::healthz_answers_within_its_bound_while_the_bus_read_stalls` (ran); integration `crosstalk_gateway::integration::statement_timeouts::*` (nine; written, node0 runs pending) |
 | INV-1233 `transport.settle.quiet-covers-unadmitted` | integration `crosstalk_gateway::integration::pg_quiet_counts_entries_no_group_admitted_yet` (ran on node0; failed before the fix) |
 | INV-1221 `ingress.proxy.forwarding-independent-of-capture-store` | `crosstalk_gateway::postgres_down::proxy_forwards_through_outage_and_full_spool` (ran) |
 | INV-581 `topology.frontier.covers-pending` | `crosstalk_gateway::integration::pg_frontier_covers_pending_deliveries` (Postgres, not run) |
@@ -1117,7 +1138,9 @@ on `crates/api/tests/support/pg_world.rs`:
   a lock loss.
 - Every pipeline incarnation connection runs with `statement_timeout`
   and `lock_timeout` (`store.pipeline_timeouts`, lock at most statement,
-  both > 0), set before it joins the fence; no other pool or session
+  both > 0), set before it joins the fence; retention deletes raise their
+  transaction's `statement_timeout` to `retention_ms` (at least the
+  statement bound), never the lock bound; no other pool or session
   does. A statement cancelled at either bound is a transient
   `DbFailure::TimedOut`: every pipeline caller retries it (nack and
   redelivery, the next round), none acks it as refused (INV-1240).
@@ -1174,10 +1197,10 @@ on `crates/api/tests/support/pg_world.rs`:
 ## Gaps
 
 - The retention deletes (the bus's hourly `prune`, the per-tick
-  provenance and ledger expiries) are single `DELETE`s: after a stop of
-  many days at a high capture rate the first one can exceed the 60 s
-  statement bound and fail every round until `statement_ms` is raised.
-  They should delete in batches.
+  provenance and ledger expiries, the index age-out) are single
+  `DELETE`s, run under the longer `retention_ms` bound (15 min) so they
+  are not cancelled every round. They should delete in batches; that is
+  the real fix, after which they can run under the pipeline's bound.
 - A sustained stall dead-letters a stage's delivery after
   `bus.retry.max_attempts` cancelled attempts (replayable) instead of
   waiting it out; a stall-aware retry that does not spend the attempt

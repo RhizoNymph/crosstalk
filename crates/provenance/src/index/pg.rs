@@ -133,10 +133,20 @@ impl PgFingerprintIndex {
     }
 }
 
+/// Delete the observations past the horizon: an unbatched retention
+/// delete, run under the session's longer retention bound, then the
+/// transaction's bound put back for the write that follows it
+/// (`crosstalk_store::{raise_for_retention, restore_after_retention}`).
 async fn age_out(conn: &mut PgConnection, horizon: i64) -> Result<(), IndexError> {
+    crosstalk_store::raise_for_retention(&mut *conn)
+        .await
+        .map_err(store_error)?;
     sqlx::query("DELETE FROM provenance.observations WHERE at < $1")
         .bind(horizon)
         .execute(&mut *conn)
+        .await
+        .map_err(store_error)?;
+    crosstalk_store::restore_after_retention(&mut *conn)
         .await
         .map_err(store_error)?;
     Ok(())

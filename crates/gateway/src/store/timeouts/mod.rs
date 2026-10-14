@@ -16,7 +16,15 @@
 //! pool and the lock's session run without (`docs/features/postgres_mode.md`,
 //! "Bounded statements").
 //!
-//! Defaults: 60 s per statement, 15 s per lock wait. Every pipeline
+//! Retention deletes (the bus's log prune, the provenance and ledger
+//! expiries) run under a third, much longer bound, `retention`: each raises
+//! its transaction's `statement_timeout` to it (`crosstalk_store::
+//! raise_for_retention`, through the session settings `apply` records), so
+//! a delete grown by a long stop is not cancelled every round, which would
+//! silently stop retention. Batching those deletes is the follow-up.
+//!
+//! Defaults: 60 s per statement, 15 s per lock wait, 15 min per retention
+//! delete. Every pipeline
 //! statement runs in milliseconds; the longest legitimate ones (retention
 //! deletes after a long stop, recovery's reads, a checkpoint's snapshot)
 //! stay well inside a minute on a large deployment, while a stage or the
@@ -30,15 +38,17 @@ use std::time::Duration;
 use crosstalk_store::sqlx::{self, PgConnection};
 use serde::Deserialize;
 
-/// The pipeline's statement and lock bounds. Valid by construction: both
-/// at least a millisecond, within the server's 32-bit millisecond range,
-/// and the lock bound at most the statement bound (a longer one could
-/// never fire: the statement's would first).
+/// The pipeline's statement, lock and retention bounds. Valid by
+/// construction: each at least a millisecond, within the server's 32-bit
+/// millisecond range, the lock bound at most the statement bound (a longer
+/// one could never fire: the statement's would first), and the retention
+/// bound at least the statement bound.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(try_from = "RawPipelineTimeouts")]
 pub struct PipelineTimeouts {
     statement_ms: u32,
     lock_ms: u32,
+    retention_ms: u32,
 }
 
 /// Why a [`PipelineTimeouts`] was refused.
@@ -53,28 +63,50 @@ pub enum InvalidPipelineTimeouts {
     /// A lock bound above the statement bound never fires.
     #[error("lock_timeout ({lock_ms} ms) must not exceed statement_timeout ({statement_ms} ms)")]
     LockAboveStatement { lock_ms: u64, statement_ms: u64 },
+    /// Retention deletes get at least the bound every statement gets.
+    #[error(
+        "retention_timeout ({retention_ms} ms) must not be below statement_timeout ({statement_ms} ms)"
+    )]
+    RetentionBelowStatement {
+        retention_ms: u64,
+        statement_ms: u64,
+    },
 }
 
 const STATEMENT: &str = "statement_timeout";
 const LOCK: &str = "lock_timeout";
+const RETENTION: &str = "retention_timeout";
 
 impl PipelineTimeouts {
     pub const DEFAULT_STATEMENT: Duration = Duration::from_secs(60);
     pub const DEFAULT_LOCK: Duration = Duration::from_secs(15);
+    pub const DEFAULT_RETENTION: Duration = Duration::from_secs(15 * 60);
 
-    /// Checked constructor; both bounds are kept in whole milliseconds.
-    pub fn new(statement: Duration, lock: Duration) -> Result<Self, InvalidPipelineTimeouts> {
+    /// Checked constructor; every bound is kept in whole milliseconds.
+    pub fn new(
+        statement: Duration,
+        lock: Duration,
+        retention: Duration,
+    ) -> Result<Self, InvalidPipelineTimeouts> {
         let statement_ms = millis(STATEMENT, statement)?;
         let lock_ms = millis(LOCK, lock)?;
+        let retention_ms = millis(RETENTION, retention)?;
         if lock_ms > statement_ms {
             return Err(InvalidPipelineTimeouts::LockAboveStatement {
                 lock_ms: u64::from(lock_ms),
                 statement_ms: u64::from(statement_ms),
             });
         }
+        if retention_ms < statement_ms {
+            return Err(InvalidPipelineTimeouts::RetentionBelowStatement {
+                retention_ms: u64::from(retention_ms),
+                statement_ms: u64::from(statement_ms),
+            });
+        }
         Ok(Self {
             statement_ms,
             lock_ms,
+            retention_ms,
         })
     }
 
@@ -88,36 +120,58 @@ impl PipelineTimeouts {
         Duration::from_millis(u64::from(self.lock_ms))
     }
 
+    /// How long a retention delete may run.
+    pub fn retention(&self) -> Duration {
+        Duration::from_millis(u64::from(self.retention_ms))
+    }
+
     /// The session settings a pipeline connection runs with, as
-    /// `set_config` takes them.
-    pub fn session_settings(&self) -> [(&'static str, String); 2] {
+    /// `set_config` takes them: the server's two bounds, then the two
+    /// `crosstalk.*` settings retention deletes raise their transaction's
+    /// bound from and restore it to (`crosstalk_store::raise_for_retention`).
+    pub fn session_settings(&self) -> [(&'static str, String); 4] {
+        let statement = format!("{}ms", self.statement_ms);
         [
-            (STATEMENT, format!("{}ms", self.statement_ms)),
+            (STATEMENT, statement.clone()),
             (LOCK, format!("{}ms", self.lock_ms)),
+            (crosstalk_store::STATEMENT_BOUND, statement),
+            (
+                crosstalk_store::RETENTION_BOUND,
+                format!("{}ms", self.retention_ms),
+            ),
         ]
     }
 
-    /// Set both bounds on `connection` for its whole session, in one round
+    /// Set the bounds on `connection` for its whole session, in one round
     /// trip.
     pub async fn apply(&self, connection: &mut PgConnection) -> Result<(), sqlx::Error> {
-        let [(statement, statement_value), (lock, lock_value)] = self.session_settings();
-        sqlx::query("SELECT set_config($1, $2, false), set_config($3, $4, false)")
-            .bind(statement)
-            .bind(statement_value)
-            .bind(lock)
-            .bind(lock_value)
-            .execute(connection)
-            .await
-            .map(|_| ())
+        let [(a, a_value), (b, b_value), (c, c_value), (d, d_value)] = self.session_settings();
+        sqlx::query(
+            "SELECT set_config($1, $2, false), set_config($3, $4, false), \
+             set_config($5, $6, false), set_config($7, $8, false)",
+        )
+        .bind(a)
+        .bind(a_value)
+        .bind(b)
+        .bind(b_value)
+        .bind(c)
+        .bind(c_value)
+        .bind(d)
+        .bind(d_value)
+        .execute(connection)
+        .await
+        .map(|_| ())
     }
 }
 
 impl Default for PipelineTimeouts {
-    /// 60 s per statement, 15 s per lock wait (see the module docs).
+    /// 60 s per statement, 15 s per lock wait, 15 min per retention delete
+    /// (see the module docs).
     fn default() -> Self {
         Self {
             statement_ms: 60_000,
             lock_ms: 15_000,
+            retention_ms: 900_000,
         }
     }
 }
@@ -142,6 +196,12 @@ struct RawPipelineTimeouts {
     statement_ms: u64,
     #[serde(default = "default_lock_ms")]
     lock_ms: u64,
+    #[serde(default = "default_retention_ms")]
+    retention_ms: u64,
+}
+
+fn default_retention_ms() -> u64 {
+    u64::try_from(PipelineTimeouts::DEFAULT_RETENTION.as_millis()).unwrap_or(u64::MAX)
 }
 
 fn default_statement_ms() -> u64 {
@@ -159,6 +219,7 @@ impl TryFrom<RawPipelineTimeouts> for PipelineTimeouts {
         Self::new(
             Duration::from_millis(raw.statement_ms),
             Duration::from_millis(raw.lock_ms),
+            Duration::from_millis(raw.retention_ms),
         )
     }
 }

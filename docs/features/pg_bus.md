@@ -218,7 +218,9 @@ incarnation's pool, the pool an incarnation's `PgBus::new` runs over,
 carries `statement_timeout` and `lock_timeout` (`store.pipeline_timeouts`,
 60 s and 15 s by default; [postgres_mode.md](postgres_mode.md), "Bounded
 statements"); a take's and the reaper's `SET LOCAL lock_timeout` keep
-their tighter bounds. A statement the server cancels at a bound (SQLSTATE
+their tighter bounds, and `prune` raises its transaction to the longer
+retention bound (`retention_ms`, 15 min: `crosstalk_store::raise_for_retention`),
+since its single delete grows with a long stop. A statement the server cancels at a bound (SQLSTATE
 `57014` or `55P03`) classifies as `DbFailure::TimedOut` and the bus
 reports it `BusError::Disconnected` (`row::bus_error`), as its own publish
 timeout does. Each bus caller retries: the reaper's `sweep_stale` at its

@@ -37,6 +37,7 @@ mod extensions;
 mod layer;
 mod migrate;
 mod pool;
+mod retention;
 mod retry;
 mod test_db;
 mod timeouts;
@@ -51,6 +52,9 @@ pub use extensions::{Extension, InstalledExtension, ensure_extension, ensure_ext
 pub use layer::{Layer, MIGRATIONS_TABLE};
 pub use migrate::{Migrations, migrate};
 pub use pool::Store;
+pub use retention::{
+    RETENTION_BOUND, STATEMENT_BOUND, raise_for_retention, restore_after_retention,
+};
 pub use retry::{
     InvalidSerializableRetry, SerializableError, SerializableRetry, TxError, TxFuture,
     retry_serializable,

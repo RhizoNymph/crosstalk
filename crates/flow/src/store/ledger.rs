@@ -392,6 +392,10 @@ impl ExtractionLedger for PgExtractionLedger {
     async fn expire(&self, horizon: Timestamp) -> Result<(), LedgerError> {
         let horizon = micros("extract ledger horizon", horizon).map_err(FlowStoreError::from)?;
         let mut tx = self.pool.begin().await.map_err(FlowStoreError::from)?;
+        // Unbatched retention deletes: the session's longer retention bound.
+        crosstalk_store::raise_for_retention(&mut tx)
+            .await
+            .map_err(FlowStoreError::from)?;
         for statement in [
             "DELETE FROM flow.extract_delivered WHERE at < $1",
             "DELETE FROM flow.extract_contexts WHERE updated_at < $1",

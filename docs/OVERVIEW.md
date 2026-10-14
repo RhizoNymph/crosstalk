@@ -962,7 +962,9 @@ Features Index:
       pipeline fencing), and starts a pipeline incarnation (its own pool,
       named crosstalk-pipeline-<pid>-<n>-e<epoch>, each connection setting
       statement_timeout and lock_timeout from store.pipeline_timeouts
-      (60 s and 15 s by default) and joining the fence, and its own PgBus):
+      (60 s and 15 s by default; retention deletes raise their
+      transaction to retention_ms, 15 min) and joining the fence, and its
+      own PgBus):
       a statement Postgres stalls past a bound is cancelled, classified a
       transient DbFailure::TimedOut (counted in
       crosstalk_pg_statement_timeouts_total{kind}) and retried by its

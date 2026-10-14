@@ -44,7 +44,12 @@ const SLACK: Duration = Duration::from_secs(2);
 /// Short bounds, so a test sees a cancel within a second: the lock wait
 /// well below the statement's.
 fn short() -> PipelineTimeouts {
-    PipelineTimeouts::new(Duration::from_secs(2), Duration::from_millis(300)).expect("valid bounds")
+    PipelineTimeouts::new(
+        Duration::from_secs(2),
+        Duration::from_millis(300),
+        Duration::from_secs(10),
+    )
+    .expect("valid bounds")
 }
 
 /// A setting as the server shows it on `pool`'s sessions.
@@ -237,7 +242,7 @@ async fn bounded_pipeline_start(
             "store": {
                 "pool": {"max_connections": 12},
                 "bus": {"poll_micros": 20_000},
-                "pipeline_timeouts": {"statement_ms": 2_000, "lock_ms": 300},
+                "pipeline_timeouts": {"statement_ms": 2_000, "lock_ms": 300, "retention_ms": 10_000},
             },
             "spool": {"probe_ms": 10},
             "blobs": {"root": data.join("blobs")},
@@ -570,6 +575,130 @@ async fn pg_the_bounds_hold_on_every_connection_of_the_pool() {
     for connection in held {
         connection.detach().close().await.expect("closes");
     }
+    pool.close().await;
+    db.close().await.expect("drops");
+}
+
+/// Inside a transaction a retention delete raises `statement_timeout` to
+/// the retention bound (10 s here, against the pipeline's 2 s), so a
+/// statement past the pipeline bound but inside the retention bound
+/// finishes; restored, the pipeline bound applies again, and a transaction
+/// that never raised it keeps the pipeline bound. On a pool without the
+/// bounds (capture's) the raise changes nothing.
+#[tokio::test(flavor = "multi_thread")]
+async fn pg_retention_deletes_run_under_the_longer_bound() {
+    let Some(db) = migrated("pg_retention_deletes_run_under_the_longer_bound").await else {
+        return;
+    };
+    let template = pipeline_pool(&db);
+    let pool = incarnation_pool_bounded(
+        &template,
+        2,
+        "crosstalk-timeouts-test-retention",
+        Epoch::new(0),
+        short(),
+    );
+    let mut tx = pool.begin().await.expect("begins");
+    crosstalk_store::raise_for_retention(&mut tx)
+        .await
+        .expect("raises");
+    let (raised,): (String,) = sqlx::query_as("SHOW statement_timeout")
+        .fetch_one(&mut *tx)
+        .await
+        .expect("reads");
+    assert_eq!(raised, "10s");
+    sqlx::query("SELECT pg_sleep(3)")
+        .execute(&mut *tx)
+        .await
+        .expect("past the pipeline bound, inside the retention bound");
+    crosstalk_store::restore_after_retention(&mut tx)
+        .await
+        .expect("restores");
+    let (restored,): (String,) = sqlx::query_as("SHOW statement_timeout")
+        .fetch_one(&mut *tx)
+        .await
+        .expect("reads");
+    assert_eq!(restored, "2s");
+    let cancelled = sqlx::query("SELECT pg_sleep(3)")
+        .execute(&mut *tx)
+        .await
+        .expect_err("the pipeline bound again");
+    assert_eq!(
+        classify(&cancelled),
+        DbFailure::TimedOut(TimeoutKind::Statement)
+    );
+    drop(tx);
+    assert_eq!(show(&pool, "statement_timeout").await, "2s");
+
+    let publisher = derived_pool(&template, 1, "crosstalk-timeouts-test-retention-capture");
+    let mut tx = publisher.begin().await.expect("begins");
+    crosstalk_store::raise_for_retention(&mut tx)
+        .await
+        .expect("a no-op without the settings");
+    let (unbounded,): (String,) = sqlx::query_as("SHOW statement_timeout")
+        .fetch_one(&mut *tx)
+        .await
+        .expect("reads");
+    assert_eq!(unbounded, "0");
+    drop(tx);
+
+    for pool in [pool, publisher, template] {
+        pool.close().await;
+    }
+    db.close().await.expect("drops");
+}
+
+/// The bus's hourly log prune is a retention delete: made slower than the
+/// pipeline's 2 s statement bound (a statement trigger sleeps 3 s on every
+/// delete from the log), it still completes, under the 10 s retention
+/// bound, where a plain delete on the same pool is cancelled.
+#[tokio::test(flavor = "multi_thread")]
+async fn pg_the_bus_prune_runs_under_the_retention_bound() {
+    let Some(db) = migrated("pg_the_bus_prune_runs_under_the_retention_bound").await else {
+        return;
+    };
+    for statement in [
+        "CREATE FUNCTION public.slow_log_delete() RETURNS trigger LANGUAGE plpgsql AS \
+         $$ BEGIN PERFORM pg_sleep(3); RETURN NULL; END $$",
+        "CREATE TRIGGER slow_log_delete BEFORE DELETE ON transport.events \
+         FOR EACH STATEMENT EXECUTE FUNCTION public.slow_log_delete()",
+    ] {
+        sqlx::query(statement)
+            .execute(db.pool())
+            .await
+            .expect("installs the slow delete");
+    }
+    let pool = incarnation_pool_bounded(
+        &pipeline_pool(&db),
+        4,
+        "crosstalk-timeouts-test-prune",
+        Epoch::new(0),
+        short(),
+    );
+    let bus = PgBus::new(pool.clone(), bus_clock(), PgBusConfig::default()).expect("a bus");
+    bus.publish(super::envelope(0x9A0E, Timestamp::from_micros(T0)))
+        .await
+        .expect("publishes");
+
+    let pruned = bus
+        .prune(
+            Timestamp::from_micros(T0 + 3_600_000_000),
+            Duration::from_secs(60),
+        )
+        .await
+        .expect("the prune runs under the retention bound");
+    assert_eq!(pruned, 1, "no group: the aged entry goes");
+
+    let cancelled = sqlx::query("DELETE FROM transport.events WHERE seq < 0")
+        .execute(&pool)
+        .await
+        .expect_err("a delete outside the retention bound is cancelled");
+    assert_eq!(
+        classify(&cancelled),
+        DbFailure::TimedOut(TimeoutKind::Statement)
+    );
+
+    bus.shutdown();
     pool.close().await;
     db.close().await.expect("drops");
 }

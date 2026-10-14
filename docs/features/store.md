@@ -226,7 +226,12 @@ Each timeout `classify` sees is counted by kind
 `crosstalk_pg_statement_timeouts_total{kind}`), so a failure is
 classified once, where it is converted. The gateway sets both bounds on
 its pipeline connections ([postgres_mode.md](postgres_mode.md),
-"Bounded statements").
+"Bounded statements"), and records both its statement bound and a longer
+retention bound as session settings (`crosstalk.statement_timeout`,
+`crosstalk.retention_timeout`): `raise_for_retention(conn)` sets the
+transaction's `statement_timeout` to the retention bound for an unbatched
+retention delete, `restore_after_retention(conn)` puts the pipeline bound
+back; on a session without them both change nothing.
 
 A layer maps these into its spec error, for example:
 
@@ -490,6 +495,7 @@ checks still run.
 | `crates/store/src/migrate.rs` | Per-layer migration runner | `migrate`, `Migrations` |
 | `crates/store/src/extensions.rs` | Required extensions | `Extension`, `InstalledExtension`, `ensure_extensions`, `ensure_extension` |
 | `crates/store/src/error.rs` | Errors and classification | `StoreError`, `DbFailure`, `ExtensionProblem`, `classify` |
+| `crates/store/src/retention.rs` | The longer statement bound retention deletes run under | `raise_for_retention`, `restore_after_retention`, `STATEMENT_BOUND`, `RETENTION_BOUND` |
 | `crates/store/src/timeouts/mod.rs` | A statement cancelled at a bound: kinds and the process's counts | `TimeoutKind` (`sqlstate`, `label`), `TimeoutCounts`, `statement_timeouts` |
 | `crates/store/src/window.rs` | A `TimeWindow` as bounds on a `bigint` time column | `ColumnWindow` (`of`, `bounds`, `contains`), `ColumnBounds` (`start`, `end`, `contains`) |
 | `crates/store/src/retry.rs` | Serializable retries | `retry_serializable`, `SerializableRetry`, `InvalidSerializableRetry`, `TxError`, `TxFuture`, `SerializableError` |
