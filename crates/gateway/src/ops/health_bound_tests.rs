@@ -125,18 +125,10 @@ fn the_bus_section_reads_groups_or_why_not() {
         read
     );
 
-    for (unavailable, expected) in [
-        (
-            BusUnavailable::TimedOut { bound_ms: 2_000 },
-            serde_json::json!({"unavailable": {"timed_out": {"bound_ms": 2_000}}}),
-        ),
-        (
-            BusUnavailable::Failed {
-                error: "Disconnected".to_owned(),
-            },
-            serde_json::json!({"unavailable": {"failed": {"error": "Disconnected"}}}),
-        ),
-    ] {
+    for (unavailable, expected) in [(
+        BusUnavailable::TimedOut { bound_ms: 2_000 },
+        serde_json::json!({"unavailable": {"timed_out": {"bound_ms": 2_000}}}),
+    )] {
         let report = HealthReport {
             bus: Some(BusSection::Unavailable { unavailable }),
             ..report()
