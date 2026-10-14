@@ -962,13 +962,15 @@ Features Index:
       pipeline fencing), and starts a pipeline incarnation (its own pool,
       named crosstalk-pipeline-<pid>-<n>-e<epoch>, each connection setting
       statement_timeout and lock_timeout from store.pipeline_timeouts
-      (60 s and 15 s by default; retention deletes raise their
+      (20 s and 15 s by default, the statement bound below the ack
+      timeout; retention deletes raise their
       transaction to retention_ms, 15 min) and joining the fence, and its
       own PgBus):
       a statement Postgres stalls past a bound is cancelled, classified a
       transient DbFailure::TimedOut (counted in
       crosstalk_pg_statement_timeouts_total{kind}) and retried by its
-      caller (a stage nacks, the reaper and checkpoints try again), never
+      caller (a stage releases the delivery, which spends no attempt and
+      is never dead-lettered; the reaper and checkpoints try again), never
       acked as refused; capture's, the api role's and the lock's sessions
       run without them. A lost lock never
       stops the process: the incarnation is abandoned (pool fenced, every

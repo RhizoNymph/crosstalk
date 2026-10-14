@@ -414,18 +414,21 @@ async fn l4_row(db: &TestDb, group: &str) -> Option<(i32, String, Option<String>
     .expect("reads the deliveries")
 }
 
+/// A delivery as the diagnosis prints it: group, seq, attempt, state,
+/// last error, subject.
+type DeliveryRow = (String, i64, i32, String, Option<String>, Option<String>);
+
 /// Every delivery and dead letter, with the event's subject: what a failed
 /// assertion prints (the lib tests install no tracing subscriber).
 async fn diagnosis(db: &TestDb) -> String {
-    let deliveries: Vec<(String, i64, i32, String, Option<String>, Option<String>)> =
-        sqlx::query_as(
-            "SELECT d.group_name, d.seq, d.attempt, d.state, d.last_error, e.subject \
+    let deliveries: Vec<DeliveryRow> = sqlx::query_as(
+        "SELECT d.group_name, d.seq, d.attempt, d.state, d.last_error, e.subject \
              FROM transport.deliveries d LEFT JOIN transport.events e ON e.seq = d.seq \
              ORDER BY d.group_name, d.seq",
-        )
-        .fetch_all(db.pool())
-        .await
-        .unwrap_or_default();
+    )
+    .fetch_all(db.pool())
+    .await
+    .unwrap_or_default();
     format!(
         "deliveries (group, seq, attempt, state, last_error, subject): {deliveries:?}\n\
          dead letters (group, attempts, last_error, subject): {:?}",

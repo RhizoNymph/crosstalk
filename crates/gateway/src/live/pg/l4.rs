@@ -9,7 +9,9 @@
 //!   consumer holds the extracted inputs durably (`deliver` answers once
 //!   their accesses, held writes and tool calls are stored), commit the
 //!   ledger, then publish provenance's envelopes (ids derived from the
-//!   input). Only then is the delta acked; `NotDurable` retries it.
+//!   input). Only then is the delta acked; `NotDurable` retries it
+//!   (`NotDurable::Stalled`, the flow consumer's store cancelled at a
+//!   bound, releases it without spending an attempt).
 //! - A tick at `now`: expire spans past retention, and the ledger's
 //!   records older than `content_retention`.
 //!
@@ -18,9 +20,9 @@
 
 use std::time::Duration;
 
-use crosstalk_flow::consumer::DurableInputs;
+use crosstalk_flow::consumer::{DurableInputs, NotDurable};
 use crosstalk_flow::extract::ExtractConfig;
-use crosstalk_flow::extract::step::ExtractionStep;
+use crosstalk_flow::extract::step::{ExtractStepError, ExtractionStep};
 use crosstalk_flow::store::PgExtractionLedger;
 use crosstalk_provenance::config::ProvenanceConfig;
 use crosstalk_provenance::engine::{EngineError, Provenance};
@@ -128,8 +130,14 @@ impl Stage for PgProvenanceStage {
                 self.step
                     .delta(delta, at, &mut self.flow)
                     .await
-                    .map_err(|error| StageError::Retry {
-                        reason: error.to_string(),
+                    .map_err(|error| match error {
+                        ExtractStepError::Flow(NotDurable::Stalled(kind)) => StageError::Stalled {
+                            kind,
+                            reason: error.to_string(),
+                        },
+                        error => StageError::Retry {
+                            reason: error.to_string(),
+                        },
                     })?;
                 for event in processed.events() {
                     self.bus

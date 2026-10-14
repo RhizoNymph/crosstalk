@@ -8,7 +8,10 @@
 //! at the handout (the real deadline, handout plus the ack timeout), and
 //! about each ack; at a deadline the reaper fails the hold
 //! with [`Failure::Timeout`]. Every failure is conditional on the row still
-//! being held at that attempt, so a late or repeated one is a no-op.
+//! being held by that hold (attempt and `held_at`), so a late or repeated
+//! one is a no-op. A hold released for a stall ([`Failure::Stalled`]) gives
+//! its attempt back, so the next take is on the same attempt again; its
+//! `held_at`, set by each take, keeps the two holds apart.
 //! Failing on the last attempt stores the dead letter and deletes the
 //! delivery in one transaction (`transport.deadletter.stored-before-release`).
 
@@ -24,12 +27,15 @@ use tokio::time::Instant;
 use super::Shared;
 use super::row::{duration_micros, failure};
 
-/// One hold: the group's delivery row at the attempt its holder was given.
+/// One hold: the group's delivery row at the attempt its holder was given,
+/// taken at `held_at` (bus-clock micros; unique per take of the row, since
+/// a stall's release lets the same attempt be taken again).
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub(crate) struct HoldKey {
     pub(crate) group: String,
     pub(crate) seq: i64,
     pub(crate) attempt: i32,
+    pub(crate) held_at: i64,
 }
 
 /// How a held delivery ended without an ack.
@@ -41,6 +47,13 @@ pub(crate) enum Failure {
     },
     Timeout,
     Dropped,
+    /// The holder's infrastructure stalled (a store statement cancelled at
+    /// its bound): redelivered after the delay on the same attempt, never
+    /// dead-lettered for it.
+    Stalled {
+        retry_after: Duration,
+        reason: String,
+    },
 }
 
 /// What subscriptions tell the reaper.
@@ -90,11 +103,13 @@ pub(crate) async fn fail(
         "SELECT e.id, e.at, e.envelope FROM transport.deliveries d \
          JOIN transport.events e ON e.seq = d.seq \
          WHERE d.group_name = $1 AND d.seq = $2 AND d.state = 'held' AND d.attempt = $3 \
+           AND d.held_at = $4 \
          FOR UPDATE OF d",
     )
     .bind(&key.group)
     .bind(key.seq)
     .bind(key.attempt)
+    .bind(key.held_at)
     .fetch_optional(&mut *tx)
     .await?;
     let Some((event_id, at, envelope)) = row else {
@@ -103,11 +118,42 @@ pub(crate) async fn fail(
     };
     let deliveries = u32::try_from(key.attempt).unwrap_or(0);
     let ack_timeout = shared.config.ack_timeout.get();
+    if let Failure::Stalled {
+        retry_after,
+        reason,
+    } = &failure
+    {
+        // Not the message's failure: its attempt is given back (the next
+        // take counts it again) and it is never dead-lettered for this.
+        let delay = (*retry_after).clamp(retry.initial_backoff(), retry.max_backoff());
+        let available_at = shared.now_micros().saturating_add(duration_micros(delay));
+        sqlx::query(
+            "UPDATE transport.deliveries SET state = 'delayed', available_at = $3, \
+             last_error = $4, attempt = greatest(attempt - 1, 0) \
+             WHERE group_name = $1 AND seq = $2",
+        )
+        .bind(&key.group)
+        .bind(key.seq)
+        .bind(available_at)
+        .bind(reason)
+        .execute(&mut *tx)
+        .await?;
+        tx.commit().await?;
+        tracing::debug!(
+            group = %key.group,
+            seq = key.seq,
+            attempt = key.attempt,
+            delay_ms = u64::try_from(delay.as_millis()).unwrap_or(u64::MAX),
+            "released for a stall; redelivered on the same attempt"
+        );
+        return Ok(true);
+    }
     if deliveries >= retry.max_attempts().get() {
         let last_error = match &failure {
             Failure::Nack { reason, .. } => reason.clone(),
             Failure::Timeout => format!("ack timeout after {} ms", ack_timeout.as_millis()),
             Failure::Dropped => DROPPED_REASON.to_owned(),
+            Failure::Stalled { reason, .. } => reason.clone(),
         };
         sqlx::query(
             "INSERT INTO transport.dead_letters \
@@ -154,6 +200,11 @@ pub(crate) async fn fail(
             DROPPED_REASON.to_owned(),
             "holder dropped",
         ),
+        // Handled above.
+        Failure::Stalled {
+            retry_after,
+            reason,
+        } => (retry_after, reason, "stalled"),
     };
     let available_at = shared.now_micros().saturating_add(duration_micros(delay));
     sqlx::query(
@@ -229,8 +280,8 @@ pub(crate) fn stale_after(config: &super::PgBusConfig) -> Duration {
 pub(crate) async fn sweep_stale(shared: &Shared) -> Result<u64, sqlx::Error> {
     let stale = duration_micros(stale_after(&shared.config));
     let before = shared.now_micros().saturating_sub(stale);
-    let rows: Vec<(String, i64, i32, i32, i64, i64)> = sqlx::query_as(
-        "SELECT d.group_name, d.seq, d.attempt, g.max_attempts, \
+    let rows: Vec<(String, i64, i32, i64, i32, i64, i64)> = sqlx::query_as(
+        "SELECT d.group_name, d.seq, d.attempt, d.held_at, g.max_attempts, \
                 g.initial_backoff_micros, g.max_backoff_micros \
          FROM transport.deliveries d JOIN transport.groups g ON g.name = d.group_name \
          WHERE d.state = 'held' AND d.held_at IS NOT NULL AND d.held_at < $1 \
@@ -240,7 +291,7 @@ pub(crate) async fn sweep_stale(shared: &Shared) -> Result<u64, sqlx::Error> {
     .fetch_all(&shared.pool)
     .await?;
     let mut taken = 0;
-    for (group, seq, attempt, max_attempts, initial, max) in rows {
+    for (group, seq, attempt, held_at, max_attempts, initial, max) in rows {
         let Some(retry) = retry_policy(max_attempts, initial, max) else {
             tracing::warn!(group = %group, seq, "a stale hold's group retry policy is invalid; left");
             continue;
@@ -249,6 +300,7 @@ pub(crate) async fn sweep_stale(shared: &Shared) -> Result<u64, sqlx::Error> {
             group,
             seq,
             attempt,
+            held_at,
         };
         if fail(shared, &key, &retry, Failure::Timeout).await? {
             taken += 1;

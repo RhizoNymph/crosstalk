@@ -23,11 +23,15 @@
 //! a delete grown by a long stop is not cancelled every round, which would
 //! silently stop retention. Batching those deletes is the follow-up.
 //!
-//! Defaults: 60 s per statement, 15 s per lock wait, 15 min per retention
-//! delete. Every pipeline
+//! Defaults: 20 s per statement, 15 s per lock wait, 15 min per retention
+//! delete. The statement bound must stay below the bus's ack timeout
+//! (30 s by default; checked at start, [`PipelineTimeouts::check_ack_timeout`]):
+//! a stage releases a delivery whose store stalled without spending an
+//! attempt, but a hold that times out first is taken back by the reaper
+//! and its next take spends one, so a long stall could dead-letter it. Every pipeline
 //! statement runs in milliseconds; the longest legitimate ones (retention
 //! deletes after a long stop, recovery's reads, a checkpoint's snapshot)
-//! stay well inside a minute on a large deployment, while a stage or the
+//! stay well inside 20 s on a large deployment, while a stage or the
 //! reaper is never parked longer. The lock bound sits above the bus's own
 //! tighter ones (a take's 10 s, the reaper's 2 s `SET LOCAL lock_timeout`,
 //! which keep theirs) and below the default 30 s ack timeout, so a stage
@@ -71,6 +75,15 @@ pub enum InvalidPipelineTimeouts {
         retention_ms: u64,
         statement_ms: u64,
     },
+    /// A statement stalled until its bound must be cancelled before its
+    /// delivery's hold times out (`bus.ack_timeout_micros`).
+    #[error(
+        "statement_timeout ({statement_ms} ms) must be below the bus's ack timeout ({ack_timeout_ms} ms)"
+    )]
+    StatementNotBelowAckTimeout {
+        statement_ms: u64,
+        ack_timeout_ms: u64,
+    },
 }
 
 const STATEMENT: &str = "statement_timeout";
@@ -78,7 +91,7 @@ const LOCK: &str = "lock_timeout";
 const RETENTION: &str = "retention_timeout";
 
 impl PipelineTimeouts {
-    pub const DEFAULT_STATEMENT: Duration = Duration::from_secs(60);
+    pub const DEFAULT_STATEMENT: Duration = Duration::from_secs(20);
     pub const DEFAULT_LOCK: Duration = Duration::from_secs(15);
     pub const DEFAULT_RETENTION: Duration = Duration::from_secs(15 * 60);
 
@@ -118,6 +131,20 @@ impl PipelineTimeouts {
     /// How long a statement may wait for a lock.
     pub fn lock(&self) -> Duration {
         Duration::from_millis(u64::from(self.lock_ms))
+    }
+
+    /// Refused unless the statement bound is below `ack_timeout`: a stage
+    /// whose statement stalls to the bound releases its delivery (no
+    /// attempt spent) before the reaper takes the hold back (whose next
+    /// take spends one).
+    pub fn check_ack_timeout(&self, ack_timeout: Duration) -> Result<(), InvalidPipelineTimeouts> {
+        match self.statement() < ack_timeout {
+            true => Ok(()),
+            false => Err(InvalidPipelineTimeouts::StatementNotBelowAckTimeout {
+                statement_ms: u64::from(self.statement_ms),
+                ack_timeout_ms: u64::try_from(ack_timeout.as_millis()).unwrap_or(u64::MAX),
+            }),
+        }
     }
 
     /// How long a retention delete may run.
@@ -165,11 +192,11 @@ impl PipelineTimeouts {
 }
 
 impl Default for PipelineTimeouts {
-    /// 60 s per statement, 15 s per lock wait, 15 min per retention delete
+    /// 20 s per statement, 15 s per lock wait, 15 min per retention delete
     /// (see the module docs).
     fn default() -> Self {
         Self {
-            statement_ms: 60_000,
+            statement_ms: 20_000,
             lock_ms: 15_000,
             retention_ms: 900_000,
         }

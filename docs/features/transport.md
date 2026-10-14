@@ -77,6 +77,9 @@ MpscSubscription::next()
 
 ack(id)   → holder check → entry released → Ok          (else UnknownDelivery)
 nack(id)  → holder check → fail(Nack { retry_after, reason })
+release(id) → the spec's default: a nack (MpscBus has no store to stall;
+             PgBus redelivers on the same attempt and never dead-letters,
+             pg_bus.md, "Bounded statements")
 timeout   → timer AckDeadline → fail(Timeout)
 drop(sub) → drops channel → every entry it holds → fail(Dropped)
 

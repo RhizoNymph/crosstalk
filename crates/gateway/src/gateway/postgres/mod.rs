@@ -301,7 +301,7 @@ pub fn derived_pool(template: &PgPool, max: u32, application: &str) -> PgPool {
 }
 
 /// [`incarnation_pool_bounded`] with the default bounds
-/// ([`PipelineTimeouts::default`]: 60 s per statement, 15 s per lock wait).
+/// ([`PipelineTimeouts::default`]: 20 s per statement, 15 s per lock wait).
 pub fn incarnation_pool(template: &PgPool, max: u32, application: &str, epoch: Epoch) -> PgPool {
     incarnation_pool_bounded(
         template,

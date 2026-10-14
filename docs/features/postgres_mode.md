@@ -371,7 +371,7 @@ after_connect: session_setup (idle_in_transaction_session_timeout = 30s)
    ─▶ fence::join (shared fence, epoch check)
 ```
 
-`{"statement_ms": 60000, "lock_ms": 15000, "retention_ms": 900000}` by
+`{"statement_ms": 20000, "lock_ms": 15000, "retention_ms": 900000}` by
 default, each key optional; each at least 1 ms and at most 2147483647 ms
 (the server's range), the lock's at most the statement's (a longer one
 never fires), the retention's at least the statement's; a refused value
@@ -379,7 +379,7 @@ is a config parse error.
 
 **Retention deletes get the longer bound.** The retention deletes are
 single unbatched `DELETE`s whose size grows with how long retention did
-not run; under the 60 s statement bound one could be cancelled every
+not run; under the 20 s statement bound one could be cancelled every
 round after a long stop, which would silently stop retention. Each runs
 in a transaction that first raises `statement_timeout` with `SET LOCAL`
 to `retention_ms` (`crosstalk_store::raise_for_retention`, reading the
@@ -402,15 +402,17 @@ a stalled append fails at the publish's own client-side `publish_timeout`,
 head check, each bounded client-side), the `api` role's pool, the lock's
 session (its ping deadline bounds it) and `crosstalk migrate`. In role
 `all` the API's reads go through the running incarnation's stores, so
-they are bounded too: a read past a minute fails as a store error.
+they are bounded too: a read past 20 s fails as a store error.
 
-**Why 60 s and 15 s.** Every pipeline statement runs in milliseconds, and
-the longest legitimate ones (below) stay well inside a minute, while a
-stage or the reaper is never parked longer than that. The lock bound is
-above the bus's 10 s and 2 s ones and below the default 30 s ack timeout,
-so a stage write blocked on a row lock is cancelled and nacked before its
-hold times out, and a stall from lock contention (the common case) is
-retried four times a minute.
+**Why 20 s and 15 s.** Every pipeline statement runs in milliseconds, and
+the longest legitimate ones (below) stay well inside 20 s, while a stage
+or the reaper is never parked longer than that. The lock bound is above
+the bus's 10 s and 2 s ones. Both are below the default 30 s ack timeout,
+and the statement bound must be (`PipelineTimeouts::check_ack_timeout`,
+refused at start as `StartError::PipelineTimeouts`): a stage whose
+statement stalls to the bound releases its delivery before the reaper
+takes the hold back, and only the reaper's take-back leads to an attempt
+spent (see "A stall spends no attempt").
 
 **What a cancel becomes.** The server cancels the statement (SQLSTATE
 `57014` `query_canceled`, or `55P03` `lock_not_available`) and aborts its
@@ -424,8 +426,9 @@ does). `classify` counts it by kind (`crosstalk_store::statement_timeouts`,
 `/healthz` `statement_timeouts`, `/metrics`
 `crosstalk_pg_statement_timeouts_total{kind="statement"|"lock"}`) and logs
 it once at warn (`kind`, `sqlstate`, the server's `message`); the caller's
-own warn names the stage or statement (`stage will retry` with `stage`,
-`event`, `reason`; `could not take a hold back` with `group`, `seq`,
+own warn names the stage or statement (`stage's store stalled; released
+without spending an attempt` with `stage`, `event`, `attempt`, `kind`,
+`sqlstate`, `reason`; `could not take a hold back` with `group`, `seq`,
 `timed_out`; `sweeping stale holds failed`; `checkpoint not taken`;
 `flow step failed`). The bus reports a timeout as `BusError::Disconnected`,
 as its own publish timeout does.
@@ -437,39 +440,65 @@ as its own publish timeout does.
 | a take (`subscription.rs` `try_take`) | `TimedOut` | warn `next failed; retrying`, at the poll interval | retried |
 | stage ack (`PgSubscription::ack`) | `Disconnected` | hold kept, `delivery not settled` warn; the reaper redelivers at the ack deadline (stages are idempotent) | redelivered |
 | stage nack (`fail`) | `Disconnected` | warn; the reaper takes the hold back at its deadline | redelivered |
-| L3 writes (`PgExchanges::put`, reconstruct's stores) | a store error | `StageError::Retry`: nack | redelivered |
-| **L4 provenance writes** (`PgProvenanceStore`: `record_exchange`, the scan's records) | was `Server { 57014 }` ─▶ `ProvenanceStoreError::Rejected` ─▶ `EngineError` not transient ─▶ `StageError::Reject` ─▶ **acked: the exchange's or delta's provenance lost**. Now `Unavailable` (transient) | `StageError::Retry`: nack | **fixed**: redelivered |
-| L4 fingerprint index, extraction step and ledger | `IndexError::Store` (classified now, so counted), `Retry` | nack | redelivered |
+| L3 writes (`PgExchanges::put`, reconstruct's stores) | a store error | `StageError::Retry`, a stall: release | redelivered, no attempt spent |
+| **L4 provenance writes** (`PgProvenanceStore`: `record_exchange`, the scan's records) | was `Server { 57014 }` ─▶ `ProvenanceStoreError::Rejected` ─▶ `EngineError` not transient ─▶ `StageError::Reject` ─▶ **acked: the exchange's or delta's provenance lost**. Now `Unavailable` (transient) | `StageError::Retry`, a stall: release | **fixed**: redelivered, no attempt spent |
+| L4 fingerprint index, extraction step and ledger | `IndexError::Store` (classified now, so counted), `Retry` | release | redelivered, no attempt spent |
+| L4 waiting on L5 (`DurableInputs::deliver`) when L5's store stalled | `NotDurable::Stalled(kind)` | `StageError::Stalled`: release | redelivered, no attempt spent |
 | L4 tick (`expire`, ledger expiry), L7 tick (frontier, watermark) | store errors | warn, next tick | retried |
 | L5 flow steps (registry, transmissions, agents) | `Store { reason }`: not permanent | step kept in the backlog, retried with the next input, interval or drain | retried |
-| L5 checkpoint | a durability error | warn `checkpoint not taken`; acks wait for the next checkpoint; past the ack timeout the deliveries are redelivered | retried |
-| L6 classify (`TransmissionStore::modify`, catalog) | a store error | `StageError::Retry`: nack | redelivered |
-| L7 edges (`apply`, `judge`, `apply_access`, versions) | an edge error | `Outcome::Nack` | redelivered |
+| L5 checkpoint | a durability error | warn `checkpoint not taken`; acks wait for the next checkpoint; a stalled one stops L5 taking deliveries until a checkpoint is taken again | retried, no attempt spent |
+| L6 classify (`TransmissionStore::modify`, catalog) | a store error | `StageError::Retry`, a stall: release | redelivered, no attempt spent |
+| L7 edges (`apply`, `judge`, `apply_access`, versions) | an edge error | `Outcome::Nack`, a stall: release | redelivered, no attempt spent |
 | outbox relays while running (L7 relay task; L3, L5, L6 relays after a write) | a relay error | warn, next wake-up or poll; stamped rows republished under their ids (INV-1211 to INV-1213) | retried |
 | recovery (`recover_held`, `PgStores::open`, the relays, `restore`, `InProcess::host`, subscribing) | `LiveError` (never `is_permanent` for a database error) | `StartFailed::Retry`: the incarnation is abandoned and started again after `RETRY` | retried |
 | surface relay's node facts (`NodeFeeder::apply_all`) | a read error | warn `node facts not refreshed`; not retried until the next start rebuilds them | counted, continues (as for any database error before) |
 | `/healthz` `group_stats` (capture's bus: no server-side bound) | - | bounded client-side: `HEALTH_BUS_BOUND` (2 s), then `bus: {"unavailable": {"timed_out": {"bound_ms": 2000}}}` (warn); a failed read `{"unavailable": {"failed": {"error"}}}` | answers |
 | LISTEN `recv` (`listen.rs`, an incarnation connection) | no statement runs while it waits, so neither bound applies | not bounded and need not be: notifications are hints (each waiting `next` re-reads at the poll, 250 ms), the task blocks nothing, a partition is caught by the lock's `DETECTION` and the abandon aborts and joins it | covered |
 
-**Long statements on the pipeline pool**, against the 60 s default on a
+**Long statements on the pipeline pool**, against the 20 s default on a
 large deployment: `recover_held` updates at most `group_capacity` (1024)
 held rows per group; the outbox relays go batch by batch; the flow
 restore reads one checkpoint row per shard plus the inputs since it (a
 few seconds' worth), and a checkpoint's snapshot of tens of MB writes in
 well under a second; `InProcess::host` reads the agents and channels once.
-None comes near a minute. The retention deletes are the exception: in
+None comes near 20 s. The retention deletes are the exception: in
 steady state each deletes an hour's or a tick's worth of rows, but after
 the gateway was stopped for days at a high capture rate the first one
 deletes everything that aged out meanwhile. They run under `retention_ms`
 (above): Postgres deletes on the order of 10^5 to 10^6 indexed rows a
-second, so 15 min covers far more than a minute's millions.
+second, so 15 min covers far more than 20 s's millions.
 
-**The attempt budget.** A stage whose write is cancelled nacks, and each
-redelivery counts an attempt: a stall that outlasts `bus.retry.max_attempts`
-(5) cancels (about 75 s of lock contention at the default, about 5 minutes
-of a stalled statement) dead-letters the delivery: kept, listed and
-replayable (`ReplayDeadLetter`), no longer delivered on its own. Before,
-the stage hung for the stall's length instead.
+**A stall spends no attempt.** A statement or lock timeout is an
+infrastructure stall, not a property of the message, so it never
+consumes a delivery attempt and never dead-letters (before this branch a
+stall just waited and recovered when it ended; it must not now leave a
+gap that needs a replay). The generic stage loop runs each `handle` in
+`crosstalk_store::observe_timeouts` (a task-local the classification
+marks), so whatever error type a layer reports the failure through, a
+`StageError::Retry` asked for while one of the handle's statements was
+cancelled at its bound becomes `StageError::Stalled { kind, reason }`
+(`live::stage::stalled`); L4 also maps `NotDurable::Stalled`, which the
+flow consumer answers when its own store stalled
+(`FlowConsumer::handle_batch` under the same observation). A stall is
+settled with `Subscription::release` (spec, l2: by default a nack; a bus
+without such stalls may treat it so) rather than a nack. `PgBus`'s
+release (`Failure::Stalled` in the reaper's `fail`) delays the row by
+`STALL_RETRY` (1 s, clamped to the group's backoff bounds) and gives its
+attempt back (`attempt - 1`; the next take counts it again), and never
+dead-letters. A hold is now keyed by `held_at` as well as its attempt, so
+a second hold on the same attempt is never taken back by the first
+hold's deadlines. Spinning is bounded: each stalled round waits out a
+statement or lock bound, then `STALL_RETRY`. A `Reject` is the message's
+and is never turned into a stall; a failure of the message (`Retry` with
+no timeout seen, a nack) still spends attempts and dead-letters on the
+last. Two paths could still spend attempts during a stall and are
+closed: a statement stalled past the ack timeout (the reaper's take-back
+precedes the release, and the next take counts), hence the statement
+bound below the ack timeout; and L5, whose deliveries wait for a
+checkpoint, which stops taking new deliveries while its checkpoint is
+stalled. The edge left: a handle that waits out most of the lock bound,
+then stalls a later statement to the statement bound, can outlast the
+ack timeout once.
 
 ### Cancellation audit (bus reads, outbox polls, stream reads)
 
@@ -1201,10 +1230,6 @@ on `crates/api/tests/support/pg_world.rs`:
   `DELETE`s, run under the longer `retention_ms` bound (15 min) so they
   are not cancelled every round. They should delete in batches; that is
   the real fix, after which they can run under the pipeline's bound.
-- A sustained stall dead-letters a stage's delivery after
-  `bus.retry.max_attempts` cancelled attempts (replayable) instead of
-  waiting it out; a stall-aware retry that does not spend the attempt
-  budget is not built.
 
 - `PgTransmissionStore::list` was a stub returning `Store`; W8 implemented
   it (see [flow_store](flow_store.md)). No other "not implemented on

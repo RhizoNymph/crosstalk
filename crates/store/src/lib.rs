@@ -63,7 +63,7 @@ pub use test_db::{
     RuntimeProblem, STALE_TEMPLATE_AGE, TEST_DB_PREFIX, TEST_TEMPLATE_PREFIX, TemplateDb,
     TemplateStep, TestDb, TestDbError, TestDbName, drop_stale_templates, test_server,
 };
-pub use timeouts::{TimeoutCounts, TimeoutKind, statement_timeouts};
+pub use timeouts::{TimeoutCounts, TimeoutKind, observe as observe_timeouts, statement_timeouts};
 pub use window::{ColumnBounds, ColumnWindow};
 
 /// The pinned sqlx, so layer crates name its types (`PgPool`, `Migrator`)

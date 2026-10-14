@@ -216,14 +216,20 @@ Regression: `integration::pg_next_dropped_mid_take_hands_out_the_hold_on_the_nex
 Bounded statements. In the gateway every connection of a pipeline
 incarnation's pool, the pool an incarnation's `PgBus::new` runs over,
 carries `statement_timeout` and `lock_timeout` (`store.pipeline_timeouts`,
-60 s and 15 s by default; [postgres_mode.md](postgres_mode.md), "Bounded
+20 s and 15 s by default; [postgres_mode.md](postgres_mode.md), "Bounded
 statements"); a take's and the reaper's `SET LOCAL lock_timeout` keep
 their tighter bounds, and `prune` raises its transaction to the longer
 retention bound (`retention_ms`, 15 min: `crosstalk_store::raise_for_retention`),
 since its single delete grows with a long stop. A statement the server cancels at a bound (SQLSTATE
 `57014` or `55P03`) classifies as `DbFailure::TimedOut` and the bus
 reports it `BusError::Disconnected` (`row::bus_error`), as its own publish
-timeout does. Each bus caller retries: the reaper's `sweep_stale` at its
+timeout does. A consumer whose store stalled settles with `release`
+(`Subscription::release`, `Failure::Stalled`): delayed by its
+`retry_after` (clamped to the backoff bounds) on the same attempt (the
+row's `attempt` given back), never dead-lettered. Holds are keyed by
+(`group`, `seq`, `attempt`, `held_at`): every failure, ack and terminate
+is conditional on all four, so a second hold on the same attempt is never
+ended by the first's deadlines. Each bus caller retries: the reaper's `sweep_stale` at its
 next round (its loop goes on reaping deadlines meanwhile), its `fail` at
 the poll interval, a take at the poll interval; a failed ack or nack
 leaves the hold for the reaper, which redelivers it. `group_stats` on

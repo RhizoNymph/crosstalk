@@ -40,9 +40,9 @@ pub mod store_set;
 pub mod wiring;
 
 #[cfg(test)]
-mod tests;
-#[cfg(test)]
 mod stall_tests;
+#[cfg(test)]
+mod tests;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
@@ -78,7 +78,8 @@ pub use self::evidence::{EvidenceFeeder, IndexedSpans, SpanSource, SpanSourceErr
 pub use self::settle::{SettleError, Settled};
 pub use self::stage::{
     Activity, Command, Control, DERIVED_SUBJECTS, LayerStores, LiveStores, Publisher, RunFuture,
-    Slot, SlotTaken, Stage, StageContext, StageError, Stages, settle_delivery,
+    STALL_RETRY, Slot, SlotTaken, Stage, StageContext, StageError, Stages, settle_delivery,
+    stalled,
 };
 pub use self::store_set::{LiveStoreSet, MemoryQuiet, MemorySet, Quiet};
 use crate::capture::CaptureStage;

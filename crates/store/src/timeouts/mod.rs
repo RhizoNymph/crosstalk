@@ -16,8 +16,41 @@
 //! server's message; the caller's own log line names the statement or
 //! stage. [`statement_timeouts`] reads the counts (`/metrics`:
 //! `crosstalk_pg_statement_timeouts_total{kind}`).
+//!
+//! [`observe`] tells a caller whether a timeout was classified while a
+//! future of its task ran: a consumer stage uses it to tell a store that
+//! stalled (release the delivery, spend no attempt) from a message that
+//! failed (nack it), whatever error type the layer reported it through.
 
+use std::cell::Cell;
+use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering};
+
+tokio::task_local! {
+    static SEEN: Cell<Option<TimeoutKind>>;
+}
+
+/// Run `work`, and say whether a statement timeout was classified on this
+/// task while it ran (the last kind seen). A timeout classified in another
+/// task (one `work` spawned) is not seen. Scopes nest: what an inner scope
+/// saw, its outer scope sees too.
+pub async fn observe<F: Future>(work: F) -> (F::Output, Option<TimeoutKind>) {
+    let (output, seen) = SEEN
+        .scope(Cell::new(None), async {
+            let output = work.await;
+            (output, SEEN.with(Cell::get))
+        })
+        .await;
+    if let Some(kind) = seen {
+        mark(kind);
+    }
+    (output, seen)
+}
+
+/// Record `kind` in the enclosing [`observe`] scope, if any.
+fn mark(kind: TimeoutKind) {
+    let _ = SEEN.try_with(|seen| seen.set(Some(kind)));
+}
 
 /// Which bound cancelled a statement.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -96,6 +129,7 @@ pub(crate) fn note(kind: TimeoutKind, message: &str) {
         TimeoutKind::Lock => &LOCK,
     };
     let total = counter.fetch_add(1, Ordering::Relaxed).saturating_add(1);
+    mark(kind);
     tracing::warn!(
         kind = kind.label(),
         sqlstate = kind.sqlstate(),

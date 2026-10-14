@@ -315,15 +315,17 @@ where
     /// it caused ran, so its accesses, held writes and tool calls are
     /// stored; `Backlogged` when a step failed transiently and waits in
     /// the queue (the caller retries its delta; every input is
-    /// idempotent here).
+    /// idempotent here), `Stalled` when that failure was a store statement
+    /// cancelled at its bound.
     pub async fn handle_batch(&mut self, inputs: Vec<Extracted>) -> Result<(), NotDurable> {
         for input in inputs {
             self.queue(Self::step_of(input));
         }
-        self.drain().await;
-        match self.backlog.is_empty() {
-            true => Ok(()),
-            false => Err(NotDurable::Backlogged),
+        let ((), stalled) = crosstalk_store::observe_timeouts(self.drain()).await;
+        match (self.backlog.is_empty(), stalled) {
+            (true, _) => Ok(()),
+            (false, Some(kind)) => Err(NotDurable::Stalled(kind)),
+            (false, None) => Err(NotDurable::Backlogged),
         }
     }
 
