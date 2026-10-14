@@ -1,0 +1,34 @@
+[invariant]
+id = "transport.pipeline-lock.no-owner-write-after-abandon"
+statement = "Once a pipeline incarnation whose lock was lost has been abandoned, no session of that incarnation commits a write to what only the lock's holder writes (the bus's deliveries and groups, the correlator's checkpoint and held writes, the store outboxes), and its sessions are gone: its pool was closed before any of its tasks was aborted, and every task, the bus's listener and reaper, and every take in flight was aborted and joined; nothing was drained, acked, nacked or checkpointed after the loss."
+kind = "coordination"
+requires = ["unit", "integration"]
+rationale = """
+After the loss another process may hold the lock and own those tables. A
+task the abandoned incarnation left running (a stage, the reaper failing a
+hold, the outbox relay, or a take spawned in a task of its own that
+commits whether or not its caller waits) would be a second writer, and a
+graceful drain would be one on purpose. So the loss never drains: the
+incarnation's pool is fenced first (every acquire fails from then on, and
+a connection an aborted task gives back is closed, not pinged), then every
+task is aborted and joined, the bus's takes included (PgBus::abandon
+aborts each registered take and waits until each has been dropped). Held
+deliveries stay held and the next holder's recover_held readies them at
+once. What this does not close: between the server ending the lock's
+session and the holder's next ping failing (up to the ping interval, 5 s)
+the old incarnation still writes; only a fencing epoch on owner writes
+would close that window (docs/features/postgres_mode.md, known
+limitations).
+"""
+
+[evidence]
+unit = "crosstalk_transport::pg::progress::tests::aborted_takes_are_gone_once_none_by_returns"
+integration = [
+    "crosstalk_e2e::lock_loss::rival::a_terminated_lock_session_and_a_rival_holder_leave_no_owner_write_after_the_abandon",
+    "crosstalk_e2e::lock_loss::repeated::repeated_lock_losses_leave_no_pool_listener_or_task_behind",
+    "crosstalk_transport::integration::abandon::pg_an_abandoned_bus_joins_its_takes_and_leaves_its_holds_for_recovery",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "true", human = "false" }

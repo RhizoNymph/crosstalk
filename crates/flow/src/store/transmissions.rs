@@ -35,16 +35,20 @@ use std::collections::{BTreeMap, BTreeSet};
 use crosstalk_spec::ids::{ExchangeId, OperatorId, SpanId, TransmissionId};
 use crosstalk_spec::interfaces::l3_reconstruction::AgentDirectory;
 use crosstalk_spec::interfaces::l5_flow::transmissions::{
-    MatchKey, TransmissionStore, TransmissionStoreError,
+    MatchKey, TransmissionQuery, TransmissionStore, TransmissionStoreError,
 };
 use crosstalk_spec::interfaces::l5_flow::verdicts::{TransmissionVerdicts, VerdictError};
+use crosstalk_spec::interfaces::l8_surface::summary::TransmissionStateKind;
+use crosstalk_spec::paging::{Page, PageRequest, TransmissionList};
 use crosstalk_spec::support::{TimeWindow, Timestamp};
-use crosstalk_store::{SerializableRetry, TxError, retry_serializable};
+use crosstalk_store::{ColumnWindow, SerializableRetry, TxError, retry_serializable};
 use sqlx::{PgConnection, PgPool};
 
 use super::codec::{from_json, id_text, json, micros};
-use super::error::{Fault, failed, finished};
+use super::cursor::{self, List};
+use super::error::{Fault, StoreFault, failed, finished};
 use super::outbox::{EventSink, Relay, stage};
+use super::registry::canonical;
 
 /// The transmission store on Postgres. Clones share the pool.
 pub struct PgTransmissionStore<D, S> {
@@ -110,6 +114,36 @@ pub(crate) fn state_column(state: &TransmissionState) -> &'static str {
     }
 }
 
+/// The `state` column a state kind is stored under ([`state_column`]).
+fn kind_column(kind: TransmissionStateKind) -> &'static str {
+    match kind {
+        TransmissionStateKind::Detected => "detected",
+        TransmissionStateKind::AwaitingContent => "awaiting_content",
+        TransmissionStateKind::Suspected => "suspected",
+        TransmissionStateKind::Confirmed => "confirmed",
+        TransmissionStateKind::Classified => "classified",
+        TransmissionStateKind::Aggregated => "aggregated",
+        TransmissionStateKind::Discarded => "discarded",
+    }
+}
+
+/// What a `list` cursor binds: the query as given.
+fn list_binding(query: &TransmissionQuery) -> Result<String, Fault> {
+    let window = (
+        query.window.start().as_micros(),
+        query.window.end().as_micros(),
+    );
+    let states: Option<Vec<&'static str>> = query
+        .states
+        .as_ref()
+        .map(|states| states.iter().map(|kind| kind_column(*kind)).collect());
+    let channel = query.channel.map(id_text);
+    Ok(json(
+        "transmission list binding",
+        &(window, states, channel),
+    )?)
+}
+
 /// The `route` and `channel_id` columns of a route.
 fn route_columns(route: &Route) -> (&'static str, Option<String>) {
     match route {
@@ -137,6 +171,56 @@ fn verdict_of(column: Option<&str>) -> Result<Option<Verdict>, Fault> {
 }
 
 /// The stored transmission, locked for the transaction when `lock`.
+/// Write `transmission` as its stored row and its `transmission_matches`
+/// keys, replacing what its id held; the verdict log is not touched.
+async fn write(conn: &mut PgConnection, transmission: &Transmission) -> Result<(), Fault> {
+    let (route, channel) = route_columns(&transmission.route);
+    let opened = micros("transmissions.opened_at", transmission.opened_at)?;
+    let body = json("transmission", transmission)?;
+    let keys = match_rows(transmission)?;
+    let id = id_text(transmission.id);
+    sqlx::query(
+        "INSERT INTO flow.transmissions (id, state, route, channel_id, opened_at, transmission) \
+             VALUES ($1, $2, $3, $4, $5, $6) \
+             ON CONFLICT (id) DO UPDATE SET state = EXCLUDED.state, route = EXCLUDED.route, \
+                 channel_id = EXCLUDED.channel_id, opened_at = EXCLUDED.opened_at, \
+                 transmission = EXCLUDED.transmission",
+    )
+    .bind(&id)
+    .bind(state_column(&transmission.state))
+    .bind(route)
+    .bind(channel)
+    .bind(opened)
+    .bind(body)
+    .execute(&mut *conn)
+    .await?;
+    sqlx::query("DELETE FROM flow.transmission_matches WHERE transmission_id = $1")
+        .bind(&id)
+        .execute(&mut *conn)
+        .await?;
+    if !keys.origin.is_empty() {
+        sqlx::query(
+                "INSERT INTO flow.transmission_matches \
+                     (origin, reader_exchange, message, part, range_start, range_end, transmission_id) \
+                 SELECT k.origin, k.reader_exchange, k.message, k.part, k.range_start, k.range_end, $7 \
+                 FROM UNNEST($1::text[], $2::text[], $3::text[], $4::int4[], $5::int8[], $6::int8[]) \
+                     AS k(origin, reader_exchange, message, part, range_start, range_end) \
+                 ON CONFLICT (origin, reader_exchange, message, part, range_start, range_end) \
+                 DO UPDATE SET transmission_id = EXCLUDED.transmission_id",
+            )
+            .bind(&keys.origin)
+            .bind(&keys.reader_exchange)
+            .bind(&keys.message)
+            .bind(&keys.part)
+            .bind(&keys.range_start)
+            .bind(&keys.range_end)
+            .bind(&id)
+            .execute(&mut *conn)
+            .await?;
+    }
+    Ok(())
+}
+
 async fn stored(
     conn: &mut PgConnection,
     id: TransmissionId,
@@ -235,56 +319,36 @@ async fn set_verdict(
 
 impl<D: Send + Sync, S: EventSink> TransmissionStore for PgTransmissionStore<D, S> {
     async fn save(&mut self, transmission: Transmission) -> Result<(), TransmissionStoreError> {
-        let (route, channel) = route_columns(&transmission.route);
-        let opened = micros("transmissions.opened_at", transmission.opened_at).map_err(failed)?;
-        let body = json("transmission", &transmission).map_err(failed)?;
-        let keys = match_rows(&transmission).map_err(failed)?;
-        let id = id_text(transmission.id);
         let mut tx = self.pool.begin().await.map_err(failed)?;
-        sqlx::query(
-            "INSERT INTO flow.transmissions (id, state, route, channel_id, opened_at, transmission) \
-             VALUES ($1, $2, $3, $4, $5, $6) \
-             ON CONFLICT (id) DO UPDATE SET state = EXCLUDED.state, route = EXCLUDED.route, \
-                 channel_id = EXCLUDED.channel_id, opened_at = EXCLUDED.opened_at, \
-                 transmission = EXCLUDED.transmission",
-        )
-        .bind(&id)
-        .bind(state_column(&transmission.state))
-        .bind(route)
-        .bind(channel)
-        .bind(opened)
-        .bind(body)
-        .execute(&mut *tx)
-        .await
-        .map_err(failed)?;
-        sqlx::query("DELETE FROM flow.transmission_matches WHERE transmission_id = $1")
-            .bind(&id)
-            .execute(&mut *tx)
-            .await
-            .map_err(failed)?;
-        if !keys.origin.is_empty() {
-            sqlx::query(
-                "INSERT INTO flow.transmission_matches \
-                     (origin, reader_exchange, message, part, range_start, range_end, transmission_id) \
-                 SELECT k.origin, k.reader_exchange, k.message, k.part, k.range_start, k.range_end, $7 \
-                 FROM UNNEST($1::text[], $2::text[], $3::text[], $4::int4[], $5::int8[], $6::int8[]) \
-                     AS k(origin, reader_exchange, message, part, range_start, range_end) \
-                 ON CONFLICT (origin, reader_exchange, message, part, range_start, range_end) \
-                 DO UPDATE SET transmission_id = EXCLUDED.transmission_id",
-            )
-            .bind(&keys.origin)
-            .bind(&keys.reader_exchange)
-            .bind(&keys.message)
-            .bind(&keys.part)
-            .bind(&keys.range_start)
-            .bind(&keys.range_end)
-            .bind(&id)
-            .execute(&mut *tx)
-            .await
-            .map_err(failed)?;
-        }
+        write(&mut tx, &transmission).await.map_err(failed)?;
         tx.commit().await.map_err(failed)?;
         Ok(())
+    }
+
+    /// One transaction: the row is read `FOR UPDATE`, so a concurrent
+    /// `save` or `modify` of the id waits for this one's commit.
+    async fn modify<T, F>(
+        &mut self,
+        id: TransmissionId,
+        change: F,
+    ) -> Result<Option<T>, TransmissionStoreError>
+    where
+        T: Send,
+        F: FnOnce(Transmission) -> (TransmissionState, T) + Send,
+    {
+        let mut tx = self.pool.begin().await.map_err(failed)?;
+        let Some(stored) = stored(&mut tx, id, true).await.map_err(failed)? else {
+            return Ok(None);
+        };
+        let before = stored.state.clone();
+        let (state, outcome) = change(stored.clone());
+        if state != before {
+            write(&mut tx, &Transmission { state, ..stored })
+                .await
+                .map_err(failed)?;
+        }
+        tx.commit().await.map_err(failed)?;
+        Ok(Some(outcome))
     }
 
     async fn transmission(
@@ -295,20 +359,84 @@ impl<D: Send + Sync, S: EventSink> TransmissionStore for PgTransmissionStore<D, 
         stored(&mut conn, id, false).await.map_err(failed)
     }
 
-    // TODO(flow-store): list over `flow.transmissions` (opened_at window,
-    // state column, channel_id resolved through the supersession table),
-    // keyset-paged on id. Live and eval read the memory store today.
+    /// `flow.transmissions` in one `REPEATABLE READ` snapshot: the window
+    /// on `opened_at` (half-open, as `TimeWindow::contains`; an end past the
+    /// column is no bound and a start past it no rows, `ColumnWindow`), the
+    /// states by their column, the channel resolved through
+    /// `flow.channels`' supersessions on both sides (one hop: a superseding
+    /// channel is never superseded), newest id first, keyset-paged on the
+    /// id. The cursor binds the query as given (`flow.cursors`).
     async fn list(
         &self,
-        _query: &crosstalk_spec::interfaces::l5_flow::transmissions::TransmissionQuery,
-        _page: &crosstalk_spec::paging::PageRequest<crosstalk_spec::paging::TransmissionList>,
-    ) -> Result<
-        crosstalk_spec::paging::Page<Transmission, crosstalk_spec::paging::TransmissionList>,
-        TransmissionStoreError,
-    > {
-        Err(TransmissionStoreError::Store {
-            reason: "TransmissionStore::list is not implemented on Postgres yet".to_owned(),
-        })
+        query: &TransmissionQuery,
+        page: &PageRequest<TransmissionList>,
+    ) -> Result<Page<Transmission, TransmissionList>, TransmissionStoreError> {
+        let binding = list_binding(query).map_err(failed)?;
+        let window = ColumnWindow::of(query.window);
+        let states: Option<Vec<&'static str>> = query
+            .states
+            .as_ref()
+            .map(|states| states.iter().map(|kind| kind_column(*kind)).collect());
+        let mut tx = self
+            .pool
+            .begin_with("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
+            .await
+            .map_err(failed)?;
+        let after: Option<String> =
+            cursor::resolve(&mut tx, List::Transmissions, &binding, page.after.as_ref())
+                .await
+                .map_err(failed)?
+                .map_err(|_| TransmissionStoreError::InvalidCursor)?;
+        let channel = match query.channel {
+            None => None,
+            Some(wanted) => Some(id_text(
+                canonical(&mut tx, wanted)
+                    .await
+                    .map_err(failed)?
+                    .unwrap_or(wanted),
+            )),
+        };
+        let limit = i64::from(page.size.get().get()) + 1;
+        // A window starting past the column holds no stored transmission.
+        let rows: Vec<(String,)> = match window.bounds() {
+            None => Vec::new(),
+            Some(bounds) => sqlx::query_as(
+                "SELECT t.transmission FROM flow.transmissions t \
+                 LEFT JOIN flow.channels c ON c.id = t.channel_id \
+                 WHERE t.opened_at >= $1 AND ($2::bigint IS NULL OR t.opened_at < $2) \
+                   AND ($3::text[] IS NULL OR t.state = ANY($3::text[])) \
+                   AND ($4::text IS NULL OR (t.route = 'channel' \
+                        AND coalesce(c.superseded_by, t.channel_id) = $4::text)) \
+                   AND ($5::text IS NULL OR t.id < $5::text) \
+                 ORDER BY t.id DESC LIMIT $6",
+            )
+            .bind(bounds.start())
+            .bind(bounds.end())
+            .bind(states)
+            .bind(channel)
+            .bind(after)
+            .bind(limit)
+            .fetch_all(&mut *tx)
+            .await
+            .map_err(failed)?,
+        };
+        tx.commit().await.map_err(failed)?;
+        let mut items = Vec::with_capacity(rows.len());
+        for (text,) in rows {
+            items.push(
+                from_json::<Transmission>("transmissions.transmission", &text).map_err(failed)?,
+            );
+        }
+        cursor::page(
+            &self.pool,
+            List::Transmissions,
+            &binding,
+            items,
+            page.size,
+            |transmission| id_text(transmission.id),
+        )
+        .await
+        .map_err(TransmissionStoreError::store)
     }
 
     async fn holding(
@@ -477,20 +605,22 @@ impl<D: AgentDirectory + Send + Sync, S: EventSink> TransmissionVerdicts
     }
 
     async fn quality(&self, window: TimeWindow) -> Result<DetectionQuality, VerdictError> {
-        let start = micros("window.start", window.start()).map_err(failed)?;
-        let end = micros("window.end", window.end()).map_err(failed)?;
-        let rows: Vec<(String, Option<String>)> = sqlx::query_as(
-            "SELECT t.transmission, v.verdict FROM flow.transmissions t \
-             LEFT JOIN LATERAL (SELECT verdict FROM flow.verdicts \
-                                WHERE transmission_id = t.id \
-                                ORDER BY revision DESC LIMIT 1) v ON true \
-             WHERE t.opened_at >= $1 AND t.opened_at < $2",
-        )
-        .bind(start)
-        .bind(end)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(failed)?;
+        // A window starting past the column tallies nothing.
+        let rows: Vec<(String, Option<String>)> = match ColumnWindow::of(window).bounds() {
+            None => Vec::new(),
+            Some(bounds) => sqlx::query_as(
+                "SELECT t.transmission, v.verdict FROM flow.transmissions t \
+                 LEFT JOIN LATERAL (SELECT verdict FROM flow.verdicts \
+                                    WHERE transmission_id = t.id \
+                                    ORDER BY revision DESC LIMIT 1) v ON true \
+                 WHERE t.opened_at >= $1 AND ($2::bigint IS NULL OR t.opened_at < $2)",
+            )
+            .bind(bounds.start())
+            .bind(bounds.end())
+            .fetch_all(&self.pool)
+            .await
+            .map_err(failed)?,
+        };
         let mut judged = Vec::with_capacity(rows.len());
         for (transmission, verdict) in rows {
             let transmission: Transmission =

@@ -1,25 +1,30 @@
 //! [`PgProvenanceStore`]: L4's records in the `provenance` schema
-//! (`migrations/0001_provenance.sql`, `0002_forwarded_spans.sql`).
+//! (`migrations/0001_provenance.sql` to `0004_recorded_spans.sql`).
 //!
 //! Tables: `exchanges` (status, by id; by start time for pruning),
 //! `exchange_requests` (the request's hashes until pruned),
 //! `scanned_messages` (per-message scans, by message and by exchange),
 //! `spans` (by id, by exchange in output order, by message and part, and the
 //! live spans by indexing time), `matches` (by id, by reader message, by
-//! origin span, by reader exchange). Each write is one transaction; span
-//! states change only through `SpanState::advance`.
+//! origin span, by reader exchange), `recorded_spans` (the span-index
+//! records of spans no scan committed, [`recorded`]). Each write is one
+//! transaction; span states change only through `SpanState::advance`.
+
+use std::collections::BTreeMap;
 
 use crosstalk_spec::derived::provenance::matching::{Carrier, ContentMatch, MatchKind};
 use crosstalk_spec::derived::provenance::span::{
     RelaySource, Span, SpanEvent, SpanLocation, SpanState,
 };
 use crosstalk_spec::ids::{ExchangeId, MessageHash, SpanId};
+use crosstalk_spec::interfaces::l4_provenance::IndexedSpan;
 use crosstalk_spec::observed::message::PartRef;
 use crosstalk_spec::support::{ByteRange, Timestamp};
 use crosstalk_store::{Layer, Migrations, StoreError};
 use sqlx::postgres::PgRow;
 use sqlx::{PgConnection, PgPool, Row};
 
+use super::recorded;
 use super::{
     Coincidence, Committed, ExchangeRecord, Forwarding, MessageScan, ProvenanceStore,
     ProvenanceStoreError, Relay, ScanCommit, ScanFailure, ScanStatus, ScannedAs, SpanRecord,
@@ -638,6 +643,21 @@ impl ProvenanceStore for PgProvenanceStore {
             .fetch_optional(&self.pool)
             .await?;
         row.map(|row| span_from(&row)).transpose()
+    }
+
+    async fn record_indexed(
+        &mut self,
+        id: SpanId,
+        span: IndexedSpan,
+    ) -> Result<(), ProvenanceStoreError> {
+        recorded::record(&self.pool, id, &span).await
+    }
+
+    async fn recorded_indexed(
+        &self,
+        ids: &[SpanId],
+    ) -> Result<BTreeMap<SpanId, IndexedSpan>, ProvenanceStoreError> {
+        recorded::read(&self.pool, ids).await
     }
 
     async fn exchange_spans(

@@ -15,12 +15,15 @@
 //! - [`feed`](mod@feed): ingests the scenario in time order, moving the clock.
 //! - [`options`]: the composition's configuration.
 //! - [`read`]: the scenario read back through `QueryApi`, as the UI reads.
+//! - [`answers`]: the whole answer set of a run, and the renaming of
+//!   minted ids that makes two runs (or a run and its restart) comparable.
 //!
 //! The scenario is a library so `crosstalk-ui` can feed the same traffic
 //! into a running gateway for a demo. A composition crate beside the
 //! gateway: it may depend on layer crates, and no layer crate depends on
 //! it.
 
+pub mod answers;
 pub mod capture;
 pub mod compose;
 pub mod feed;

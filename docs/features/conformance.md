@@ -405,6 +405,14 @@ the list is empty: the surface passes all 65, in process and over HTTP.
 | `scenarios::dropped_bodies`, `scenarios::everything` | `transmission_evidence` for a dropped body failed with `Store("span missing")` instead of `BodyDropped` (INV-698). | Not a mapping: the seeded world wrote no spans, accesses or resources where the evidence page reads them. The world now records every content match's origin span through L4's `SpanIndex` (`WorldStores::Spans`), and `MemoryEvidence` reads accesses and resources from the registry that recorded them (INV-1076). |
 | `projections::*` (5) | A `fit_projection` job never left the queue. | No fitter ran in process. `InProcess` gained an opt-in deterministic fitter (`ProjectionFitting::Deterministic`, `FakeLayoutFitter`, INV-1073), which both harnesses turn on through `WorldOptions::projection_fitting`. |
 
+Over Postgres (`conformance_pg`, in process and over HTTP) the same two
+tests, `scenarios::dropped_bodies` and `scenarios::everything`, failed
+again with `Store { reason: "span missing: …" }`: the seed recorded each
+origin span through `PgProvenanceStore`'s `SpanIndex::record`, which wrote
+nothing (it assumed a scan had committed the span), so `PgEvidence` found
+no span. `record` now keeps a span no scan committed
+(`provenance.recorded_spans`, INV-965; [provenance.md](provenance.md)).
+
 The fixture passes all 65; it lists no expected failures.
 
 ### Invariants and constraints

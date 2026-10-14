@@ -1,10 +1,27 @@
 //! `GET /metrics`: the capture counters in the Prometheus text exposition
 //! format (version 0.0.4). Written by hand: a few counters do not need a
 //! metrics library. Full observability comes later.
+//!
+//! In Postgres mode (a report with a `spool` section) the publish spool's
+//! series follow: `crosstalk_spool_state{state}` (one series is 1),
+//! `crosstalk_spool_bytes`, `crosstalk_spool_records`,
+//! `crosstalk_spool_oldest_age_seconds`, `crosstalk_spool_appended_total`,
+//! `crosstalk_spool_drained_total`, `crosstalk_spool_rejected_total{reason}`
+//! (`spool_full` or `spool_io`, the values crosstalk-infra's dashboard and
+//! alerts select on)
+//! and `crosstalk_spool_truncated_bytes_total`.
+//!
+//! In Postgres mode (a report with a `recovery` section) the pipeline
+//! lock's series follow: `crosstalk_pipeline_lock_losses_total`,
+//! `crosstalk_pipeline_lock_last_loss_timestamp_seconds` (0 before the
+//! first loss), `crosstalk_pipeline_lock_last_loss_reason{reason}` (1 for
+//! the last loss's reason) and `crosstalk_pipeline_incarnation` (the
+//! pipeline incarnations started so far).
 
 use std::fmt::Write as _;
 
 use super::{HealthReport, Phase};
+use crate::live::recovery::{LossReason, RecoveryReport};
 use crate::normalize_failure::{FailureCounts, protocol_code};
 
 /// The exposition format's content type.
@@ -24,6 +41,10 @@ pub fn render(report: &HealthReport, failures: &FailureCounts) -> String {
         draining,
     );
     let capture = &report.capture;
+    let spool_full = report
+        .spool
+        .as_ref()
+        .map_or(0, |spool| spool.capture_spool_full);
     counter(
         &mut out,
         "crosstalk_capture_exchanges_total",
@@ -44,6 +65,7 @@ pub fn render(report: &HealthReport, failures: &FailureCounts) -> String {
                 capture.response_too_large,
             ),
             (&[("reason", "ids_exhausted")], capture.ids_exhausted),
+            (&[("reason", "spool_full")], spool_full),
         ],
     );
     let pipeline = &report.pipeline;
@@ -67,6 +89,7 @@ pub fn render(report: &HealthReport, failures: &FailureCounts) -> String {
     );
     samples.push((&[("outcome", "store_failed")], pipeline.store_failed));
     samples.push((&[("outcome", "publish_failed")], pipeline.publish_failed));
+    samples.push((&[("outcome", "spool_full")], spool_full));
     counter(
         &mut out,
         "crosstalk_pipeline_exchanges_total",
@@ -90,7 +113,111 @@ pub fn render(report: &HealthReport, failures: &FailureCounts) -> String {
             (&[("outcome", "write_failed")], log.write_failed),
         ],
     );
+    if let Some(spool) = &report.spool {
+        spool_series(&mut out, spool);
+    }
+    if let Some(recovery) = &report.recovery {
+        lock_series(&mut out, recovery);
+    }
     out
+}
+
+/// The pipeline lock's losses and the incarnations they cost.
+fn lock_series(out: &mut String, recovery: &RecoveryReport) {
+    counter(
+        out,
+        "crosstalk_pipeline_lock_losses_total",
+        "Times this process lost the pipeline lock and abandoned its pipeline.",
+        &[(&[], recovery.lock_losses)],
+    );
+    let last = recovery.last_loss;
+    gauge(
+        out,
+        "crosstalk_pipeline_lock_last_loss_timestamp_seconds",
+        "When the pipeline lock was last lost, by the process's clock; 0 before the first loss.",
+        last.map_or(0, |loss| loss.at_micros / 1_000_000),
+    );
+    let _ = writeln!(
+        out,
+        "# HELP crosstalk_pipeline_lock_last_loss_reason Why the pipeline lock was last lost: 1 for that reason."
+    );
+    let _ = writeln!(out, "# TYPE crosstalk_pipeline_lock_last_loss_reason gauge");
+    for reason in [
+        LossReason::PingFailed,
+        LossReason::PingTimedOut,
+        LossReason::HolderStopped,
+    ] {
+        let value = u64::from(last.is_some_and(|loss| loss.reason == reason));
+        let _ = writeln!(
+            out,
+            "crosstalk_pipeline_lock_last_loss_reason{{reason=\"{}\"}} {value}",
+            reason.label()
+        );
+    }
+    gauge(
+        out,
+        "crosstalk_pipeline_incarnation",
+        "Pipeline incarnations this process started (each start after a lost lock is a new one).",
+        recovery.incarnation,
+    );
+}
+
+/// The publish spool's series.
+fn spool_series(out: &mut String, spool: &super::SpoolReport) {
+    let _ = writeln!(
+        out,
+        "# HELP crosstalk_spool_state Where publishes go: 1 for the spool's current state."
+    );
+    let _ = writeln!(out, "# TYPE crosstalk_spool_state gauge");
+    for state in ["direct", "spooling", "draining", "corrupt"] {
+        let value = u64::from(spool.state == state);
+        let _ = writeln!(out, "crosstalk_spool_state{{state=\"{state}\"}} {value}");
+    }
+    gauge(
+        out,
+        "crosstalk_spool_bytes",
+        "Bytes the spool's segment files hold.",
+        spool.bytes,
+    );
+    gauge(
+        out,
+        "crosstalk_spool_records",
+        "Records not yet sent to the bus.",
+        spool.records,
+    );
+    gauge(
+        out,
+        "crosstalk_spool_oldest_age_seconds",
+        "Age of the oldest unsent record, by the clock.",
+        spool.oldest_age_seconds,
+    );
+    counter(
+        out,
+        "crosstalk_spool_appended_total",
+        "Records appended since the spool opened.",
+        &[(&[], spool.appended)],
+    );
+    counter(
+        out,
+        "crosstalk_spool_drained_total",
+        "Records sent to the bus since the spool opened.",
+        &[(&[], spool.drained)],
+    );
+    counter(
+        out,
+        "crosstalk_spool_rejected_total",
+        "Appends refused, by reason.",
+        &[
+            (&[("reason", "spool_full")], spool.rejected_full),
+            (&[("reason", "spool_io")], spool.rejected_io),
+        ],
+    );
+    counter(
+        out,
+        "crosstalk_spool_truncated_bytes_total",
+        "Bytes of torn appends truncated when the spool opened.",
+        &[(&[], spool.truncated_bytes)],
+    );
 }
 
 fn gauge(out: &mut String, name: &str, help: &str, value: u64) {

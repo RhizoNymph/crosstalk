@@ -8,7 +8,8 @@
 //! | `ingress` | ingress's [`IngressConfig`], unchanged: the proxy's listen address, routes, secrets, limits and capture channel capacity |
 //! | `api` | [`ApiConfig`], optional: the L8 HTTP binding's listen address, bearer token variable and the operator the token signs in as |
 //! | `ops` | [`OpsConfig`]: `/metrics`, `/healthz`, `/readyz` |
-//! | `store` | [`StoreSection`], optional: Postgres pool sizing (the URL is `DATABASE_URL`) |
+//! | `store` | [`StoreSection`], optional: Postgres pool sizing and the durable bus (`PgBusConfig`; the URL is `DATABASE_URL`). With it, `serve` runs on the Postgres stores; without it, on the memory stores |
+//! | `spool` | [`SpoolSection`], optional: the publish spool's directory and bounds (used with `store`) |
 //! | `blobs` | [`BlobsConfig`]: the blob store's root, whose parent is the data directory |
 //! | `embeddings` | [`EmbeddingsConfig`], optional; checked, unused until P6 |
 //! | `bus`, `pipeline`, `shutdown` | optional tuning: transport's [`BusConfig`], [`PipelineConfig`], [`ShutdownConfig`] |
@@ -30,8 +31,8 @@ use serde::Deserialize;
 
 pub use sections::{
     ApiConfig, ApiOperator, BlobsConfig, EmbeddingsConfig, EmptyString, EnvRef, EnvVarName,
-    HttpUrl, InvalidEnvVarName, InvalidHttpUrl, NonEmpty, OpsConfig, PipelineConfig,
-    ShutdownConfig, StoreSection,
+    HttpUrl, InvalidEnvVarName, InvalidHttpUrl, InvalidSpoolSection, NonEmpty, OpsConfig,
+    PipelineConfig, ShutdownConfig, SpoolSection, StoreSection,
 };
 
 /// Everything the gateway is configured with.
@@ -44,6 +45,8 @@ pub struct GatewayConfig {
     pub ops: OpsConfig,
     #[serde(default)]
     pub store: Option<StoreSection>,
+    #[serde(default)]
+    pub spool: SpoolSection,
     pub blobs: BlobsConfig,
     #[serde(default)]
     pub embeddings: Option<EmbeddingsConfig>,

@@ -28,7 +28,8 @@
 | Command | Behaviour |
 |---|---|
 | `crosstalk serve --role <all\|proxy\|pipeline\|api\|analysis> --config <path>` | Runs the role(s). `all` is the only role compose uses today. Exits non-zero on bad config. Handles SIGTERM by refusing new exchanges and letting in-flight streams finish (compose waits 60 s). |
-| `crosstalk migrate --config <path>` | Runs every layer's migrations (`crates/store`), then exits 0. Idempotent. |
+| `crosstalk migrate --config <path> [--reset-correlator]` | Ensures the extensions and runs every layer's migrations, each in its own schema (`transport`, `canonical`, `reconstruct`, `provenance`, `flow`, `analysis`, `topology`, `surface`), then exits 0. Idempotent. `--reset-correlator` also resets L5's checkpoint, after a start refused an incompatible one (decision Q2). `serve` never migrates and consumes only against a database at head. |
+| `crosstalk spool --config <path> --discard-corrupt` | With the gateway stopped: drops the corrupt record that stopped the publish spool's drain (`/readyz` `capture: spool corrupt: <segment>`) and everything after it in its segment. |
 | `crosstalk healthcheck --url <url>` | GETs the URL; exits 0 on 2xx, 1 otherwise. The runtime image is distroless (no shell, no curl), so the container healthcheck needs this. |
 
 Listeners:
@@ -37,7 +38,7 @@ Listeners:
 |---|---|---|
 | 8080 | `ingress.listen` | The reverse proxy. Agents set `ANTHROPIC_BASE_URL=http://<host>:<CROSSTALK_PROXY_PORT>/anthropic` (host port, default 8080). |
 | 8081 | `api.listen` | The L8 HTTP binding over the live process's surface (roles `all` and `api`). Every request carries `Authorization: Bearer <value of the variable api.token names>` and is made as `api.operator` (default `{"name": "admin"}`, every permission); without it, `401`. |
-| 9464 | `ops.listen` | `GET /metrics` (Prometheus text format), `GET /healthz` (process serving, with the capture, pipeline and exchange-log counters, and a `live` section: each layer stage's handled count and the L7 watermark), `GET /readyz` (database reachable, migrations at head, every role's tasks running: `exchange_log`, `capture`, `live` (every layer stage), `proxy`, `api`). |
+| 9464 | `ops.listen` | `GET /metrics` (Prometheus text format), `GET /healthz` (process serving, with the capture, pipeline and exchange-log counters, and a `live` section: each layer stage's handled count and the L7 watermark; with a `store` section also `bus`, `recovery` and `spool` sections), `GET /readyz` (every role's tasks running: `exchange_log`, `capture`, `live` (every layer stage), `proxy`, `api`; with a `store` section also `migrations`, `pipeline_lock`, `capture`, `pipeline` and `recovery`: ready while the database is down (capture spools to `<data dir>/spool`), not ready when migrations are behind, the pipeline lock is held elsewhere by another process at start, capture stopped, or the spool is full or corrupt; ready, degraded, while a lost lock is resumed in process; see `docs/features/postgres_mode.md`). |
 
 Environment:
 
@@ -58,7 +59,8 @@ conventions (snake_case, unknown fields refused), secrets only by `{"env":
 | `ingress` | `crosstalk_ingress::config::IngressConfig`, unchanged. |
 | `api` | `{"listen": SocketAddr, "token": {"env": String}, "operator": {"name": String}}`; `operator` defaults to `{"name": "admin"}` |
 | `ops` | `{"listen": SocketAddr}` |
-| `store` | `{"pool": crosstalk_store::config::PoolSettings}` |
+| `store` | `{"pool": crosstalk_store::config::PoolSettings, "bus": PgBusConfig}` (`bus` optional, each key defaulted); with it `serve` runs on the Postgres stores and the durable bus |
+| `spool` | optional: `{"dir", "max_bytes", "segment_bytes", "drain_batch", "probe_ms"}`, each defaulted (`<data dir>/spool`, 1 GiB in 64 MiB segments) |
 | `blobs` | `{"root": path}` for `FsBlobStore::open`. The `data` volume is mounted at `/var/lib/crosstalk` (owned by the runtime user), so the blob root and anything the gateway keeps beside it (P3's exchange log in the blob root's parent) persist. |
 | `embeddings` | `{"base_url": String, "model": String, "api_key": {"env": String}}`, an OpenAI-compatible endpoint. |
 
@@ -155,13 +157,13 @@ without breaking the linking of exchanges across the change:
 | `deploy/postgres/init/` | First-start SQL: extensions and the monitor role. |
 | `deploy/prometheus/prometheus.yml` | Scrape jobs: `prometheus`, `node`, `cadvisor`, `postgres`, `loki`, `alloy`, `grafana`, `crosstalk`. |
 | `deploy/prometheus/rules/infrastructure.yml` | Infra alert rules (group `crosstalk-infra`). |
-| `deploy/prometheus/rules/gateway.yml` | Gateway health alert rules (group `crosstalk-gateway`) on the gateway's own `/metrics`: normalize, store and publish failures, capture drops and decode errors, exchange log write failures, nothing published while capturing, stuck draining. |
+| `deploy/prometheus/rules/gateway.yml` | Gateway health alert rules (group `crosstalk-gateway`) on the gateway's own `/metrics`: normalize, store and publish failures, capture drops and decode errors, exchange log write failures, nothing published while capturing, stuck draining; and (group `crosstalk-gateway-spool`, Postgres mode) captures rejected at the spool (critical), spool over 80% of its default 1 GiB, captures waiting over 5 minutes, a corrupt spool that stopped draining (critical: run `crosstalk spool --discard-corrupt`), a torn spool tail truncated. |
 | `deploy/grafana/provisioning/` | Datasources (uids `prometheus`, `loki`) and the dashboard provider. |
 | `deploy/grafana/dashboards/infrastructure.json` | Host, containers, Postgres, logs and monitoring-stack panels, plus a crosstalk-process row. |
-| `deploy/grafana/dashboards/gateway.json` | "crosstalk / gateway" (uid `crosstalk-gateway`): health, capture, pipeline, exchange log, the captured → published → written funnel, and the gateway's WARN/ERROR logs. |
-| `deploy/loki/loki.yaml` | Single-binary Loki on the filesystem, 7-day retention. |
+| `deploy/grafana/dashboards/gateway.json` | "crosstalk / gateway" (uid `crosstalk-gateway`): health, capture, pipeline, the capture spool (Postgres mode: its state, size against the 1 GiB `spool.max_bytes` default, oldest capture's age, appended/drained/rejected rates), exchange log, the captured → published → written funnel, and the gateway's WARN/ERROR logs. |
+| `deploy/loki/loki.yaml` | Single-binary Loki on the filesystem, 7-day retention. The ingester WAL refuses writes only above 99% disk use (`disk_full_threshold: 0.99`; Loki's default 0.9 drops every log on a shared host whose disk is fuller than that). |
 | `deploy/alloy/config.alloy` | Docker log discovery, `service`/`container`/`stream` labels, JSON `level` label for crosstalk, migrate and ui. |
-| `deploy/compose.demo.yaml`, `deploy/demo.Dockerfile`, `deploy/demo/` | The token-free demo (fake upstream, wiki, agent swarm; `run.sh demo ...`): see [demo.md](demo.md). The image also carries `ct-eval`, and the override adds the `bench` service (profile `bench`). |
+| `deploy/compose.demo.yaml`, `deploy/demo.Dockerfile`, `deploy/demo/` | The token-free demo (fake upstream, wiki, agent swarm; `run.sh demo ...`): see [demo.md](demo.md). The image also carries the bench tools (`ct-eval`, `ct-bench-detect`, and `a2a-bench` at `A2A_BENCH_REF` with the bench repo's gates; [bench.md](bench.md)), and the override adds the `bench` service (profile `bench`). |
 | `deploy/bench.sh`, `deploy/bench/` (gitignored) | `run.sh bench`: one scored detection benchmark on the demo stack, its runs under `deploy/bench/<run>/`; see [bench.md](bench.md). |
 
 ## Store tests against the compose Postgres
@@ -329,12 +331,18 @@ The checkout reaches the host by rsync rather than git, so any worktree
 can be deployed (a worktree's `.git` is only a pointer file):
 
 ```sh
-rsync -a --exclude deploy/.env --exclude target --exclude .claude <checkout>/ node0:<dir>/
+rsync -a --delete --exclude deploy/.env --exclude deploy/bench --exclude target \
+    --exclude .claude --exclude node_modules --exclude ui/elements/dist --exclude .git \
+    <checkout>/ node0:<dir>/
 ```
 
-- **No `--delete`, and `deploy/.env` excluded**, so the host's generated
-  secrets survive. Files deleted from the checkout stay on the host until
-  removed by hand.
+- **`--delete`, with the host's own files excluded.** Excluded paths are
+  never deleted (only `--delete-excluded` would), so `deploy/.env` (the
+  host's generated secrets), `deploy/bench/` (bench runs) and build output
+  survive, while files removed or renamed in the checkout disappear from
+  the host too. Without `--delete` a renamed module stays behind and the
+  next image build fails: `crates/api/src/world.rs` beside the new
+  `world/mod.rs` gave rustc E0761.
 - **Data survives a re-sync.** Volumes are named after the compose project
   (`name: crosstalk`), not the directory: `crosstalk_pgdata`,
   `crosstalk_data` and the rest.
@@ -346,6 +354,36 @@ rsync -a --exclude deploy/.env --exclude target --exclude .claude <checkout>/ no
   for `crosstalk.json`, `ui.json`, `loki.yaml` and `config.alloy`.
   Directory mounts (`rules/`, Grafana's provisioning and dashboards) see
   new files.
+
+### The private bench dependency
+
+`crates/eval` depends on the private `a2a-transmission-bench` repository by
+git tag; `Cargo.lock` pins its URL and commit. Image builds never see a
+GitHub token: each Rust image's build stage gets a bare mirror of that repo
+as the `a2a` build context, and git's `insteadOf` sends cargo's fetch of
+the GitHub URL to it (`CARGO_NET_GIT_FETCH_WITH_CLI=true`), so the lockfile
+is unchanged and `--locked` holds.
+
+- **Where the mirror lives.** `${A2A_BENCH_GIT}`, by default
+  `../../.build-deps/a2a-transmission-bench.git` from `deploy/` (for a
+  worktree at `~/Code/ai/crosstalk/<worktree>`, that is
+  `~/Code/ai/crosstalk/.build-deps/`), outside every git checkout.
+- **Making it**, on a machine that can read the repository (any local
+  clone or worktree, or GitHub with credentials):
+
+  ```sh
+  git clone --bare <a2a-transmission-bench clone or URL> ~/Code/ai/crosstalk/.build-deps/a2a-transmission-bench.git
+  rsync -a ~/Code/ai/crosstalk/.build-deps/ node0:~/Code/ai/crosstalk/.build-deps/
+  ```
+
+- **When a pinned tag moves** (a new `a2a-bench-format-v*` in
+  `Cargo.lock`, or a new `a2a-bench-v*` as `A2A_BENCH_REF` in
+  `deploy/demo.Dockerfile`), fetch it into the mirror (`git -C <mirror>
+  fetch --tags <source>`) and re-sync it; a build whose mirror lacks the
+  commit fails at cargo's git fetch (the format crate) or at the checkout
+  of the tag (the scorer).
+- Plain `docker build` needs the context too: `--build-context
+  a2a=<mirror>`.
 
 ### Smoke test
 
@@ -410,6 +448,35 @@ from the host instead.
   `docker exec crosstalk-crosstalk-1 /usr/local/bin/crosstalk inspect
   --config /etc/crosstalk/crosstalk.json [<exchange-id>]`.
 
+### After a network partition
+
+`serve` does not exit when its pipeline lock's session fails (a database
+outage, a reset, a partition): it abandons the pipeline's incarnation and
+takes the lock again in process, the proxy listening and capture spooling
+throughout (`docs/features/postgres_mode.md`, "Losing the pipeline
+lock"). The compose `restart: unless-stopped` policy therefore only covers
+a crash (a panic, an out-of-memory kill) or a shutdown that overran its
+bound; a database outage no longer restarts the container. After a
+Postgres restart the old backends are gone and the process takes the lock
+at once. After a partition the old backend can outlive the cut, holding
+the lock, until the server notices the dead peer: the gateway waits up to
+about 25 s for its old session's lock (`pipeline_lock: held elsewhere`,
+`/readyz` 200 degraded, forwarding and spooling meanwhile) with the
+server's `tcp_keepalives_idle=10`, `tcp_keepalives_interval=5` and
+`tcp_keepalives_count=3`, which deploy/postgres sets (crosstalk-infra).
+Without them the wait follows the OS keepalive defaults, hours.
+
+The gateway notices a partition of its own lock session within 9 s (a
+5 s ping interval plus a 4 s ping deadline, `store::lock::DETECTION`)
+and reports `pipeline_lock: lost` within 11 s. That must stay strictly
+below the server's reap of the partitioned session (about 25 s with the
+settings above, or `tcp_user_timeout=25000`), since once reaped the lock
+is free for another process (INV-1236). Raising the server's keepalives
+is safe; lowering them below about 12 s (the report plus the 1 s abandon)
+is not, unless the gateway's `PING` and `PING_TIMEOUT` shrink with them.
+A `docker restart` (SIGTERM) still stops the proxy for the shutdown and
+the new start: about 40 requests refused per restart at the bench's rate.
+
 ## Invariants and constraints
 
 - **Secrets never live in a tracked file.**
@@ -443,7 +510,13 @@ from the host instead.
 - **The compiler is the nightly in `rust-toolchain.toml`.** The Dockerfiles'
   `RUST_TOOLCHAIN` argument must change together with that file.
 - **`crosstalk` never starts against an unmigrated database.** Compose
-  orders it after `migrate` has completed successfully.
+  orders it after `migrate` has completed successfully; a `serve` that
+  finds the database behind its migrations stays not ready
+  (`migrations: behind: ...`) and consumes nothing.
+- **One pipeline process per database.** `serve` takes a Postgres
+  advisory lock; a second one stays not ready (`pipeline_lock: held
+  elsewhere`). The publish spool (`<data dir>/spool`) is locked per data
+  directory too.
 - **The data volume is writable by uid 65532.** The image creates
   `/var/lib/crosstalk` and `/var/lib/crosstalk/blobs` with that owner, and
   a fresh named volume copies the ownership. A bind mount in its place must

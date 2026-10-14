@@ -10,7 +10,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::derived::flow::transmission::Transmission;
+use crate::derived::flow::transmission::{Transmission, TransmissionState};
 use crate::derived::provenance::matching::ContentMatch;
 use crate::derived::provenance::span::SpanLocation;
 use crate::ids::{ChannelId, ExchangeId, SpanId, TransmissionId};
@@ -89,6 +89,26 @@ pub trait TransmissionStore {
         &mut self,
         transmission: Transmission,
     ) -> impl Future<Output = Result<(), TransmissionStoreError>> + Send;
+
+    /// Change the stored transmission with `id` in place: `change` is given
+    /// it as stored when the call runs and returns its new state and an
+    /// outcome; a state other than the stored one is saved (as `save`
+    /// would, verdict log kept) before any other `save` or `modify` of
+    /// that id commits (`flow.transmission-store.modify-atomic`). `None`
+    /// for an unknown id, `change` not called.
+    ///
+    /// Two consumers write a confirmed transmission: the flow consumer
+    /// extends its content and analysis classifies it. Each does so
+    /// through this, never by reading with `transmission` and writing with
+    /// `save`, so neither write is lost to the other.
+    fn modify<T, F>(
+        &mut self,
+        id: TransmissionId,
+        change: F,
+    ) -> impl Future<Output = Result<Option<T>, TransmissionStoreError>> + Send
+    where
+        T: Send,
+        F: FnOnce(Transmission) -> (TransmissionState, T) + Send;
 
     /// The stored transmission, as last saved; `None` for an unknown id.
     fn transmission(

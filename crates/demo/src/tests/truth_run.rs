@@ -156,6 +156,37 @@ impl Recorder {
         }
     }
 
+    /// A recorder whose port refuses connections for the first `refusing`
+    /// of the run, as a gateway that is down or restarting does: nothing
+    /// listens there until then, so those requests never reach it.
+    async fn start_refusing(refusing: Duration) -> Self {
+        let (probe, addr) = listener().await;
+        drop(probe);
+        let (commands, inbox) = mpsc::channel(64);
+        tokio::spawn(record(inbox));
+        let (stop, stopped) = oneshot::channel::<()>();
+        let handler_commands = commands.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(refusing).await;
+            let listener = tokio::net::TcpListener::bind(addr)
+                .await
+                .expect("rebind the refusing port");
+            serve(
+                listener,
+                move |request| answer(request, handler_commands.clone()),
+                async {
+                    let _ = stopped.await;
+                },
+            )
+            .await;
+        });
+        Self {
+            addr,
+            commands,
+            _stop: stop,
+        }
+    }
+
     async fn log(&self) -> Vec<Recorded> {
         let (answer, answered) = oneshot::channel();
         self.commands
@@ -186,7 +217,15 @@ async fn swarm(claude_code_shape: bool, seed: u64) -> Run {
 
 /// One swarm run against a fresh wiki with the given write/read mix.
 async fn swarm_with(claude_code_shape: bool, seed: u64, mix: TaskMix) -> Run {
-    let recorder = Recorder::start().await;
+    swarm_against(Recorder::start().await, claude_code_shape, seed, mix).await
+}
+
+async fn swarm_against(
+    recorder: Recorder,
+    claude_code_shape: bool,
+    seed: u64,
+    mix: TaskMix,
+) -> Run {
     let pages = wiki().await;
     // Unique per call: tests may run the same (shape, seed) concurrently.
     static CALLS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -493,8 +532,10 @@ fn check(run: &Run) -> (BTreeSet<String>, bool) {
     assert_eq!(count("reread"), run.report.rereads);
     assert_eq!(count("miss"), run.report.wiki_misses);
     assert_eq!(run.report.unattributed_reads, 0);
-    // Every request the model received was counted.
-    assert_eq!(run.total_recorded as u64, run.report.requests);
+    // Every request the model received was counted, and only those: a
+    // request refused before it was sent reached nothing.
+    let unsent = run.report.failures.get("unsent").copied().unwrap_or(0);
+    assert_eq!(run.total_recorded as u64, run.report.requests - unsent);
     assert!(run.report.failures.contains_key("http 529"));
     (kinds, skipped_failure)
 }
@@ -508,6 +549,26 @@ async fn ground_truth_rows_point_into_the_requests_sent() {
     // Turn ordinals are positions among every request of the session,
     // failed ones included, so they exceed the successes before them.
     assert!(run.sessions.values().any(|s| s.iter().any(|r| r.failed)));
+}
+
+/// A gateway that refuses connections (down or restarting) never sees the
+/// request, so it has no exchange for it: a refused request claims no turn
+/// ordinal, and the rows still point at the requests the model received.
+#[tokio::test]
+async fn refused_requests_claim_no_turn() {
+    let mix = TaskMix::new(
+        Fraction::new(0.3).expect("fraction"),
+        Fraction::new(0.65).expect("fraction"),
+    )
+    .expect("mix");
+    // Past the 50 ms ramp, before the first retry 500 ms after a failure:
+    // every agent's first request is refused, its retry answered.
+    let recorder = Recorder::start_refusing(Duration::from_millis(300)).await;
+    let run = swarm_against(recorder, false, 42, mix).await;
+    let refused = run.report.failures.get("unsent").copied().unwrap_or(0);
+    assert!(refused >= 1, "{:?}", run.report.failures);
+    let (kinds, _) = check(&run);
+    assert!(kinds.contains("transmission"), "{kinds:?}");
 }
 
 #[tokio::test]

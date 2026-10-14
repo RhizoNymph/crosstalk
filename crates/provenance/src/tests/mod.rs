@@ -18,6 +18,7 @@ pub(crate) mod reads;
 pub(crate) mod scenarios;
 mod segment;
 mod short;
+pub(crate) mod span_index;
 pub(crate) mod started;
 mod store;
 

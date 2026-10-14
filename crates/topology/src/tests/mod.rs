@@ -4,6 +4,7 @@
 //! that never connects.
 
 pub mod support;
+mod windows;
 
 use std::num::NonZeroU64;
 

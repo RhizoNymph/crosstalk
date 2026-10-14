@@ -22,8 +22,18 @@ tokio = { workspace = true, features = ["sync", "time"] }
 tracing.workspace = true
 
 [dev-dependencies]
+crosstalk-analysis = { path = "../analysis" }
 crosstalk-api = { path = "../api", features = ["world"] }
+crosstalk-canonical = { path = "../canonical" }
 crosstalk-conformance = { path = "../conformance" }
+crosstalk-flow = { path = "../flow" }
+crosstalk-memory = { path = "../memory" }
+crosstalk-provenance = { path = "../provenance" }
+crosstalk-reconstruct = { path = "../reconstruct" }
+crosstalk-store = { path = "../store" }
+crosstalk-surface = { path = "../surface" }
+crosstalk-topology = { path = "../topology" }
+crosstalk-transport = { path = "../transport" }
 crosstalk-world = { path = "../world" }
 http-body-util = { workspace = true, features = ["channel"] }
 hyper = { workspace = true, features = ["client", "http1", "server"] }

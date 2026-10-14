@@ -550,14 +550,18 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "bytes",
+ "crosstalk-analysis",
  "crosstalk-canonical",
  "crosstalk-conformance",
+ "crosstalk-flow",
  "crosstalk-memory",
  "crosstalk-provenance",
  "crosstalk-reconstruct",
  "crosstalk-spec",
+ "crosstalk-store",
  "crosstalk-surface",
  "crosstalk-testkit",
+ "crosstalk-topology",
  "crosstalk-transport",
  "crosstalk-world",
  "form_urlencoded",
@@ -624,9 +628,19 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "bytes",
+ "crosstalk-analysis",
  "crosstalk-api",
+ "crosstalk-canonical",
  "crosstalk-conformance",
+ "crosstalk-flow",
+ "crosstalk-memory",
+ "crosstalk-provenance",
+ "crosstalk-reconstruct",
  "crosstalk-spec",
+ "crosstalk-store",
+ "crosstalk-surface",
+ "crosstalk-topology",
+ "crosstalk-transport",
  "crosstalk-world",
  "http-body-util",
  "hyper",
@@ -672,6 +686,7 @@ dependencies = [
 name = "crosstalk-e2e"
 version = "0.1.0"
 dependencies = [
+ "bytes",
  "crosstalk-api",
  "crosstalk-canonical",
  "crosstalk-client",
@@ -682,8 +697,11 @@ dependencies = [
  "crosstalk-provenance",
  "crosstalk-reconstruct",
  "crosstalk-spec",
+ "crosstalk-store",
  "crosstalk-surface",
+ "crosstalk-testkit",
  "crosstalk-transport",
+ "hyper",
  "serde_json",
  "tempfile",
  "thiserror",
@@ -715,8 +733,10 @@ dependencies = [
 name = "crosstalk-gateway"
 version = "0.1.0"
 dependencies = [
+ "axum",
  "blake3",
  "bytes",
+ "crosstalk-analysis",
  "crosstalk-api",
  "crosstalk-canonical",
  "crosstalk-flow",
@@ -739,6 +759,7 @@ dependencies = [
  "tempfile",
  "thiserror",
  "tokio",
+ "tower",
  "tracing",
  "tracing-subscriber",
 ]

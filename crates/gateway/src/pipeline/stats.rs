@@ -18,6 +18,12 @@ pub struct PipelineStats {
     store_failed: AtomicU64,
     store_retries: AtomicU64,
     publish_failed: AtomicU64,
+    /// Exchanges the publish spool refused because it was full (Postgres
+    /// mode only): their bodies are stored, no event names them.
+    spool_full: AtomicU64,
+    /// Whether the last publish was refused by a full spool, cleared by
+    /// the next one that lands: `/readyz` turns 503 while it holds.
+    refusing: std::sync::atomic::AtomicBool,
 }
 
 /// A reading of [`PipelineStats`]. On the health endpoint, its JSON.
@@ -48,6 +54,7 @@ pub(crate) enum Counter {
     StoreFailed,
     StoreRetries,
     PublishFailed,
+    SpoolFull,
 }
 
 impl PipelineStats {
@@ -71,8 +78,24 @@ impl PipelineStats {
             Counter::StoreFailed => &self.store_failed,
             Counter::StoreRetries => &self.store_retries,
             Counter::PublishFailed => &self.publish_failed,
+            Counter::SpoolFull => &self.spool_full,
         };
         field.fetch_add(1, Ordering::Relaxed);
+        match counter {
+            Counter::SpoolFull => self.refusing.store(true, Ordering::Relaxed),
+            Counter::Published => self.refusing.store(false, Ordering::Relaxed),
+            Counter::StoreFailed | Counter::StoreRetries | Counter::PublishFailed => {}
+        }
+    }
+
+    /// Exchanges the full spool refused (`capture.spool_full`).
+    pub fn spool_full(&self) -> u64 {
+        self.spool_full.load(Ordering::Relaxed)
+    }
+
+    /// Whether the last exchange's publish was refused by a full spool.
+    pub fn refusing(&self) -> bool {
+        self.refusing.load(Ordering::Relaxed)
     }
 
     /// Count one refusal under its reason and protocol.

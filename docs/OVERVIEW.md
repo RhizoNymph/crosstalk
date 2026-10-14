@@ -58,7 +58,8 @@ Overview:
     (testkit). crosstalk-transport has the in-process bus (MpscBus) with
     consumer groups, retries, dead letters and envelope dedup, the
     durable Postgres bus (PgBus, pg_bus) and the on-disk publish spool in
-    front of it (SpoolingBus, publish_spool), not yet wired into serve,
+    front of it (SpoolingBus, publish_spool), which serve uses whenever a
+    store section is configured (postgres_mode),
     and the content-addressed blob store (FsBlobStore, MemoryBlobStore)
     (transport). crosstalk-canonical has the Anthropic Messages
     normalizer (L1): pure functions from a RawExchange to a
@@ -779,15 +780,25 @@ Features Index:
       to DbFailure (unique, foreign-key and check violations, retryable
       serialization failures and deadlocks, connection loss, pool timeout)
       for layers to map into spec errors; retry_serializable runs a
-      SERIALIZABLE transaction with bounded, backed-off retries. TestDb
+      SERIALIZABLE transaction with bounded, backed-off retries.
+      ColumnWindow maps a spec TimeWindow onto a bigint time column for
+      every layer's windowed reads: an end past i64::MAX is no upper bound
+      (a row at i64::MAX kept), a start past it reads empty, never an
+      error. TestDb
       creates a fresh database per test from TEST_DATABASE_URL and drops it
-      on close or drop; tests skip with a printed reason when the variable
+      on close or drop; a suite with expensive shared contents builds them
+      once into a template (TestDb::create_template, freeze into a
+      TemplateDb) and clones it per test (TemplateDb::instantiate), stale
+      templates of dead or day-old processes dropped by the next
+      create_template; tests skip with a printed reason when the variable
       is unset, and scripts/test-db.sh starts a disposable Postgres 18 with
       pgvector.
     entry_points:
       - crates/store/src/lib.rs
       - crates/store/src/migrate.rs
-      - crates/store/src/test_db.rs
+      - crates/store/src/window.rs
+      - crates/store/src/test_db/mod.rs
+      - crates/store/src/test_db/template.rs
       - scripts/test-db.sh
     depends_on: [workspace]
     doc: docs/features/store.md
@@ -810,7 +821,10 @@ Features Index:
       consumer's checkpoint writes (PgFlowDurability, migration
       0003_restart: recording order, access resolutions, tool calls, held
       writes, checkpoints). PgExtractionLedger keeps the extraction step's
-      ledger (0004_extract_ledger). Model-tested against
+      ledger (0004_extract_ledger). TransmissionStore::modify (a FOR
+      UPDATE read and its write in one transaction) is how the flow
+      consumer extends and analysis classifies a confirmed transmission,
+      so neither drops the other's write (INV-1230). Model-tested against
       crosstalk-memory's reference stores with the reference harnesses'
       proptest strategies.
     entry_points:
@@ -866,7 +880,10 @@ Features Index:
       see pg_bus and publish_spool; W4, flow, implemented: checkpoints with
       deferred acks, held writes, access recording order, the extraction
       step and its ledger in crosstalk-flow, stamped outbox, see
-      flow_correlator, flow_store and flow_extract): detections that survive
+      flow_correlator, flow_store and flow_extract; W8, the composition,
+      implemented: PgStores, Live over a LiveStoreSet, recovery, the
+      pipeline lock, PgFrontierSource, migrate for every layer, the spool
+      section, readiness and health, see postgres_mode): detections that survive
       a gateway restart. Surveys what is persisted today (serve runs Live
       on memory stores and MpscBus; the L3 to L7 Postgres stores exist but
       are unwired, and crosstalk migrate runs no layer migrations) and
@@ -893,6 +910,73 @@ Features Index:
       - crates/store/src/migrate.rs
     depends_on: [store, gateway, transport, reconstruct, provenance, flow_store, flow_correlator, search_alerts, topology_store, surface_service, conformance]
     doc: docs/features/postgres_stores.md
+  postgres_mode:
+    description: >
+      serve on the Postgres stores (P7.3 workstream W8). crosstalk-api's
+      PgStores bundles every layer's Postgres store over one pool
+      (SurfaceStores; PgEvidence reads spans from L4 and accesses and
+      resources from L5's tables; cursor keys derived from the deployment
+      secret; ids from OS entropy, or seeded in tests) and InProcess hosts
+      any HostedStores bundle. crosstalk-gateway's Live is generic over a
+      LiveStoreSet (MemorySet unchanged, PgSet): Live::start_pg recovers
+      (held deliveries back, every outbox relayed, L5 restored from its
+      checkpoint, node facts rebuilt, interrupted actions recorded), then
+      subscribes every group and opens the spool's gate, so captures made
+      before (or while the database was down) drain in order under their
+      ids. Postgres stages: L3 over PgAgents and PgConversations, L4 with
+      the extraction step on PgExtractionLedger and DurableInputs, the
+      durable flow consumer acking after checkpoints, crosstalk-analysis's
+      Classifier, L7 with PgFrontierSource (shard ticks, groups' pending
+      and dead letters, the spool's oldest record); subscriptions are
+      pumped so a stage's select never cancels a take. serve in Postgres
+      mode starts the proxy and capture at once over the spool (capture
+      appends through a publish-only PgBus over a pool of its own), then
+      waits for the database, migrations at head and the pipeline advisory
+      lock, and starts a pipeline incarnation (its own pool, named
+      crosstalk-pipeline-<pid>-<n>, and its own PgBus). A lost lock never
+      stops the process: the incarnation is abandoned (pool fenced, every
+      task and take aborted and joined, nothing drained, no owner write
+      after) and the loop waits for the database and the lock again, the
+      proxy listening throughout; serve stops only on a signal, every
+      database step of its shutdown bounded. /readyz reports migrations,
+      pipeline_lock, capture (spooling, draining, dropping: spool full,
+      spool corrupt, stopped), pipeline (abandoning after a loss) and
+      recovery, ready while the database is down and through a resume;
+      /healthz adds bus, recovery (lock losses, the last loss, the
+      incarnation) and spool sections; spool_full is a capture outcome. crosstalk migrate
+      runs every layer and --reset-correlator; crosstalk spool
+      --discard-corrupt. Memory mode's replays are byte-identical. Tested
+      end to end (W9): crosstalk-e2e's restart tests kill Postgres-mode Live
+      processes while feeding, mid-settle, after a checkpoint and with
+      outbox rows pending, restart them on the same database, blob store
+      and spool, and compare the whole answer set with an uninterrupted
+      run's once minted ids are renamed (crosstalk_e2e::answers); its spool
+      tests send the relay through the proxy with the database behind a
+      cuttable DbLink (outage mid-stream resumed in process, gateway killed
+      while spooling, spool full); its lock_loss tests hold a partition or a
+      reset past the loss bounds (zero refused connects), terminate the
+      lock's session under a rival holder with a commit-time audit (no
+      owner write after the abandon) and lose the lock five times (no
+      leaked session or task); the L8 conformance suite runs over PgStores in process
+      and over HTTP, each test process seeding the world once into a
+      template database and each test hosting the surface over its own
+      clone of it.
+    entry_points:
+      - crates/api/src/pg/mod.rs
+      - crates/gateway/src/live/pg/mod.rs
+      - crates/gateway/src/live/frontier.rs
+      - crates/gateway/src/gateway/postgres/mod.rs
+      - crates/gateway/src/gateway/postgres/pipeline.rs
+      - crates/gateway/src/store/migrations.rs
+      - crates/gateway/src/spool.rs
+      - crates/gateway/src/ops/mod.rs
+      - crates/e2e/tests/restart/main.rs
+      - crates/e2e/tests/spool/main.rs
+      - crates/e2e/tests/lock_loss/main.rs
+      - crates/api/tests/conformance_pg.rs
+      - crates/api/tests/support/pg_world.rs
+    depends_on: [postgres_stores, gateway, pg_bus, publish_spool, store, reconstruct, provenance, flow_store, flow_correlator, flow_extract, search_alerts, topology_store, surface_service]
+    doc: docs/features/postgres_mode.md
   sim:
     description: >
       crosstalk-sim, the deterministic simulation kit for every dst
@@ -936,7 +1020,8 @@ Features Index:
       stalls, disconnects, withholds or fails on command and records what
       it received; a hyper fake harness client that collects responses
       chunk by chunk; and DbLink, a loopback TCP relay to the test database
-      that a test cuts and restores to simulate an outage.
+      that a test cuts (resets), partitions (silently stalls) and restores
+      to simulate an outage.
     entry_points:
       - crates/testkit/src/lib.rs
       - crates/testkit/src/corpus/anthropic.rs
@@ -989,10 +1074,15 @@ Features Index:
       next admits, makes due delays ready and takes a row FOR UPDATE SKIP
       LOCKED in one transaction, waking on LISTEN/NOTIFY or a poll; ack
       deadlines in a reaper task; delays from the injected clock;
-      recover_held returns a stopped process's held deliveries with the
-      attempt counted; group_stats for the frontier; prune for 7-day
-      retention behind the slowest group; DrainTarget for the spool. Not
-      yet built by serve (W8).
+      recover_held returns a stopped process's held deliveries ready at
+      once (no backoff, so taken before later entries) with the attempt
+      counted; group_stats for the frontier; prune for 7-day
+      retention behind the slowest group; DrainTarget for the spool. A bus
+      owns its takes: abandon closes it and aborts and joins its listener,
+      reaper and every take in flight, touching nothing in the database
+      (a pipeline that lost its lock); publisher is a publish-only bus
+      (no listener, no reaper, subscribe refused) for the gateway's
+      capture side.
     entry_points:
       - crates/transport/src/pg/mod.rs
       - crates/transport/src/pg/subscription.rs
@@ -1229,8 +1319,9 @@ Features Index:
     description: >
       crosstalk-gateway, the crosstalk binary (P3, milestone M1), on the
       deployment contract (docs/features/deploy.md): serve --role
-      all|proxy|pipeline|api|analysis, migrate (extensions; no layer
-      migrations yet), healthcheck (a hyper GET for the distroless image)
+      all|proxy|pipeline|api|analysis, migrate (extensions, then every
+      layer's migrations, transport first; --reset-correlator), spool
+      --discard-corrupt, healthcheck (a hyper GET for the distroless image)
       and inspect (lists logged exchanges and decodes one with its bodies).
       One JSON config refusing unknown fields (ingress's config unchanged,
       api, ops, store, blobs, embeddings, and optional bus, pipeline and
@@ -1282,7 +1373,11 @@ Features Index:
       Live::stores and Live::layers expose TransmissionStore::list and
       ExchangePlacements::placement for the bench adapter. Live advances the L7
       watermark on each tick when the layer groups are empty (the spec's
-      Watermark::settled rule) and reports per-stage counts. serve runs a
+      Watermark::settled rule) and reports per-stage counts. With a store
+      section serve runs in Postgres mode instead (postgres_mode: PgStores,
+      PgBus behind the publish spool, recovery, the pipeline lock,
+      PgFrontierSource; Live is generic over a LiveStoreSet, MemorySet or
+      PgSet). Without one, serve runs a
       Live process in every role but analysis (memory stores, wall clock,
       periodic ticks every flow.tick_ms), feeds it from the proxy, and in
       roles all and api mounts crosstalk-api's HttpApi on api.listen (bearer
@@ -1292,7 +1387,8 @@ Features Index:
       /healthz has a live section (stage counts, watermark_micros).
     entry_points:
       - crates/gateway/src/main.rs
-      - crates/gateway/src/gateway.rs
+      - crates/gateway/src/gateway/mod.rs
+      - crates/gateway/src/gateway/postgres.rs
       - crates/gateway/src/pipeline/mod.rs
       - crates/gateway/src/pipeline/ingest.rs
       - crates/gateway/src/live/mod.rs
@@ -1418,7 +1514,10 @@ Features Index:
       reader message and by origin span, and each exchange's start, read
       back by the L4 stage so a restart loses none) in memory and on
       Postgres, the Postgres pair model-tested against the memory one
-      under every match rule and across a restart; a
+      under every match rule and across a restart, both serving the
+      spec's SpanIndex (spans the scans committed, plus spans recorded
+      with no scan behind them, such as the synthetic world's origin
+      spans); a
       semantic matcher stub until P6.2. Validated on AgentDojo: 9948 of
       9949 exposed injection slots matched.
     entry_points:
@@ -1433,8 +1532,10 @@ Features Index:
       - crates/provenance/src/fingerprint/mod.rs
       - crates/provenance/src/index/pg.rs
       - crates/provenance/src/store/mod.rs
+      - crates/provenance/src/store/reads.rs
       - crates/provenance/migrations/0001_provenance.sql
       - crates/provenance/migrations/0002_forwarded_spans.sql
+      - crates/provenance/migrations/0004_recorded_spans.sql
     depends_on: [type_spec, spec_primitives, store, memory, transport, sim, testkit, workspace]
     doc: docs/features/provenance.md
   deploy:
@@ -1508,16 +1609,16 @@ Features Index:
       gateway writing ground truth v2 to deploy/bench/<run>/ (gitignored,
       run id a UTC timestamp), wait until /healthz live.watermark_micros
       passes the swarm's end (exports are cut at the watermark), export the
-      gateway's detections with ct-eval swarm-fetch over the L8 API, and
-      score them with ct-eval swarm against the exchange log and blobs read
-      in place from the data volume (mounted read-only into the bench
-      service). Prints precision, recall and the gate result and passes
-      ct-eval's exit code through (2 = a gate failed). Fails fast unless
-      /readyz has the `live` and `api` tasks running and the API takes the
-      token. ct-eval ships in the crosstalk-demo image (the workspace no
-      longer builds ct-eval: crosstalk-infra's switch moves the run to
-      ct-bench-detect swarm-fetch and from-export and the bench's scorer
-      with gates/crosstalk-gateway-export.toml). --scenario
+      gateway's detections with ct-bench-detect swarm-fetch over the L8 API, copy
+      the exchange log and blobs into the run, turn the run into bench
+      input with ct-bench-detect, and score it with a2a-bench (the
+      a2a-transmission-bench scorer, at the release tag A2A_BENCH_REF in
+      deploy/demo.Dockerfile, recorded as bench_ref in bench.env) and the
+      bench repo's gates. Prints precision, recall and the gate result and
+      passes a2a-bench score's exit code through (2 = a gate failed). Fails
+      fast unless /readyz has the `live` and `api` tasks running and the
+      API takes the token. The bench tools ship in the crosstalk-demo
+      image. --scenario
       headline (default, high-entropy prose: the headline precision and
       recall) or boilerplate (templated prose unrelated agents share: a
       regression scenario for false positives on shared text), recorded in
@@ -1712,6 +1813,7 @@ Features Index:
       - crates/e2e/src/capture.rs
       - crates/e2e/src/compose.rs
       - crates/e2e/src/read.rs
+      - crates/e2e/src/answers.rs
       - crates/e2e/tests/smoke/main.rs
     depends_on: [gateway, ingress, canonical, surface_service, memory, workspace]
     doc: docs/features/e2e_smoke.md

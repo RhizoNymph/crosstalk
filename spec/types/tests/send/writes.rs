@@ -10,7 +10,7 @@ use crate::aggregates::topic_history::TopicLineage;
 use crate::batch::IdBatch;
 use crate::derived::flow::access::Access;
 use crate::derived::flow::resource::Resource;
-use crate::derived::flow::transmission::Transmission;
+use crate::derived::flow::transmission::{Transmission, TransmissionState};
 use crate::derived::flow::verdict::{Observed, Verdict, VerdictRevision};
 use crate::ids::{
     AccessId, AlertId, AlertRuleId, ChannelId, ConfigHash, OperatorId, ResourceId, SinkId, TopicId,
@@ -124,6 +124,17 @@ impl TransmissionStore for Dummy {
     async fn save(&mut self, _transmission: Transmission) -> Result<(), TransmissionStoreError> {
         match *self {}
     }
+    async fn modify<T, F>(
+        &mut self,
+        _id: TransmissionId,
+        _change: F,
+    ) -> Result<Option<T>, TransmissionStoreError>
+    where
+        T: Send,
+        F: FnOnce(Transmission) -> (TransmissionState, T) + Send,
+    {
+        match *self {}
+    }
     async fn transmission(
         &self,
         _id: TransmissionId,
@@ -161,6 +172,7 @@ fn channel_reads<T: ChannelReads>(x: &T, never: &Dummy) {
 
 fn transmission_store<T: TransmissionStore>(x: &mut T, never: &Dummy) {
     assert_send(x.save(arg(never)));
+    assert_send(x.modify(arg(never), |stored: Transmission| (stored.state, ())));
     assert_send(x.transmission(arg(never)));
     assert_send(x.list(arg(never), arg(never)));
     assert_send(x.holding(arg(never)));

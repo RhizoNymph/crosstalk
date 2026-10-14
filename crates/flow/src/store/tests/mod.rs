@@ -5,7 +5,10 @@
 mod concurrency;
 mod detection;
 mod holding;
+mod list;
 mod model;
+mod modify;
 mod registry;
 pub(crate) mod support;
 mod verdicts;
+mod windows;

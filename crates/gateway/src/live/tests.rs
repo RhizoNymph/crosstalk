@@ -746,3 +746,25 @@ async fn an_ingested_exchange_reads_back_as_a_conversation_turn() {
     );
     live.shutdown(Instant::now() + PATIENCE).await;
 }
+
+/// `surface.ids.unique-across-restart` (INV-1220), unit: `serve`'s
+/// Postgres-mode generators draw from OS entropy, so two starts mint from
+/// different streams; a fixed seed (tests only) repeats.
+#[test]
+fn serve_seeds_id_generators_from_entropy() {
+    use crosstalk_api::PgIds;
+    use crosstalk_spec::ids::RandomSource;
+
+    assert_eq!(crate::gateway::postgres::SERVE_IDS, PgIds::Entropy);
+    let draw = |ids: PgIds| {
+        let mut random = ids.random(0x5EC0_0001);
+        [random.next_u64(), random.next_u64()]
+    };
+    assert_ne!(
+        draw(PgIds::Entropy),
+        draw(PgIds::Entropy),
+        "two starts draw different streams"
+    );
+    assert_eq!(draw(PgIds::Seeded(7)), draw(PgIds::Seeded(7)));
+    assert_ne!(draw(PgIds::Seeded(7)), draw(PgIds::Seeded(8)));
+}

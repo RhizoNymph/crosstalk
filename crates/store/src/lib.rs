@@ -13,6 +13,8 @@
 //! - [`classify`] maps a [`sqlx::Error`] to a [`DbFailure`] that layer crates
 //!   map into their spec errors, and [`retry_serializable`] runs a
 //!   `SERIALIZABLE` transaction with bounded retries.
+//! - [`ColumnWindow`] maps a `TimeWindow` onto a `bigint` time column: an
+//!   end past `i64::MAX` is no upper bound, a start past it no stored time.
 //! - [`TestDb`] gives each test a fresh database on the `TEST_DATABASE_URL`
 //!   server.
 //!
@@ -34,6 +36,7 @@ mod migrate;
 mod pool;
 mod retry;
 mod test_db;
+mod window;
 
 pub use config::{
     ConfigError, DATABASE_URL_VAR, DatabaseUrl, PoolSettings, StoreConfig, TEST_DATABASE_URL_VAR,
@@ -48,7 +51,11 @@ pub use retry::{
     InvalidSerializableRetry, SerializableError, SerializableRetry, TxError, TxFuture,
     retry_serializable,
 };
-pub use test_db::{RuntimeProblem, TEST_DB_PREFIX, TestDb, TestDbError, TestDbName};
+pub use test_db::{
+    RuntimeProblem, STALE_TEMPLATE_AGE, TEST_DB_PREFIX, TEST_TEMPLATE_PREFIX, TemplateDb,
+    TemplateStep, TestDb, TestDbError, TestDbName, drop_stale_templates, test_server,
+};
+pub use window::{ColumnBounds, ColumnWindow};
 
 /// The pinned sqlx, so layer crates name its types (`PgPool`, `Migrator`)
 /// through the same version. A layer crate that embeds migrations with
