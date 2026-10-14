@@ -157,3 +157,78 @@ mod tests {
         );
     }
 }
+
+/// A server-side cancel at a pipeline bound (`statement_timeout`,
+/// `lock_timeout`) reads as the database not answering in time, as the
+/// publish's own client-side timeout does: `Disconnected`, which the spool
+/// takes and a stage retries, never a refusal.
+#[cfg(test)]
+mod timeout_tests {
+    use std::borrow::Cow;
+    use std::error::Error as StdError;
+    use std::fmt;
+
+    use crosstalk_spec::interfaces::l2_transport::BusError;
+    use crosstalk_store::DbFailure;
+
+    use super::{bus_error, failure};
+
+    #[derive(Debug)]
+    struct ServerError(&'static str);
+
+    impl fmt::Display for ServerError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "SQLSTATE {}", self.0)
+        }
+    }
+
+    impl StdError for ServerError {}
+
+    impl sqlx::error::DatabaseError for ServerError {
+        fn message(&self) -> &str {
+            "canceling statement"
+        }
+        fn code(&self) -> Option<Cow<'_, str>> {
+            Some(Cow::Borrowed(self.0))
+        }
+        fn as_error(&self) -> &(dyn StdError + Send + Sync + 'static) {
+            self
+        }
+        fn as_error_mut(&mut self) -> &mut (dyn StdError + Send + Sync + 'static) {
+            self
+        }
+        fn into_error(self: Box<Self>) -> Box<dyn StdError + Send + Sync + 'static> {
+            self
+        }
+        fn kind(&self) -> sqlx::error::ErrorKind {
+            sqlx::error::ErrorKind::Other
+        }
+    }
+
+    fn server(code: &'static str) -> sqlx::Error {
+        sqlx::Error::Database(Box::new(ServerError(code)))
+    }
+
+    #[test]
+    fn a_statement_or_lock_timeout_is_disconnected() {
+        for code in ["57014", "55P03"] {
+            let error = server(code);
+            assert!(failure(&error).is_timeout(), "{code}");
+            assert_eq!(bus_error("ack", &error), BusError::Disconnected, "{code}");
+        }
+    }
+
+    #[test]
+    fn a_refused_statement_is_still_a_rejection() {
+        let error = server("42P01");
+        assert_eq!(
+            failure(&error),
+            DbFailure::Server {
+                sqlstate: Some("42P01".to_owned())
+            }
+        );
+        assert!(
+            matches!(bus_error("ack", &error), BusError::PublishRejected { reason } if reason.contains("42P01"))
+        );
+    }
+}

@@ -7,6 +7,7 @@
 mod fence;
 mod lock;
 mod pool_close;
+mod statement_timeouts;
 
 use std::future::Future;
 use std::num::{NonZeroU16, NonZeroU32};

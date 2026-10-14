@@ -95,3 +95,76 @@ pub fn failure(error: &sqlx::Error) -> Failure {
         Failure::Refused(failure)
     }
 }
+
+/// A statement the server cancelled at a pipeline bound is transient: the
+/// L4 stage nacks the delivery and it is redelivered, rather than acked as
+/// a refused write (which lost the delta's provenance).
+#[cfg(test)]
+mod timeout_tests {
+    use std::borrow::Cow;
+    use std::error::Error as StdError;
+    use std::fmt;
+
+    use crosstalk_store::DbFailure;
+
+    use super::{Failure, failure};
+    use crate::store::ProvenanceStoreError;
+
+    #[derive(Debug)]
+    struct ServerError(&'static str);
+
+    impl fmt::Display for ServerError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            write!(f, "SQLSTATE {}", self.0)
+        }
+    }
+
+    impl StdError for ServerError {}
+
+    impl sqlx::error::DatabaseError for ServerError {
+        fn message(&self) -> &str {
+            "canceling statement"
+        }
+        fn code(&self) -> Option<Cow<'_, str>> {
+            Some(Cow::Borrowed(self.0))
+        }
+        fn as_error(&self) -> &(dyn StdError + Send + Sync + 'static) {
+            self
+        }
+        fn as_error_mut(&mut self) -> &mut (dyn StdError + Send + Sync + 'static) {
+            self
+        }
+        fn into_error(self: Box<Self>) -> Box<dyn StdError + Send + Sync + 'static> {
+            self
+        }
+        fn kind(&self) -> sqlx::error::ErrorKind {
+            sqlx::error::ErrorKind::Other
+        }
+    }
+
+    fn server(code: &'static str) -> sqlx::Error {
+        sqlx::Error::Database(Box::new(ServerError(code)))
+    }
+
+    #[test]
+    fn a_statement_or_lock_timeout_is_transient() {
+        for code in ["57014", "55P03"] {
+            assert!(
+                matches!(failure(&server(code)), Failure::Transient(f) if f.is_timeout()),
+                "{code}"
+            );
+            let stored = ProvenanceStoreError::from(server(code));
+            assert!(stored.is_transient(), "{code}: {stored:?}");
+            assert!(stored.to_string().contains(code), "{code}: {stored}");
+        }
+    }
+
+    #[test]
+    fn a_refused_statement_stays_refused() {
+        assert_eq!(
+            failure(&server("23514")),
+            Failure::Refused(DbFailure::CheckViolation { constraint: None })
+        );
+        assert!(!ProvenanceStoreError::from(server("23514")).is_transient());
+    }
+}

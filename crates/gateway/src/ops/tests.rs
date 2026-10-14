@@ -23,7 +23,7 @@ fn failures() -> FailureCounts {
         )
 }
 
-fn report() -> HealthReport {
+pub(super) fn report() -> HealthReport {
     HealthReport {
         status: Phase::Ok,
         capture: CaptureReport {
@@ -59,6 +59,7 @@ fn report() -> HealthReport {
         bus: None,
         recovery: None,
         spool: None,
+        statement_timeouts: None,
     }
 }
 

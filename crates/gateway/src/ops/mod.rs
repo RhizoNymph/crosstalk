@@ -488,4 +488,6 @@ fn json(status: StatusCode, body: Vec<u8>) -> Response<Full<Bytes>> {
 }
 
 #[cfg(test)]
+mod health_bound_tests;
+#[cfg(test)]
 mod tests;
