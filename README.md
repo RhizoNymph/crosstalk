@@ -48,7 +48,7 @@ The step-by-step plan and current progress are in [`docs/roadmap.md`](docs/roadm
 
 All results below are on synthetic traffic: crosstalk's demo swarm, whose agents read and write a shared wiki through the real gateway, with known ground truth. They are scored by [a2a-transmission-bench](#benchmark-a2a-transmission-bench), not by crosstalk's own code.
 
-The numbers describe the build tagged [`post-2026-10`](https://github.com/RhizoNymph/crosstalk/tree/post-2026-10) (staging `5295fdd`). Changes merged after that tag are not covered by them until the next measurement.
+These results apply to the build tagged [`post-2026-10`](https://github.com/RhizoNymph/crosstalk/tree/post-2026-10) (staging `5295fdd`). The fault runs used the same code as that tag. The held-out runs used an earlier build with the same detection, described below. Changes merged after the tag are not covered until the next measurement.
 
 ### Held-out detection
 
