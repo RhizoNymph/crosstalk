@@ -202,6 +202,8 @@ where
 
 #[cfg(test)]
 mod tests {
+    use crosstalk_spec::ids::SeededRandom;
+
     use super::*;
 
     fn nz(n: u32) -> NonZeroU32 {
@@ -223,6 +225,125 @@ mod tests {
     fn backoff_never_overflows() -> Result<(), InvalidSerializableRetry> {
         let p = SerializableRetry::new(nz(u32::MAX), Duration::from_secs(1), Duration::MAX)?;
         assert!(p.backoff_after(nz(u32::MAX)) >= Duration::from_secs(1));
+        Ok(())
+    }
+
+    /// The ceilings `delay_after` jitters under, pinned so the jitter never
+    /// moves them: the old deterministic schedule is now the upper bound.
+    fn ceiling_policy() -> Result<SerializableRetry, InvalidSerializableRetry> {
+        SerializableRetry::new(nz(6), Duration::from_millis(10), Duration::from_millis(50))
+    }
+
+    #[test]
+    fn jittered_delay_stays_between_zero_and_the_ceiling() -> Result<(), InvalidSerializableRetry>
+    {
+        let p = ceiling_policy()?;
+        let mut random = SeededRandom::new(7);
+        for attempt in 1..=40 {
+            let ceiling = p.backoff_after(nz(attempt));
+            for _ in 0..500 {
+                let delay = p.delay_after(nz(attempt), &mut random);
+                assert!(delay >= Duration::ZERO);
+                assert!(
+                    delay <= ceiling,
+                    "attempt {attempt}: {delay:?} above {ceiling:?}"
+                );
+                assert!(delay <= Duration::from_millis(50), "above max_backoff");
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn jittered_delay_varies_across_draws() -> Result<(), InvalidSerializableRetry> {
+        let p = ceiling_policy()?;
+        let mut random = SeededRandom::new(11);
+        let draws: std::collections::BTreeSet<Duration> =
+            (0..200).map(|_| p.delay_after(nz(3), &mut random)).collect();
+        assert!(draws.len() > 150, "only {} distinct delays", draws.len());
+        Ok(())
+    }
+
+    #[test]
+    fn jittered_delay_spreads_over_the_whole_range() -> Result<(), InvalidSerializableRetry> {
+        let p = ceiling_policy()?;
+        let ceiling = p.backoff_after(nz(4));
+        let mut random = SeededRandom::new(3);
+        let draws: Vec<Duration> = (0..10_000)
+            .map(|_| p.delay_after(nz(4), &mut random))
+            .collect();
+        let total: Duration = draws.iter().sum();
+        let mean = total / 10_000;
+        assert!(mean > ceiling * 2 / 5 && mean < ceiling * 3 / 5, "mean {mean:?}");
+        assert!(draws.iter().any(|d| *d < ceiling / 10));
+        assert!(draws.iter().any(|d| *d > ceiling * 9 / 10));
+        Ok(())
+    }
+
+    #[test]
+    fn jittered_delay_is_a_function_of_the_seed() -> Result<(), InvalidSerializableRetry> {
+        let p = ceiling_policy()?;
+        let run = |seed| {
+            let mut random = SeededRandom::new(seed);
+            (1..=10)
+                .map(|a| p.delay_after(nz(a), &mut random))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(run(5), run(5));
+        assert_ne!(run(5), run(6));
+        Ok(())
+    }
+
+    /// Two contenders that failed together on the same attempts do not
+    /// sleep the same amounts, so they stop meeting on every retry.
+    #[test]
+    fn contenders_do_not_retry_in_lockstep() -> Result<(), InvalidSerializableRetry> {
+        let p = ceiling_policy()?;
+        let mut one = SeededRandom::new(1);
+        let mut two = SeededRandom::new(2);
+        let same = (1..=30)
+            .filter(|a| p.delay_after(nz(*a), &mut one) == p.delay_after(nz(*a), &mut two))
+            .count();
+        assert_eq!(same, 0);
+        Ok(())
+    }
+
+    #[test]
+    fn jittered_delay_never_overflows() -> Result<(), InvalidSerializableRetry> {
+        let p = SerializableRetry::new(nz(u32::MAX), Duration::from_secs(1), Duration::MAX)?;
+        let mut random = SeededRandom::new(9);
+        for attempt in [1, 2, 33, 64, u32::MAX] {
+            for _ in 0..100 {
+                assert!(p.delay_after(nz(attempt), &mut random) <= p.backoff_after(nz(attempt)));
+            }
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn zero_backoff_never_sleeps() -> Result<(), InvalidSerializableRetry> {
+        let p = SerializableRetry::new(nz(4), Duration::ZERO, Duration::ZERO)?;
+        let mut random = SeededRandom::new(4);
+        for attempt in 1..=4 {
+            assert_eq!(p.delay_after(nz(attempt), &mut random), Duration::ZERO);
+        }
+        Ok(())
+    }
+
+    /// `max_attempts` counts the first attempt: attempts `1..max` are each
+    /// followed by a retry, attempt `max` is the last.
+    #[test]
+    fn attempt_counting_counts_the_first_attempt() -> Result<(), InvalidSerializableRetry> {
+        let p = SerializableRetry::new(nz(5), Duration::from_millis(1), Duration::from_millis(2))?;
+        let next: Vec<Option<u32>> = (1..=6)
+            .map(|a| p.retry_after(nz(a)).map(NonZeroU32::get))
+            .collect();
+        assert_eq!(next, [Some(2), Some(3), Some(4), Some(5), None, None]);
+        let once = SerializableRetry::new(nz(1), Duration::ZERO, Duration::ZERO)?;
+        assert_eq!(once.retry_after(nz(1)), None);
+        let endless = SerializableRetry::new(nz(u32::MAX), Duration::ZERO, Duration::ZERO)?;
+        assert_eq!(endless.retry_after(nz(u32::MAX)), None);
+        assert_eq!(endless.retry_after(nz(u32::MAX - 1)), Some(nz(u32::MAX)));
         Ok(())
     }
 
