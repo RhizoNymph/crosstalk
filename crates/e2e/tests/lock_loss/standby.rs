@@ -182,7 +182,9 @@ fn a_standby_takes_over_a_terminated_lock_session_with_no_older_epoch_write() {
         let clock = ManualClock::at(scenario.start);
         let owner = run.start(&clock).await;
         owner.send(&run.upstream, &scenario.exchanges[..1], 1).await;
-        owner.settled(&run.db, "the first exchange's pipeline").await;
+        owner
+            .settled(&run.db, "the first exchange's pipeline")
+            .await;
         let dir = tempfile::tempdir().expect("a temp dir");
         let standby = start_standby(&run, &standby_data(&run, dir.path()), &clock).await;
         let prober = Prober::start(owner.running.proxy_addr().expect("role all proxies"));
@@ -214,9 +216,14 @@ fn a_standby_takes_over_a_terminated_lock_session_with_no_older_epoch_write() {
                 }
                 Taker::Owner => {
                     eprintln!("round {round}: the owner retook the lock first; again");
-                    wait_status(&owner.running, "the owner running again", RESUME, |status| {
-                        status.lock == LockState::Held && status.phase == PipelinePhase::Running
-                    })
+                    wait_status(
+                        &owner.running,
+                        "the owner running again",
+                        RESUME,
+                        |status| {
+                            status.lock == LockState::Held && status.phase == PipelinePhase::Running
+                        },
+                    )
                     .await;
                 }
             }
@@ -228,22 +235,13 @@ fn a_standby_takes_over_a_terminated_lock_session_with_no_older_epoch_write() {
             "the standby's epoch {standby_epoch} is newer than the owner's {owner_epoch}"
         );
 
-        wait_status(
-            &standby.running,
-            "the standby running",
-            RESUME,
-            |status| status.lock == LockState::Held && status.phase == PipelinePhase::Running,
-        )
+        wait_status(&standby.running, "the standby running", RESUME, |status| {
+            status.lock == LockState::Held && status.phase == PipelinePhase::Running
+        })
         .await;
-        let resumed = wait_status(
-            &owner.running,
-            "the owner standing by",
-            RESUME,
-            |status| {
-                status.lock == LockState::HeldElsewhere
-                    && status.phase == PipelinePhase::WaitingForLock
-            },
-        )
+        let resumed = wait_status(&owner.running, "the owner standing by", RESUME, |status| {
+            status.lock == LockState::HeldElsewhere && status.phase == PipelinePhase::WaitingForLock
+        })
         .await;
         assert!(resumed.report.lock_losses >= 1, "{resumed:?}");
         let ready = owner.running.readiness().await;
@@ -355,7 +353,9 @@ fn a_standby_takes_over_promptly_from_a_killed_owner() {
         };
         owner.settled(&run.db, "the owner's start").await;
         owner.send(&run.upstream, &scenario.exchanges[..1], 1).await;
-        owner.settled(&run.db, "the first exchange's pipeline").await;
+        owner
+            .settled(&run.db, "the first exchange's pipeline")
+            .await;
         let owner_epoch = status(&owner).report.epoch.get();
         let dir = tempfile::tempdir().expect("a temp dir");
         let standby = start_standby(&run, &standby_data(&run, dir.path()), &clock).await;

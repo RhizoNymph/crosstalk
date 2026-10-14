@@ -180,7 +180,7 @@ fn the_wait_notices_a_lost_session_within_the_detection_bound() {
 #[test]
 fn the_fence_key_is_distinct_and_positive() {
     assert_ne!(PIPELINE_FENCE, PIPELINE_LOCK);
-    assert!(PIPELINE_FENCE > 0 && PIPELINE_LOCK > 0);
+    const { assert!(PIPELINE_FENCE > 0 && PIPELINE_LOCK > 0) };
 }
 
 /// Epochs count up from 0 (the migration's seed, before any take), are

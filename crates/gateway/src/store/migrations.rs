@@ -201,9 +201,9 @@ mod tests {
             .expect("migration 3");
         assert_eq!(epoch.description, "pipeline epoch");
         assert!(
-            epoch.sql.contains("CREATE TABLE pipeline_epoch"),
+            epoch.sql.as_str().contains("CREATE TABLE pipeline_epoch"),
             "{}",
-            epoch.sql
+            epoch.sql.as_str()
         );
     }
 

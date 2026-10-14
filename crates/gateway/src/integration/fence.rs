@@ -7,9 +7,9 @@
 use std::num::NonZeroU32;
 use std::time::Duration;
 
+use crosstalk_spec::interfaces::l2_transport::EventBus;
 use crosstalk_store::sqlx::postgres::PgConnection;
 use crosstalk_store::sqlx::{self, Connection, PgPool};
-use crosstalk_spec::interfaces::l2_transport::EventBus;
 use crosstalk_store::{PoolSettings, StoreConfig, TestDb};
 use tokio::sync::watch;
 use tokio::time::Instant;
@@ -28,8 +28,8 @@ const SLACK: Duration = Duration::from_secs(2);
 /// A template pool on `db` whose acquires give up after `acquire`: a
 /// fenced pool's acquire retries its refused connects until then.
 fn template(db: &TestDb, acquire: Duration) -> PgPool {
-    let settings = PoolSettings::new(NonZeroU32::MIN.saturating_add(3), 0, acquire)
-        .expect("pool settings");
+    let settings =
+        PoolSettings::new(NonZeroU32::MIN.saturating_add(3), 0, acquire).expect("pool settings");
     lazy_pool(&StoreConfig::new(db.url().clone(), settings))
 }
 
@@ -203,14 +203,11 @@ async fn pg_a_take_waits_for_an_older_connection_and_completes_once_it_closes() 
         }
     });
 
-    let fencing = tokio::time::timeout(
-        Duration::from_secs(30),
-        reported.wait_for(Option::is_some),
-    )
-    .await
-    .expect("the take reports its fence wait")
-    .expect("the taker lives")
-    .expect("an epoch");
+    let fencing = tokio::time::timeout(Duration::from_secs(30), reported.wait_for(Option::is_some))
+        .await
+        .expect("the take reports its fence wait")
+        .expect("the taker lives")
+        .expect("an epoch");
     assert_eq!(fencing, old.next());
     let waiting_since = Instant::now();
     tokio::time::sleep(TAKE_TIMEOUT + Duration::from_secs(1)).await;
@@ -232,7 +229,10 @@ async fn pg_a_take_waits_for_an_older_connection_and_completes_once_it_closes() 
         closed.elapsed()
     );
     assert_eq!(lock.epoch(), fencing);
-    assert_eq!(stored_epoch(&db).await, i64::try_from(fencing.get()).expect("fits"));
+    assert_eq!(
+        stored_epoch(&db).await,
+        i64::try_from(fencing.get()).expect("fits")
+    );
     assert_eq!(fence_holders(&db, name, "ShareLock").await, 0);
     assert_eq!(
         fence_exclusive(&db).await,
@@ -252,7 +252,8 @@ async fn pg_a_take_waits_for_an_older_connection_and_completes_once_it_closes() 
 /// the fence shared.
 #[tokio::test(flavor = "multi_thread")]
 async fn pg_the_pipeline_reports_fencing_while_an_older_connection_lives() {
-    let Some(db) = migrated("pg_the_pipeline_reports_fencing_while_an_older_connection_lives").await
+    let Some(db) =
+        migrated("pg_the_pipeline_reports_fencing_while_an_older_connection_lives").await
     else {
         return;
     };
