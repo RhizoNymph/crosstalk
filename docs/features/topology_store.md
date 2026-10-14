@@ -129,7 +129,12 @@ Each read opens one snapshot and reads, in order:
 3. the filter's topics against the resolved version's topics, but only
    when the filter lists topics;
 4. the bucket sums of that version in the window, per stored key (and per
-   point, for a series);
+   point, for a series). The window goes through
+   `crosstalk_store::ColumnWindow`: an end past `i64::MAX` is no upper
+   bound, and a window starting past it reads no rows at all (an empty
+   graph, channel topology and agent traffic, a series of zeros). A graph
+   read puts every row in its one point (`Points::step` is `None`); so does
+   a series whose step is longer than `i64::MAX` µs;
 5. under `FalseDetections::Exclude` only, the false detections: stored
    contributions whose verdict copy is `FalseDetection`.
 
@@ -149,8 +154,10 @@ detections subtracted under `Exclude`. Self-edges count there.
 
 The drill-down reads the contributions table, so its window need not be
 aligned. Its cursors are rows of `topology.cursors`, keyed by a random
-token and bound to the request (edge, window and filter, as JSON) and to
-the version the first page resolved.
+token and bound to the request (edge, window and filter, as JSON, the
+window as its two microsecond counts since one past `wire::time::MAX` has
+no text) and to the version the first page resolved. Its window goes
+through `ColumnWindow` too: a start past `i64::MAX` lists nothing.
 
 ### Partitions
 
@@ -253,11 +260,19 @@ deletes, the notification covers every committed change.
   integers. Everything else is bound.
 - Ids sort as ULIDs only in Rust: no SQL ordering depends on text
   collation.
+- Every read takes any valid window: an end past the `bigint` columns is
+  no upper bound and a start past them reads empty, never a `Store` error
+  (`ColumnWindow`). Alignment is still checked first.
 
 ## Tests
 
 - `tests`: unit evidence on fixed inputs. Most run against the database;
   the window and grid refusals run on a pool that never connects.
+  `tests::windows`: graph, channel topology, agent traffic, series and the
+  drill-down with an end past `i64::MAX` read what a bounded window
+  covering the rows does (the drill-down at page sizes 1 and 100), a series
+  step past the column holds every row in one point, and a window starting
+  past the column reads what an empty one does.
 - `integration`: the model test (32 cases of up to 40 operations) and
   Postgres scenarios: redelivery, concurrency, immediate reads,
   monotonicity, the drill-down against the graph, drops, the outbox order,

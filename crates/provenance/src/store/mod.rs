@@ -26,12 +26,15 @@
 mod memory;
 mod pg;
 pub mod reads;
+mod recorded;
 
+use std::collections::BTreeMap;
 use std::future::Future;
 
 use crosstalk_spec::derived::provenance::matching::ContentMatch;
 use crosstalk_spec::derived::provenance::span::{IllegalTransition, Span, SpanState};
 use crosstalk_spec::ids::{AgentId, EventId, ExchangeId, MessageHash, SpanId};
+use crosstalk_spec::interfaces::l4_provenance::IndexedSpan;
 use crosstalk_spec::support::Timestamp;
 
 pub use self::memory::MemoryProvenanceStore;
@@ -319,6 +322,24 @@ pub trait ProvenanceStore {
         &self,
         id: SpanId,
     ) -> impl Future<Output = Result<Option<SpanRecord>, ProvenanceStoreError>> + Send;
+
+    /// Keep `span` as `id`'s span-index record (`SpanIndex::record`)
+    /// unless the id is already known: committed by a scan, or recorded
+    /// before. It writes no scan record, so a span recorded with no scan
+    /// behind it (its exchange may be unknown to L4, as the world seed's
+    /// origin spans are) is in no exchange's spans and no scan read.
+    fn record_indexed(
+        &mut self,
+        id: SpanId,
+        span: IndexedSpan,
+    ) -> impl Future<Output = Result<(), ProvenanceStoreError>> + Send;
+
+    /// The span-index records [`ProvenanceStore::record_indexed`] kept
+    /// among `ids`; the others are left out.
+    fn recorded_indexed(
+        &self,
+        ids: &[SpanId],
+    ) -> impl Future<Output = Result<BTreeMap<SpanId, IndexedSpan>, ProvenanceStoreError>> + Send;
 
     /// An exchange's spans, in output order.
     fn exchange_spans(

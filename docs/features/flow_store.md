@@ -40,11 +40,16 @@ model-tested against the `crosstalk-memory` reference stores.
 - `ResourceExtractor`, `Correlator` and the flow bus consumer (sibling
   branches `feat/flow-extract`, `feat/flow-correlator`). The consumer calls
   these stores; the stores never call it.
-- `AccessStore::accesses` and `TransmissionStore::list` on Postgres: the
-  tables are shaped for them (accesses by id, transmissions by
-  `(state, channel_id, opened_at)`). `PgTransmissionStore::list` is a TODO
-  that returns `TransmissionStoreError::Store`; the memory store
-  (`MemoryVerdicts`) implements it.
+- `AccessStore::accesses` on Postgres (the table is shaped for it:
+  accesses by id). `PgTransmissionStore::list` is implemented (P7.3 W8):
+  one `REPEATABLE READ` snapshot of `flow.transmissions`, the window on
+  `opened_at` (half-open), the states by their column, the channel resolved
+  through `flow.channels.superseded_by` on both sides (one hop), newest id
+  first, keyset-paged on the id with a `flow.cursors` cursor (list `tl`)
+  binding the query as given; checked against `MemoryVerdicts` by
+  `store::tests::list::pg_list_agrees_with_the_memory_reference` (a query
+  matrix of windows, state sets, channels including a superseded and an
+  unknown one, page sizes 1, 3 and 100).
 - Retention of old rows, and cursor pruning on a schedule (the function
   exists; nothing calls it yet).
 - Gateway wiring.
@@ -109,6 +114,10 @@ created_at, superseded_by, state, route, channel_id, opened_at, confirmed,
 verdict) are derived from the value in the same statement, by one function
 per table, and carry the indexes and checks. Ids are ULID text in `"C"`
 collation (text order is id order); times are microseconds in `BIGINT`.
+A read's window goes through `crosstalk_store::ColumnWindow`: an end past
+`i64::MAX` is no bound, and a start past it reads nothing (`list` and
+`resource_use` an empty page, `quality` an empty tally) instead of a
+`Store` error.
 
 **Domain logic stays in the spec.** Promotion runs `promotion::plan` (and the
 preview `promotion::coverage`) over every stored channel, read in registry
@@ -134,7 +143,9 @@ skips one); the model test uses the reference's sequence so declared ids
 compare equal.
 
 **Cursors.** A token (`fl-<list>-<n>`) names a row in `flow.cursors` holding
-the list, the binding (the canonical channel, window or filter as JSON) and
+the list, the binding (the canonical channel, window or filter as JSON; a
+window, also the channel filter's, as its two microsecond counts, since one
+past `wire::time::MAX` has no text) and
 the last sort key served. A token from another list, another binding or
 another database is `InvalidCursor`. Tokens survive restarts and work on
 every node.
@@ -263,12 +274,22 @@ recorded, not what was saved.
   moves follow INV-1030 and INV-1031.
 - `save` keeps the verdict log (INV-811); `set` never writes the
   transmission (INV-529), stages `VerdictSet` once per append (INV-527).
+- `modify` reads the row `FOR UPDATE` and writes the state its change
+  returns in the same transaction (INV-1230
+  `flow.transmission-store.modify-atomic`), so a concurrent `save` or
+  `modify` of the id waits for it. The flow consumer extends and
+  reconfirms through it, and analysis classifies through it: each writes
+  the whole state, and a read-then-`save` by one dropped what the other
+  wrote in between (see "Concurrent writers" below).
 - Supersession resolves in one step (INV-651), in SQL and in the cache.
 - `shard_ticks` never names a tick later than its shard's stored
   checkpoint (INV-1216): `PgShardTicks` only reads, and the checkpoint
   writes both in one transaction.
 - No `unwrap`/`expect` outside tests; every stored value that fails to
   decode is a typed `CodecError` surfaced as the operation's `Store` error.
+- `list`, `quality`, `resource_use` and `channels` take any valid window:
+  an end past `i64::MAX` reads as unbounded, a start past it as empty, and
+  their cursors still bind it (`ColumnWindow`).
 
 ## Tests
 
@@ -286,9 +307,15 @@ recorded, not what was saved.
 - Integration (Postgres): `tests::registry` (one per registry invariant),
   `tests::concurrency` (discover races, declaration races),
   `tests::verdicts` (outbox, verdicts, at-least-once relay),
+  `tests::modify` (`pg_modify_keeps_concurrent_extensions_and_classification`:
+  `crosstalk_memory::flow::verdicts::race` on Postgres),
   `integration::outbox::outbox_relay_publishes_each_event_once_under_its_stamped_id`
   (a relay failing, or dropped after the stamp and after a publish before
   its delete; a new relay publishes each event once under its stamp).
+- Windows (Postgres): `tests::windows` — `list` and `quality`, and
+  `resource_use` and `channels`, with an end past `i64::MAX` read the same
+  as a bounded window covering the rows, at several page sizes, and a
+  start past it reads empty.
 
 ## Transmission holding
 
@@ -296,3 +323,30 @@ recorded, not what was saved.
 `0002_transmission_matches`): every content match a transmission holds,
 keyed as `MatchKey`, rewritten in `save`'s transaction and backfilled from
 the stored JSON. INV-1013.
+
+## Concurrent writers
+
+A confirmed transmission has two writers. The flow consumer extends its
+content as late matches arrive; analysis classifies it once
+`TransmissionConfirmed` reaches it. Both write the whole stored state.
+
+```text
+flow consumer (L5)                      classifier (L6)
+confirm(m1) ─▶ save Confirmed[m1] ─▶ TransmissionConfirmed ─▶ read Confirmed[m1..k]
+extend(m_k+1) ─▶ save Confirmed[m1..k+1]                      read the topic catalog
+                                                              save Classified[m1..k]   (m_k+1 lost)
+```
+
+Through `TransmissionStore::modify` each write starts from the other's:
+the extension runs on the classified state, or the classification on the
+extended content. Classification still reads the catalog first, outside
+the row lock; `modify` keeps a classification stored meanwhile.
+
+Exposure: only a transmission confirmed by its first match and extended by
+the rest, which is one whose reader exchange outlasts the evidence window
+(the window has closed before the exchange is captured and its matches
+arrive). One confirmed by a tick with all its matches held has no
+extension to lose. In the 20261007T150139Z Postgres bench run, 3 of 86
+confirmed transmissions were of that kind and 2 lost one match each; the
+memory replay of the same capture, where stages drain between ingests,
+kept both.

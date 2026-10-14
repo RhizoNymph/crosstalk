@@ -199,28 +199,48 @@ where
             .versions()
             .await
             .map_err(ClassifyError::Catalog)?;
-        let classification = Classification {
+        let fresh = Classification {
             version: history.active().version(),
             topic: None,
             watched: false,
         };
-        match stored {
-            None => {
-                tracing::warn!(transmission = %id.ulid_text(), "confirmed transmission not stored; classified without a state");
-            }
-            Some(mut transmission) => {
-                if let TransmissionState::Confirmed(confirmed) = &transmission.state {
-                    transmission.state = TransmissionState::Classified {
-                        confirmed: confirmed.clone(),
-                        classification: classification.clone(),
-                    };
-                    self.transmissions
-                        .save(transmission)
-                        .await
-                        .map_err(ClassifyError::Transmissions)?;
-                }
-            }
-        }
-        Ok(classification)
+        // Read and written in one `modify`: the flow consumer may extend the
+        // transmission's content meanwhile, and the classified state keeps
+        // whatever content is stored when it is written
+        // (`flow.transmission-store.modify-atomic`).
+        let decided = self
+            .transmissions
+            .modify(id, |stored| classified(stored.state, fresh.clone()))
+            .await
+            .map_err(ClassifyError::Transmissions)?;
+        Ok(decided.unwrap_or_else(|| {
+            tracing::warn!(transmission = %id.ulid_text(), "confirmed transmission not stored; classified without a state");
+            fresh
+        }))
+    }
+}
+
+/// `state` classified as `fresh` when it is `Confirmed`, and the
+/// classification it holds after: one saved before is kept, and a state
+/// with no confirmation stays as it is.
+fn classified(
+    state: TransmissionState,
+    fresh: Classification,
+) -> (TransmissionState, Classification) {
+    let kept = match &state {
+        TransmissionState::Classified { classification, .. }
+        | TransmissionState::Aggregated { classification, .. } => Some(classification.clone()),
+        _ => None,
+    };
+    match (state, kept) {
+        (TransmissionState::Confirmed(confirmed), _) => (
+            TransmissionState::Classified {
+                confirmed,
+                classification: fresh.clone(),
+            },
+            fresh,
+        ),
+        (state, Some(kept)) => (state, kept),
+        (state, None) => (state, fresh),
     }
 }

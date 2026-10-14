@@ -39,9 +39,15 @@ pub mod normalize_failure;
 pub mod ops;
 pub mod pipeline;
 pub mod role;
+pub mod runtime;
 pub mod server;
+pub mod spool;
 pub mod store;
 pub mod tasks;
 
+#[cfg(test)]
+mod dst;
+#[cfg(test)]
+mod integration;
 #[cfg(test)]
 mod tests;

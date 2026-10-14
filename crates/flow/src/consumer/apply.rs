@@ -63,6 +63,75 @@ fn record(transmission: &Transmission) -> Option<Step> {
     matches!(transmission.route, Route::Channel(_)).then(|| Step::Record(transmission.clone()))
 }
 
+/// Whether `update` may follow `stored`'s state; logs when it may not.
+fn admits(stored: &Transmission, update: UpdateKind) -> bool {
+    match lifecycle::advance(Stage::of(&stored.state), update) {
+        Ok(_) => true,
+        Err(illegal) => {
+            tracing::debug!(transmission = %stored.id.ulid_text(), ?illegal, "update not admitted by the stored state; skipped");
+            false
+        }
+    }
+}
+
+/// The stored confirmation of `state`, if it holds one.
+fn confirmation(state: &mut TransmissionState) -> Option<&mut Confirmed> {
+    match state {
+        TransmissionState::Confirmed(confirmed)
+        | TransmissionState::Classified { confirmed, .. }
+        | TransmissionState::Aggregated { confirmed, .. } => Some(confirmed),
+        TransmissionState::Detected
+        | TransmissionState::AwaitingContent { .. }
+        | TransmissionState::Suspected { .. }
+        | TransmissionState::Discarded { .. } => None,
+    }
+}
+
+/// `stored` with the matches of `confirmed` its confirmation lacks, and
+/// the steps: record it, and publish the stored confirmation's event. A
+/// state holding no confirmation is kept, with no steps.
+fn reconfirmed(mut stored: Transmission, confirmed: &Confirmed) -> (TransmissionState, Vec<Step>) {
+    let id = stored.id;
+    let before = stored.clone();
+    let Some(held) = confirmation(&mut stored.state) else {
+        return (stored.state, Vec::new());
+    };
+    let announced = confirmed_event(&before, held);
+    for content in confirmed.content().iter() {
+        if !held.content().iter().any(|known| known == content)
+            && let Err(mixed) = held.extend(content.clone())
+        {
+            tracing::warn!(transmission = %id.ulid_text(), error = ?mixed, "match not extended");
+        }
+    }
+    let steps = record(&stored)
+        .into_iter()
+        .chain([Step::Publish(announced)])
+        .collect();
+    (stored.state, steps)
+}
+
+/// `stored` with `content` in its confirmation, and the record step. A
+/// state that does not admit an extension is kept, with no steps.
+fn extended(mut stored: Transmission, content: ContentMatch) -> (TransmissionState, Vec<Step>) {
+    if !admits(&stored, UpdateKind::Extend) {
+        return (stored.state, Vec::new());
+    }
+    let id = stored.id;
+    let Some(confirmed) = confirmation(&mut stored.state) else {
+        return (stored.state, Vec::new());
+    };
+    if !confirmed.content().iter().any(|known| *known == content)
+        && let Err(mixed) = confirmed.extend(content)
+    {
+        tracing::warn!(transmission = %id.ulid_text(), error = ?mixed, "match not extended");
+        let Transmission { state, .. } = stored;
+        return (state, Vec::new());
+    }
+    let steps = record(&stored).into_iter().collect();
+    (stored.state, steps)
+}
+
 impl<R, T, A, B, D> FlowConsumer<R, T, A, B, D>
 where
     R: ChannelRegistry + ChannelTraffic + Send + Sync,
@@ -113,17 +182,6 @@ where
             .transmission(id)
             .await?
             .ok_or(StepError::MissingTransmission(id))
-    }
-
-    /// Whether `update` may follow `stored`'s state; logs when it may not.
-    fn admits(stored: &Transmission, update: UpdateKind) -> bool {
-        match lifecycle::advance(Stage::of(&stored.state), update) {
-            Ok(_) => true,
-            Err(illegal) => {
-                tracing::debug!(transmission = %stored.id.ulid_text(), ?illegal, "update not admitted by the stored state; skipped");
-                false
-            }
-        }
     }
 
     async fn open_channel(
@@ -220,7 +278,7 @@ where
             return if stored.state == state {
                 Ok(vec![Step::Publish(confirmed_event(&stored, &confirmed))])
             } else {
-                self.reconfirm(stored, &confirmed).await
+                self.reconfirm(id, &confirmed).await
             };
         }
         let transmission = Transmission {
@@ -246,9 +304,9 @@ where
         let state = TransmissionState::Confirmed(confirmed.clone());
         if stored.state != state {
             if Stage::of(&stored.state) == Some(Stage::Confirmed) {
-                return self.reconfirm(stored, &confirmed).await;
+                return self.reconfirm(id, &confirmed).await;
             }
-            if !Self::admits(&stored, UpdateKind::Confirm) {
+            if !admits(&stored, UpdateKind::Confirm) {
                 return Ok(Vec::new());
             }
             self.transmissions
@@ -270,73 +328,33 @@ where
     /// matches of the stored confirmation and of its extensions at once
     /// confirms with all of them. The stored confirmation's event is
     /// published again (under its own id: a no-op unless it was lost), and
-    /// the matches it lacks extend it, as the extensions would have.
+    /// the matches it lacks extend it, as the extensions would have. Read
+    /// and written in one `modify`, so a classification saved meanwhile is
+    /// kept (`flow.transmission-store.modify-atomic`).
     async fn reconfirm(
         &mut self,
-        mut transmission: Transmission,
+        id: TransmissionId,
         confirmed: &Confirmed,
     ) -> Result<Vec<Step>, StepError> {
-        let before = transmission.clone();
-        let stored = match &mut transmission.state {
-            TransmissionState::Confirmed(stored)
-            | TransmissionState::Classified {
-                confirmed: stored, ..
-            }
-            | TransmissionState::Aggregated {
-                confirmed: stored, ..
-            } => stored,
-            TransmissionState::Detected
-            | TransmissionState::AwaitingContent { .. }
-            | TransmissionState::Suspected { .. }
-            | TransmissionState::Discarded { .. } => return Ok(Vec::new()),
-        };
-        let announced = confirmed_event(&before, stored);
-        let mut changed = false;
-        for content in confirmed.content().iter() {
-            if !stored.content().iter().any(|known| known == content) {
-                match stored.extend(content.clone()) {
-                    Ok(()) => changed = true,
-                    Err(mixed) => {
-                        tracing::warn!(transmission = %transmission.id.ulid_text(), error = ?mixed, "match not extended");
-                    }
-                }
-            }
-        }
-        if changed {
-            self.transmissions.save(transmission.clone()).await?;
-        }
-        Ok(record(&transmission)
-            .into_iter()
-            .chain([Step::Publish(announced)])
-            .collect())
+        self.transmissions
+            .modify(id, |stored| reconfirmed(stored, confirmed))
+            .await?
+            .ok_or(StepError::MissingTransmission(id))
     }
 
+    /// `content` added to the stored confirmation, in one `modify`: analysis
+    /// may classify the transmission while its content still arrives, and
+    /// neither write may drop the other
+    /// (`flow.transmission-store.modify-atomic`).
     async fn extend(
         &mut self,
         id: TransmissionId,
         content: ContentMatch,
     ) -> Result<Vec<Step>, StepError> {
-        let mut transmission = self.stored(id).await?;
-        if !Self::admits(&transmission, UpdateKind::Extend) {
-            return Ok(Vec::new());
-        }
-        let confirmed = match &mut transmission.state {
-            TransmissionState::Confirmed(confirmed)
-            | TransmissionState::Classified { confirmed, .. }
-            | TransmissionState::Aggregated { confirmed, .. } => confirmed,
-            TransmissionState::Detected
-            | TransmissionState::AwaitingContent { .. }
-            | TransmissionState::Suspected { .. }
-            | TransmissionState::Discarded { .. } => return Ok(Vec::new()),
-        };
-        if !confirmed.content().iter().any(|known| *known == content) {
-            if let Err(mixed) = confirmed.extend(content) {
-                tracing::warn!(transmission = %id.ulid_text(), error = ?mixed, "match not extended");
-                return Ok(Vec::new());
-            }
-            self.transmissions.save(transmission.clone()).await?;
-        }
-        Ok(record(&transmission).into_iter().collect())
+        self.transmissions
+            .modify(id, |stored| extended(stored, content))
+            .await?
+            .ok_or(StepError::MissingTransmission(id))
     }
 
     async fn suspect(
@@ -354,7 +372,7 @@ where
                 since,
             } if *held == co_access => *since,
             _ => {
-                Self::admits(&stored, UpdateKind::Suspect);
+                admits(&stored, UpdateKind::Suspect);
                 return Ok(Vec::new());
             }
         };
@@ -393,7 +411,7 @@ where
                 return Ok(record(&transmission).into_iter().collect());
             }
             _ => {
-                Self::admits(&transmission, UpdateKind::Discard);
+                admits(&transmission, UpdateKind::Discard);
                 return Ok(Vec::new());
             }
         };

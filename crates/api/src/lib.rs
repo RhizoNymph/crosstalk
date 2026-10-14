@@ -12,13 +12,15 @@
 
 pub mod http;
 pub mod in_process;
+pub mod pg;
 #[cfg(feature = "world")]
 pub mod world;
 
 pub use in_process::{
-    Backbone, ConversationStores, InProcess, InProcessError, InProcessOptions, MemoryStores,
-    ProjectionFitting, Unrecorded,
+    Backbone, ConversationStores, CursorSecret, HostedStores, InProcess, InProcessError,
+    InProcessOptions, MemoryStores, ProjectionFitting, Unrecorded,
 };
+pub use pg::{PgEvidence, PgIds, PgOpen, PgSettings, PgStores, PgStoresError};
 
 #[cfg(test)]
 mod tests;

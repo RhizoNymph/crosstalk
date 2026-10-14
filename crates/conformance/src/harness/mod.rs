@@ -78,6 +78,14 @@ pub trait Harness {
     fn expected_failures(&self) -> &[ExpectedFailure] {
         &[]
     }
+
+    /// Why this harness cannot run here at all, if it cannot: a backend
+    /// needing a service the environment does not provide (the Postgres
+    /// harnesses without `TEST_DATABASE_URL`). Every test then skips,
+    /// passing, with the reason on stderr, before anything is provisioned.
+    fn unavailable(&self) -> Option<String> {
+        None
+    }
 }
 
 /// A test an implementation is known to fail.

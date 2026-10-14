@@ -1,0 +1,22 @@
+[invariant]
+id = "transport.stage-pump.no-dropped-delivery"
+statement = "A delivery the stage pump handed to a Pumped::next call whose future was dropped before it returned is returned, at the same attempt and without waiting for an ack timeout, by the next Pumped::next call on that subscription."
+kind = "coordination"
+requires = ["unit"]
+rationale = """
+Every Postgres-mode stage loop selects its commands (ticks, drains) against
+its subscription's next, commands first, so a next future is dropped
+whenever a command wins a poll. If the pump had already answered, a reply
+channel owned by the dropped future took the delivery with it: the row
+stayed held until the bus's ack timeout, each timeout counted an attempt,
+and a settle that keeps sending drain commands could lose it again on
+every redelivery and never finish (the restart e2e's hangs on
+live-surface-relay). Pumped keeps the pending reply itself, as
+MpscSubscription keeps its pending receiver across a cancelled next.
+"""
+
+[evidence]
+unit = "crosstalk_gateway::live::pg::pump::tests::a_next_dropped_after_its_answer_keeps_the_delivery"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

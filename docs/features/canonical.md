@@ -319,5 +319,8 @@ Open:
 (`MemoryExchanges`, `PgExchanges` in schema `canonical`, migration
 `0001_exchanges`): each exchange record without bodies, first put kept,
 listed newest first by (`started_at`, id). The crate now depends on
-`crosstalk-store`. See [conversation_reads.md](conversation_reads.md);
-INV-1024.
+`crosstalk-store`. On Postgres the list's window goes through
+`crosstalk_store::ColumnWindow`: an end past the `bigint` column is no
+upper bound, and a start past it lists nothing
+(`pg_exchange_list_reads_an_end_past_the_column_as_unbounded`). See
+[conversation_reads.md](conversation_reads.md); INV-1024.

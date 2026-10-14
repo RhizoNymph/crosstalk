@@ -1,0 +1,24 @@
+[invariant]
+id = "transport.settle.quiet-covers-unadmitted"
+statement = "PgQuiet::busy returns true while any store outbox holds a row, the spool holds a record, a log entry under one of a slot group's subjects lies past that group's admitted_through, or a slot's group holds a delivery."
+kind = "coordination"
+requires = ["integration"]
+rationale = """
+A Postgres-mode group admits log entries into its deliveries only when its
+consumer pulls, so an envelope one stage published and acked its input for
+sits in transport.events with no delivery row until the next stage takes
+it. Group statistics alone read that window as quiet: Live::settle
+returned with L6's TransmissionClassified committed and L5 and L7 yet to
+take it, and the e2e answers were read without the edge (the node0 loop's
+spool_outage_twice), or with every capture of a restarted run still
+unadmitted (restart's killed_while_feeding). An envelope moves outbox row,
+spool record, log entry, delivery, each step committed before the earlier
+copy goes, so busy reads them in that order and one that moves between
+two reads is seen by the later one.
+"""
+
+[evidence]
+integration = "crosstalk_gateway::integration::pg_quiet_counts_entries_no_group_admitted_yet"
+
+[evidence-review]
+integration = { agent = "true", human = "false" }

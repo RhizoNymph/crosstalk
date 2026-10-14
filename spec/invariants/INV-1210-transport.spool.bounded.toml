@@ -16,4 +16,4 @@ integration = "crosstalk_e2e::spool::full_spool_refuses_and_proxy_still_forwards
 
 [evidence-review]
 unit = { agent = "true", human = "false" }
-integration = { agent = "false", human = "false" }
+integration = { agent = "true", human = "false" }

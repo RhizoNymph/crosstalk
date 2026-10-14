@@ -80,6 +80,12 @@ pub(crate) async fn fail(
     failure: Failure,
 ) -> Result<bool, sqlx::Error> {
     let mut tx = shared.pool.begin().await?;
+    // A row lock held by a stuck session must not wedge the reaper (it
+    // reaps every hold of the process in turn): give up after a bound and
+    // retry at the next poll (`fire_due`), or fail the nack.
+    sqlx::query("SET LOCAL lock_timeout = '2s'")
+        .execute(&mut *tx)
+        .await?;
     let row: Option<(String, i64, String)> = sqlx::query_as(
         "SELECT e.id, e.at, e.envelope FROM transport.deliveries d \
          JOIN transport.events e ON e.seq = d.seq \
@@ -204,14 +210,84 @@ async fn sleep_until(deadline: Option<Instant>) {
     }
 }
 
+/// The longest a hold this process tracks can live: its provisional
+/// deadline runs twice the ack timeout plus the publish timeout from its
+/// take's start, and a take runs at most its limit. A hold older than this
+/// (and a margin of one ack timeout) is tracked by no live reaper.
+pub(crate) fn stale_after(config: &super::PgBusConfig) -> Duration {
+    3 * config.ack_timeout.get()
+        + config.publish_timeout.get()
+        + super::progress::take_limit(config.publish_timeout.get())
+}
+
+/// Take back every hold older than [`stale_after`] by the bus clock,
+/// whoever took it (one pipeline process per database: a hold that old is
+/// one whose taker lost track of it, or a process gone without a
+/// restart's `recover_held` seeing it). Each is failed as a timeout, its
+/// attempt counted, with its group's retry policy. Returns how many it
+/// took back.
+pub(crate) async fn sweep_stale(shared: &Shared) -> Result<u64, sqlx::Error> {
+    let stale = duration_micros(stale_after(&shared.config));
+    let before = shared.now_micros().saturating_sub(stale);
+    let rows: Vec<(String, i64, i32, i32, i64, i64)> = sqlx::query_as(
+        "SELECT d.group_name, d.seq, d.attempt, g.max_attempts, \
+                g.initial_backoff_micros, g.max_backoff_micros \
+         FROM transport.deliveries d JOIN transport.groups g ON g.name = d.group_name \
+         WHERE d.state = 'held' AND d.held_at IS NOT NULL AND d.held_at < $1 \
+         ORDER BY d.held_at LIMIT 256",
+    )
+    .bind(before)
+    .fetch_all(&shared.pool)
+    .await?;
+    let mut taken = 0;
+    for (group, seq, attempt, max_attempts, initial, max) in rows {
+        let Some(retry) = retry_policy(max_attempts, initial, max) else {
+            tracing::warn!(group = %group, seq, "a stale hold's group retry policy is invalid; left");
+            continue;
+        };
+        let key = HoldKey {
+            group,
+            seq,
+            attempt,
+        };
+        if fail(shared, &key, &retry, Failure::Timeout).await? {
+            taken += 1;
+            tracing::warn!(group = %key.group, seq, attempt, "a hold no reaper tracked was taken back");
+        }
+    }
+    if taken > 0 {
+        shared.wake_all();
+    }
+    Ok(taken)
+}
+
+fn retry_policy(max_attempts: i32, initial: i64, max: i64) -> Option<RetryPolicy> {
+    let attempts = u32::try_from(max_attempts)
+        .ok()
+        .and_then(std::num::NonZeroU32::new)?;
+    let micros = |value: i64| u64::try_from(value).ok().map(Duration::from_micros);
+    RetryPolicy::new(attempts, micros(initial)?, micros(max)?).ok()
+}
+
 /// The reaper task: runs until the bus is shut down or dropped.
 pub(crate) async fn run(shared: Arc<Shared>, mut messages: mpsc::UnboundedReceiver<ReaperMsg>) {
     let mut timers: BinaryHeap<Entry> = BinaryHeap::new();
     let mut settled: HashSet<HoldKey> = HashSet::new();
+    let mut sweep = tokio::time::interval(shared.config.ack_timeout.get());
+    sweep.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
+        shared.reaper_beat.beat(timers.len());
         let deadline = timers.peek().map(|Reverse((at, ..))| *at);
         tokio::select! {
             biased;
+            _ = sweep.tick() => {
+                if shared.sweeps.load(std::sync::atomic::Ordering::Relaxed) {
+                    match sweep_stale(&shared).await {
+                        Ok(taken) => shared.reaper_beat.swept(taken),
+                        Err(error) => tracing::warn!(failure = %failure(&error), "sweeping stale holds failed; retried next round"),
+                    }
+                }
+            }
             message = messages.recv() => match message {
                 None => break,
                 Some(ReaperMsg::Hold { key, deadline, retry }) => {

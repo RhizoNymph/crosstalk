@@ -59,30 +59,30 @@ impl Classifier {
         id: TransmissionId,
         classification: &Classification,
     ) -> Result<(), StageError> {
-        let stored =
-            self.transmissions
-                .transmission(id)
-                .await
-                .map_err(|error| StageError::Retry {
-                    reason: format!("reading the transmission: {error:?}"),
-                })?;
-        let Some(mut transmission) = stored else {
-            tracing::warn!(transmission = %id.ulid_text(), "confirmed transmission not stored; classified without a state");
-            return Ok(());
-        };
-        let TransmissionState::Confirmed(confirmed) = &transmission.state else {
-            return Ok(());
-        };
-        transmission.state = TransmissionState::Classified {
-            confirmed: confirmed.clone(),
-            classification: classification.clone(),
-        };
-        self.transmissions
-            .save(transmission)
+        // Read and written in one `modify`: the flow stage may extend the
+        // transmission's content meanwhile, and the classified state keeps
+        // whatever content is stored when it is written
+        // (`flow.transmission-store.modify-atomic`).
+        let stored = self
+            .transmissions
+            .modify(id, |stored| match stored.state {
+                TransmissionState::Confirmed(confirmed) => (
+                    TransmissionState::Classified {
+                        confirmed,
+                        classification: classification.clone(),
+                    },
+                    (),
+                ),
+                other => (other, ()),
+            })
             .await
             .map_err(|error| StageError::Retry {
-                reason: format!("saving the classified transmission: {error:?}"),
-            })
+                reason: format!("classifying the stored transmission: {error:?}"),
+            })?;
+        if stored.is_none() {
+            tracing::warn!(transmission = %id.ulid_text(), "confirmed transmission not stored; classified without a state");
+        }
+        Ok(())
     }
 }
 

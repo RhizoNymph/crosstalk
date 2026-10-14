@@ -1,0 +1,29 @@
+[invariant]
+id = "ingress.capture.never-stopped-by-lock-loss"
+statement = "Losing the pipeline lock (its session reset, ended, or silently partitioned, for any length of time) never stops the gateway process, its proxy listener or capture: no connection to the proxy is refused and every request is answered unchanged while the pipeline incarnation is abandoned and resumed in process, and once the database answers and the lock is free the same process recovers and drains its spool, each record once."
+kind = "coordination"
+requires = ["integration"]
+rationale = """
+Before this a lost lock made serve exit for its supervisor to restart it.
+The graceful stop closed the proxy listener first and then waited on the
+dead link (sqlx's Pool::close and PgListener's UNLISTEN, neither bounded):
+on the node0 bench (20261013T162634Z) the proxy refused connections for
+61 s across a silent partition, and even a Postgres stop cost 7 to 8 s of
+refusals for the exit and the restart. Capture needs nothing the lock
+guards: it appends through the spool and a bus and pool of its own. So the
+loss abandons only the pipeline's incarnation (its own pool, bus,
+listener, takes and tasks) and the pipeline task walks back through
+waiting for the database and the lock, recovery and running, while the
+proxy listens and the spool takes every capture. /readyz stays 200
+degraded throughout, as at a start with the database down.
+"""
+
+[evidence]
+integration = [
+    "crosstalk_e2e::lock_loss::partition::a_silent_partition_never_stops_capture_and_resumes_in_process",
+    "crosstalk_e2e::lock_loss::partition::a_postgres_stop_never_stops_capture_and_resumes_in_process",
+    "crosstalk_e2e::lock_loss::partition::a_partition_past_the_server_reap_never_stops_capture_and_resumes_in_process",
+]
+
+[evidence-review]
+integration = { agent = "true", human = "false" }

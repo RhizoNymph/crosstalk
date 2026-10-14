@@ -1,0 +1,27 @@
+[invariant]
+id = "transport.restart.recovered-ready-first"
+statement = "A PgBus delivery that recover_held returns to its group is ready as soon as recover_held returns, with no retry backoff, and a consumer of that group takes it before any log entry published after it."
+kind = "coordination"
+requires = ["integration"]
+rationale = """
+L2 promises no delivery order (transport.ordering.unconstrained), but L3
+threads conversations by arrival order. When recover_held delayed a
+recovered hold by its group's backoff, an envelope published after it (a
+spool record drained once the database came back) was ready first and
+taken first, so an outage that cut a delivery mid-processing changed the
+answers: in a node0 spool_outage_twice run the fourth exchange started the
+conversation the third should have. A restart is not a failure of the
+delivery, so the backoff floor (which bounds retries after a nack or ack
+timeout) does not apply, and the take order is by log seq, so a ready
+recovered row goes ahead of every later entry. The attempt stays as the
+dead holder was given it (transport.restart.held-redelivered). Only this
+restart case skips the backoff: a nack, an ack timeout, a dropped
+subscription and the stale-hold sweep (transport.hold.always-reaped) in a
+live process keep it. L3's tolerance of a reordered arrival is separate.
+"""
+
+[evidence]
+integration = "crosstalk_transport::integration::pg_recovered_hold_is_ready_and_taken_first"
+
+[evidence-review]
+integration = { agent = "true", human = "false" }

@@ -56,6 +56,9 @@ fn report() -> HealthReport {
             .collect(),
             watermark_micros: 1_790_845_200_000_000,
         }),
+        bus: None,
+        recovery: None,
+        spool: None,
     }
 }
 
@@ -210,6 +213,7 @@ fn readiness_needs_every_task_running_and_no_drain() {
             live: None,
             tasks,
             store: StoreProbe::not_configured(),
+            postgres: None,
         };
         let ready = ops.readiness().await;
         assert!(ready.ready, "{ready:?}");

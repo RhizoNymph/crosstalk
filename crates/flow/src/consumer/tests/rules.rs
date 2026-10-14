@@ -370,6 +370,34 @@ impl TransmissionStore for Flaky {
         self.inner.save(transmission).await
     }
 
+    async fn modify<T, F>(
+        &mut self,
+        id: TransmissionId,
+        change: F,
+    ) -> Result<Option<T>, TransmissionStoreError>
+    where
+        T: Send,
+        F: FnOnce(
+                Transmission,
+            ) -> (
+                crosstalk_spec::derived::flow::transmission::TransmissionState,
+                T,
+            ) + Send,
+    {
+        if self
+            .failures
+            .try_update(Ordering::SeqCst, Ordering::SeqCst, |left| {
+                left.checked_sub(1)
+            })
+            .is_ok()
+        {
+            return Err(TransmissionStoreError::Store {
+                reason: "injected".to_owned(),
+            });
+        }
+        self.inner.modify(id, change).await
+    }
+
     async fn transmission(
         &self,
         id: TransmissionId,
@@ -589,4 +617,62 @@ async fn stale_updates_never_move_a_stored_transmission_back() {
     let stored = stores.transmissions.transmission(confirmed.id).await;
     assert_eq!(stored, Ok(Some(confirmed.clone())));
     assert_eq!(bus.events().len(), published);
+}
+
+/// A decision taken at a tick whose save fails transiently waits in the
+/// backlog, and no input of the tick's kind is coming to retry it: a stage
+/// driving the consumer by ticks and drains retries it on a drain
+/// (`retry_backlog`), so the confirmation, its channel traffic and its
+/// event are never left behind (the restart e2e lost an L7 edge this way:
+/// a settle ended with the decision's steps stranded).
+#[tokio::test]
+async fn a_tick_decision_that_failed_is_retried_on_a_drain() {
+    let mut scene = Scene::new(106);
+    let stores = Stores::new();
+    let (a, b) = (scene.agent(), scene.agent());
+    let page = wiki_page("Tick");
+    let span = scene.span();
+    let bus = RecordingBus::default();
+    let failures = Arc::new(AtomicU32::new(0));
+    let mut flow = FlowConsumer::new(
+        super::harness::settings(1),
+        FlowDeps {
+            registry: stores.registry.clone(),
+            transmissions: Flaky {
+                inner: stores.transmissions.clone(),
+                failures: Arc::clone(&failures),
+            },
+            agents: stores.agents.clone(),
+            bus: bus.clone(),
+            clock: Arc::new(ManualClock::at(T0)),
+        },
+    );
+    flow.handle_extracted(Extracted::Write {
+        write: write(&mut scene, a, &page, T0, vec![span]),
+        outcome: Some(WriteOutcome::Delivered),
+    })
+    .await;
+    let fetch = read(&mut scene, b, &page, after(T0, 30));
+    flow.handle_extracted(Extracted::Read(fetch.clone())).await;
+    flow.handle_event(&matched(&found_in(&mut scene, &fetch, a, span)))
+        .await;
+    assert_eq!(flow.backlog(), 0);
+    assert!(
+        !bus.subjects().contains(&Subject::TransmissionConfirmed),
+        "confirmed only when the window closes"
+    );
+
+    // The tick closes the window; the confirmation's save fails once.
+    failures.store(1, Ordering::SeqCst);
+    flow.tick(after(T0, 100)).await;
+    assert!(flow.backlog() > 0, "the tick's decision waits");
+    assert!(!bus.subjects().contains(&Subject::TransmissionConfirmed));
+
+    // A drain retries it: confirmed, recorded on its channel, announced.
+    let ran = flow.retry_backlog().await;
+    assert!(ran > 0, "steps ran");
+    assert_eq!(flow.backlog(), 0);
+    assert!(bus.subjects().contains(&Subject::TransmissionConfirmed));
+    // Nothing waiting: a retry is a no-op.
+    assert_eq!(flow.retry_backlog().await, 0);
 }

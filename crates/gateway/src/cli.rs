@@ -2,7 +2,8 @@
 //!
 //! ```text
 //! crosstalk serve --role <all|proxy|pipeline|api|analysis> --config <path>
-//! crosstalk migrate --config <path>
+//! crosstalk migrate --config <path> [--reset-correlator]
+//! crosstalk spool --config <path> --discard-corrupt
 //! crosstalk healthcheck --url <url>
 //! crosstalk inspect --config <path> [<exchange-id>]
 //! crosstalk help
@@ -10,6 +11,10 @@
 //!
 //! `serve`, `migrate` and `healthcheck` are the deployment contract
 //! (`docs/features/deploy.md`); `inspect` reads what the gateway captured.
+//! `migrate --reset-correlator` replaces L5's checkpoint after an
+//! incompatible one (decision Q2); `spool --discard-corrupt` drops the
+//! corrupt record that stopped the publish spool's drain, and everything
+//! after it in its segment (the gateway must be stopped).
 
 use std::path::PathBuf;
 
@@ -23,6 +28,12 @@ pub enum Command {
         config: PathBuf,
     },
     Migrate {
+        config: PathBuf,
+        /// `--reset-correlator`: also reset L5's checkpoint.
+        reset_correlator: bool,
+    },
+    /// `spool --discard-corrupt`.
+    SpoolDiscardCorrupt {
         config: PathBuf,
     },
     Healthcheck {
@@ -51,6 +62,11 @@ pub enum UsageError {
     },
     #[error("{0} is given twice")]
     Repeated(&'static str),
+    #[error("{command} needs {switch}")]
+    MissingSwitch {
+        command: &'static str,
+        switch: &'static str,
+    },
     #[error(transparent)]
     Role(#[from] UnknownRole),
 }
@@ -58,7 +74,8 @@ pub enum UsageError {
 pub const USAGE: &str = "\
 usage:
   crosstalk serve --role <all|proxy|pipeline|api|analysis> --config <path>
-  crosstalk migrate --config <path>
+  crosstalk migrate --config <path> [--reset-correlator]
+  crosstalk spool --config <path> --discard-corrupt
   crosstalk healthcheck --url <url>
   crosstalk inspect --config <path> [<exchange-id>]
   crosstalk help
@@ -75,6 +92,8 @@ struct Flags {
     role: Option<String>,
     config: Option<String>,
     url: Option<String>,
+    reset_correlator: bool,
+    discard_corrupt: bool,
     positional: Vec<String>,
 }
 
@@ -85,6 +104,22 @@ impl Flags {
     ) -> Result<Self, UsageError> {
         let mut flags = Self::default();
         while let Some(arg) = args.next() {
+            let switch = match arg.as_str() {
+                "--reset-correlator" if allowed.contains(&"--reset-correlator") => {
+                    Some((&mut flags.reset_correlator, "--reset-correlator"))
+                }
+                "--discard-corrupt" if allowed.contains(&"--discard-corrupt") => {
+                    Some((&mut flags.discard_corrupt, "--discard-corrupt"))
+                }
+                _ => None,
+            };
+            if let Some((set, name)) = switch {
+                if *set {
+                    return Err(UsageError::Repeated(name));
+                }
+                *set = true;
+                continue;
+            }
             let (slot, name) = match arg.as_str() {
                 "--role" if allowed.contains(&"--role") => (&mut flags.role, "--role"),
                 "--config" if allowed.contains(&"--config") => (&mut flags.config, "--config"),
@@ -133,10 +168,25 @@ impl Command {
                 Ok(Self::Serve { role, config })
             }
             "migrate" => {
-                let mut flags = Flags::read(args, &["--config"])?;
+                let mut flags = Flags::read(args, &["--config", "--reset-correlator"])?;
                 flags.no_positional()?;
                 let config = required(flags.config, "migrate", "--config")?.into();
-                Ok(Self::Migrate { config })
+                Ok(Self::Migrate {
+                    config,
+                    reset_correlator: flags.reset_correlator,
+                })
+            }
+            "spool" => {
+                let mut flags = Flags::read(args, &["--config", "--discard-corrupt"])?;
+                flags.no_positional()?;
+                let config = required(flags.config, "spool", "--config")?.into();
+                if !flags.discard_corrupt {
+                    return Err(UsageError::MissingSwitch {
+                        command: "spool",
+                        switch: "--discard-corrupt",
+                    });
+                }
+                Ok(Self::SpoolDiscardCorrupt { config })
             }
             "healthcheck" => {
                 let mut flags = Flags::read(args, &["--url"])?;
@@ -197,7 +247,8 @@ mod tests {
         assert_eq!(
             parse(&["migrate", "--config", "/etc/crosstalk/crosstalk.json"]),
             Ok(Command::Migrate {
-                config: PathBuf::from("/etc/crosstalk/crosstalk.json")
+                config: PathBuf::from("/etc/crosstalk/crosstalk.json"),
+                reset_correlator: false
             })
         );
         assert_eq!(
@@ -277,6 +328,51 @@ mod tests {
         assert_eq!(
             parse(&["proxy"]),
             Err(UsageError::UnknownCommand("proxy".to_owned()))
+        );
+    }
+
+    #[test]
+    fn the_postgres_maintenance_commands_parse() {
+        assert_eq!(
+            parse(&["migrate", "--reset-correlator", "--config", "c.json"]),
+            Ok(Command::Migrate {
+                config: PathBuf::from("c.json"),
+                reset_correlator: true
+            })
+        );
+        assert_eq!(
+            parse(&["spool", "--config", "c.json", "--discard-corrupt"]),
+            Ok(Command::SpoolDiscardCorrupt {
+                config: PathBuf::from("c.json")
+            })
+        );
+        assert_eq!(
+            parse(&["spool", "--config", "c.json"]),
+            Err(UsageError::MissingSwitch {
+                command: "spool",
+                switch: "--discard-corrupt"
+            })
+        );
+        assert_eq!(
+            parse(&[
+                "migrate",
+                "--config",
+                "c",
+                "--reset-correlator",
+                "--reset-correlator"
+            ]),
+            Err(UsageError::Repeated("--reset-correlator"))
+        );
+        assert_eq!(
+            parse(&[
+                "serve",
+                "--role",
+                "all",
+                "--config",
+                "c",
+                "--discard-corrupt"
+            ]),
+            Err(UsageError::Unexpected("--discard-corrupt".to_owned()))
         );
     }
 }

@@ -27,7 +27,7 @@ use crate::live::blobs::LiveBlobs;
 pub use crosstalk_flow::extract::step::ExtractStepError;
 
 /// Message bodies from the live blob store.
-struct LiveMessages(BlobMessages<LiveBlobs>);
+pub(crate) struct LiveMessages(pub(crate) BlobMessages<LiveBlobs>);
 
 impl MessageReader for LiveMessages {
     async fn message(&self, hash: MessageHash) -> Result<Option<Message>, PortError> {
@@ -38,10 +38,10 @@ impl MessageReader for LiveMessages {
     }
 }
 
-/// Spans from the live provenance store.
-struct LiveSpans(MemoryProvenanceStore);
+/// Spans from the live process's provenance store (memory or Postgres).
+pub(crate) struct LiveSpans<P = MemoryProvenanceStore>(pub(crate) P);
 
-impl SpanReader for LiveSpans {
+impl<P: ProvenanceStore + Send + Sync> SpanReader for LiveSpans<P> {
     async fn exchange_spans(&self, exchange: ExchangeId) -> Result<Vec<Span>, PortError> {
         self.0
             .exchange_spans(exchange)

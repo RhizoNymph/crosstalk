@@ -115,6 +115,11 @@ score guarantees require anyway.
   not show (`AlertSubject::shown`); the memory reference does not filter.
 - Search applies the filter before cutting the page; cursors pin the
   resolved topic version and are bound to the query, window and filter.
+- Search and projection sampling take any valid window on
+  `confirmed_at` (`crosstalk_store::ColumnWindow`): an end past
+  `i64::MAX` is no upper bound (`$6` is `NULL`), and a window starting
+  past it finds no hit and samples nothing (`matching` 0), never a
+  `Store` error.
 - The stage skips envelopes it already handled while running; a
   redelivery after a crash, or after a failure partway through an
   envelope's drafts, counts again as an occurrence.
@@ -124,7 +129,8 @@ score guarantees require anyway.
 - Model harnesses from `crosstalk-memory`: `check_search_index`,
   `check_alert_rule_store`, `check_alert_triage` (on Postgres, a fresh
   current-thread pool per case on emptied tables).
-- Focused Postgres cases per invariant in `search/tests/cases.rs` and
+- Focused Postgres cases per invariant in `search/tests/cases.rs` (among
+  them `pg_search_and_sample_read_an_end_past_the_column_as_unbounded`) and
   `alerts/tests/{triage,rules,reads,consumer}.rs`; rule evaluation unit and
   property tests in `alerts/eval/tests.rs` (no database).
 - Database tests skip without `TEST_DATABASE_URL`.

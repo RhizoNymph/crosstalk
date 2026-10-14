@@ -13,13 +13,16 @@ use crosstalk_memory::model::build::{agent, catalog, channel, transmission, ts, 
 use crosstalk_memory::support::Outbox;
 use crosstalk_spec::aggregates::edge::RouteKind;
 use crosstalk_spec::aggregates::filter::{FalseDetections, TopologyFilter};
-use crosstalk_spec::aggregates::topic::{Embedding, EmbeddingModel};
+use crosstalk_spec::aggregates::projection::{ProjectionLimit, ProjectionParams, ProjectionSpec};
+use crosstalk_spec::aggregates::topic::{Embedding, EmbeddingModel, TopicModelVersion};
 use crosstalk_spec::aggregates::watermark::Watermark;
 use crosstalk_spec::derived::flow::transmission::{DelegationDirection, Route};
 use crosstalk_spec::derived::flow::verdict::{Verdict, VerdictRevision};
 use crosstalk_spec::ids::TransmissionId;
 use crosstalk_spec::interfaces::l6_analysis::corpus::{IndexedTransmission, SearchCorpus};
-use crosstalk_spec::interfaces::l6_analysis::{SearchError, SearchIndex, SearchQuery};
+use crosstalk_spec::interfaces::l6_analysis::{
+    ProjectionSource, SearchError, SearchIndex, SearchQuery,
+};
 use crosstalk_spec::paging::{PageRequest, PageSize};
 use crosstalk_spec::support::{NonBlank, TimeWindow};
 use proptest::prelude::*;
@@ -737,5 +740,94 @@ async fn prop_filtered_search_is_filtered_ranking() {
     });
     if let Err(error) = result {
         panic!("{error}");
+    }
+}
+
+/// The first time a `bigint` column cannot hold.
+const PAST: u64 = i64::MAX.unsigned_abs() + 1;
+
+fn spec(window: TimeWindow) -> ProjectionSpec {
+    let params = ProjectionLimit::new(4)
+        .ok()
+        .and_then(|limit| ProjectionParams::new(limit, 2, 100, 7).ok())
+        .unwrap_or_else(|| panic!("projection params"));
+    ProjectionSpec::new(
+        window,
+        TopologyFilter::default(),
+        TopicModelVersion(0),
+        params,
+        model(),
+    )
+}
+
+fn bounded(start: u64, end: u64) -> TimeWindow {
+    window(start, end).unwrap_or_else(|| panic!("{start}..{end}"))
+}
+
+/// A window ending past the `bigint` `confirmed_at` column finds and
+/// samples what a bounded window covering the same documents does, its
+/// cursors bound to it; one starting past the column finds and samples
+/// nothing.
+#[tokio::test(flavor = "multi_thread")]
+async fn pg_search_and_sample_read_an_end_past_the_column_as_unbounded() {
+    let Some(db) = database("pg_search_and_sample_read_an_end_past_the_column_as_unbounded").await
+    else {
+        return;
+    };
+    let (mut subject, _) = subject(db.pool().clone()).await;
+    index(&mut subject, wiki_corpus()).await;
+    let max = crosstalk_spec::wire::time::MAX.as_micros();
+    let filter = TopologyFilter::default();
+    let queries = [
+        SearchQuery::Text(text("wiki")),
+        SearchQuery::Semantic(vector(1.0, 0.0, 0.0)),
+    ];
+    for start in [0, 25] {
+        let covering = bounded(start, max);
+        let sampled = subject
+            .sample(&spec(covering))
+            .await
+            .unwrap_or_else(|error| panic!("{error:?}"));
+        assert!(sampled.matching > 0, "a sample from {start}");
+        for end in [PAST, u64::MAX] {
+            let unbounded = bounded(start, end);
+            for query in &queries {
+                let want = flat(
+                    &traverse(&subject, query, Some(covering), &filter, size(100))
+                        .await
+                        .unwrap_or_else(|error| panic!("{error:?}")),
+                );
+                assert!(!want.is_empty(), "hits from {start}");
+                for page_size in [2, 100] {
+                    let got = traverse(&subject, query, Some(unbounded), &filter, size(page_size))
+                        .await
+                        .unwrap_or_else(|error| panic!("{error:?}"));
+                    assert_eq!(flat(&got), want, "{query:?} {start}..{end} by {page_size}");
+                }
+            }
+            assert_eq!(
+                subject.sample(&spec(unbounded)).await,
+                Ok(sampled.clone()),
+                "sample {start}..{end}"
+            );
+        }
+    }
+    for beyond in [bounded(PAST, u64::MAX), bounded(u64::MAX - 1, u64::MAX)] {
+        for query in &queries {
+            assert_eq!(
+                traverse(&subject, query, Some(beyond), &filter, size(100)).await,
+                Ok(vec![Vec::new()]),
+                "{query:?} {beyond:?}"
+            );
+        }
+        let sampled = subject
+            .sample(&spec(beyond))
+            .await
+            .unwrap_or_else(|error| panic!("{error:?}"));
+        assert_eq!(
+            (sampled.matching, sampled.rows),
+            (0, Vec::new()),
+            "{beyond:?}"
+        );
     }
 }
