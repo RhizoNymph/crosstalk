@@ -210,6 +210,7 @@ per extension.
 | SQLSTATE `40P01` | `DeadlockDetected` (retryable) |
 | SQLSTATE class `08`, `57P01`, `57P02`, `57P03`; `Io`, `Tls`, `PoolClosed`, `WorkerCrashed` | `ConnectionLost` |
 | `PoolTimedOut` | `PoolTimedOut` |
+| SQLSTATE `57014` (`query_canceled`: `statement_timeout`), `55P03` (`lock_not_available`: `lock_timeout`) | `TimedOut(TimeoutKind::Statement \| Lock)`, counted and logged at warn |
 | `RowNotFound` | `RowNotFound` |
 | `Migrate(Execute(e) \| ExecuteMigration(e, _))` | `classify(e)` |
 | any other server error | `Server { sqlstate }` |
@@ -217,6 +218,15 @@ per extension.
 
 `is_retryable()` is true for serialization failures and deadlocks only.
 `is_unavailable()` is true for `ConnectionLost` and `PoolTimedOut`.
+`is_timeout()` is true for `TimedOut`; `is_transient()` (a later try can
+succeed) for any of the three. A timeout is not retried inside
+`retry_serializable` (that would multiply the stall); the caller retries.
+Each timeout `classify` sees is counted by kind
+(`statement_timeouts() -> TimeoutCounts`, process-wide: the gateway's
+`crosstalk_pg_statement_timeouts_total{kind}`), so a failure is
+classified once, where it is converted. The gateway sets both bounds on
+its pipeline connections ([postgres_mode.md](postgres_mode.md),
+"Bounded statements").
 
 A layer maps these into its spec error, for example:
 
@@ -480,6 +490,7 @@ checks still run.
 | `crates/store/src/migrate.rs` | Per-layer migration runner | `migrate`, `Migrations` |
 | `crates/store/src/extensions.rs` | Required extensions | `Extension`, `InstalledExtension`, `ensure_extensions`, `ensure_extension` |
 | `crates/store/src/error.rs` | Errors and classification | `StoreError`, `DbFailure`, `ExtensionProblem`, `classify` |
+| `crates/store/src/timeouts/mod.rs` | A statement cancelled at a bound: kinds and the process's counts | `TimeoutKind` (`sqlstate`, `label`), `TimeoutCounts`, `statement_timeouts` |
 | `crates/store/src/window.rs` | A `TimeWindow` as bounds on a `bigint` time column | `ColumnWindow` (`of`, `bounds`, `contains`), `ColumnBounds` (`start`, `end`, `contains`) |
 | `crates/store/src/retry.rs` | Serializable retries | `retry_serializable`, `SerializableRetry`, `InvalidSerializableRetry`, `TxError`, `TxFuture`, `SerializableError` |
 | `crates/store/src/test_db/mod.rs` | Test database harness | `TestDb`, `TestDbName`, `TestDbError`, `RuntimeProblem`, `TEST_DB_PREFIX`, `test_server` |
@@ -499,6 +510,8 @@ Unit tests (no database), 66 of them:
 - `error`: every `classify` row, through a fake `DatabaseError`;
   `is_retryable` and `is_unavailable`; `StoreError::failure` and the
   `From<sqlx::Error>` conversion.
+- `timeouts`: `57014` and `55P03` typed by kind, transient but not
+  retryable, displayed with their SQLSTATE, counted by kind.
 - `layer`: distinct, lowercase schemas and tables.
 - `migrate`: the layer migrator's table, schema and lock; the future is
   `Send + 'static`.

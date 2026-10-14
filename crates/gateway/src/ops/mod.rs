@@ -2,7 +2,7 @@
 //!
 //! | Route | Answer |
 //! | --- | --- |
-//! | `GET /healthz` | 200 while the process serves: liveness, plus the counters as JSON ([`HealthReport`]); with a `store` section also the bus's per-group backlog, what recovery did and the spool |
+//! | `GET /healthz` | 200 while the process serves: liveness, plus the counters as JSON ([`HealthReport`]); with a `store` section also the bus's per-group backlog (read within [`HEALTH_BUS_BOUND`], else reported unavailable), what recovery did, the spool and the statements Postgres cancelled at a pipeline bound |
 //! | `GET /readyz` | 200 when ready, 503 otherwise, with the checks as JSON ([`Readiness`]); 503 while draining |
 //! | `GET /metrics` | the counters in the Prometheus text format ([`metrics`]) |
 //!
@@ -27,6 +27,7 @@ pub mod metrics;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;
+use std::time::Duration;
 
 use bytes::Bytes;
 use crosstalk_ingress::capture::{CaptureCounts, CaptureStats};
@@ -100,15 +101,68 @@ pub struct HealthReport {
     /// watermark; `null` for a role without one (`analysis`). In Postgres
     /// mode the watermark is the persisted one, from the first report.
     pub live: Option<LiveReport>,
-    /// Postgres mode: each pipeline group's backlog and dead letters.
+    /// Postgres mode: each pipeline group's backlog and dead letters, or
+    /// why they were not read (within [`HEALTH_BUS_BOUND`]).
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub bus: Option<BusReport>,
+    pub bus: Option<BusSection>,
     /// Postgres mode: what recovery did at start.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recovery: Option<RecoveryReport>,
     /// Postgres mode, a role that captures: the publish spool.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub spool: Option<SpoolReport>,
+    /// Postgres mode: statements the server cancelled at a pipeline bound
+    /// since the process started, by kind.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub statement_timeouts: Option<StatementTimeoutsReport>,
+}
+
+/// How long `/healthz` waits for the bus's per-group statistics. The read
+/// runs on capture's pool, which has no server-side bound, and `/healthz`
+/// is a request path (probes, dashboards): past this the report goes out
+/// with the bus section unavailable.
+pub const HEALTH_BUS_BOUND: Duration = Duration::from_secs(2);
+
+/// `/healthz`'s `bus` section: the groups' statistics, or why they are
+/// missing. Read as `{"groups": {...}}` or `{"unavailable": {...}}`.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(untagged, deny_unknown_fields)]
+pub enum BusSection {
+    Read(BusReport),
+    #[serde(rename_all = "snake_case")]
+    Unavailable {
+        unavailable: BusUnavailable,
+    },
+}
+
+/// Why `/healthz` has no group statistics.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub enum BusUnavailable {
+    /// The read did not answer within [`HEALTH_BUS_BOUND`].
+    TimedOut { bound_ms: u64 },
+    /// The read failed (the database out of reach, a refused statement).
+    Failed { error: String },
+}
+
+/// `/healthz`'s `statement_timeouts` section (`/metrics`:
+/// `crosstalk_pg_statement_timeouts_total{kind}`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct StatementTimeoutsReport {
+    /// Cancelled by `statement_timeout` (SQLSTATE 57014).
+    pub statement: u64,
+    /// Cancelled by `lock_timeout` (SQLSTATE 55P03).
+    pub lock: u64,
+}
+
+impl From<crosstalk_store::TimeoutCounts> for StatementTimeoutsReport {
+    fn from(counts: crosstalk_store::TimeoutCounts) -> Self {
+        Self {
+            statement: counts.statement,
+            lock: counts.lock,
+        }
+    }
 }
 
 /// `/healthz`'s `bus` section.
@@ -279,6 +333,48 @@ fn capture_text(stats: &SpoolStats, refusing: bool, running: bool) -> (String, b
     }
 }
 
+/// The groups' statistics from `bus`, within [`HEALTH_BUS_BOUND`]. A read
+/// past the bound is dropped (its connection goes back to the pool once
+/// the server answers) and reported unavailable, warned with the bound.
+async fn read_bus(bus: &PgBus) -> BusSection {
+    let bound_ms = u64::try_from(HEALTH_BUS_BOUND.as_millis()).unwrap_or(u64::MAX);
+    match tokio::time::timeout(HEALTH_BUS_BOUND, bus.group_stats()).await {
+        Ok(Ok(stats)) => BusSection::Read(BusReport {
+            groups: stats
+                .into_iter()
+                .map(|stats| {
+                    (
+                        stats.group.0,
+                        GroupReport {
+                            pending: stats.pending,
+                            oldest_pending_micros: stats.oldest_pending.map(|at| at.as_micros()),
+                            dead_letters: stats.dead_letters,
+                        },
+                    )
+                })
+                .collect(),
+        }),
+        Ok(Err(error)) => {
+            tracing::debug!(error = ?error, "group stats unreadable; /healthz reports the bus unavailable");
+            BusSection::Unavailable {
+                unavailable: BusUnavailable::Failed {
+                    error: format!("{error:?}"),
+                },
+            }
+        }
+        Err(_) => {
+            tracing::warn!(
+                what = "group_stats",
+                bound_ms,
+                "/healthz's bus read did not answer within its bound; reported unavailable"
+            );
+            BusSection::Unavailable {
+                unavailable: BusUnavailable::TimedOut { bound_ms },
+            }
+        }
+    }
+}
+
 /// The tasks capture runs on: the proxy that hands it exchanges and the
 /// capture stage.
 const CAPTURE_TASKS: [&str; 2] = ["proxy", "capture"];
@@ -319,38 +415,17 @@ impl Ops {
             bus: None,
             recovery: postgres.map(|pg| pg.status.snapshot().report),
             spool,
+            statement_timeouts: postgres.map(|_| crosstalk_store::statement_timeouts().into()),
         }
     }
 
     /// [`Ops::health`] with the bus's per-group backlog read from the
-    /// database (left out while it does not answer).
+    /// database within [`HEALTH_BUS_BOUND`]; past it, or when the read
+    /// fails, the section says why instead.
     pub async fn health_full(&self) -> HealthReport {
         let mut report = self.health();
         if let Some(pg) = &self.postgres {
-            match pg.bus.group_stats().await {
-                Ok(stats) => {
-                    report.bus = Some(BusReport {
-                        groups: stats
-                            .into_iter()
-                            .map(|stats| {
-                                (
-                                    stats.group.0,
-                                    GroupReport {
-                                        pending: stats.pending,
-                                        oldest_pending_micros: stats
-                                            .oldest_pending
-                                            .map(|at| at.as_micros()),
-                                        dead_letters: stats.dead_letters,
-                                    },
-                                )
-                            })
-                            .collect(),
-                    });
-                }
-                Err(error) => {
-                    tracing::debug!(error = ?error, "group stats unreadable; /healthz without the bus section");
-                }
-            }
+            report.bus = Some(read_bus(&pg.bus).await);
         }
         report
     }

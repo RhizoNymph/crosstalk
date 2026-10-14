@@ -18,6 +18,9 @@
 //! - [`fence`]: no write from an older pipeline incarnation once a newer
 //!   one runs (the epoch and the shared fence every pipeline connection
 //!   joins).
+//! - [`timeouts`]: the `statement_timeout` and `lock_timeout` every
+//!   pipeline connection runs with, so a stalled statement is cancelled
+//!   and retried instead of hanging a stage or the reaper.
 
 use std::ffi::OsString;
 use std::time::Duration;
@@ -25,6 +28,7 @@ use std::time::Duration;
 pub mod fence;
 pub mod lock;
 pub mod migrations;
+pub mod timeouts;
 
 use crosstalk_spec::support::Clock;
 use crosstalk_store::sqlx::PgPool;
@@ -171,8 +175,9 @@ pub fn lazy_pool_named(config: &StoreConfig, application: &str) -> PgPool {
 /// transaction left idle for [`IDLE_IN_TRANSACTION_TIMEOUT`]
 /// (`idle_in_transaction_session_timeout`, set per session, so no server
 /// setting is needed). `PgPoolOptions::after_connect` replaces any earlier
-/// hook, so a pool that adds to it (a pipeline incarnation's joins the
-/// fence, `gateway::postgres::incarnation_pool`) runs this first itself.
+/// hook, so a pool that adds to it (a pipeline incarnation's sets the
+/// statement and lock bounds and joins the fence,
+/// `gateway::postgres::incarnation_pool_bounded`) runs this first itself.
 pub async fn session_setup(
     connection: &mut PgConnection,
 ) -> Result<(), crosstalk_store::sqlx::Error> {

@@ -26,11 +26,38 @@ use crosstalk_spec::support::Timestamp;
 use sqlx::{PgConnection, PgPool, Row};
 
 use crate::config::IndexSettings;
-use crate::pg::{fingerprint_from, fingerprint_i64, horizon, id_bytes, id_from, time_i64};
+use crate::pg::{
+    OutOfRange, fingerprint_from, fingerprint_i64, horizon, id_bytes, id_from, time_i64,
+};
 
-fn store_error(reason: impl std::fmt::Display) -> IndexError {
+/// A failure as the index reports it (always transient for the engine).
+fn store_error(failure: impl Reason) -> IndexError {
     IndexError::Store {
-        reason: reason.to_string(),
+        reason: failure.reason(),
+    }
+}
+
+/// What an index failure says. A failed statement is classified, so one
+/// the server cancelled at a bound is counted (`crosstalk_store::classify`).
+trait Reason {
+    fn reason(self) -> String;
+}
+
+impl Reason for sqlx::Error {
+    fn reason(self) -> String {
+        format!("{}: {self}", crosstalk_store::classify(&self))
+    }
+}
+
+impl Reason for OutOfRange {
+    fn reason(self) -> String {
+        self.to_string()
+    }
+}
+
+impl Reason for std::num::TryFromIntError {
+    fn reason(self) -> String {
+        self.to_string()
     }
 }
 

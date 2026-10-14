@@ -68,6 +68,7 @@ PipelineLock::try_take_reporting(url, fencing), on the lock's own session:
 incarnation pool (gateway::postgres::incarnation_pool(template, max, application, e)),
 after_connect of every new connection:
   store::session_setup (idle_in_transaction_session_timeout = 30s)
+  ─▶ the statement and lock bounds (store::timeouts, postgres_mode.md "Bounded statements")
   ─▶ fence::join: pg_try_advisory_lock_shared(PIPELINE_FENCE), then SELECT epoch
      shared refused ─▶ FenceError::Fencing { mine, current }
      epoch != e     ─▶ FenceError::Fenced { mine, current }
@@ -98,8 +99,9 @@ capture's publisher pool (`derived_pool`, `crosstalk-capture-<pid>`) and
 the `api` role's pool never take the shared fence: capture is never
 fenced (INV-1237), and none of them writes what only the lock's holder
 writes. `PgPoolOptions::after_connect` replaces any earlier hook, so both
-`derived_pool` and `incarnation_pool` set theirs explicitly over the
-shared `store::session_setup`. What an abandoned incarnation's stage put
+`derived_pool` and `incarnation_pool_bounded` set theirs explicitly over the
+shared `store::session_setup` (the incarnation's also sets the pipeline's
+statement and lock bounds before it joins). What an abandoned incarnation's stage put
 in the spool before its abort still reaches the log through capture's
 bus: log appends, which every consumer already tolerates as
 redeliveries; the fence covers the holder's own tables.

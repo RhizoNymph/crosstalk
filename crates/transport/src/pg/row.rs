@@ -102,22 +102,21 @@ pub(crate) fn decode_stored(text: &str) -> Result<Envelope, BusError> {
 }
 
 /// What a failed database call means to a bus caller: the database out of
-/// reach is [`BusError::Disconnected`]; anything else is refused with the
-/// classified failure (never the statement or its parameters).
+/// reach, or a statement the server cancelled at its `statement_timeout`
+/// or `lock_timeout` (the database not answering in time, as the publish's
+/// own client-side timeout reports it), is [`BusError::Disconnected`], which
+/// the spool takes and a consumer retries; anything else is refused with
+/// the classified failure (never the statement or its parameters).
 pub(crate) fn bus_error(op: &'static str, error: &sqlx::Error) -> BusError {
     let failure = classify(error);
-    if failure.is_unavailable() {
+    if failure.is_unavailable() || failure.is_timeout() {
+        tracing::debug!(op, failure = %failure, "bus statement failed; reported disconnected");
         BusError::Disconnected
     } else {
         BusError::PublishRejected {
             reason: format!("{op}: {failure}"),
         }
     }
-}
-
-/// Whether the failure is the database being out of reach.
-pub(crate) fn unavailable(error: &sqlx::Error) -> bool {
-    classify(error).is_unavailable()
 }
 
 /// The classified failure, for logs.

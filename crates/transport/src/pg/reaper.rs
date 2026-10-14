@@ -22,7 +22,7 @@ use tokio::sync::mpsc;
 use tokio::time::Instant;
 
 use super::Shared;
-use super::row::{duration_micros, failure, unavailable};
+use super::row::{duration_micros, failure};
 
 /// One hold: the group's delivery row at the attempt its holder was given.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -284,7 +284,10 @@ pub(crate) async fn run(shared: Arc<Shared>, mut messages: mpsc::UnboundedReceiv
                 if shared.sweeps.load(std::sync::atomic::Ordering::Relaxed) {
                     match sweep_stale(&shared).await {
                         Ok(taken) => shared.reaper_beat.swept(taken),
-                        Err(error) => tracing::warn!(failure = %failure(&error), "sweeping stale holds failed; retried next round"),
+                        Err(error) => tracing::warn!(
+                            failure = %failure(&error),
+                            "sweeping stale holds failed; retried next round"
+                        ),
                     }
                 }
             }
@@ -334,11 +337,14 @@ async fn fire_due(shared: &Shared, timers: &mut BinaryHeap<Entry>, settled: &mut
             }
             Ok(false) => {}
             Err(error) => {
+                // Classified once: a timeout is counted where it is classified.
+                let failed = failure(&error);
                 tracing::warn!(
                     group = %key.group,
                     seq = key.seq,
-                    failure = %failure(&error),
-                    unavailable = unavailable(&error),
+                    failure = %failed,
+                    unavailable = failed.is_unavailable(),
+                    timed_out = failed.is_timeout(),
                     "could not take a hold back; retrying"
                 );
                 retry_later.push(Reverse((

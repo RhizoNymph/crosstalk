@@ -802,8 +802,9 @@ Features Index:
       never collide on versions. ensure_extensions creates vector and
       pg_trgm (TimescaleDB stays out pending D3). classify maps sqlx errors
       to DbFailure (unique, foreign-key and check violations, retryable
-      serialization failures and deadlocks, connection loss, pool timeout)
-      for layers to map into spec errors; retry_serializable runs a
+      serialization failures and deadlocks, connection loss, pool timeout,
+      a statement cancelled at its statement_timeout or lock_timeout:
+      transient, counted by kind) for layers to map into spec errors; retry_serializable runs a
       SERIALIZABLE transaction with bounded, backed-off retries.
       ColumnWindow maps a spec TimeWindow onto a bigint time column for
       every layer's windowed reads: an end past i64::MAX is no upper bound
@@ -959,8 +960,15 @@ Features Index:
       lock, fenced (the take bumps the pipeline epoch and waits until no
       connection of an earlier incarnation, of any process, is left:
       pipeline fencing), and starts a pipeline incarnation (its own pool,
-      named crosstalk-pipeline-<pid>-<n>-e<epoch>, each connection joining
-      the fence, and its own PgBus). A lost lock never
+      named crosstalk-pipeline-<pid>-<n>-e<epoch>, each connection setting
+      statement_timeout and lock_timeout from store.pipeline_timeouts
+      (60 s and 15 s by default) and joining the fence, and its own PgBus):
+      a statement Postgres stalls past a bound is cancelled, classified a
+      transient DbFailure::TimedOut (counted in
+      crosstalk_pg_statement_timeouts_total{kind}) and retried by its
+      caller (a stage nacks, the reaper and checkpoints try again), never
+      acked as refused; capture's, the api role's and the lock's sessions
+      run without them. A lost lock never
       stops the process: the incarnation is abandoned (pool fenced, every
       task and take aborted and joined, nothing drained, no owner write
       after) and the loop waits for the database and the lock again, the
@@ -969,8 +977,9 @@ Features Index:
       pipeline_lock, capture (spooling, draining, dropping: spool full,
       spool corrupt, stopped), pipeline (abandoning after a loss) and
       recovery, ready while the database is down and through a resume;
-      /healthz adds bus, recovery (lock losses, the last loss, the
-      incarnation, the epoch) and spool sections; spool_full is a capture outcome. crosstalk migrate
+      /healthz adds bus (read within 2 s, else reported unavailable),
+      recovery (lock losses, the last loss, the incarnation, the epoch),
+      spool and statement_timeouts sections; spool_full is a capture outcome. crosstalk migrate
       runs every layer and --reset-correlator; crosstalk spool
       --discard-corrupt. Memory mode's replays are byte-identical. Tested
       end to end (W9): crosstalk-e2e's restart tests kill Postgres-mode Live
@@ -996,6 +1005,7 @@ Features Index:
       - crates/gateway/src/gateway/postgres/mod.rs
       - crates/gateway/src/gateway/postgres/pipeline.rs
       - crates/gateway/src/store/migrations.rs
+      - crates/gateway/src/store/timeouts/mod.rs
       - crates/gateway/src/spool.rs
       - crates/gateway/src/ops/mod.rs
       - crates/e2e/tests/restart/main.rs
@@ -1136,7 +1146,9 @@ Features Index:
       reaper and every take in flight, touching nothing in the database
       (a pipeline that lost its lock); publisher is a publish-only bus
       (no listener, no reaper, subscribe refused) for the gateway's
-      capture side.
+      capture side. A statement the server cancels at a statement or lock
+      bound (the gateway sets both on pipeline connections) is
+      Disconnected to a bus caller, which retries it.
     entry_points:
       - crates/transport/src/pg/mod.rs
       - crates/transport/src/pg/subscription.rs

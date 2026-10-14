@@ -80,8 +80,10 @@ pub fn u32_from(value: i64, what: &'static str) -> Result<u32, OutOfRange> {
 /// statement.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Failure {
-    /// Lost connection, pool timeout, serialization failure or deadlock:
-    /// retrying later can succeed.
+    /// Lost connection, pool timeout, serialization failure, deadlock, or a
+    /// statement the server cancelled at its `statement_timeout` or
+    /// `lock_timeout`: retrying later can succeed (the stage nacks and the
+    /// delivery is redelivered).
     Transient(DbFailure),
     /// The statement was refused.
     Refused(DbFailure),
@@ -89,7 +91,7 @@ pub enum Failure {
 
 pub fn failure(error: &sqlx::Error) -> Failure {
     let failure = classify(error);
-    if failure.is_unavailable() || failure.is_retryable() {
+    if failure.is_transient() {
         Failure::Transient(failure)
     } else {
         Failure::Refused(failure)

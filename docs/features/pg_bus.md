@@ -213,6 +213,24 @@ nothing else). The reaper's own transaction sets `lock_timeout = 2s`, so a
 row locked by a stuck session delays its reaping, never all reaping.
 Regression: `integration::pg_next_dropped_mid_take_hands_out_the_hold_on_the_next_call`.
 
+Bounded statements. In the gateway every connection of a pipeline
+incarnation's pool, the pool an incarnation's `PgBus::new` runs over,
+carries `statement_timeout` and `lock_timeout` (`store.pipeline_timeouts`,
+60 s and 15 s by default; [postgres_mode.md](postgres_mode.md), "Bounded
+statements"); a take's and the reaper's `SET LOCAL lock_timeout` keep
+their tighter bounds. A statement the server cancels at a bound (SQLSTATE
+`57014` or `55P03`) classifies as `DbFailure::TimedOut` and the bus
+reports it `BusError::Disconnected` (`row::bus_error`), as its own publish
+timeout does. Each bus caller retries: the reaper's `sweep_stale` at its
+next round (its loop goes on reaping deadlines meanwhile), its `fail` at
+the poll interval, a take at the poll interval; a failed ack or nack
+leaves the hold for the reaper, which redelivers it. `group_stats` on
+capture's publish-only bus has no server-side bound; `/healthz` bounds it
+client-side (2 s). The `LISTEN` connection runs no statement while it
+waits, so neither bound applies; it needs none (notifications are hints,
+a waiting `next` re-reads every poll, and a lost lock's abandon aborts the
+task).
+
 Transactions are `READ COMMITTED` with explicit locks (the queue-table
 pattern), not the `SERIALIZABLE` retries the stores use.
 
@@ -289,6 +307,7 @@ checkpoint interval; W8 checks that at start.
 | INV-1234 `transport.restart.recovered-ready-first` | `integration::pg_recovered_hold_is_ready_and_taken_first` |
 | INV-X `transport.retention.prune-keeps-unfinished` | `integration::pg_prune_never_drops_an_unacked_event` |
 | INV-1238 `transport.pipeline-lock.no-owner-write-after-abandon` (with the gateway) | `pg::progress::tests::aborted_takes_are_gone_once_none_by_returns`, `integration::abandon::pg_an_abandoned_bus_joins_its_takes_and_leaves_its_holds_for_recovery` |
+| INV-1240 `transport.pipeline.statements-bounded` (with the gateway) | `pg::row::timeout_tests::a_statement_or_lock_timeout_is_disconnected`, `crosstalk_gateway::integration::statement_timeouts::pg_the_reaper_survives_a_stalled_sweep` |
 
 All four are Postgres integration tests, written but not run by the
 workstream (its sandbox could not reach the test server), so their
@@ -309,6 +328,9 @@ evidence stays `agent = "false"` until they run.
 - No SQL reads `now()`; delays use the injected clock.
 - Errors and logs never carry payloads: logs carry group, seq, attempt,
   event id; database failures are reported by their classification.
+- A statement cancelled at a bound is `Disconnected` to a bus caller,
+  never a refusal, and is classified once per failure (the reaper's
+  warn reads one classification), so it is counted once.
 - Dead-letter cursors are checked with a per-bus-value keyed hash: a token
   another bus value issued, another filter's, or edited text is
   `InvalidCursor` (an integrity check, not a MAC; cursors die with the

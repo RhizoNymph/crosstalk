@@ -60,6 +60,7 @@ use crate::role::Role;
 use crate::spool::{Gate, Gated, LiveBus};
 use crate::store::fence::{self, Epoch};
 use crate::store::lock::{DETECTION, PipelineLock, SERVER_REAP};
+use crate::store::timeouts::PipelineTimeouts;
 use crate::store::{migrations, session_setup};
 use crate::tasks::Tasks;
 
@@ -289,28 +290,51 @@ pub struct CaptureSide {
 /// A lazy pool on `template`'s database with its options (the acquire
 /// timeout) but at most `max` connections, its sessions named
 /// `application` in `pg_stat_activity` and set up by
-/// [`session_setup`]. It never joins the pipeline fence: capture's
-/// publisher pool is one (capture is never fenced, INV-1237).
+/// [`session_setup`]. It never joins the pipeline fence and runs without
+/// the pipeline's statement and lock bounds: capture's publisher pool is
+/// one (capture is never fenced, INV-1237; a stalled append spools at the
+/// publish's own client-side timeout).
 pub fn derived_pool(template: &PgPool, max: u32, application: &str) -> PgPool {
     derived_options(template, max)
         .after_connect(|connection, _meta| Box::pin(session_setup(connection)))
         .connect_lazy_with(derived_connect(template, application))
 }
 
-/// A pipeline incarnation's pool: [`derived_pool`]'s, each new connection
-/// then joining the pipeline fence as a connection of the incarnation of
-/// `epoch` (`store::fence::join`). Once a newer epoch is taken every
-/// connect is refused (`FenceError::Fenced`, or `Fencing` while the new
-/// holder waits): the pool can never hand out a connection again.
-/// `PgPoolOptions::after_connect` replaces the template's hook, so this
-/// one runs the session setup first itself.
+/// [`incarnation_pool_bounded`] with the default bounds
+/// ([`PipelineTimeouts::default`]: 60 s per statement, 15 s per lock wait).
 pub fn incarnation_pool(template: &PgPool, max: u32, application: &str, epoch: Epoch) -> PgPool {
+    incarnation_pool_bounded(
+        template,
+        max,
+        application,
+        epoch,
+        PipelineTimeouts::default(),
+    )
+}
+
+/// A pipeline incarnation's pool: [`derived_pool`]'s, each new connection
+/// then set to cancel any statement past `timeouts` (`statement_timeout`,
+/// `lock_timeout`, for the whole session: a stalled statement is retried,
+/// never waited on without end) and joining the pipeline fence as a
+/// connection of the incarnation of `epoch` (`store::fence::join`). Once a
+/// newer epoch is taken every connect is refused (`FenceError::Fenced`, or
+/// `Fencing` while the new holder waits): the pool can never hand out a
+/// connection again. `PgPoolOptions::after_connect` replaces the template's
+/// hook, so this one runs the session setup first itself.
+pub fn incarnation_pool_bounded(
+    template: &PgPool,
+    max: u32,
+    application: &str,
+    epoch: Epoch,
+    timeouts: PipelineTimeouts,
+) -> PgPool {
     let name = application.to_owned();
     derived_options(template, max)
         .after_connect(move |connection, _meta| {
             let name = name.clone();
             Box::pin(async move {
                 session_setup(connection).await?;
+                timeouts.apply(connection).await?;
                 fence::join(connection, epoch).await.map_err(|refused| {
                     tracing::warn!(
                         application_name = %name,

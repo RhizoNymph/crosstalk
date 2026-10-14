@@ -44,7 +44,7 @@ use tokio::time::Instant;
 
 use super::{
     LOST_SHUTDOWN, PipelineHeld, PipelineStart, SERVE_IDS, StopHandle, close_bounded,
-    incarnation_pool, pause, wait_for_database, wait_for_migrations,
+    incarnation_pool_bounded, pause, wait_for_database, wait_for_migrations,
 };
 use crate::gateway::{StartError, access};
 use crate::live::pg::{PgParts, PgSet, bus_clock};
@@ -104,11 +104,16 @@ pub fn application_name(number: u64, epoch: Epoch) -> String {
 
 impl Parts {
     fn new(start: &PipelineStart, number: u64, epoch: Epoch) -> Result<Self, StartError> {
-        let pool = incarnation_pool(
+        let pool = incarnation_pool_bounded(
             &start.pool,
             start.pool.options().get_max_connections(),
             &application_name(number, epoch),
             epoch,
+            start
+                .config
+                .store
+                .map(|store| store.pipeline_timeouts)
+                .unwrap_or_default(),
         );
         // Delays on the wall clock even when the live process runs on a
         // manual one (`live::pg::bus_clock`).

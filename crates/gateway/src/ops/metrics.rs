@@ -18,6 +18,11 @@
 //! the last loss's reason), `crosstalk_pipeline_incarnation` (the
 //! pipeline incarnations started so far) and `crosstalk_pipeline_epoch`
 //! (the pipeline epoch this process last took the lock under).
+//!
+//! In Postgres mode (a report with a `statement_timeouts` section),
+//! `crosstalk_pg_statement_timeouts_total{kind}`: statements the server
+//! cancelled at a pipeline bound, `kind` `statement` (`statement_timeout`,
+//! SQLSTATE 57014) or `lock` (`lock_timeout`, 55P03).
 
 use std::fmt::Write as _;
 
@@ -119,6 +124,17 @@ pub fn render(report: &HealthReport, failures: &FailureCounts) -> String {
     }
     if let Some(recovery) = &report.recovery {
         lock_series(&mut out, recovery);
+    }
+    if let Some(timeouts) = &report.statement_timeouts {
+        counter(
+            &mut out,
+            "crosstalk_pg_statement_timeouts_total",
+            "Statements Postgres cancelled at a pipeline bound (statement_timeout or lock_timeout); each was retried.",
+            &[
+                (&[("kind", "statement")], timeouts.statement),
+                (&[("kind", "lock")], timeouts.lock),
+            ],
+        );
     }
     out
 }
