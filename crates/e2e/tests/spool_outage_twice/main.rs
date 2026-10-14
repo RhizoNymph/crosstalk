@@ -35,13 +35,15 @@ async fn body() {
         .settled(&run.db, "the first exchange's pipeline")
         .await;
     let gateway = run.outage(gateway, &scenario.exchanges[1..2], 1).await;
+    // The same process throughout: its capture counts carry over the
+    // outage.
     gateway
-        .send(&run.upstream, &scenario.exchanges[2..3], 1)
+        .send(&run.upstream, &scenario.exchanges[2..3], 3)
         .await;
     gateway
         .settled(&run.db, "the third exchange's pipeline")
         .await;
-    let gateway = run.outage(gateway, &scenario.exchanges[3..], 1).await;
+    let gateway = run.outage(gateway, &scenario.exchanges[3..], 3).await;
     run.finish(gateway, &scenario, &expected, "the run with two outages")
         .await;
 }
