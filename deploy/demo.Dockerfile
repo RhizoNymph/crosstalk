@@ -2,8 +2,8 @@
 #
 # crosstalk-demo: the fake Anthropic upstream, the shared wiki and the agent
 # swarm (one binary, subcommands), plus the bench tools for `run.sh bench`
-# (the deployment host has no Rust toolchain): ct-eval (fetching the
-# gateway's export), ct-bench-detect (the detector's bench input) and
+# (the deployment host has no Rust toolchain): ct-bench-detect (fetching the
+# gateway's export and turning it into the detector's bench input) and
 # a2a-bench at a pinned release tag (export and score). Build context is the repository root:
 #   docker build -f deploy/demo.Dockerfile -t crosstalk-demo:dev .
 # (deploy/compose.demo.yaml does this for you.)
@@ -35,18 +35,15 @@ ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
 COPY . .
 
 # One cargo invocation for both binaries, so they share one dependency
-# resolution and one lock on the cached target dir. ct-eval's default gates
-# path is compiled in as /src/crates/eval/gates.toml, which the runtime image
-# does not have; the file is shipped beside it and `bench` passes --gates.
+# resolution and one lock on the cached target dir. The gates come from the
+# bench repo (below), not from crosstalk.
 RUN --mount=type=cache,sharing=locked,target=/usr/local/cargo/registry \
     --mount=type=cache,sharing=locked,target=/src/target \
     cargo build --locked --release \
         -p crosstalk-demo --bin crosstalk-demo \
-        -p crosstalk-eval --bin ct-eval --bin ct-bench-detect \
+        -p crosstalk-bench-adapter --bin ct-bench-detect \
     && install -D target/release/crosstalk-demo /out/crosstalk-demo \
-    && install -D target/release/ct-eval /out/ct-eval \
-    && install -D target/release/ct-bench-detect /out/ct-bench-detect \
-    && install -D -m 0644 crates/eval/gates.toml /out/eval/gates.toml
+    && install -D target/release/ct-bench-detect /out/ct-bench-detect
 
 # a2a-bench, the scorer, at a release tag of the bench repo, from the same
 # mirror. Bump A2A_BENCH_REF (and fetch the tag into the mirror) to score
@@ -67,9 +64,7 @@ RUN --mount=type=cache,sharing=locked,target=/usr/local/cargo/registry \
 FROM gcr.io/distroless/cc-debian13:nonroot
 
 COPY --from=build /out/crosstalk-demo /usr/local/bin/crosstalk-demo
-COPY --from=build /out/ct-eval /usr/local/bin/ct-eval
 COPY --from=build /out/ct-bench-detect /usr/local/bin/ct-bench-detect
-COPY --from=build /out/eval/gates.toml /usr/local/share/crosstalk-eval/gates.toml
 COPY --from=build /out/a2a-bench /usr/local/bin/a2a-bench
 COPY --from=build /out/a2a-bench-share /usr/local/share/a2a-bench
 
