@@ -804,7 +804,8 @@ Features Index:
       to DbFailure (unique, foreign-key and check violations, retryable
       serialization failures and deadlocks, connection loss, pool timeout)
       for layers to map into spec errors; retry_serializable runs a
-      SERIALIZABLE transaction with bounded, backed-off retries.
+      SERIALIZABLE transaction with bounded retries and full-jitter
+      exponential backoff, so contenders do not retry in lockstep.
       ColumnWindow maps a spec TimeWindow onto a bigint time column for
       every layer's windowed reads: an end past i64::MAX is no upper bound
       (a row at i64::MAX kept), a start past it reads empty, never an

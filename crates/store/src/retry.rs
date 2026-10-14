@@ -4,13 +4,23 @@
 //! `BEGIN ISOLATION LEVEL SERIALIZABLE`, commits, and re-runs the whole
 //! transaction when Postgres reports a serialization failure or a deadlock
 //! (at the statement or at commit), up to the policy's attempt budget, with
-//! exponential backoff between attempts.
+//! jittered exponential backoff between attempts.
+//!
+//! **Jitter.** The pause after a failed attempt is drawn uniformly from
+//! `[0, ceiling]`, where the ceiling is the initial backoff doubled per
+//! earlier attempt and capped at the maximum ("full jitter"). Transactions
+//! that conflict with each other fail at the same moment; with a fixed
+//! schedule they would wake at the same moments too and conflict again on
+//! every retry until the budget ran out. Drawing over the whole range
+//! spreads them furthest apart, and a short pause costs little because the
+//! transaction that won the conflict has usually committed already.
 
 use std::future::Future;
 use std::num::NonZeroU32;
 use std::pin::Pin;
 use std::time::Duration;
 
+use crosstalk_spec::ids::{RandomSource, SeededRandom};
 use sqlx::{PgConnection, PgPool};
 use tracing::{debug, warn};
 
@@ -65,14 +75,51 @@ impl SerializableRetry {
         self.max_attempts
     }
 
-    /// The pause after failed attempt `attempt` (1-based): the initial
-    /// backoff doubled per earlier attempt, capped at the maximum.
+    /// The attempt that follows failed attempt `attempt` (1-based), or
+    /// `None` when `attempt` spent the budget.
+    pub fn retry_after(&self, attempt: NonZeroU32) -> Option<NonZeroU32> {
+        if attempt >= self.max_attempts {
+            return None;
+        }
+        attempt.checked_add(1)
+    }
+
+    /// The ceiling of the pause after failed attempt `attempt` (1-based):
+    /// the initial backoff doubled per earlier attempt, capped at the
+    /// maximum. [`SerializableRetry::delay_after`] draws the actual pause
+    /// below it.
     pub fn backoff_after(&self, attempt: NonZeroU32) -> Duration {
         let doublings = attempt.get().saturating_sub(1).min(31);
         self.initial_backoff
             .saturating_mul(1u32 << doublings)
             .min(self.max_backoff)
     }
+
+    /// The pause actually slept after failed attempt `attempt` (1-based):
+    /// uniform in `[0, backoff_after(attempt)]`, drawn from `random`, so it
+    /// never exceeds the maximum backoff (module docs, **Jitter**).
+    pub fn delay_after<R: RandomSource + ?Sized>(
+        &self,
+        attempt: NonZeroU32,
+        random: &mut R,
+    ) -> Duration {
+        let ceiling = self.backoff_after(attempt);
+        let span = ceiling.as_nanos();
+        let draw = u128::from(random.next_u64());
+        // floor(span * draw / 2^64), split so neither product overflows:
+        // `span` is below 2^94 (the largest `Duration`) and `draw` below
+        // 2^64. The result is below `span`.
+        let nanos = (span >> 64) * draw + (((span & u128::from(u64::MAX)) * draw) >> 64);
+        duration_from_nanos(nanos).min(ceiling)
+    }
+}
+
+/// A `Duration` of `nanos` nanoseconds, saturating at `Duration::MAX`.
+fn duration_from_nanos(nanos: u128) -> Duration {
+    const NANOS_PER_SEC: u128 = 1_000_000_000;
+    let secs = u64::try_from(nanos / NANOS_PER_SEC).unwrap_or(u64::MAX);
+    let subsec = u32::try_from(nanos % NANOS_PER_SEC).unwrap_or(0);
+    Duration::new(secs, subsec)
 }
 
 impl Default for SerializableRetry {
@@ -138,6 +185,9 @@ where
     T: Send,
     E: Send,
 {
+    // Seeded per call from the OS: concurrent callers draw independent
+    // delays, which is the point of the jitter.
+    let mut random = SeededRandom::from_entropy();
     let mut attempt = NonZeroU32::MIN;
     loop {
         let err = match attempt_once(pool, &mut body).await {
@@ -153,7 +203,7 @@ where
             }
             .into());
         }
-        if attempt >= policy.max_attempts {
+        let Some(next) = policy.retry_after(attempt) else {
             warn!(attempts = attempt.get(), failure = %failure, "serializable transaction gave up");
             return Err(StoreError::RetriesExhausted {
                 attempts: attempt,
@@ -161,8 +211,8 @@ where
                 source: err,
             }
             .into());
-        }
-        let pause = policy.backoff_after(attempt);
+        };
+        let pause = policy.delay_after(attempt, &mut random);
         debug!(
             attempt = attempt.get(),
             max_attempts = policy.max_attempts.get(),
@@ -171,7 +221,7 @@ where
             "serializable transaction conflicted, retrying"
         );
         tokio::time::sleep(pause).await;
-        attempt = attempt.saturating_add(1);
+        attempt = next;
     }
 }
 
@@ -235,8 +285,7 @@ mod tests {
     }
 
     #[test]
-    fn jittered_delay_stays_between_zero_and_the_ceiling() -> Result<(), InvalidSerializableRetry>
-    {
+    fn jittered_delay_stays_between_zero_and_the_ceiling() -> Result<(), InvalidSerializableRetry> {
         let p = ceiling_policy()?;
         let mut random = SeededRandom::new(7);
         for attempt in 1..=40 {
@@ -258,8 +307,9 @@ mod tests {
     fn jittered_delay_varies_across_draws() -> Result<(), InvalidSerializableRetry> {
         let p = ceiling_policy()?;
         let mut random = SeededRandom::new(11);
-        let draws: std::collections::BTreeSet<Duration> =
-            (0..200).map(|_| p.delay_after(nz(3), &mut random)).collect();
+        let draws: std::collections::BTreeSet<Duration> = (0..200)
+            .map(|_| p.delay_after(nz(3), &mut random))
+            .collect();
         assert!(draws.len() > 150, "only {} distinct delays", draws.len());
         Ok(())
     }
@@ -274,7 +324,10 @@ mod tests {
             .collect();
         let total: Duration = draws.iter().sum();
         let mean = total / 10_000;
-        assert!(mean > ceiling * 2 / 5 && mean < ceiling * 3 / 5, "mean {mean:?}");
+        assert!(
+            mean > ceiling * 2 / 5 && mean < ceiling * 3 / 5,
+            "mean {mean:?}"
+        );
         assert!(draws.iter().any(|d| *d < ceiling / 10));
         assert!(draws.iter().any(|d| *d > ceiling * 9 / 10));
         Ok(())

@@ -253,7 +253,8 @@ retry_serializable(pool, &SerializableRetry::default(), |conn| Box::pin(async mo
    and the body's error is the one reported.
 4. A `Db` error from the body or the commit is classified:
    - Retryable, with budget left: log `debug` (`attempt`, `max_attempts`,
-     `failure`, `backoff_ms`), sleep `backoff_after(attempt)`, and go to 1.
+     `failure`, `backoff_ms`), sleep `delay_after(attempt, random)`, and go
+     to 1. `random` is a `SeededRandom::from_entropy()` drawn once per call.
    - Retryable, budget spent: `SerializableError::Store(RetriesExhausted)`,
      logged at `warn`.
    - Not retryable: `SerializableError::Store(Query { failure, .. })`.
@@ -261,7 +262,19 @@ retry_serializable(pool, &SerializableRetry::default(), |conn| Box::pin(async mo
    retry.
 
 `SerializableRetry::new(max_attempts: NonZeroU32, initial, max)` refuses
-`initial > max`. The backoff doubles from `initial` and is capped at `max`.
+`initial > max`. `backoff_after(attempt)` is the deterministic ceiling: it
+doubles from `initial` and is capped at `max`. `delay_after(attempt, random)`
+is the pause actually slept, uniform in `[0, backoff_after(attempt)]`
+("full jitter"), drawn from any spec `RandomSource` so tests pass a seeded
+one. Jitter is there because conflicting transactions fail at the same
+instant: with a fixed schedule they also wake together and conflict again
+on every retry until the budget runs out (seen with 20 concurrent enqueues
+exhausting 30 attempts). Full jitter rather than equal jitter (half fixed,
+half random) because it spreads contenders over the whole range, twice the
+spread for the same cap, and a short or zero pause is cheap here: the
+conflict's winner has usually committed by then. `retry_after(attempt)`
+gives the next attempt, or `None` once `max_attempts` (which counts the
+first attempt) is spent.
 The default is 5 attempts, 5 ms initial and 200 ms max. The body is
 `for<'c> FnMut(&'c mut PgConnection) -> TxFuture<'c, T, E> + Send`, and
 `TxFuture` is a boxed `Send` future, so the whole call is `Send` like every
@@ -459,7 +472,8 @@ checks still run.
   template names start with `crosstalk_test_tmpl_`, under the test prefix.
 - `retry_serializable` retries only `SerializationFailure` and
   `DeadlockDetected`, never more than `max_attempts` times in total, and
-  never retries an `Abort`.
+  never retries an `Abort`. The pause between attempts is never longer than
+  `backoff_after(attempt)`, so never longer than `max`.
 - `TestDb` exists only on a multi-threaded runtime, so its `Drop` can always
   run teardown.
 - A windowed read never refuses a valid `TimeWindow` for its size: an end
@@ -503,8 +517,12 @@ Unit tests (no database), 66 of them:
 - `migrate`: the layer migrator's table, schema and lock; the future is
   `Send + 'static`.
 - `extensions`: the required set, idempotent DDL in `public`, no TimescaleDB.
-- `retry`: backoff doubling, cap and overflow; the policy constructor; the
-  future is `Send`.
+- `retry`: backoff ceiling doubling, cap and overflow; jittered delays stay
+  in `[0, ceiling]` and never above `max`, vary across draws, cover the
+  range (mean near half the ceiling), repeat for a seed, differ between two
+  seeds on every attempt, never overflow, and are zero for a zero backoff;
+  `retry_after` counts the first attempt; the policy constructor; the future
+  is `Send`.
 - `window`: in-range windows keep both bounds; an end past `i64::MAX` is
   unbounded; a start past it is `Beyond`; an unbounded end keeps a time
   stored at `i64::MAX`; the bounds keep exactly what `TimeWindow::contains`
