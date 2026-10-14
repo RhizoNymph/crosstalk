@@ -23,7 +23,9 @@ x-logging: &logging
     max-file: "5"
 
 x-crosstalk-env: &crosstalk-env
-  DATABASE_URL: postgres://crosstalk:${POSTGRES_PASSWORD:?run deploy/run.sh init}@postgres:5432/crosstalk
+  # CROSSTALK_DB_NAME picks the database (run.sh bench gives each run its
+  # own, crosstalk_bench_<run>); a plain `up` uses `crosstalk`.
+  DATABASE_URL: postgres://crosstalk:${POSTGRES_PASSWORD:?run deploy/run.sh init}@postgres:5432/${CROSSTALK_DB_NAME:-crosstalk}
   CROSSTALK_SECRET_V1: ${CROSSTALK_SECRET_V1:?run deploy/run.sh init}
   CROSSTALK_API_TOKEN: ${CROSSTALK_API_TOKEN:?run deploy/run.sh init}
   CROSSTALK_EMBEDDINGS_API_KEY: ${CROSSTALK_EMBEDDINGS_API_KEY:-}
@@ -71,6 +73,20 @@ services:
       - log_min_duration_statement=500ms
       - -c
       - log_lock_waits=on
+      # Reap a client that vanished without closing (a network partition, a
+      # killed host) in about 25 s instead of hours, so its session's
+      # advisory locks (the gateway's pipeline lock) are released and a
+      # restarted gateway can take them. Keepalives cover an idle
+      # connection (10 s idle, then 3 probes 5 s apart);
+      # tcp_user_timeout covers one with unacknowledged data in flight.
+      - -c
+      - tcp_keepalives_idle=10
+      - -c
+      - tcp_keepalives_interval=5
+      - -c
+      - tcp_keepalives_count=3
+      - -c
+      - tcp_user_timeout=25000
     shm_size: 1g
     volumes:
       # Postgres 18 images keep PGDATA under /var/lib/postgresql/18/.
@@ -90,6 +106,8 @@ services:
     build:
       context: ..
       dockerfile: deploy/crosstalk.Dockerfile
+      additional_contexts:
+        a2a: ${A2A_BENCH_GIT:-../../.build-deps/a2a-transmission-bench.git}
     command: ["migrate", "--config", "/etc/crosstalk/crosstalk.json"]
     restart: "no"
     logging: *logging
@@ -105,6 +123,8 @@ services:
     build:
       context: ..
       dockerfile: deploy/crosstalk.Dockerfile
+      additional_contexts:
+        a2a: ${A2A_BENCH_GIT:-../../.build-deps/a2a-transmission-bench.git}
     command: ["serve", "--role", "all", "--config", "/etc/crosstalk/crosstalk.json"]
     restart: unless-stopped
     logging: *logging
@@ -144,6 +164,8 @@ services:
     build:
       context: ..
       dockerfile: deploy/ui.Dockerfile
+      additional_contexts:
+        a2a: ${A2A_BENCH_GIT:-../../.build-deps/a2a-transmission-bench.git}
     restart: unless-stopped
     logging: *logging
     # The HTTP backend reads the gateway's operator API at crosstalk:8081

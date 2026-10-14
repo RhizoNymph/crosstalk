@@ -3,17 +3,20 @@
 //! their results sent back, think time between prompts, until the run
 //! stops.
 //!
-//! Every generation request claims the conversation's next turn ordinal
-//! before it is sent, failed and retried ones included. A read's result is
-//! reported to the collector when the first request carrying it is built:
-//! that request's turn and the result's place in its `messages` are known
-//! only then.
+//! Every generation request the gateway may have seen claims the
+//! conversation's next turn ordinal, failed and retried ones included (the
+//! gateway captures a 529 or a cut stream as an exchange too). A request
+//! that never left the client (connection refused while the gateway is down
+//! or restarting) claims none: the gateway has no exchange for it. A read's
+//! result is reported to the collector with the first request carrying it
+//! that claimed a turn: that request's turn and the result's place in its
+//! `messages` are known only then.
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use bytes::{Bytes, BytesMut};
-use crosstalk_testkit::client::{BodyEnd, HarnessClient, Next};
+use crosstalk_testkit::client::{BodyEnd, ClientError, HarnessClient, Next};
 use crosstalk_testkit::corpus::http::Headers;
 use crosstalk_testkit::corpus::sse::EventStream;
 use hyper::Method;
@@ -110,7 +113,7 @@ impl Agent {
     }
 }
 
-/// Why a request failed (after it was counted).
+/// Why a request failed.
 #[derive(Debug, thiserror::Error)]
 enum ExchangeError {
     #[error("building the request: {0}")]
@@ -461,18 +464,30 @@ async fn exchange(
         body,
     )
     .map_err(|e| ExchangeError::Build(e.to_string()))?;
-    let turn = conversation.claim_turn();
-    if !reads.is_empty() {
+    let started = Instant::now();
+    let opened = shared.gateway.open(&request).await;
+    // Claimed only once the request may have reached the gateway; until
+    // then the reads stay pending for the next attempt.
+    let turn = match &opened {
+        Err(error) if !reached_gateway(error) => None,
+        _ => Some(conversation.claim_turn()),
+    };
+    if let Some(turn) = turn
+        && !reads.is_empty()
+    {
         let session = conversation.session().to_owned();
         deliver_reads(agent, events, &session, turn, &value, std::mem::take(reads)).await;
     }
-    let started = Instant::now();
     let mut ttfb = None;
     let mut received = BytesMut::new();
-    let (outcome, answer) = match shared.gateway.open(&request).await {
+    let (outcome, answer) = match opened {
         Err(error) => {
             tracing::debug!(agent = %agent.name, %error, "no response");
-            (Outcome::Transport, None)
+            if turn.is_some() {
+                (Outcome::Transport, None)
+            } else {
+                (Outcome::Unsent, None)
+            }
         }
         Ok(mut response) => {
             let end = loop {
@@ -512,9 +527,21 @@ async fn exchange(
             response_bytes: received.len(),
         }))
         .await;
-    answer
-        .map(|answer| (answer, turn))
-        .ok_or(ExchangeError::Failed(outcome))
+    match (answer, turn) {
+        (Some(answer), Some(turn)) => Ok((answer, turn)),
+        _ => Err(ExchangeError::Failed(outcome)),
+    }
+}
+
+/// Whether a request that failed with `error` may have reached the gateway.
+/// A refused connection, a failed handshake or an unbuildable request never
+/// left the client; a send error or a head timeout may have been read by
+/// the gateway, which then captured it.
+fn reached_gateway(error: &ClientError) -> bool {
+    match error {
+        ClientError::Connect { .. } | ClientError::Handshake(_) | ClientError::Build(_) => false,
+        ClientError::Send(_) | ClientError::HeadTimeout(_) => true,
+    }
 }
 
 /// Why a 2xx body is not an answer.
