@@ -115,7 +115,11 @@ over walks `held elsewhere / waiting_for_lock` (503: it never held the
 lock) ─▶ `held / fencing` ─▶ `held / recovering` ─▶ `held / running`. The
 old owner, once it notices the loss, walks `lost / abandoning` ─▶ `held
 elsewhere / waiting_for_lock` (200 degraded: it held the lock before),
-capturing throughout. Logs: the take's start (`pipeline lock taken;
+capturing throughout. A gateway that restarts while another holds the
+lock (an old owner killed and started again) publishes its captures
+directly too: its capture gate opens as soon as its watch finds every
+pipeline group's row, not only once it takes the lock (INV-1241,
+[postgres_mode.md](postgres_mode.md), "The gate"). Logs: the take's start (`pipeline lock taken;
 fencing the earlier incarnations`, `epoch`), the wait's blockers (warn,
 bounded), its end (`waited_ms`, `polls`), `pipeline lock taken; earlier
 incarnations fenced` (`epoch`, `fence_waited_ms`, `fence_polls`) and the

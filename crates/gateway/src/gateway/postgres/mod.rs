@@ -6,6 +6,9 @@
 //!   capture pipeline over the spool ─▶ proxy forwards and captures at once
 //!   listeners: proxy, api (503 until the surface exists), ops
 //! pipeline task (roles all, proxy, pipeline), one loop for the process's life:
+//! gate watch (beside the pipeline task, until the capture gate is open):
+//!   at start and every second while this process does not hold the lock: every
+//!   pipeline group in transport.groups? ─▶ the gate opens (captures publish directly)
 //!   waiting:    the database answers ─▶ migrations at head? (behind: not ready, re-checked)
 //!               ─▶ pipeline lock (held elsewhere: retried) ─▶ the epoch bumped ─▶ fencing:
 //!               until no connection of an earlier incarnation (any process) is left
@@ -29,6 +32,7 @@
 //! (`ingress.capture.never-stopped-by-lock-loss`).
 
 mod api;
+pub mod gate_watch;
 mod pipeline;
 
 use std::sync::Arc;
@@ -162,6 +166,8 @@ pub struct PgRunning {
     /// Capture's bus (publish only); the `api` role's bus.
     pub bus: PgBus,
     pub spool: Option<LiveBus>,
+    /// The spool's gate: open once every pipeline group exists.
+    pub gate: Gate,
     pub capture: Option<JoinHandle<()>>,
     pub capture_pipeline: Option<Arc<Pipeline<LiveBlobs, LiveBus>>>,
     pub pipeline: Option<StopHandle<PipelineHeld>>,

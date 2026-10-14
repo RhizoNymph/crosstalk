@@ -12,12 +12,19 @@
 //! log's head when it first subscribes: anything published before it
 //! would never reach it. On a fresh database no pipeline group exists
 //! until recovery subscribes them, while the proxy captures from the first
-//! second. So until the live process has subscribed every group, the inner
-//! bus refuses publishes as `Disconnected` and the spool keeps them; once
-//! the gate opens, the spool drains them in order under their ids, and
-//! every group receives them. Everything else is the spool's own contract
-//! (`transport.spool.*`): only the gate's or the database's `Disconnected`
-//! is spooled, a full spool refuses with `SpoolFull`.
+//! second. So until every pipeline group exists, the inner bus refuses
+//! publishes as `Disconnected` and the spool keeps them; once the gate
+//! opens, the spool drains them in order under their ids, and every group
+//! receives them. The gate opens when this process's own pipeline has
+//! subscribed every group ([`GateOpened::GroupsSubscribed`]) or, in a
+//! process without the pipeline lock, as soon as it finds every group's
+//! row in `transport.groups` ([`GateOpened::GroupsFound`],
+//! `gateway::postgres::gate_watch`): another process subscribed them, and
+//! a group's row carries its admission base from the moment it exists
+//! (INV-1241 `ingress.capture.gate-opens-once-groups-exist`). Everything
+//! else is the spool's own contract (`transport.spool.*`): only the gate's
+//! or the database's `Disconnected` is spooled, a full spool refuses with
+//! `SpoolFull`.
 //!
 //! [`discard_corrupt`] is `crosstalk spool --discard-corrupt`: offline (it
 //! takes the spool's `LOCK`), it drops the corrupt record that stopped the
@@ -43,15 +50,46 @@ impl Gate {
         Self::default()
     }
 
-    /// Let publishes through, for good.
+    /// Let publishes through, for good: this process's pipeline subscribed
+    /// every group.
     pub fn open(&self) {
-        if !self.0.swap(true, Ordering::AcqRel) {
-            tracing::info!("pipeline groups subscribed; the spool drains to the bus");
+        self.open_by(GateOpened::GroupsSubscribed);
+    }
+
+    /// Let publishes through, for good, logging why. `true` when this call
+    /// opened it (it was closed).
+    pub fn open_by(&self, by: GateOpened) -> bool {
+        let opened = !self.0.swap(true, Ordering::AcqRel);
+        if opened {
+            tracing::info!(
+                opened_by = by.label(),
+                "capture gate opened: every pipeline group exists; the spool drains to the bus"
+            );
         }
+        opened
     }
 
     pub fn is_open(&self) -> bool {
         self.0.load(Ordering::Acquire)
+    }
+}
+
+/// Why a [`Gate`] opened.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GateOpened {
+    /// This process's pipeline incarnation subscribed every group.
+    GroupsSubscribed,
+    /// Every pipeline group's row was found in `transport.groups`, created
+    /// by whichever process subscribed it.
+    GroupsFound,
+}
+
+impl GateOpened {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::GroupsSubscribed => "groups_subscribed",
+            Self::GroupsFound => "groups_found",
+        }
     }
 }
 

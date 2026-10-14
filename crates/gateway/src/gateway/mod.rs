@@ -631,6 +631,7 @@ async fn start_postgres(
             capture_pool: side.capture_pool,
             bus: side.bus,
             spool: side.spool,
+            gate: side.gate,
             capture,
             capture_pipeline: side.pipeline,
             pipeline,

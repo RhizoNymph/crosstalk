@@ -18,8 +18,10 @@ section nothing changes: memory stores and `MpscBus` (decision Q7).
   - `Live` generic over a `LiveStoreSet` (`MemorySet`, `PgSet`), the stage
     machinery shared, the Postgres stages (`live::pg`), the recovery
     sequence (`Live::start_pg`), `PgFrontierSource`;
-  - the gate and the `spool` section (`spool.rs`), the `spool_full`
-    capture outcome;
+  - the gate and the `spool` section (`spool.rs`), the gate's watch that
+    opens it in a process without the lock once every pipeline group
+    exists (`gateway/postgres/gate_watch/`, the group list in
+    `live/pg/groups.rs`), the `spool_full` capture outcome;
   - `crosstalk migrate` running every layer's migrations,
     `--reset-correlator`, the migration head check, the pipeline lock and
     its fence (`store/`: the epoch and the shared fence every pipeline
@@ -60,6 +62,9 @@ lazy template pool (no connection yet) ─▶ capture's own pool ─▶ PgBus::p
    ─▶ SpoolingBus::open(<data dir>/spool, Gated<PgBus>)
    capture pipeline over the spool (Bodies::SkipStored: FsBlobStore never deletes)
    proxy listener: forwards and captures at once            ops listener   api listener (503 until set)
+gate watch (beside the pipeline task, until the gate is open; gateway::postgres::gate_watch):
+   at start, then every GATE_POLL (1 s) while this process does not hold the lock:
+   every pipeline group's row in transport.groups? ─▶ the gate opens (groups_found)
 pipeline task:
    wait for the database (status waiting_for_database)
    ─▶ migrations::check_heads: every layer's applied head == the binary's (behind: not ready, re-checked)
@@ -81,12 +86,61 @@ pipeline task:
 ```
 
 **The gate.** A consumer group that does not exist starts at the log's
-head. On a fresh database the pipeline groups are created only when
-recovery subscribes them, while capture runs from the first second. So
-the bus behind the spool refuses publishes (`Disconnected`) until every
-group subscribed: captures and recovery's own publishes wait in the
-spool, fsynced, and drain in order under their ids once the gate opens.
-`/readyz` shows `capture: spooling` until then.
+head: `PgBus::subscribe` inserts its row with `admitted_through` set to
+the log's head in the same statement, and a take admits only entries
+past it, so anything published before the row exists never reaches the
+group (lost to it, and to the detection after it). On a fresh database
+the pipeline groups are created only when recovery subscribes them,
+while capture runs from the first second. So the bus behind the spool
+refuses publishes (`Disconnected`) until every pipeline group exists:
+captures and recovery's own publishes wait in the spool, fsynced, and
+drain in order under their ids once the gate opens. `/readyz` shows
+`capture: spooling` until then. The gate opens, for good, either way it
+learns that every group exists (INV-1241
+`ingress.capture.gate-opens-once-groups-exist`):
+
+- **Subscribed** (`GateOpened::GroupsSubscribed`): this process's
+  incarnation subscribed every group (the last step of `Live::start_pg`).
+  On a fresh database this is the only way: nobody else creates them.
+- **Found** (`GateOpened::GroupsFound`): the gate's watch
+  (`gateway::postgres::gate_watch`, spawned beside the pipeline task by
+  `spawn_pipeline`, ended with it) looks at start and then every
+  `GATE_POLL` (1 s), while the gate is closed and this process does not
+  hold the lock (a holder's own subscribe opens it), for the rows of every
+  group in `live::pg::groups::PipelineGroups`: one query on the template
+  pool, in a transaction whose `statement_timeout` and `lock_timeout` are
+  the pipeline's (`store.pipeline_timeouts`, `SET LOCAL`) and bounded
+  client-side by the statement bound. All present: the gate opens and the
+  watch ends. Any missing, or the look failing or timing out: the gate
+  stays closed (a failure is warned at its first in a row and every 30th)
+  and it looks again a poll later.
+
+**Why "every row exists" is the right condition.** A group's row and its
+admission base are written in one statement, groups are never deleted,
+and an append takes a sequence number above the head every existing row
+was based at, so once every row exists each later append is admitted by
+every group at its next take, whichever process subscribes it and
+whenever. No group's base or admission needs to be checked beyond the
+row: `admitted_through` is set by the insert, and a group that has not
+taken yet admits from it. The list the watch looks for is the one
+`Live::start_pg` subscribes (`PipelineGroups`: the exchange log's group
+when the incarnation runs one, then `PG_SLOTS`, each slot filled or the
+start refused with `LiveError::SlotEmpty` / `SlotOutsideGroups`), so a
+process never opens on a subset of what its own pipeline would subscribe.
+The migrations' head is not a condition: the gate guards delivery, not
+schema compatibility, and an open gate stays open across later
+migrations as before. Gateways sharing a database run the same roles
+(the exchange log's group is in the list only for `all` and `pipeline`).
+
+**Before**, the gate opened only at this process's own subscribe, so a
+gateway restarted while another held the lock spooled every capture
+until it took the lock itself, and the holder's pipeline saw none of
+them. The node0 two-gateway fault run: `crosstalk` killed, the standby
+took the lock, `crosstalk` restarted as a non-holder; 97 exchanges sat in
+its spool (`inner bus unreachable; spooling`, `from=direct`) for five
+minutes and reached the bus only when it took the lock as epoch 4, past
+the watermark: late L7 dead letters. A gateway whose gate had opened
+before it lost the lock kept publishing (the s2/s3 runs).
 
 ### Stages over Postgres (`live::pg`)
 
@@ -938,6 +992,19 @@ prober dials the proxy every 25 ms and counts refusals; a sampler reads
   the owner on a runtime of its own, killed; the standby is past its fence
   within its retry and take (10 s plus slack) under the next epoch, runs,
   captures the rest and ends as the uninterrupted run.
+- `gate::a_gateway_started_beside_a_lock_holder_publishes_its_captures_directly`
+  (INV-1241, the node0 regression): the owner runs (every group exists); a
+  second gateway (its own data directory, the owner's blob store linked)
+  starts as a non-holder, its gate opens within `GATE_POLL` plus slack of
+  its start, it captures the rest with nothing through its spool
+  (`appended == 0`, `direct`), never runs an incarnation, and the owner's
+  exchange log holds every capture; the run ends as the uninterrupted one.
+- `gate::a_gateway_on_a_fresh_database_spools_until_the_groups_exist`
+  (INV-1241): a rival session holds the lock on a fresh database; the
+  gateway's gate stays closed through three polls, its captures wait in
+  the spool, no group row and no log entry exist; once the rival lets go
+  the gateway takes the lock, its subscribe opens the gate, the spool
+  drains, and the run ends as the uninterrupted one.
 
 ### Conformance over Postgres
 
@@ -1020,7 +1087,12 @@ on `crates/api/tests/support/pg_world.rs`:
 | `crates/gateway/src/live/pg/diagnose.rs` | what a stalled wait waits on | `diagnose`, `DiagnoseFrom`, `PgDiagnosis`, `bounded`, `Stalled` |
 | `crates/gateway/src/live/frontier.rs` | the frontier | `PgFrontierSource`, `SpoolBacklog`, `combine` |
 | `crates/gateway/src/live/recovery.rs` | status for ops | `PipelineStatus`, `StatusReporter`, `RecoveryStep`, `RecoveryReport` |
-| `crates/gateway/src/spool.rs` | gate, spooled bus, discard | `Gate`, `Gated`, `LiveBus`, `discard_corrupt` |
+| `crates/gateway/src/spool.rs` | gate, spooled bus, discard | `Gate` (`open`, `open_by`), `GateOpened`, `Gated`, `LiveBus`, `discard_corrupt` |
+| `crates/gateway/src/gateway/postgres/gate_watch/mod.rs` | the gate's watch: opens a non-holder's gate once every pipeline group exists | `GATE_POLL`, `watch`, `WatchEnd`, `GateWatch` (`spawn`, `for_pipeline`), `GroupCheck`, `PgGroupCheck`, `GroupsFound`, `MissingGroups`, `missing_from`, `GroupCheckError` |
+| `crates/gateway/src/gateway/postgres/gate_watch/tests.rs` | the watch on a scripted check and paused clock | tests |
+| `crates/gateway/src/live/pg/groups.rs` | the pipeline's consumer groups: one list for the subscribe and the gate's watch | `PipelineGroups`, `ExchangeLogGroup`, `PG_SLOTS` |
+| `crates/gateway/src/integration/gate.rs` | Postgres: the group check, its bound, a non-holder publishing directly, a fresh database spooling | tests |
+| `crates/e2e/tests/lock_loss/gate.rs` | two gateways: one beside the lock holder publishing directly; a fresh database spooling until the groups exist | tests |
 | `crates/gateway/src/store/{mod,migrations,lock}.rs` | migrate, head check, lock (its take bumps the epoch and fences), lazy pool and the session setup every pooled connection runs | `migrate`, `MigrateOptions`, `LAYERS`, `check_heads`, `PipelineLock` (`try_take`, `try_take_reporting`, `epoch`, `lost`), `TakeError`, `PIPELINE_LOCK`, `PIPELINE_FENCE`, `lazy_pool`, `session_setup` |
 | `crates/gateway/src/store/fence/mod.rs` | the epoch, a pipeline connection joining the fence, the bump | `Epoch`, `EpochError`, `FenceError` (`Fenced`, `Fencing`), `join`, `read_epoch`, `FENCE_POLL`, `FENCE_REPORT` |
 | `crates/gateway/src/store/fence/wait.rs` | a new holder's wait for the fence, over any `FenceSession` (the lock's `PgConnection`) | `wait_for_fence`, `FenceSession`, `Fenced`, `FenceWaitError`, `Blocker` |
@@ -1030,7 +1102,7 @@ on `crates/api/tests/support/pg_world.rs`:
 | `crates/store/src/timeouts/mod.rs` | a statement cancelled at a bound: its kind, the process's counts | `TimeoutKind`, `TimeoutCounts`, `statement_timeouts`; `DbFailure::TimedOut`, `DbFailure::{is_timeout, is_transient}` (`error.rs`) |
 | `crates/gateway/src/integration/statement_timeouts.rs` | Postgres: the bounds on the pipeline pools only, a statement and a lock wait cancelled, a blocked stage write retried, the reaper past a blocked sweep, `/healthz` within its bound | tests |
 | `crates/gateway/src/gateway/postgres/mod.rs` | Postgres-mode start: the template and capture pools, the incarnation pools that set the statement and lock bounds and join the fence, capture's publish-only bus and spool, the bounded shutdown | `PgRunning`, `CaptureSide`, `capture_side`, `derived_pool`, `incarnation_pool`, `incarnation_pool_bounded`, `close_bounded`, `StopHandle::stop_by`, `PipelineStart`, `Late`, `SERVE_IDS`, `LOST_SHUTDOWN`, `LOST_REPORTED`, `CLOSE_BOUND`, `CAPTURE_CONNECTIONS` |
-| `crates/gateway/src/gateway/postgres/pipeline.rs` | the pipeline task: waiting (and fencing), starting, running and abandoning incarnations, each with its own pool and bus under the lock's epoch | `spawn_pipeline`, `application_name` |
+| `crates/gateway/src/gateway/postgres/pipeline.rs` | the pipeline task: waiting (and fencing), starting, running and abandoning incarnations, each with its own pool and bus under the lock's epoch; the gate's watch spawned beside it | `spawn_pipeline`, `application_name`, `runs_exchange_log` |
 | `crates/gateway/src/gateway/postgres/api.rs` | the `api` role's surface | `spawn_api`, `ApiStart` |
 | `crates/gateway/src/gateway/late.rs` | what an incarnation sets and a loss clears: the API router (503 before), the ops handles | `LateRouter`, `LateValue` |
 | `crates/transport/src/pg/{mod,progress,subscription}.rs` | the bus an incarnation owns: abandon with every take joined; the publish-only bus capture appends through | `PgBus::abandon`, `Abandoned`, `PgBus::publisher` |
@@ -1093,6 +1165,18 @@ on `crates/api/tests/support/pg_world.rs`:
   loss; the epoch), `live::recovery::tests::fencing_is_ready_degraded_with_recovery_pending`,
   `the_report_carries_the_epoch`, `ops::tests::the_recovery_report_carries_the_epoch_in_health_and_metrics`,
   `store::migrations::tests::transport_head_creates_the_pipeline_epoch`.
+- The capture gate (INV-1241). Postgres (written; node0 runs pending):
+  `integration::gate::{pg_the_group_check_finds_only_the_groups_that_exist,
+  pg_a_blocked_group_check_returns_at_its_lock_bound,
+  pg_a_non_holder_publishes_directly_once_the_groups_exist,
+  pg_a_non_holder_on_a_fresh_database_spools_until_the_groups_exist}`;
+  `crosstalk-e2e` `lock_loss::gate` (above). No database (run):
+  `gateway::postgres::gate_watch::tests::*` (the watch on a scripted check
+  and paused clock: opens at the first look when every group exists,
+  stays closed and looks once per poll while one is missing or a look
+  fails, never looks while this process holds the lock, ends without a
+  look once the subscribe opened the gate, stops with its handle),
+  `live::pg::groups::tests::*` (the list).
 - Bounded statements (Postgres, written; node0 runs pending):
   `integration::statement_timeouts::{pg_pipeline_pools_carry_the_bounds_and_the_publisher_pool_none,
   pg_a_pipeline_statement_past_its_bound_is_cancelled_as_a_statement_timeout,
@@ -1146,6 +1230,7 @@ on `crates/api/tests/support/pg_world.rs`:
 | INV-1237 `ingress.capture.never-stopped-by-lock-loss` | integration `crosstalk_e2e::lock_loss::partition::{a_silent_partition,a_postgres_stop,a_partition_past_the_server_reap}_never_stops_capture_and_resumes_in_process` (written; node0 runs pending) |
 | INV-1238 `transport.pipeline-lock.no-owner-write-after-abandon` | unit `crosstalk_transport::pg::progress::tests::aborted_takes_are_gone_once_none_by_returns` (ran); integration `crosstalk_e2e::lock_loss::rival::a_terminated_lock_session_and_a_rival_holder_leave_no_owner_write_after_the_abandon`, `crosstalk_e2e::lock_loss::repeated::repeated_lock_losses_leave_no_pool_listener_or_task_behind`, `crosstalk_transport::integration::abandon::pg_an_abandoned_bus_joins_its_takes_and_leaves_its_holds_for_recovery` (written; node0 runs pending) |
 | INV-1239 `transport.pipeline-lock.no-write-from-an-older-epoch` | unit `crosstalk_gateway::store::fence::tests::the_wait_never_gives_up_and_completes_once_the_fence_is_free`, `a_try_without_an_answer_is_a_lock_loss_within_the_ping_deadline`, `a_failed_try_while_waiting_is_a_lock_loss` (ran); integration `crosstalk_gateway::integration::fence::*` (four) and `crosstalk_e2e::lock_loss::standby::*` (two) (written; node0 runs pending) |
+| INV-1241 `ingress.capture.gate-opens-once-groups-exist` | unit `crosstalk_gateway::gateway::postgres::gate_watch::tests::*` (seven), `crosstalk_gateway::live::pg::groups::tests::*` (four) (ran); integration `crosstalk_gateway::integration::gate::*` (four) and `crosstalk_e2e::lock_loss::gate::*` (two) (written; node0 runs pending) |
 | INV-1240 `transport.pipeline.statements-bounded` | unit `crosstalk_store::timeouts::tests::*`, `crosstalk_transport::pg::row::timeout_tests::*`, `crosstalk_provenance::pg::timeout_tests::*`, `crosstalk_gateway::store::timeouts::tests::*`, `crosstalk_gateway::ops::health_bound_tests::healthz_answers_within_its_bound_while_the_bus_read_stalls` (ran); integration `crosstalk_gateway::integration::statement_timeouts::*` (nine; written, node0 runs pending) |
 | INV-1233 `transport.settle.quiet-covers-unadmitted` | integration `crosstalk_gateway::integration::pg_quiet_counts_entries_no_group_admitted_yet` (ran on node0; failed before the fix) |
 | INV-1221 `ingress.proxy.forwarding-independent-of-capture-store` | `crosstalk_gateway::postgres_down::proxy_forwards_through_outage_and_full_spool` (ran) |
@@ -1182,7 +1267,12 @@ on `crates/api/tests/support/pg_world.rs`:
 - Forwarding never waits on the database, the bus or the spool; capture
   publishes through the spool, which refuses only when full.
 - No pipeline group misses an envelope published before it first
-  subscribed (the gate).
+  subscribed (the gate). The capture gate opens only once every pipeline
+  group's row exists, and then within `GATE_POLL` (1 s) plus one bounded
+  look in a process that does not hold the lock (INV-1241
+  `ingress.capture.gate-opens-once-groups-exist`); the groups it looks
+  for are exactly those `Live::start_pg` subscribes
+  (`live::pg::groups::PipelineGroups`).
 - The flow group acks only after a checkpoint; the bus's ack timeout must
   exceed `flow.checkpoint_ms` and `flow.checkpoint_unacked` must fit the
   group capacity (checked at start).

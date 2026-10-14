@@ -948,7 +948,10 @@ Features Index:
       checkpoint, node facts rebuilt, interrupted actions recorded), then
       subscribes every group and opens the spool's gate, so captures made
       before (or while the database was down) drain in order under their
-      ids. Postgres stages: L3 over PgAgents and PgConversations, L4 with
+      ids; a process without the lock opens its gate as soon as every
+      pipeline group's row exists in transport.groups (looked for at start
+      and every second, bounded by the pipeline's timeouts), so a gateway
+      restarted beside a lock holder publishes its captures directly. Postgres stages: L3 over PgAgents and PgConversations, L4 with
       the extraction step on PgExtractionLedger and DurableInputs, the
       durable flow consumer acking after checkpoints, crosstalk-analysis's
       Classifier, L7 with PgFrontierSource (shard ticks, groups' pending
@@ -997,8 +1000,10 @@ Features Index:
       reset past the loss bounds (zero refused connects), terminate the
       lock's session under a rival holder with a commit-time audit (no
       owner write after the abandon), lose the lock five times (no
-      leaked session or task) and hand the pipeline to a standby gateway
-      (no write of an older epoch once the standby's incarnation began); the L8 conformance suite runs over PgStores in process
+      leaked session or task), hand the pipeline to a standby gateway
+      (no write of an older epoch once the standby's incarnation began)
+      and capture through a gateway beside the lock holder (published
+      directly; spooled on a fresh database until the groups exist); the L8 conformance suite runs over PgStores in process
       and over HTTP, each test process seeding the world once into a
       template database and each test hosting the surface over its own
       clone of it.
@@ -1008,6 +1013,8 @@ Features Index:
       - crates/gateway/src/live/frontier.rs
       - crates/gateway/src/gateway/postgres/mod.rs
       - crates/gateway/src/gateway/postgres/pipeline.rs
+      - crates/gateway/src/gateway/postgres/gate_watch/mod.rs
+      - crates/gateway/src/live/pg/groups.rs
       - crates/gateway/src/store/migrations.rs
       - crates/gateway/src/store/timeouts/mod.rs
       - crates/gateway/src/spool.rs

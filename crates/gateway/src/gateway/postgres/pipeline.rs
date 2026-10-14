@@ -42,6 +42,7 @@ use crosstalk_transport::PgBus;
 use tokio::sync::oneshot;
 use tokio::time::Instant;
 
+use super::gate_watch::GateWatch;
 use super::{
     LOST_SHUTDOWN, PipelineHeld, PipelineStart, SERVE_IDS, StopHandle, close_bounded,
     incarnation_pool_bounded, pause, wait_for_database, wait_for_migrations,
@@ -52,14 +53,28 @@ use crate::live::recovery::{LastLoss, LockState, PipelinePhase};
 use crate::live::{BlobConfig, Live, LiveBlobs, LiveConfig, Ticking};
 use crate::log::ExchangeLog;
 use crate::pipeline::Settings;
+use crate::role::Role;
 use crate::store::fence::Epoch;
 use crate::store::lock::{LockLoss, PipelineLock, TakeError};
 
-/// Run the pipeline task: see the module docs.
+/// Run the pipeline task: see the module docs. Beside it, until the
+/// capture gate is open, its watch (`gate_watch`): a process that does not
+/// hold the lock opens the gate once every pipeline group exists. The
+/// watch ends with the task, or when the task is dropped or aborted.
 pub fn spawn_pipeline(start: PipelineStart) -> StopHandle<PipelineHeld> {
     let (stop, stopped) = oneshot::channel();
-    let task = tokio::spawn(run_pipeline(start, stopped));
+    let gate_watch = GateWatch::for_pipeline(&start);
+    let task = tokio::spawn(async move {
+        let _gate_watch = gate_watch;
+        run_pipeline(start, stopped).await
+    });
     StopHandle { stop, task }
+}
+
+/// Whether `role`'s pipeline incarnations run the exchange log, whose
+/// group is then one of the pipeline's (`live::pg::groups`).
+pub(super) fn runs_exchange_log(role: Role) -> bool {
+    role.runs_pipeline()
 }
 
 /// Where the pipeline task is (see the module docs).
@@ -410,7 +425,7 @@ async fn live_config(start: &PipelineStart) -> Result<LiveConfig, StartError> {
     live.extract = config.extract.clone();
     live.ticking = Ticking::Periodic;
     live.capture = None;
-    live.exchange_log = match start.role.runs_pipeline() {
+    live.exchange_log = match runs_exchange_log(start.role) {
         true => Some(ExchangeLog::open(&config.exchange_log_path()?).await?),
         false => None,
     };

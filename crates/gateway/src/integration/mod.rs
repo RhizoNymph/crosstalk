@@ -5,6 +5,7 @@
 //! and skips, passing, without one.
 
 mod fence;
+mod gate;
 mod lock;
 mod pool_close;
 mod statement_timeouts;
