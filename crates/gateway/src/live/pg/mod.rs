@@ -91,8 +91,19 @@ pub struct PgLayers {
     pub status: super::recovery::StatusReader,
 }
 
-/// [`Quiet`] over Postgres: group stats, the spool's backlog and the
-/// store outboxes.
+/// [`Quiet`] over Postgres: the store outboxes, the spool's backlog, the
+/// log entries a stage's group has not admitted yet and the groups'
+/// deliveries.
+///
+/// An envelope moves outbox row ─▶ spool record ─▶ log entry ─▶ delivery,
+/// each step committed before the earlier copy goes, so `busy` reads them
+/// in that order: an envelope that moves between two reads is seen by the
+/// later one. A log entry past a group's `admitted_through` has no
+/// delivery row until the group's consumer pulls again (L6 publishes
+/// `TransmissionClassified`, acks, and L5 and L7 have not taken it yet), so
+/// the group statistics alone read that window as quiet, and a settle
+/// returned with the event unhandled (the node0 loop's
+/// `spool_outage_twice`, `integration::pg_quiet_counts_entries_no_group_admitted_yet`).
 #[derive(Debug, Clone)]
 pub struct PgQuiet {
     bus: PgBus,
@@ -107,6 +118,12 @@ const OUTBOX_ROWS: &str = "SELECT (SELECT count(*) FROM reconstruct.outbox) \
      + (SELECT count(*) FROM analysis.outbox) \
      + (SELECT count(*) FROM topology.outbox)";
 
+impl PgQuiet {
+    pub(crate) fn new(bus: PgBus, spool: LiveBus, pool: PgPool) -> Self {
+        Self { bus, spool, pool }
+    }
+}
+
 fn in_flight(what: &str, error: impl std::fmt::Debug) -> SettleError {
     SettleError::InFlight {
         reason: format!("{what}: {error:?}"),
@@ -115,26 +132,31 @@ fn in_flight(what: &str, error: impl std::fmt::Debug) -> SettleError {
 
 impl Quiet for PgQuiet {
     async fn busy(&self, slots: &[Slot]) -> Result<bool, SettleError> {
-        let groups: Vec<ConsumerGroup> = slots.iter().map(|slot| slot.group()).collect();
-        let stats = self
-            .bus
-            .group_stats()
+        let (rows,): (i64,) = sqlx::query_as(OUTBOX_ROWS)
+            .fetch_one(&self.pool)
             .await
-            .map_err(|error| in_flight("group stats", error))?;
-        if stats
-            .iter()
-            .any(|stats| stats.pending > 0 && groups.contains(&stats.group))
-        {
+            .map_err(|error| in_flight("outbox rows", error))?;
+        if rows > 0 {
             return Ok(true);
         }
         if self.spool.stats().records > 0 {
             return Ok(true);
         }
-        let (rows,): (i64,) = sqlx::query_as(OUTBOX_ROWS)
-            .fetch_one(&self.pool)
+        let groups: Vec<ConsumerGroup> = slots.iter().map(|slot| slot.group()).collect();
+        let unadmitted = super::frontier::unadmitted(&self.pool, &groups)
             .await
-            .map_err(|error| in_flight("outbox rows", error))?;
-        Ok(rows > 0)
+            .map_err(|error| in_flight("unadmitted log entries", error))?;
+        if !unadmitted.is_empty() {
+            return Ok(true);
+        }
+        let stats = self
+            .bus
+            .group_stats()
+            .await
+            .map_err(|error| in_flight("group stats", error))?;
+        Ok(stats
+            .iter()
+            .any(|stats| stats.pending > 0 && groups.contains(&stats.group)))
     }
 
     async fn flush(&self) -> Result<u64, SettleError> {
@@ -163,6 +185,11 @@ impl Quiet for PgQuiet {
 
     async fn stop(&self) {
         self.bus.shutdown();
+    }
+
+    async fn abandon(&self, deadline: tokio::time::Instant) -> bool {
+        let abandoned = self.bus.abandon(deadline).await;
+        abandoned.tasks_joined && abandoned.takes_joined
     }
 }
 
@@ -599,7 +626,7 @@ impl Live<PgSet> {
             clock,
             activity,
             stages: running,
-            quiet: PgQuiet { bus, spool, pool },
+            quiet: PgQuiet::new(bus, spool, pool),
             publishers: vec![topology, retention],
             ticker,
             capture: None,

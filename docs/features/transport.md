@@ -138,6 +138,15 @@ entries out in the order they became ready; `DeliveryOrder::Shuffled {
 seed }` picks one uniformly with a seeded SplitMix64, so simulation tests
 reach every order and the same seed reproduces the same run.
 
+`MpscBus` has no restart: its groups and entries live in the bus task and
+end with the process, so nothing held survives to be recovered. A dropped
+subscription is a consumer failure in a live process and keeps its
+backoff. Restart recovery is `PgBus::recover_held`'s alone; it makes a
+recovered hold ready at once, with no backoff, so it is taken before
+anything published after it (`transport.restart.recovered-ready-first`,
+[pg_bus](pg_bus.md)). Consumers must still tolerate every order: L3's
+tolerance of a reordered arrival is separate work.
+
 ### Dedup
 
 `Dedup<S, H>` wraps any `Subscription`. `next` asks `H` whether the

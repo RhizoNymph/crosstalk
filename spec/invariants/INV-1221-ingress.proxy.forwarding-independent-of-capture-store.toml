@@ -1,13 +1,16 @@
 [invariant]
 id = "ingress.proxy.forwarding-independent-of-capture-store"
-statement = "The proxy forwards and relays every request unchanged whatever the state of the database, the bus or the publish spool."
+statement = "While the gateway process runs, the proxy forwards and relays every request unchanged whatever the state of the database, the bus, the publish spool or the pipeline lock."
 kind = "coordination"
 requires = ["integration"]
 rationale = """
 Capture never blocks the client. A database outage spools captures, and
 a full spool counts them as uncaptured; neither may delay, alter or fail
 a harness's request, because readiness keeps harness traffic flowing
-through an outage.
+through an outage. A lost pipeline lock no longer stops the process: the
+pipeline resumes in process (ingress.capture.never-stopped-by-lock-loss),
+so the exception this statement carried (serve exiting for its supervisor
+to restart it, the proxy not listening in between) is gone.
 """
 
 [evidence]

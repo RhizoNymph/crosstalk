@@ -357,6 +357,28 @@ where
         }
     }
 
+    /// Run the steps a transient failure left waiting, in order, now
+    /// rather than with the next input; how many steps ran (each one that
+    /// completed or was dropped for good). A driver that settles by ticks
+    /// and drains calls it on every drain: a decision a tick took has no
+    /// input behind it to retry it, and a checkpoint is refused while it
+    /// waits.
+    pub async fn retry_backlog(&mut self) -> usize {
+        if self.backlog.is_empty() {
+            return 0;
+        }
+        let before = self.backlog.len();
+        let ran = self.drain_counting().await;
+        tracing::debug!(
+            group = GROUP,
+            before,
+            ran,
+            left = self.backlog.len(),
+            "flow backlog retried"
+        );
+        ran
+    }
+
     /// A tick at `now`: release the writes whose settle window closed (as
     /// `Unknown`), then close windows and expire suspicions up to `now`.
     pub async fn tick(&mut self, now: Timestamp) {
@@ -482,23 +504,33 @@ where
     /// Run queued steps in order until the queue is empty or a step fails
     /// transiently.
     async fn drain(&mut self) {
+        self.drain_counting().await;
+    }
+
+    /// [`Self::drain`], counting the steps that ran (completed, or dropped
+    /// for good).
+    async fn drain_counting(&mut self) -> usize {
+        let mut ran = 0;
         while let Some(step) = self.backlog.pop_front() {
             match self.execute(step.clone()).await {
                 Ok(produced) => {
+                    ran += 1;
                     for next in produced.into_iter().rev() {
                         self.backlog.push_front(next);
                     }
                 }
                 Err(error) if error.is_permanent() => {
+                    ran += 1;
                     tracing::error!(group = GROUP, error = %error, "flow step failed for good; dropped");
                 }
                 Err(error) => {
-                    tracing::warn!(group = GROUP, error = %error, backlog = self.backlog.len() + 1, "flow step failed; retried with the next input");
+                    tracing::warn!(group = GROUP, error = %error, backlog = self.backlog.len() + 1, "flow step failed; retried with the next input or drain");
                     self.backlog.push_front(step);
-                    return;
+                    return ran;
                 }
             }
         }
+        ran
     }
 
     async fn execute(&mut self, step: Step) -> Result<Vec<Step>, StepError> {

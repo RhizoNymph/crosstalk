@@ -28,9 +28,10 @@
 //! Postgres mode instead ([`postgres`]): the bus is `PgBus` behind the
 //! publish spool, the stores are the Postgres bundle, and the pipeline
 //! starts once the database answers, its migrations are at head and the
-//! pipeline lock is held, after the recovery sequence. Forwarding and
-//! capture start at once either way. Without one, memory mode is kept
-//! (decision Q7).
+//! pipeline lock is held, after the recovery sequence; a lost lock
+//! abandons the pipeline and the process takes it up again in process.
+//! Forwarding and capture start at once either way, and only a shutdown
+//! stops them. Without one, memory mode is kept (decision Q7).
 
 pub mod late;
 pub mod postgres;
@@ -448,7 +449,10 @@ async fn start_postgres(
     let ops_listener = bind("ops", config.ops.listen).await?;
     let ops_addr = local_addr("ops", &ops_listener)?;
 
-    let pool = crate::store::lazy_pool(&store_config);
+    let pool = crate::store::lazy_pool_named(
+        &store_config,
+        &format!("crosstalk-{role}-{}", std::process::id()),
+    );
     let side = postgres::capture_side(config, role, pool, &blobs, &reader).await?;
     let status = postgres::initial_status();
     let late = postgres::Late::default();
@@ -469,6 +473,8 @@ async fn start_postgres(
     };
     if role != Role::Api {
         let log_tasks = Arc::clone(&late.log_tasks);
+        // While no incarnation runs (before the first, after a lost lock)
+        // there is nothing to stop: the probes read running.
         if role.runs_pipeline() {
             tasks.probe("exchange_log", move || {
                 log_tasks
@@ -477,7 +483,9 @@ async fn start_postgres(
             });
         }
         let stages = Arc::clone(&late.stages);
-        tasks.probe("live", move || stages.get().is_none_or(StagesRunning::all));
+        tasks.probe("live", move || {
+            stages.get().as_ref().is_none_or(StagesRunning::all)
+        });
     }
     let (phase, phase_watch) = watch::channel(Phase::Ok);
     let drain = config.shutdown.drain_timeout();
@@ -613,6 +621,7 @@ async fn start_postgres(
         live: None,
         postgres: Some(postgres::PgRunning {
             pool: side.pool,
+            capture_pool: side.capture_pool,
             bus: side.bus,
             spool: side.spool,
             capture,
@@ -777,6 +786,12 @@ impl Running {
         self.postgres.as_ref()
     }
 
+    /// How long [`Running::shutdown`] may take: the drain and flush
+    /// timeouts, and a margin for the listeners and the pool.
+    pub fn shutdown_bound(&self) -> Duration {
+        self.drain + self.flush + Duration::from_secs(10)
+    }
+
     /// What `GET /readyz` would answer now.
     pub async fn readiness(&self) -> Readiness {
         self.ops.readiness().await
@@ -826,8 +841,12 @@ impl Running {
         }
         if let Some(store) = self.store {
             store.abort();
-            if let Ok(Some(store)) = store.await {
-                store.close().await;
+            if let Ok(Some(store)) = store.await
+                && tokio::time::timeout(postgres::CLOSE_BOUND, store.close())
+                    .await
+                    .is_err()
+            {
+                tracing::warn!("the store probe's pool did not close in time; dropped");
             }
         }
         let _ = self.stop_ops.send(true);

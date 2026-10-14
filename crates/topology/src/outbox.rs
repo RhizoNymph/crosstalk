@@ -335,6 +335,13 @@ pub(crate) async fn stamp_batch(pool: &PgPool, ids: &mut OutboxIds) -> Result<u6
 
 /// Txn B: publish the next batch of stamped rows in seq order under their
 /// stamps, and delete the ones published. Returns how many it deleted.
+///
+/// The batch is read in one transaction and deleted in another, each under
+/// the drain lock; the publishes run between them, holding no transaction
+/// or connection. A relay aborted or hung mid-publish (a slow bus, a
+/// killed process) leaves no transaction open and no lock held; the rows
+/// it did not delete are republished under their stamps by the next
+/// drain, which the bus deduplicates by id.
 pub(crate) async fn publish_batch<A: Announce>(
     pool: &PgPool,
     announcer: &A,
@@ -348,6 +355,7 @@ pub(crate) async fn publish_batch<A: Announce>(
     .bind(BATCH)
     .fetch_all(&mut *tx)
     .await?;
+    tx.commit().await?;
     let mut published_through = None;
     let mut failure = None;
     for row in &rows {
@@ -374,15 +382,20 @@ pub(crate) async fn publish_batch<A: Announce>(
     }
     let removed = match published_through {
         Some(through) => {
-            sqlx::query("DELETE FROM topology.outbox WHERE envelope_id IS NOT NULL AND seq <= $1")
-                .bind(through)
-                .execute(&mut *tx)
-                .await?
-                .rows_affected()
+            let mut tx = pool.begin().await?;
+            lock(&mut tx).await?;
+            let removed = sqlx::query(
+                "DELETE FROM topology.outbox WHERE envelope_id IS NOT NULL AND seq <= $1",
+            )
+            .bind(through)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+            tx.commit().await?;
+            removed
         }
         None => 0,
     };
-    tx.commit().await?;
     match failure {
         Some(error) => Err(error),
         None => Ok(removed),

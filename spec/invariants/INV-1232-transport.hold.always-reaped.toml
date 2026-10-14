@@ -1,0 +1,23 @@
+[invariant]
+id = "transport.hold.always-reaped"
+statement = "A PgBus delivery held longer than three ack timeouts plus the publish timeout plus a take's limit is taken back, its attempt counted, by the reaper of any process that subscribed a group, whichever process took it."
+kind = "coordination"
+requires = ["integration"]
+rationale = """
+A hold is normally taken back by its taker's reaper (at its real or
+provisional deadline) or by a restart's recover_held. Neither covers a
+hold its taker lost track of: a reaper message never sent or never acted
+on, a commit landing after the provisional deadline fired, or a hold a
+dying process committed after the next process's recover_held ran. Such
+a hold stays held for good and its group never empties (the restart and
+spool e2e settles waited on one in live-surface-relay). Each hold now
+records when it was taken (held_at), and consuming processes sweep holds
+older than the longest a tracked hold can live. One pipeline process per
+database (the pipeline lock) makes a hold that old abandoned.
+"""
+
+[evidence]
+integration = "crosstalk_transport::integration::pg_a_hold_no_reaper_tracks_is_swept_and_redelivered"
+
+[evidence-review]
+integration = { agent = "true", human = "false" }

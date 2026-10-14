@@ -22,10 +22,7 @@ fn main() -> ExitCode {
         print!("{USAGE}");
         return ExitCode::SUCCESS;
     }
-    let runtime = match tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()
-    {
+    let runtime = match crosstalk_gateway::runtime::build() {
         Ok(runtime) => runtime,
         Err(error) => {
             eprintln!("crosstalk: starting the tokio runtime: {error}");
@@ -119,6 +116,9 @@ async fn run(command: Command) -> ExitCode {
     }
 }
 
+/// Serve until SIGINT or SIGTERM, then shut down within the gateway's
+/// bound. Nothing else ends it: a lost pipeline lock is resumed in
+/// process, the proxy listening throughout.
 async fn serve(config: &GatewayConfig, role: Role) -> ExitCode {
     let running = match gateway::start(config, role, env, Arc::new(SystemClock)).await {
         Ok(running) => running,
@@ -130,7 +130,17 @@ async fn serve(config: &GatewayConfig, role: Role) -> ExitCode {
             tracing::error!(error = %error, "cannot listen for shutdown signals; stopping")
         }
     }
-    running.shutdown().await;
+    let bound = running.shutdown_bound();
+    if tokio::time::timeout(bound, running.shutdown())
+        .await
+        .is_err()
+    {
+        tracing::error!(
+            bound_ms = u64::try_from(bound.as_millis()).unwrap_or(u64::MAX),
+            "the shutdown did not finish in time; exiting"
+        );
+        return ExitCode::FAILURE;
+    }
     ExitCode::SUCCESS
 }
 

@@ -3,6 +3,11 @@
 //! the rows, all from one snapshot, so a read sees every bucket a version
 //! had or none of a dropped one, and its data counts everything applied to
 //! a bucket the watermark it reports finalizes.
+//!
+//! A window is read on the `bigint` time columns through [`ColumnWindow`]:
+//! an end past `i64::MAX` is no upper bound, and a window starting past it
+//! holds nothing, so its read folds no rows (an empty graph, zero series)
+//! rather than failing.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -20,6 +25,7 @@ use crosstalk_spec::derived::flow::transmission::Route;
 use crosstalk_spec::ids::AgentId;
 use crosstalk_spec::interfaces::l7_topology::EdgeQueryError;
 use crosstalk_spec::support::TimeWindow;
+use crosstalk_store::{ColumnBounds, ColumnWindow};
 use sqlx::{PgConnection, Postgres, Row, Transaction};
 
 use super::error::{DbError, ReadResult};
@@ -103,11 +109,12 @@ pub(super) async fn resolve_version<V: TopologyEnv>(
 }
 
 /// How a series read cuts its window into points: the window's start and
-/// the step, in microseconds. A graph read has one point.
+/// the step, in microseconds. A step of `None` puts every row in point 0:
+/// a graph read's one point, or a step longer than any stored time.
 #[derive(Debug, Clone, Copy)]
 pub(super) struct Points {
     pub start: i64,
-    pub step: i64,
+    pub step: Option<i64>,
 }
 
 fn point(stored: i64) -> Result<usize, DbError> {
@@ -136,22 +143,20 @@ fn edge_row(
 pub(super) async fn read_rows(
     conn: &mut PgConnection,
     version: TopicModelVersion,
-    window: TimeWindow,
+    window: ColumnBounds,
     points: Option<Points>,
     false_detections: FalseDetections,
 ) -> Result<Rows, DbError> {
-    let start = codec::time(window.start())?;
-    let end = codec::time(window.end())?;
+    let (start, end) = (window.start(), window.end());
     // A graph read is a series of one point as long as the window.
-    let points = points.unwrap_or(Points {
-        start,
-        step: end - start,
-    });
+    let points = points.unwrap_or(Points { start, step: None });
     let stored = codec::version(version);
     let buckets = sqlx::query(
-        "SELECT from_agent, to_agent, route, topic, (bucket_start - $4) / $5 AS step_index, \
+        "SELECT from_agent, to_agent, route, topic, \
+         coalesce((bucket_start - $4::bigint) / $5::bigint, 0) AS step_index, \
          sum(transmissions)::bigint AS transmissions, sum(matched_bytes)::bigint AS matched_bytes \
-         FROM topology.edge_buckets WHERE version = $1 AND bucket_start >= $2 AND bucket_start < $3 \
+         FROM topology.edge_buckets WHERE version = $1 AND bucket_start >= $2 \
+         AND ($3::bigint IS NULL OR bucket_start < $3) \
          GROUP BY from_agent, to_agent, route, topic, step_index",
     )
     .bind(stored)
@@ -172,10 +177,12 @@ pub(super) async fn read_rows(
     }
     if false_detections == FalseDetections::Exclude {
         let falses = sqlx::query(
-            "SELECT c.from_agent, c.to_agent, c.route, c.topic, (c.at_micros - $4) / $5 AS step_index, \
+            "SELECT c.from_agent, c.to_agent, c.route, c.topic, \
+             coalesce((c.at_micros - $4::bigint) / $5::bigint, 0) AS step_index, \
              c.matched_bytes FROM topology.contributions c \
              JOIN topology.verdicts v ON v.transmission = c.transmission \
-             WHERE c.version = $1 AND c.at_micros >= $2 AND c.at_micros < $3 AND v.verdict = 1",
+             WHERE c.version = $1 AND c.at_micros >= $2 \
+             AND ($3::bigint IS NULL OR c.at_micros < $3) AND v.verdict = 1",
         )
         .bind(stored)
         .bind(start)
@@ -195,14 +202,15 @@ pub(super) async fn read_rows(
 /// The access bucket sums in `window`, per agent, resource and op.
 pub(super) async fn read_accesses(
     conn: &mut PgConnection,
-    window: TimeWindow,
+    window: ColumnBounds,
 ) -> Result<Vec<AccessRow>, DbError> {
     let rows = sqlx::query(
         "SELECT agent, resource, op, sum(accesses)::bigint AS accesses FROM topology.access_buckets \
-         WHERE bucket_start >= $1 AND bucket_start < $2 GROUP BY agent, resource, op",
+         WHERE bucket_start >= $1 AND ($2::bigint IS NULL OR bucket_start < $2) \
+         GROUP BY agent, resource, op",
     )
-    .bind(codec::time(window.start())?)
-    .bind(codec::time(window.end())?)
+    .bind(window.start())
+    .bind(window.end())
     .fetch_all(conn)
     .await?;
     rows.iter()
@@ -246,14 +254,19 @@ impl<V: TopologyEnv> PgEdgeStore<V> {
         }
         let mut snapshot = self.snapshot().await?;
         let (watermark, version) = self.begin(&mut snapshot, filter).await?;
-        let rows = read_rows(
-            &mut snapshot,
-            version,
-            window,
-            None,
-            filter.false_detections,
-        )
-        .await?;
+        let rows = match ColumnWindow::of(window) {
+            ColumnWindow::Beyond => Rows::default(),
+            ColumnWindow::Within(bounds) => {
+                read_rows(
+                    &mut snapshot,
+                    version,
+                    bounds,
+                    None,
+                    filter.false_detections,
+                )
+                .await?
+            }
+        };
         snapshot.commit().await?;
         let env = self.env.as_ref();
         let folded = fold::fold(env, filter, &rows)?;
@@ -332,15 +345,20 @@ impl<V: TopologyEnv> PgEdgeStore<V> {
         }
         let mut snapshot = self.snapshot().await?;
         let (watermark, version) = self.begin(&mut snapshot, filter).await?;
-        let rows = read_rows(
-            &mut snapshot,
-            version,
-            window,
-            None,
-            filter.false_detections,
-        )
-        .await?;
-        let access_rows = read_accesses(&mut snapshot, window).await?;
+        let (rows, access_rows) = match ColumnWindow::of(window) {
+            ColumnWindow::Beyond => (Rows::default(), Vec::new()),
+            ColumnWindow::Within(bounds) => (
+                read_rows(
+                    &mut snapshot,
+                    version,
+                    bounds,
+                    None,
+                    filter.false_detections,
+                )
+                .await?,
+                read_accesses(&mut snapshot, bounds).await?,
+            ),
+        };
         snapshot.commit().await?;
         let env = self.env.as_ref();
         let folded = fold::fold(env, filter, &rows)?;
@@ -388,20 +406,27 @@ impl<V: TopologyEnv> PgEdgeStore<V> {
             }
             .into());
         }
-        let points = Points {
-            start: codec::time(grid.window().start())?,
-            step: codec::micros("series step", grid.step().as_micros().get())?,
-        };
         let mut snapshot = self.snapshot().await?;
         let (watermark, version) = self.begin(&mut snapshot, filter).await?;
-        let rows = read_rows(
-            &mut snapshot,
-            version,
-            grid.window(),
-            Some(points),
-            filter.false_detections,
-        )
-        .await?;
+        let rows = match ColumnWindow::of(grid.window()) {
+            ColumnWindow::Beyond => Rows::default(),
+            ColumnWindow::Within(bounds) => {
+                // A step past the column is longer than any stored time
+                // after the start: every row is in point 0.
+                let points = Points {
+                    start: bounds.start(),
+                    step: i64::try_from(grid.step().as_micros().get()).ok(),
+                };
+                read_rows(
+                    &mut snapshot,
+                    version,
+                    bounds,
+                    Some(points),
+                    filter.false_detections,
+                )
+                .await?
+            }
+        };
         snapshot.commit().await?;
         let folded = fold::fold(self.env.as_ref(), filter, &rows)?;
         let count = usize::try_from(grid.points().get())

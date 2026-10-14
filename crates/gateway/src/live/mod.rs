@@ -175,6 +175,24 @@ pub enum LiveError {
     CaptureOutsidePipeline,
 }
 
+impl LiveError {
+    /// Whether the failure needs an operator rather than a retry: the
+    /// config contradicts itself or the stored snapshot cannot be read.
+    /// Anything else (the database out of reach, connections short, a
+    /// recovery step failing) may pass, and `serve` retries it.
+    pub fn is_permanent(&self) -> bool {
+        matches!(
+            self,
+            Self::Restore(crosstalk_flow::consumer::FlowRestoreError::IncompatibleSnapshot(_))
+                | Self::Flow(_)
+                | Self::AckTimeout { .. }
+                | Self::UnackedAboveCapacity { .. }
+                | Self::TooManyShards(_)
+                | Self::CaptureOutsidePipeline
+        )
+    }
+}
+
 /// How a live process drained on shutdown.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct LiveDrained {
@@ -187,6 +205,28 @@ pub struct LiveDrained {
     /// when it does not run).
     pub log: bool,
 }
+
+/// How [`Live::abandon`] went.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct LiveAbandoned {
+    /// Every stage, the ticker, the exchange log and the publishers ended
+    /// by the deadline.
+    pub tasks_joined: bool,
+    /// The bus's own tasks and takes ended by the deadline.
+    pub bus_joined: bool,
+    /// The surface's relay and live feed stopped by the deadline.
+    pub surface_stopped: bool,
+}
+
+impl LiveAbandoned {
+    /// Whether everything ended by the deadline.
+    pub fn joined(&self) -> bool {
+        self.tasks_joined && self.bus_joined && self.surface_stopped
+    }
+}
+
+/// How long [`Live::kill`] waits for what it aborted.
+const KILL_JOIN: Duration = Duration::from_secs(30);
 
 /// A running stage: its task, where its commands go, and its count.
 struct Running {
@@ -490,8 +530,26 @@ impl<S: LiveStoreSet> Live<S> {
     /// without touching its state (a Postgres bus leaves held deliveries
     /// held, for the next start's `recover_held`). For restart tests; the
     /// spool, which outlives the process in a deployment, is the caller's
-    /// to close.
+    /// to close. [`Live::abandon`] with a generous deadline.
     pub async fn kill(self) {
+        // Boxed: `abandon` owns the whole `Live` and the surface's
+        // shutdown; inline, a debug build's caller overflows a test
+        // thread's 2 MiB stack.
+        let abandoned = Box::pin(self.abandon(Instant::now() + KILL_JOIN)).await;
+        tracing::warn!(joined = abandoned.joined(), "live process killed");
+    }
+
+    /// Stop as a process that lost its pipeline lock must: no `Drain`
+    /// command, so no checkpoint, ack or nack, and no outbox relay or
+    /// prune after this starts. Every task (the stages, the ticker, the
+    /// exchange log, L7's outbox relay, the retention prune) is aborted,
+    /// the bus abandoned (its listener, reaper and takes aborted), and each
+    /// joined by `deadline`; the surface's relay and live feed stop. A
+    /// task joined can write nothing more; a Postgres caller has closed
+    /// the pool first, so nothing aborted waits on the database to give
+    /// its connection back. Held deliveries stay held for the next
+    /// holder's `recover_held`.
+    pub async fn abandon(self, deadline: Instant) -> LiveAbandoned {
         let mut tasks: Vec<JoinHandle<()>> = Vec::new();
         tasks.extend(self.ticker);
         tasks.extend(self.capture);
@@ -501,13 +559,32 @@ impl<S: LiveStoreSet> Live<S> {
         for task in &tasks {
             task.abort();
         }
+        let mut tasks_joined = true;
         for task in tasks {
             // An aborted task's join reports the cancellation.
-            let _ = task.await;
+            if tokio::time::timeout_at(deadline, task).await.is_err() {
+                tasks_joined = false;
+            }
         }
-        self.quiet.stop().await;
-        drop(self.backend);
-        tracing::warn!("live process killed");
+        let bus_joined = Box::pin(self.quiet.abandon(deadline)).await;
+        let surface_stopped = tokio::time::timeout_at(deadline, Box::pin(self.backend.shutdown()))
+            .await
+            .is_ok();
+        let abandoned = LiveAbandoned {
+            tasks_joined,
+            bus_joined,
+            surface_stopped,
+        };
+        match abandoned.joined() {
+            true => tracing::info!("live process abandoned: every task joined"),
+            false => tracing::warn!(
+                tasks_joined,
+                bus_joined,
+                surface_stopped,
+                "live process abandoned; not every task ended by the deadline"
+            ),
+        }
+        abandoned
     }
 
     /// Drain and stop by `deadline`: the capture stage handles what is

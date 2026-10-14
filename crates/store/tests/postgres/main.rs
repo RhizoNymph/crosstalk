@@ -11,6 +11,7 @@ mod extensions;
 mod harness;
 mod migrations;
 mod retry;
+mod template;
 
 use crosstalk_store::{StoreError, TestDb, TestDbError};
 

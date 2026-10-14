@@ -12,6 +12,8 @@
 //! The functions named by transport invariants' `integration` evidence
 //! live here, at `crosstalk_transport::integration::<name>`.
 
+mod abandon;
+
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::Duration;
@@ -232,6 +234,71 @@ async fn pg_held_delivery_redelivered_after_restart() {
         "process restarted while holding the delivery"
     );
     drop(flow_sub);
+    bus.shutdown();
+    db.close().await.expect("drop the test database");
+}
+
+/// `transport.restart.recovered-ready-first`: a delivery held by a process
+/// that died is `ready` as soon as the next process's `recover_held`
+/// returns, with no backoff, so a single consumer takes it before entries
+/// published after it: one the dead process published after its take, and
+/// one the new process publishes after recovery (a drained spool record).
+/// With the group's backoff (10 s here) the later entries were taken first,
+/// and L3 threaded an outage's interrupted exchange after the next one.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn pg_recovered_hold_is_ready_and_taken_first() {
+    let Some(db) = database("pg_recovered_hold_is_ready_and_taken_first").await else {
+        return;
+    };
+    let flow = group("flow");
+    let slow = retry(5, 10 * SECOND, 30 * SECOND);
+    {
+        let bus = process(&db, config()).await;
+        let mut sub = bus
+            .subscribe(&[Subject::Changed], flow.clone(), slow)
+            .await
+            .expect("subscribe");
+        bus.publish(changed(1)).await.expect("publish");
+        assert_eq!(next_soon(&mut sub).await.envelope, changed(1));
+        bus.publish(changed(2)).await.expect("publish");
+        // Killed while holding changed(1); changed(2) is in the log.
+        sub.abandon();
+    }
+
+    let pool = pool(db.url().connect_options().clone()).await;
+    let bus = PgBus::new(pool, Arc::new(SystemClock), config()).expect("bus starts");
+    let recovered = bus.recover_held().await.expect("recovers");
+    assert_eq!((recovered.redelivered, recovered.dead_lettered), (1, 0));
+    let rows: Vec<(i32, String, Option<i64>)> = sqlx::query_as(
+        "SELECT attempt, state, available_at FROM transport.deliveries WHERE group_name = 'flow'",
+    )
+    .fetch_all(db.pool())
+    .await
+    .expect("reads deliveries");
+    assert_eq!(
+        rows,
+        vec![(1, "ready".to_owned(), None)],
+        "the recovered hold is ready at once, its attempt kept"
+    );
+
+    let mut sub = bus
+        .subscribe(&[Subject::Changed], flow, slow)
+        .await
+        .expect("subscribe");
+    bus.publish(changed(3)).await.expect("publish");
+    let mut got = Vec::new();
+    for _ in 0..3 {
+        // Each within 20 s; the order is what is checked.
+        let delivery = next_soon(&mut sub).await;
+        got.push((delivery.envelope.clone(), delivery.attempt.get()));
+        sub.ack(delivery.id).await.expect("ack");
+    }
+    assert_eq!(
+        got,
+        vec![(changed(1), 2), (changed(2), 1), (changed(3), 1)],
+        "the recovered hold is taken first, at its next attempt"
+    );
+    drop(sub);
     bus.shutdown();
     db.close().await.expect("drop the test database");
 }
@@ -633,5 +700,176 @@ async fn pg_publish_while_unreachable_is_disconnected() {
     bus.publish(changed(2)).await.expect("up again");
     assert_eq!(log_ids(db.pool()).await, ids(&[changed(1), changed(2)]));
     bus.shutdown();
+    db.close().await.expect("drop the test database");
+}
+
+/// `PgSubscription::next` is cancel-safe: a call dropped while its take is
+/// in flight leaves the take running to its commit (the row becomes held),
+/// and the next call hands out that very hold at once, at attempt 1: no
+/// attempt spent, no ack timeout or provisional deadline waited (both are
+/// far longer than the bound here). A dropped take that never ran on is
+/// what left deliveries held until the reaper, and stage loops drop
+/// `next` whenever a command wins their `select!`.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn pg_next_dropped_mid_take_hands_out_the_hold_on_the_next_call() {
+    let Some(db) = database("pg_next_dropped_mid_take_hands_out_the_hold_on_the_next_call").await
+    else {
+        return;
+    };
+    let bus = process(&db, config()).await;
+    let mut sub = bus
+        .subscribe(&[Subject::Changed], group("relay"), default_retry())
+        .await
+        .expect("subscribe");
+    bus.publish(changed(1)).await.expect("publish");
+
+    // Poll `next` once: its take starts. Then drop it, as a stage loop
+    // drops it when a command wins.
+    {
+        let mut next = std::pin::pin!(sub.next());
+        let ready =
+            std::future::poll_fn(|cx| std::task::Poll::Ready(next.as_mut().poll(cx).is_ready()))
+                .await;
+        assert!(!ready, "a take is a round trip at least");
+    }
+    // The take runs on without its caller and commits the hold.
+    let held = async {
+        loop {
+            let held: i64 = sqlx::query_scalar(
+                "SELECT count(*) FROM transport.deliveries WHERE state = 'held'",
+            )
+            .fetch_one(db.pool())
+            .await
+            .expect("counts");
+            if held == 1 {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    };
+    tokio::time::timeout(20 * SECOND, held)
+        .await
+        .expect("the dropped call's take committed its hold");
+
+    let delivery = tokio::time::timeout(5 * SECOND, sub.next())
+        .await
+        .expect("handed out at once, not after a deadline")
+        .expect("open")
+        .expect("a delivery");
+    assert_eq!((delivery.envelope, delivery.attempt.get()), (changed(1), 1));
+    sub.ack(delivery.id).await.expect("acks");
+    let left: i64 = sqlx::query_scalar("SELECT count(*) FROM transport.deliveries")
+        .fetch_one(db.pool())
+        .await
+        .expect("counts");
+    assert_eq!(left, 0, "acked: nothing pending");
+    drop(sub);
+    bus.shutdown();
+    db.close().await.expect("drop the test database");
+}
+
+/// `transport.hold.always-reaped`: a hold no live reaper tracks (its taker
+/// gone after the next process's `recover_held` ran, its reaper message
+/// lost, or its commit landing after its provisional deadline) is taken
+/// back by the sweep of a consuming process once it is older than the
+/// longest a tracked hold can live, its attempt counted, and redelivered.
+/// Before the sweep such a hold stayed `held` for good and a settle waited
+/// on it forever (the restart and spool e2e stalls on `live-surface-relay`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn pg_a_hold_no_reaper_tracks_is_swept_and_redelivered() {
+    let Some(db) = database("pg_a_hold_no_reaper_tracks_is_swept_and_redelivered").await else {
+        return;
+    };
+    let quick = PgBusConfig {
+        ack_timeout: non_zero(5 * SECOND),
+        publish_timeout: non_zero(10 * SECOND),
+        ..config()
+    };
+    let relay = group("relay");
+
+    // Both processes reach the database over a lossy link (15% of chunks
+    // stalled 200 to 400 ms, as the node0 loop's link was): a hold must be
+    // taken back however slow its statements are.
+    let options = db.url().connect_options();
+    let link = DbLink::start_lossy(
+        options.get_host(),
+        options.get_port(),
+        crosstalk_testkit::db_link::Lossy::tailscale_bad_day(0x5EED),
+    )
+    .await
+    .expect("a lossy link");
+    let over_link = || async {
+        let pool = PgPoolOptions::new()
+            .max_connections(4)
+            .acquire_timeout(30 * SECOND)
+            .connect_lazy_with(
+                db.url()
+                    .connect_options()
+                    .clone()
+                    .host(&link.host())
+                    .port(link.port()),
+            );
+        let bus = PgBus::new(pool, Arc::new(SystemClock), quick).expect("bus starts");
+        bus.recover_held().await.expect("recovers");
+        bus
+    };
+
+    // The surviving process starts first and recovers: nothing is held yet.
+    let survivor = over_link().await;
+    let mut sub = survivor
+        .subscribe(&[Subject::Changed], relay.clone(), default_retry())
+        .await
+        .expect("subscribe");
+
+    // Another process takes the delivery after that recovery, then dies
+    // without telling anyone: its reaper goes with it.
+    let doomed = over_link().await;
+    let mut doomed_sub = doomed
+        .subscribe(&[Subject::Changed], relay.clone(), default_retry())
+        .await
+        .expect("subscribe");
+    survivor.publish(changed(1)).await.expect("publish");
+    let taken = next_soon(&mut doomed_sub).await;
+    assert_eq!(taken.attempt.get(), 1);
+    doomed_sub.abandon();
+    doomed.shutdown();
+    let held: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM transport.deliveries WHERE state = 'held'")
+            .fetch_one(db.pool())
+            .await
+            .expect("counts");
+    assert_eq!(held, 1, "held by a process that is gone");
+
+    // The survivor's sweep takes it back once it is stale; it is
+    // redelivered, its attempt counted.
+    let bound = crate::pg::reaper::stale_after(&quick) + 30 * SECOND;
+    let again = match tokio::time::timeout(bound, sub.next()).await {
+        Ok(Some(Ok(delivery))) => delivery,
+        other => panic!("the untracked hold was not redelivered within {bound:?}: {other:?}"),
+    };
+    assert_eq!((again.envelope, again.attempt.get()), (changed(1), 2));
+    sub.ack(again.id).await.expect("acks");
+    assert!(survivor.reaper().swept >= 1, "{:?}", survivor.reaper());
+    drop(sub);
+    survivor.shutdown();
+    db.close().await.expect("drop the test database");
+}
+
+/// A process that never subscribes (the `api` role's bus) never sweeps:
+/// stale holds are the consuming process's to take back.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn pg_a_bus_that_never_subscribed_does_not_sweep() {
+    let Some(db) = database("pg_a_bus_that_never_subscribed_does_not_sweep").await else {
+        return;
+    };
+    let quick = PgBusConfig {
+        ack_timeout: non_zero(SECOND),
+        publish_timeout: non_zero(SECOND),
+        ..config()
+    };
+    let reader = process(&db, quick).await;
+    tokio::time::sleep(3 * SECOND).await;
+    assert_eq!(reader.reaper().swept, 0);
+    reader.shutdown();
     db.close().await.expect("drop the test database");
 }

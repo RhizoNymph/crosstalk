@@ -481,8 +481,8 @@ at a time:
 
 ## Tables and indexes
 
-Migrations `crates/provenance/migrations/0001_provenance.sql` and
-`0002_forwarded_spans.sql`, schema `provenance`. No message text anywhere.
+Migrations `crates/provenance/migrations/0001_provenance.sql` to
+`0004_recorded_spans.sql`, schema `provenance`. No message text anywhere.
 
 | Table | Holds | Indexes |
 | --- | --- | --- |
@@ -491,6 +491,7 @@ Migrations `crates/provenance/migrations/0001_provenance.sql` and
 | `scanned_messages` | (message, exchange, scanned as `input`, `system` or `output`): per-message scan status | primary key (message first); exchange |
 | `spans` | span id, agent, exchange, message, part, range, output ordinal, state with relay source, `indexed_at`, first hit, hits, `expired_at`, index sequence; for a forwarded span `forward_indexed_at` and `forward_expired_at` (0002, checked to sit only on `relayed` rows with an input source) | primary key (a span's location by id, ready for `SpanIndex::spans`); (exchange, ordinal); (message, part, start); live spans by `indexed_at` |
 | `matches` | match id (= envelope id), reader exchange, ordinal, time, origin span and agent, reader, read message, part and range, carrier and kind as spec JSON, matched bytes | primary key; (read message, part, start): by reader message; (origin, at): by origin span; (reader exchange, ordinal) |
+| `recorded_spans` | span id, agent, exchange, message, part, range (0004): the `SpanIndex::record` record of a span no scan committed; no foreign key to `exchanges`, since such a span's exchange may be unknown to L4 | primary key |
 | `postings` | fingerprint, span, offset | primary key; span |
 | `observations` | one row per observed text and its time | primary key; `at` |
 | `observed` | fingerprint, observation, time | primary key (fingerprint, observation); observation; (fingerprint, at) |
@@ -600,13 +601,32 @@ call acts on, not content the tool wrote. A URL inside a content value
 still counts. So `Write {file_path, content}` yields one span, the
 content.
 
-`MemoryProvenanceStore` also implements the spec's `SpanIndex` over the
-spans `commit_scan` wrote: `record` adds nothing, `spans` returns the
-originated spans (any state whose origin is `Originated`) and the
-forwarded spans (`Relayed` from an input) as recorded, leaving out spans
-relayed from another span, common spans and unknown ids. `Live`'s evidence
-feeder reads through it. `PgProvenanceStore` answers the same through
-`store/reads.rs`.
+Both stores implement the spec's `SpanIndex` through the same functions
+in `store/reads.rs` (`record_span`, `indexed_spans`), so they agree by
+construction:
+
+- `record` keeps the span's `IndexedSpan` through
+  `ProvenanceStore::record_indexed`, unless a scan committed a span under
+  its id (`commit_scan` already wrote it) or it was recorded before. It
+  writes no scan record: a span recorded with no scan behind it, such as
+  the synthetic world's origin spans (`crosstalk-world`'s `Op::Span`),
+  whose exchange L4 never saw, is in no exchange's spans and no
+  `ProvenanceReads` answer. In memory the records sit beside the tables;
+  on Postgres in `provenance.recorded_spans`, written by one
+  `INSERT … SELECT … WHERE NOT EXISTS (spans) ON CONFLICT DO NOTHING`.
+- `spans` returns the committed originated spans (any state whose origin
+  is `Originated`) and forwarded spans (`Relayed` from an input) as
+  committed, plus the spans `record` kept
+  (`ProvenanceStore::recorded_indexed`). A kept record predates any
+  commit of its id, so it is the first record and wins
+  (`provenance.span-index.spans-as-recorded`, INV-965). Spans relayed
+  from another span, common spans and unknown ids are absent.
+
+`Live`'s evidence feeder reads through the memory store; Postgres mode's
+`PgEvidence` reads the evidence page's spans through `PgProvenanceStore`.
+Before `record` kept anything, a Postgres world seed lost every origin
+span, and the evidence page failed with `span missing` on Postgres only
+(`scenarios::dropped_bodies` in the conformance suite).
 
 ## Files
 
@@ -627,17 +647,20 @@ feeder reads through it. `PgProvenanceStore` answers the same through
 | `src/engine.rs` | Processing, replay, eviction | `Provenance`, `Processed`, `EngineError`, `envelopes`, `exchange_record` |
 | `src/consumer.rs` | The bus consumer | `GROUP`, `SUBJECTS`, `subscribe`, `run`, `ConsumerSettings`, `ConsumerStats` |
 | `src/span.rs` | Deterministic ids | `span_id`, `span_event_id`, `match_id` |
-| `src/store/{mod,memory,pg}.rs` | L4's records | `ProvenanceStore` (with `started_at`), `MemoryProvenanceStore`, `PgProvenanceStore`, `ExchangeRecord`, `ScanStatus`, `ScanFailure`, `SpanRecord` (`committed`, `indexed_at`), `Forwarding`, `Relay`, `StoredMatch`, `ScanCommit`, `MessageScan`, `MIGRATIONS`, `migrate` |
+| `src/store/{mod,memory,pg}.rs` | L4's records | `ProvenanceStore` (with `started_at`, `record_indexed`, `recorded_indexed`), `MemoryProvenanceStore`, `PgProvenanceStore`, `ExchangeRecord`, `ScanStatus`, `ScanFailure`, `SpanRecord` (`committed`, `indexed_at`), `Forwarding`, `Relay`, `StoredMatch`, `ScanCommit`, `MessageScan`, `MIGRATIONS`, `migrate` |
+| `src/store/recorded.rs` | `provenance.recorded_spans` on Postgres: keep and read the span-index records of spans no scan committed | — (crate) |
+| `src/store/reads.rs` | `ProvenanceReads` and `SpanIndex` on both stores over `ProvenanceStore` | `scan_status`; the trait impls |
 | `src/index/{mod,pg}.rs` | The Postgres fingerprint index | `PgFingerprintIndex` |
 | `src/semantic.rs` | The semantic stub | `DisabledSemanticMatcher` |
 | `src/pg.rs` | Shared Postgres conversions | — |
 | `migrations/0001_provenance.sql` | The schema | — |
 | `migrations/0002_forwarded_spans.sql` | A forwarded span's indexing columns; spans by relay source (the spread rule's copies) | — |
 | `migrations/0003_span_coincidences.sql` | Coincident template stretches: (span, source), by source (the spread rule's copies) | — |
+| `migrations/0004_recorded_spans.sql` | Span-index records of spans no scan committed (`SpanIndex::record`) | — |
 | `src/tests/` | Unit tests, scenarios, fixtures, AgentDojo | evidence `crosstalk_provenance::tests::*` |
 | `src/props/` | Property tests and the scenario generator | evidence `crosstalk_provenance::props::*` |
 | `src/dst.rs` | Simulations of the consumer | evidence `crosstalk_provenance::dst::*` |
-| `src/integration/` | Postgres tests (gated on `TEST_DATABASE_URL`): index, engine, reads; `rules.rs` the match rules against the memory model (`transcript`, `agree!`); `restart.rs` restart replay, `started_at`, token-observation retention | evidence `crosstalk_provenance::integration::*`; `pg_world_on`, `PgWorld`, `truncate` |
+| `src/integration/` | Postgres tests (gated on `TEST_DATABASE_URL`): index, engine, reads; `rules.rs` the match rules against the memory model (`transcript`, `agree!`); `restart.rs` restart replay, `started_at`, token-observation retention; `span_index.rs` `SpanIndex::record` on Postgres (`tests::span_index`'s scenarios) | evidence `crosstalk_provenance::integration::*`; `pg_world_on`, `PgWorld`, `truncate` |
 | `src/tests/started.rs` | `started_at` on any store | `started_at_is_the_recorded_start` |
 
 ## Invariants and constraints
@@ -860,6 +883,5 @@ feeder reads through it. `PgProvenanceStore` answers the same through
 `store/reads.rs` serves the spec's `ProvenanceReads` over both stores
 (scan status, output spans of every origin with their state, relayed and
 forwarded ones included, matches by reader exchange, a span's readers
-newest first with keyed-tag cursors) and `SpanIndex` on
-`PgProvenanceStore`. See [conversation_reads.md](conversation_reads.md);
+newest first with keyed-tag cursors) and `SpanIndex` on both stores. See [conversation_reads.md](conversation_reads.md);
 INV-1012, 1014, 1015, 1023.

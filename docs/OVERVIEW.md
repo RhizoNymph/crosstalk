@@ -804,15 +804,25 @@ Features Index:
       to DbFailure (unique, foreign-key and check violations, retryable
       serialization failures and deadlocks, connection loss, pool timeout)
       for layers to map into spec errors; retry_serializable runs a
-      SERIALIZABLE transaction with bounded, backed-off retries. TestDb
+      SERIALIZABLE transaction with bounded, backed-off retries.
+      ColumnWindow maps a spec TimeWindow onto a bigint time column for
+      every layer's windowed reads: an end past i64::MAX is no upper bound
+      (a row at i64::MAX kept), a start past it reads empty, never an
+      error. TestDb
       creates a fresh database per test from TEST_DATABASE_URL and drops it
-      on close or drop; tests skip with a printed reason when the variable
+      on close or drop; a suite with expensive shared contents builds them
+      once into a template (TestDb::create_template, freeze into a
+      TemplateDb) and clones it per test (TemplateDb::instantiate), stale
+      templates of dead or day-old processes dropped by the next
+      create_template; tests skip with a printed reason when the variable
       is unset, and scripts/test-db.sh starts a disposable Postgres 18 with
       pgvector.
     entry_points:
       - crates/store/src/lib.rs
       - crates/store/src/migrate.rs
-      - crates/store/src/test_db.rs
+      - crates/store/src/window.rs
+      - crates/store/src/test_db/mod.rs
+      - crates/store/src/test_db/template.rs
       - scripts/test-db.sh
     depends_on: [workspace]
     doc: docs/features/store.md
@@ -835,7 +845,10 @@ Features Index:
       consumer's checkpoint writes (PgFlowDurability, migration
       0003_restart: recording order, access resolutions, tool calls, held
       writes, checkpoints). PgExtractionLedger keeps the extraction step's
-      ledger (0004_extract_ledger). Model-tested against
+      ledger (0004_extract_ledger). TransmissionStore::modify (a FOR
+      UPDATE read and its write in one transaction) is how the flow
+      consumer extends and analysis classifies a confirmed transmission,
+      so neither drops the other's write (INV-1230). Model-tested against
       crosstalk-memory's reference stores with the reference harnesses'
       proptest strategies.
     entry_points:
@@ -940,22 +953,52 @@ Features Index:
       Classifier, L7 with PgFrontierSource (shard ticks, groups' pending
       and dead letters, the spool's oldest record); subscriptions are
       pumped so a stage's select never cancels a take. serve in Postgres
-      mode starts the proxy and capture at once over the spool, then waits
-      for the database, migrations at head and the pipeline advisory lock;
-      /readyz reports migrations, pipeline_lock, capture (spooling,
-      draining, dropping: spool full, spool corrupt), pipeline and recovery,
-      ready while the database is down; /healthz adds bus, recovery and
-      spool sections; spool_full is a capture outcome. crosstalk migrate
+      mode starts the proxy and capture at once over the spool (capture
+      appends through a publish-only PgBus over a pool of its own), then
+      waits for the database, migrations at head and the pipeline advisory
+      lock, and starts a pipeline incarnation (its own pool, named
+      crosstalk-pipeline-<pid>-<n>, and its own PgBus). A lost lock never
+      stops the process: the incarnation is abandoned (pool fenced, every
+      task and take aborted and joined, nothing drained, no owner write
+      after) and the loop waits for the database and the lock again, the
+      proxy listening throughout; serve stops only on a signal, every
+      database step of its shutdown bounded. /readyz reports migrations,
+      pipeline_lock, capture (spooling, draining, dropping: spool full,
+      spool corrupt, stopped), pipeline (abandoning after a loss) and
+      recovery, ready while the database is down and through a resume;
+      /healthz adds bus, recovery (lock losses, the last loss, the
+      incarnation) and spool sections; spool_full is a capture outcome. crosstalk migrate
       runs every layer and --reset-correlator; crosstalk spool
-      --discard-corrupt. Memory mode's replays are byte-identical.
+      --discard-corrupt. Memory mode's replays are byte-identical. Tested
+      end to end (W9): crosstalk-e2e's restart tests kill Postgres-mode Live
+      processes while feeding, mid-settle, after a checkpoint and with
+      outbox rows pending, restart them on the same database, blob store
+      and spool, and compare the whole answer set with an uninterrupted
+      run's once minted ids are renamed (crosstalk_e2e::answers); its spool
+      tests send the relay through the proxy with the database behind a
+      cuttable DbLink (outage mid-stream resumed in process, gateway killed
+      while spooling, spool full); its lock_loss tests hold a partition or a
+      reset past the loss bounds (zero refused connects), terminate the
+      lock's session under a rival holder with a commit-time audit (no
+      owner write after the abandon) and lose the lock five times (no
+      leaked session or task); the L8 conformance suite runs over PgStores in process
+      and over HTTP, each test process seeding the world once into a
+      template database and each test hosting the surface over its own
+      clone of it.
     entry_points:
       - crates/api/src/pg/mod.rs
       - crates/gateway/src/live/pg/mod.rs
       - crates/gateway/src/live/frontier.rs
-      - crates/gateway/src/gateway/postgres.rs
+      - crates/gateway/src/gateway/postgres/mod.rs
+      - crates/gateway/src/gateway/postgres/pipeline.rs
       - crates/gateway/src/store/migrations.rs
       - crates/gateway/src/spool.rs
       - crates/gateway/src/ops/mod.rs
+      - crates/e2e/tests/restart/main.rs
+      - crates/e2e/tests/spool/main.rs
+      - crates/e2e/tests/lock_loss/main.rs
+      - crates/api/tests/conformance_pg.rs
+      - crates/api/tests/support/pg_world.rs
     depends_on: [postgres_stores, gateway, pg_bus, publish_spool, store, reconstruct, provenance, flow_store, flow_correlator, flow_extract, search_alerts, topology_store, surface_service]
     doc: docs/features/postgres_mode.md
   sim:
@@ -1001,7 +1044,8 @@ Features Index:
       stalls, disconnects, withholds or fails on command and records what
       it received; a hyper fake harness client that collects responses
       chunk by chunk; and DbLink, a loopback TCP relay to the test database
-      that a test cuts and restores to simulate an outage.
+      that a test cuts (resets), partitions (silently stalls) and restores
+      to simulate an outage.
     entry_points:
       - crates/testkit/src/lib.rs
       - crates/testkit/src/corpus/anthropic.rs
@@ -1054,10 +1098,15 @@ Features Index:
       next admits, makes due delays ready and takes a row FOR UPDATE SKIP
       LOCKED in one transaction, waking on LISTEN/NOTIFY or a poll; ack
       deadlines in a reaper task; delays from the injected clock;
-      recover_held returns a stopped process's held deliveries with the
-      attempt counted; group_stats for the frontier; prune for 7-day
-      retention behind the slowest group; DrainTarget for the spool. Not
-      yet built by serve (W8).
+      recover_held returns a stopped process's held deliveries ready at
+      once (no backoff, so taken before later entries) with the attempt
+      counted; group_stats for the frontier; prune for 7-day
+      retention behind the slowest group; DrainTarget for the spool. A bus
+      owns its takes: abandon closes it and aborts and joins its listener,
+      reaper and every take in flight, touching nothing in the database
+      (a pipeline that lost its lock); publisher is a publish-only bus
+      (no listener, no reaper, subscribe refused) for the gateway's
+      capture side.
     entry_points:
       - crates/transport/src/pg/mod.rs
       - crates/transport/src/pg/subscription.rs
@@ -1489,7 +1538,10 @@ Features Index:
       reader message and by origin span, and each exchange's start, read
       back by the L4 stage so a restart loses none) in memory and on
       Postgres, the Postgres pair model-tested against the memory one
-      under every match rule and across a restart; a
+      under every match rule and across a restart, both serving the
+      spec's SpanIndex (spans the scans committed, plus spans recorded
+      with no scan behind them, such as the synthetic world's origin
+      spans); a
       semantic matcher stub until P6.2. Validated on AgentDojo: 9948 of
       9949 exposed injection slots matched.
     entry_points:
@@ -1504,8 +1556,10 @@ Features Index:
       - crates/provenance/src/fingerprint/mod.rs
       - crates/provenance/src/index/pg.rs
       - crates/provenance/src/store/mod.rs
+      - crates/provenance/src/store/reads.rs
       - crates/provenance/migrations/0001_provenance.sql
       - crates/provenance/migrations/0002_forwarded_spans.sql
+      - crates/provenance/migrations/0004_recorded_spans.sql
     depends_on: [type_spec, spec_primitives, store, memory, transport, sim, testkit, workspace]
     doc: docs/features/provenance.md
   deploy:
@@ -1830,6 +1884,7 @@ Features Index:
       - crates/e2e/src/capture.rs
       - crates/e2e/src/compose.rs
       - crates/e2e/src/read.rs
+      - crates/e2e/src/answers.rs
       - crates/e2e/tests/smoke/main.rs
     depends_on: [gateway, ingress, canonical, surface_service, memory, workspace]
     doc: docs/features/e2e_smoke.md

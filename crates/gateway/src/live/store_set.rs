@@ -16,6 +16,7 @@ use crosstalk_api::HostedStores;
 use crosstalk_spec::interfaces::l2_transport::{ConsumerGroup, EventBus, Subscription};
 use crosstalk_transport::{MpscBus, MpscSubscription};
 use tokio::sync::{mpsc, oneshot};
+use tokio::time::Instant;
 
 use super::relay::Flush;
 use super::settle::SettleError;
@@ -58,6 +59,11 @@ pub trait Quiet: Send + Sync + 'static {
 
     /// Stop the bus: subscriptions then end.
     fn stop(&self) -> impl Future<Output = ()> + Send;
+
+    /// Stop the bus for good without touching its state, joining every
+    /// task it runs by `deadline` (a Postgres bus: its listener, its reaper
+    /// and every take in flight); whether all of them ended in time.
+    fn abandon(&self, deadline: Instant) -> impl Future<Output = bool> + Send;
 }
 
 /// The in-memory set: the reference stores on an `MpscBus`, whose own
@@ -101,5 +107,11 @@ impl Quiet for MemoryQuiet {
 
     async fn stop(&self) {
         self.bus.shutdown().await;
+    }
+
+    async fn abandon(&self, deadline: Instant) -> bool {
+        tokio::time::timeout_at(deadline, self.bus.shutdown())
+            .await
+            .is_ok()
     }
 }

@@ -26,6 +26,7 @@ pub enum RunError {
 /// may spawn on it (a server, a relay task), and those tasks run while the
 /// test is driven.
 ///
+/// A harness that is [`Harness::unavailable`] skips the test, passing.
 /// A test the harness lists in [`Harness::expected_failures`] must fail:
 /// its panic is caught and reported with the listed reason, and a pass is
 /// [`RunError::UnexpectedPass`].
@@ -34,6 +35,10 @@ pub fn run<H: Harness>(
     name: &'static str,
     test: impl AsyncFnOnce(&H),
 ) -> Result<(), RunError> {
+    if let Some(reason) = harness.unavailable() {
+        eprintln!("skipping {name}: {reason}");
+        return Ok(());
+    }
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()?;

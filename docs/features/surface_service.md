@@ -436,6 +436,10 @@ stops the relay and the fitter and ends every stream with `ShuttingDown`.
   (`crosstalk.cursor.v1.surface`, `crosstalk.cursor.v1.audit`), so a cursor
   resolves after a restart with the same secret and fails after a rotation
   (INV-1219).
+- `PgAuditLog::query` takes any valid filter window: an end past the
+  `bigint` `at` column is no upper bound, a start past it is an empty page
+  (`crosstalk_store::ColumnWindow`), and the cursor digest binds the window
+  as its two microsecond counts (one past `wire::time::MAX` has no text).
 - The live feed never waits for a stream; within a stream cursors share the
   epoch and never go down; heartbeats carry the newest passed entry.
 - An export audits a refusal, or `Started` before its header and then
@@ -491,8 +495,9 @@ The Postgres stores (`integration`, `TestDb::new_or_skip`, skipped without
 check_operator_store, check_sink_registry}`) against fresh truncated
 tables, and test restarts over a new pool (leftover intents recovered as
 `Interrupted`, audit cursors, sinks and their last deliveries), the
-append-only trigger, and a config load whose entries are refused storing
-no directory.
+append-only trigger, a config load whose entries are refused storing
+no directory, and an audit query whose window ends or starts past the
+`bigint` column (`pg_audit_query_reads_an_end_past_the_column_as_unbounded`).
 
 ## Conversation reads
 

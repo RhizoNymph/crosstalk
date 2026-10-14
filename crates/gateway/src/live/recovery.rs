@@ -6,7 +6,12 @@
 //! waiting_for_database ─▶ migrations checked (behind: stop) ─▶ pipeline lock (held elsewhere: wait)
 //!   ─▶ recovering: recovering_bus ─▶ relaying_outboxes ─▶ restoring_flow ─▶ rebuilding_nodes
 //!                  ─▶ subscribing ─▶ running
+//! running (lock held) ─ lock lost ─▶ abandoning (lock lost) ─▶ waiting_for_database ─▶ ...
 //! ```
+//!
+//! A lost lock never stops the process: the pipeline incarnation is
+//! abandoned and the walk starts over, counted in the report
+//! (`lock_losses`, `last_loss`, `incarnation`).
 //!
 //! The process that walks it ([`super::pg`]) reports each step through a
 //! [`StatusReporter`]; the ops listener reads [`PipelineStatus`] snapshots.
@@ -34,7 +39,8 @@ pub enum LockState {
     Held,
     /// Another process holds it: this one neither consumes nor relays.
     HeldElsewhere,
-    /// The lock's connection dropped: the pipeline stopped.
+    /// The lock's session failed or went silent: the pipeline is abandoned
+    /// and the process waits to take the lock again.
     Lost,
 }
 
@@ -79,8 +85,42 @@ pub enum PipelinePhase {
     WaitingForLock,
     Recovering(RecoveryStep),
     Running,
+    /// The lock was lost: the incarnation's tasks are being aborted and
+    /// joined, nothing drained; then the process waits for the database.
+    Abandoning,
     /// The pipeline did not start or stopped, with why.
     Stopped(String),
+}
+
+/// Why the lock was last lost, as the report and the metrics name it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LossReason {
+    /// A ping failed: the session was reset, closed or ended by the server.
+    PingFailed,
+    /// A ping did not answer in time: a silent partition or a stalled
+    /// server.
+    PingTimedOut,
+    /// The lock's holder task ended without a report.
+    HolderStopped,
+}
+
+impl LossReason {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::PingFailed => "ping_failed",
+            Self::PingTimedOut => "ping_timed_out",
+            Self::HolderStopped => "holder_stopped",
+        }
+    }
+}
+
+/// The last lock loss: why, and when by the process's clock.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields)]
+pub struct LastLoss {
+    pub reason: LossReason,
+    pub at_micros: u64,
 }
 
 /// What recovery did, for `/healthz`'s `recovery` section.
@@ -95,6 +135,17 @@ pub struct RecoveryReport {
     pub accesses_refed: u64,
     /// Deliveries a stopped process held, returned to their groups.
     pub deliveries_redelivered: u64,
+    /// The pipeline incarnations started so far (each start after a lost
+    /// lock is a new one, with a pool and bus of its own); 0 before the
+    /// first.
+    #[serde(default)]
+    pub incarnation: u64,
+    /// How often this process lost the pipeline lock.
+    #[serde(default)]
+    pub lock_losses: u64,
+    /// The last loss, once there was one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_loss: Option<LastLoss>,
 }
 
 /// A snapshot of a Postgres-mode process's progress.
@@ -149,6 +200,7 @@ impl PipelineStatus {
             PipelinePhase::WaitingForLock => "waiting_for_lock".to_owned(),
             PipelinePhase::Recovering(_) => "recovering".to_owned(),
             PipelinePhase::Running => "running".to_owned(),
+            PipelinePhase::Abandoning => "abandoning".to_owned(),
             PipelinePhase::Stopped(why) => format!("stopped: {why}"),
         }
     }
@@ -159,7 +211,8 @@ impl PipelineStatus {
             PipelinePhase::NotRun
             | PipelinePhase::WaitingForDatabase
             | PipelinePhase::WaitingForMigrations
-            | PipelinePhase::WaitingForLock => "pending".to_owned(),
+            | PipelinePhase::WaitingForLock
+            | PipelinePhase::Abandoning => "pending".to_owned(),
             PipelinePhase::Recovering(step) => step.label().to_owned(),
             PipelinePhase::Running => "done".to_owned(),
             PipelinePhase::Stopped(why) => format!("failed: {why}"),
@@ -167,11 +220,14 @@ impl PipelineStatus {
     }
 
     /// Whether this status alone keeps the process from being ready:
-    /// migrations behind, the lock held elsewhere or lost, the pipeline
-    /// stopped.
+    /// migrations behind, the pipeline stopped, or the lock held elsewhere
+    /// by a process that never held it (a standby). A process resuming
+    /// after a loss stays ready, degraded, through `lost`, `abandoning`
+    /// and `held elsewhere`: it still forwards and captures durably, as at
+    /// its start.
     pub fn blocks_readiness(&self) -> bool {
         matches!(self.migrations, MigrationState::Behind(_))
-            || matches!(self.lock, LockState::HeldElsewhere | LockState::Lost)
+            || (self.lock == LockState::HeldElsewhere && self.report.lock_losses == 0)
             || matches!(self.phase, PipelinePhase::Stopped(_))
     }
 
@@ -269,6 +325,49 @@ mod tests {
         status.migrations = MigrationState::Behind("flow 1 < 2".to_owned());
         assert_eq!(status.migrations_text(), "behind: flow 1 < 2");
         assert!(status.blocks_readiness());
+    }
+
+    /// After a loss the process resumes: `lost`, `abandoning` and a lock
+    /// held elsewhere leave it ready, degraded, through to `running`.
+    #[test]
+    fn a_resuming_process_stays_ready_degraded_after_a_loss() {
+        let mut status = PipelineStatus::waiting();
+        status.migrations = MigrationState::AtHead;
+        status.lock = LockState::Held;
+        status.phase = PipelinePhase::Running;
+        status.report.incarnation = 1;
+        assert!(!status.degraded() && !status.blocks_readiness());
+
+        status.lock = LockState::Lost;
+        status.phase = PipelinePhase::Abandoning;
+        status.report.lock_losses = 1;
+        status.report.last_loss = Some(LastLoss {
+            reason: LossReason::PingTimedOut,
+            at_micros: 7,
+        });
+        assert_eq!(status.lock_text(), "lost");
+        assert_eq!(status.pipeline_text(), "abandoning");
+        assert_eq!(status.recovery_text(), "pending");
+        assert!(status.degraded() && !status.blocks_readiness());
+
+        for phase in [
+            PipelinePhase::WaitingForDatabase,
+            PipelinePhase::WaitingForLock,
+            PipelinePhase::Recovering(RecoveryStep::RecoveringBus),
+        ] {
+            status.phase = phase;
+            for lock in [LockState::Lost, LockState::HeldElsewhere, LockState::Held] {
+                status.lock = lock;
+                assert!(status.degraded(), "{status:?}");
+                assert!(!status.blocks_readiness(), "{status:?}");
+            }
+        }
+        status.phase = PipelinePhase::Running;
+        status.lock = LockState::Held;
+        assert!(!status.degraded() && !status.blocks_readiness());
+        let json = serde_json::to_value(status.report).expect("encodes");
+        assert_eq!(json["lock_losses"], 1);
+        assert_eq!(json["last_loss"]["reason"], "ping_timed_out");
     }
 
     #[test]

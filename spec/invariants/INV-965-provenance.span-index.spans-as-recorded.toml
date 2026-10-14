@@ -19,7 +19,7 @@ checked against a real database.
 
 [evidence]
 unit = "crosstalk_memory::provenance::tests::spans_read_back_as_recorded_through_eviction"
-integration = "crosstalk_provenance::integration::span_index_reads_back_recorded_spans"
+integration = "crosstalk_provenance::integration::span_index::pg_recorded_span_reads_back_without_a_scan"
 
 [evidence-review]
 unit = { agent = "true", human = "false" }
