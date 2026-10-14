@@ -532,7 +532,10 @@ impl<S: LiveStoreSet> Live<S> {
     /// spool, which outlives the process in a deployment, is the caller's
     /// to close. [`Live::abandon`] with a generous deadline.
     pub async fn kill(self) {
-        let abandoned = self.abandon(Instant::now() + KILL_JOIN).await;
+        // Boxed: `abandon` owns the whole `Live` and the surface's
+        // shutdown; inline, a debug build's caller overflows a test
+        // thread's 2 MiB stack.
+        let abandoned = Box::pin(self.abandon(Instant::now() + KILL_JOIN)).await;
         tracing::warn!(joined = abandoned.joined(), "live process killed");
     }
 
@@ -563,8 +566,8 @@ impl<S: LiveStoreSet> Live<S> {
                 tasks_joined = false;
             }
         }
-        let bus_joined = self.quiet.abandon(deadline).await;
-        let surface_stopped = tokio::time::timeout_at(deadline, self.backend.shutdown())
+        let bus_joined = Box::pin(self.quiet.abandon(deadline)).await;
+        let surface_stopped = tokio::time::timeout_at(deadline, Box::pin(self.backend.shutdown()))
             .await
             .is_ok();
         let abandoned = LiveAbandoned {
