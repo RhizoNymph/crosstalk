@@ -186,6 +186,11 @@ impl Quiet for PgQuiet {
     async fn stop(&self) {
         self.bus.shutdown();
     }
+
+    async fn abandon(&self, deadline: tokio::time::Instant) -> bool {
+        let abandoned = self.bus.abandon(deadline).await;
+        abandoned.tasks_joined && abandoned.takes_joined
+    }
 }
 
 /// What a Postgres-mode live process starts from besides its config.

@@ -9,6 +9,16 @@
 //! as the server gone; [`DbLink::restore`] relays again. Dropping the link
 //! cuts it for good.
 //!
+//! [`DbLink::partition`] is a silent network partition instead: nothing
+//! is reset or closed, nothing is relayed. Every open connection stays
+//! established on both sides (loopback acknowledges what a client writes)
+//! but no byte, and no close, crosses the link, so a client's next query
+//! waits for an answer that never comes, as across a partition that drops
+//! every packet. A connection accepted meanwhile is held unanswered (the
+//! upstream is not even dialled). [`DbLink::restore`] heals it: the held
+//! bytes, and any close a side sent meanwhile, cross in order, as TCP
+//! retransmissions would deliver them; [`DbLink::cut`] resets everything.
+//!
 //! It speaks TCP only, so it knows nothing of Postgres (or of the URL and
 //! its credentials): the caller resolves the server's host and port.
 //!
@@ -33,6 +43,8 @@ use tokio::task::JoinHandle;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Link {
     Up,
+    /// Silent: nothing crosses, nothing is reset or closed.
+    Partitioned,
     Cut,
 }
 
@@ -173,7 +185,16 @@ impl DbLink {
         tracing::debug!(addr = %self.addr, "db link cut");
     }
 
-    /// Relay new connections again.
+    /// Partition the link silently: every connection, open or new, stays
+    /// established but nothing crosses it (no byte, no close, no reset)
+    /// until [`DbLink::restore`] or [`DbLink::cut`].
+    pub fn partition(&self) {
+        self.state.send_replace(Link::Partitioned);
+        tracing::debug!(addr = %self.addr, "db link partitioned");
+    }
+
+    /// Relay again: new connections after a cut, held bytes and new
+    /// connections after a partition.
     pub fn restore(&self) {
         self.state.send_replace(Link::Up);
         tracing::debug!(addr = %self.addr, "db link restored");
@@ -182,6 +203,11 @@ impl DbLink {
     /// Whether the link is cut.
     pub fn is_cut(&self) -> bool {
         *self.state.borrow() == Link::Cut
+    }
+
+    /// Whether the link is partitioned.
+    pub fn is_partitioned(&self) -> bool {
+        *self.state.borrow() == Link::Partitioned
     }
 }
 
@@ -242,12 +268,33 @@ async fn cut(mut state: watch::Receiver<Link>) {
     }
 }
 
+/// Wait out a partition: `true` once the link is up, `false` once it is
+/// cut (or gone).
+async fn passable(state: &mut watch::Receiver<Link>) -> bool {
+    loop {
+        match *state.borrow_and_update() {
+            Link::Up => return true,
+            Link::Cut => return false,
+            Link::Partitioned => {}
+        }
+        if state.changed().await.is_err() {
+            return false;
+        }
+    }
+}
+
 async fn relay(
     mut client: TcpStream,
     upstream: SocketAddr,
     state: watch::Receiver<Link>,
     delays: Option<(Delays, Delays)>,
 ) {
+    // Accepted during a partition: held unanswered, the upstream not
+    // dialled, until the link heals or is cut.
+    if !passable(&mut state.clone()).await {
+        reset(client);
+        return;
+    }
     let mut server = match TcpStream::connect(upstream).await {
         Ok(server) => server,
         Err(error) => {
@@ -256,53 +303,60 @@ async fn relay(
             return;
         }
     };
-    match delays {
-        None => {
-            tokio::select! {
-                copied = tokio::io::copy_bidirectional(&mut client, &mut server) => {
-                    if let Err(error) = copied {
-                        tracing::debug!(%error, "db link connection ended");
-                    }
-                }
-                () = cut(state) => {
-                    reset(client);
-                    reset(server);
-                }
-            }
+    let lossy = delays.is_some();
+    let (up, down) = match delays {
+        Some((up, down)) => (Some(up), Some(down)),
+        None => (None, None),
+    };
+    let was_cut = {
+        let (client_read, client_write) = client.split();
+        let (server_read, server_write) = server.split();
+        let forward = pump(client_read, server_write, up, state.clone());
+        let backward = pump(server_read, client_write, down, state.clone());
+        tokio::select! {
+            () = async { tokio::join!(forward, backward); } => false,
+            () = cut(state) => true,
         }
-        Some((up, down)) => {
-            let (client_read, client_write) = client.into_split();
-            let (server_read, server_write) = server.into_split();
-            let forward = pump(client_read, server_write, up);
-            let backward = pump(server_read, client_write, down);
-            tokio::select! {
-                () = async { tokio::join!(forward, backward); } => {}
-                () = cut(state) => {}
-            }
-            // The halves drop here: the sockets close (a cut resets them
-            // only on the plain relay; a lossy link is for slowness).
-        }
+    };
+    // A cut resets both sides on the plain relay; a lossy link is for
+    // slowness, so its sockets just close.
+    if was_cut && !lossy {
+        reset(client);
+        reset(server);
     }
 }
 
-/// Relay `from` to `to`, each chunk after its delay, in order.
-async fn pump(
-    mut from: tokio::net::tcp::OwnedReadHalf,
-    mut to: tokio::net::tcp::OwnedWriteHalf,
-    mut delays: Delays,
-) {
+/// Relay `from` to `to`, each chunk after its delay (on a lossy link) and
+/// only while the link is up: a partition holds the chunk, and the close,
+/// until it heals; a cut ends the pump.
+async fn pump<R, W>(
+    mut from: R,
+    mut to: W,
+    mut delays: Option<Delays>,
+    mut state: watch::Receiver<Link>,
+) where
+    R: tokio::io::AsyncRead + Unpin,
+    W: tokio::io::AsyncWrite + Unpin,
+{
     let mut buffer = vec![0u8; 16 * 1024];
     loop {
         let read = match from.read(&mut buffer).await {
             Ok(0) | Err(_) => break,
             Ok(read) => read,
         };
-        tokio::time::sleep(delays.next()).await;
+        if let Some(delays) = delays.as_mut() {
+            tokio::time::sleep(delays.next()).await;
+        }
+        if !passable(&mut state).await {
+            return;
+        }
         if to.write_all(&buffer[..read]).await.is_err() {
             break;
         }
     }
-    let _ = to.shutdown().await;
+    if passable(&mut state).await {
+        let _ = to.shutdown().await;
+    }
 }
 
 #[cfg(test)]
@@ -366,6 +420,74 @@ mod tests {
         link.restore();
         let mut third = TcpStream::connect(link.addr()).await.expect("connect");
         assert_eq!(round_trip(&mut third).await.expect("relayed"), b"ping");
+    }
+
+    /// A partition is silent: the client's write succeeds, nothing comes
+    /// back, and the connection neither resets nor closes (a read just
+    /// waits). Healed, the held bytes cross and the echo arrives.
+    #[tokio::test]
+    async fn a_partition_stalls_silently_and_heals() {
+        let server = echo().await;
+        let link = DbLink::start("127.0.0.1", server.port())
+            .await
+            .expect("link");
+        let mut stream = TcpStream::connect(link.addr()).await.expect("connect");
+        assert_eq!(round_trip(&mut stream).await.expect("relayed"), b"ping");
+
+        link.partition();
+        assert!(link.is_partitioned());
+        stream
+            .write_all(b"held")
+            .await
+            .expect("loopback accepts the write");
+        let mut back = [0u8; 4];
+        let stalled =
+            tokio::time::timeout(Duration::from_millis(500), stream.read_exact(&mut back)).await;
+        assert!(
+            stalled.is_err(),
+            "a partition neither answers, resets nor closes: {stalled:?}"
+        );
+        // A connection opened during the partition is held unanswered too.
+        let mut late = TcpStream::connect(link.addr()).await.expect("accepted");
+        late.write_all(b"late").await.expect("written");
+        let mut late_back = [0u8; 4];
+        assert!(
+            tokio::time::timeout(Duration::from_millis(300), late.read_exact(&mut late_back))
+                .await
+                .is_err(),
+            "held unanswered"
+        );
+
+        link.restore();
+        tokio::time::timeout(Duration::from_secs(5), stream.read_exact(&mut back))
+            .await
+            .expect("the held bytes cross once healed")
+            .expect("read");
+        assert_eq!(&back, b"held");
+        tokio::time::timeout(Duration::from_secs(5), late.read_exact(&mut late_back))
+            .await
+            .expect("the late connection relays once healed")
+            .expect("read");
+        assert_eq!(&late_back, b"late");
+    }
+
+    /// A partition then a cut: the stalled connection is reset.
+    #[tokio::test]
+    async fn a_cut_ends_a_partition_with_a_reset() {
+        let server = echo().await;
+        let link = DbLink::start("127.0.0.1", server.port())
+            .await
+            .expect("link");
+        let mut stream = TcpStream::connect(link.addr()).await.expect("connect");
+        assert_eq!(round_trip(&mut stream).await.expect("relayed"), b"ping");
+        link.partition();
+        stream.write_all(b"lost").await.expect("written");
+        link.cut();
+        let mut back = [0u8; 4];
+        let ended = tokio::time::timeout(Duration::from_secs(5), stream.read_exact(&mut back))
+            .await
+            .expect("the cut ends the stall");
+        assert!(ended.is_err(), "reset, not answered: {ended:?}");
     }
 
     #[test]

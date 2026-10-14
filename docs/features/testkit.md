@@ -156,14 +156,21 @@ idle timeout). `send` collects everything into a `CollectedResponse`.
 ### Database link
 
 `DbLink::start(host, port)` resolves the server, listens on
-`127.0.0.1:0` and relays every accepted connection to it with
-`copy_bidirectional`. A test points its pool at `DbLink::host()` and
+`127.0.0.1:0` and relays every accepted connection to it, one pump per
+direction (`start_lossy` delays each chunk as a lossy link would). A test points its pool at `DbLink::host()` and
 `DbLink::port()` (it takes them from the test database's
 `PgConnectOptions`; the link never sees the URL or its credentials).
 `cut()` resets every relayed connection (zero linger, so the client sees
 a reset at once) and resets every new one as soon as it is accepted;
 `restore()` relays new connections again; dropping the link cuts it for
-good. The server is never stopped, so other tests sharing it are not
+good. `partition()` is a silent network partition instead: nothing is
+reset or closed and nothing crosses (each pump holds its next chunk, and
+any close, until the link heals), so a client's next query waits for an
+answer that never comes; a connection accepted meanwhile is held
+unanswered without dialling the server. `restore()` heals it, the held
+bytes and closes crossing in order; `cut()` resets everything
+(`is_partitioned()` reports it). The gateway's lock tests partition the
+pipeline lock's own session with it. The server is never stopped, so other tests sharing it are not
 affected. The transport crate's spool integration tests use it.
 
 ### Comparisons
@@ -203,7 +210,7 @@ ignoring `http::NOT_RECORDED`.
 | `src/upstream/script.rs` | Replies and routes | `Script` (`route`, `case`, `cases`, `fallback`), `Route` (`new`, `of`, `matches`), `Reply` (`from_response`, `from_case`, `json`, `error`, `header`, `paced`, `with_fault`, `body`), `Pacing` (`IMMEDIATE`, `every`), `Fault` (`Stall`, `Disconnect`, `NoResponse`), `Framing`, `error_type` |
 | `src/upstream/body.rs` | The served body and its feeder (private) | `ReplyBody`, `BodyCut`, `reply_body` |
 | `src/client.rs` | The fake harness | `HarnessClient` (`new`, `prefix`, `idle_timeout`, `send`, `open`), `ResponseStream` (`status`, `headers`, `next`, `collect`), `Next`, `ReceivedChunk`, `BodyEnd`, `CollectedResponse` (`events`, `differences_from`), `ClientError` |
-| `src/db_link.rs` | The cuttable database relay | `DbLink` (`start`, `host`, `port`, `addr`, `upstream`, `cut`, `restore`, `is_cut`) |
+| `src/db_link.rs` | The cuttable database relay | `DbLink` (`start`, `start_lossy`, `host`, `port`, `addr`, `upstream`, `cut`, `partition`, `restore`, `is_cut`, `is_partitioned`), `Lossy` |
 | `src/tests/` | Builder validity, corpus loading and refusals, SSE framing, upstream round trips and faults | — |
 | `corpus/README.md` | The corpus: synthetic status, formats, cases, how to add redacted captures | — |
 | `corpus/anthropic/messages/*/` | 15 cases | — |

@@ -953,12 +953,21 @@ Features Index:
       Classifier, L7 with PgFrontierSource (shard ticks, groups' pending
       and dead letters, the spool's oldest record); subscriptions are
       pumped so a stage's select never cancels a take. serve in Postgres
-      mode starts the proxy and capture at once over the spool, then waits
-      for the database, migrations at head and the pipeline advisory lock;
-      /readyz reports migrations, pipeline_lock, capture (spooling,
-      draining, dropping: spool full, spool corrupt), pipeline and recovery,
-      ready while the database is down; /healthz adds bus, recovery and
-      spool sections; spool_full is a capture outcome. crosstalk migrate
+      mode starts the proxy and capture at once over the spool (capture
+      appends through a publish-only PgBus over a pool of its own), then
+      waits for the database, migrations at head and the pipeline advisory
+      lock, and starts a pipeline incarnation (its own pool, named
+      crosstalk-pipeline-<pid>-<n>, and its own PgBus). A lost lock never
+      stops the process: the incarnation is abandoned (pool fenced, every
+      task and take aborted and joined, nothing drained, no owner write
+      after) and the loop waits for the database and the lock again, the
+      proxy listening throughout; serve stops only on a signal, every
+      database step of its shutdown bounded. /readyz reports migrations,
+      pipeline_lock, capture (spooling, draining, dropping: spool full,
+      spool corrupt, stopped), pipeline (abandoning after a loss) and
+      recovery, ready while the database is down and through a resume;
+      /healthz adds bus, recovery (lock losses, the last loss, the
+      incarnation) and spool sections; spool_full is a capture outcome. crosstalk migrate
       runs every layer and --reset-correlator; crosstalk spool
       --discard-corrupt. Memory mode's replays are byte-identical. Tested
       end to end (W9): crosstalk-e2e's restart tests kill Postgres-mode Live
@@ -967,8 +976,12 @@ Features Index:
       and spool, and compare the whole answer set with an uninterrupted
       run's once minted ids are renamed (crosstalk_e2e::answers); its spool
       tests send the relay through the proxy with the database behind a
-      cuttable DbLink (outage mid-stream, gateway killed while spooling,
-      spool full); the L8 conformance suite runs over PgStores in process
+      cuttable DbLink (outage mid-stream resumed in process, gateway killed
+      while spooling, spool full); its lock_loss tests hold a partition or a
+      reset past the loss bounds (zero refused connects), terminate the
+      lock's session under a rival holder with a commit-time audit (no
+      owner write after the abandon) and lose the lock five times (no
+      leaked session or task); the L8 conformance suite runs over PgStores in process
       and over HTTP, each test process seeding the world once into a
       template database and each test hosting the surface over its own
       clone of it.
@@ -976,12 +989,14 @@ Features Index:
       - crates/api/src/pg/mod.rs
       - crates/gateway/src/live/pg/mod.rs
       - crates/gateway/src/live/frontier.rs
-      - crates/gateway/src/gateway/postgres.rs
+      - crates/gateway/src/gateway/postgres/mod.rs
+      - crates/gateway/src/gateway/postgres/pipeline.rs
       - crates/gateway/src/store/migrations.rs
       - crates/gateway/src/spool.rs
       - crates/gateway/src/ops/mod.rs
       - crates/e2e/tests/restart/main.rs
       - crates/e2e/tests/spool/main.rs
+      - crates/e2e/tests/lock_loss/main.rs
       - crates/api/tests/conformance_pg.rs
       - crates/api/tests/support/pg_world.rs
     depends_on: [postgres_stores, gateway, pg_bus, publish_spool, store, reconstruct, provenance, flow_store, flow_correlator, flow_extract, search_alerts, topology_store, surface_service]
@@ -1029,7 +1044,8 @@ Features Index:
       stalls, disconnects, withholds or fails on command and records what
       it received; a hyper fake harness client that collects responses
       chunk by chunk; and DbLink, a loopback TCP relay to the test database
-      that a test cuts and restores to simulate an outage.
+      that a test cuts (resets), partitions (silently stalls) and restores
+      to simulate an outage.
     entry_points:
       - crates/testkit/src/lib.rs
       - crates/testkit/src/corpus/anthropic.rs
@@ -1085,8 +1101,12 @@ Features Index:
       recover_held returns a stopped process's held deliveries ready at
       once (no backoff, so taken before later entries) with the attempt
       counted; group_stats for the frontier; prune for 7-day
-      retention behind the slowest group; DrainTarget for the spool. Not
-      yet built by serve (W8).
+      retention behind the slowest group; DrainTarget for the spool. A bus
+      owns its takes: abandon closes it and aborts and joins its listener,
+      reaper and every take in flight, touching nothing in the database
+      (a pipeline that lost its lock); publisher is a publish-only bus
+      (no listener, no reaper, subscribe refused) for the gateway's
+      capture side.
     entry_points:
       - crates/transport/src/pg/mod.rs
       - crates/transport/src/pg/subscription.rs

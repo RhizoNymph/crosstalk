@@ -12,6 +12,8 @@
 //! The functions named by transport invariants' `integration` evidence
 //! live here, at `crosstalk_transport::integration::<name>`.
 
+mod abandon;
+
 use std::num::NonZeroUsize;
 use std::sync::Arc;
 use std::time::Duration;

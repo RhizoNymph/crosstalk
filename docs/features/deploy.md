@@ -38,7 +38,7 @@ Listeners:
 |---|---|---|
 | 8080 | `ingress.listen` | The reverse proxy. Agents set `ANTHROPIC_BASE_URL=http://<host>:<CROSSTALK_PROXY_PORT>/anthropic` (host port, default 8080). |
 | 8081 | `api.listen` | The L8 HTTP binding over the live process's surface (roles `all` and `api`). Every request carries `Authorization: Bearer <value of the variable api.token names>` and is made as `api.operator` (default `{"name": "admin"}`, every permission); without it, `401`. |
-| 9464 | `ops.listen` | `GET /metrics` (Prometheus text format), `GET /healthz` (process serving, with the capture, pipeline and exchange-log counters, and a `live` section: each layer stage's handled count and the L7 watermark; with a `store` section also `bus`, `recovery` and `spool` sections), `GET /readyz` (every role's tasks running: `exchange_log`, `capture`, `live` (every layer stage), `proxy`, `api`; with a `store` section also `migrations`, `pipeline_lock`, `capture`, `pipeline` and `recovery`: ready while the database is down (capture spools to `<data dir>/spool`), not ready when migrations are behind, the pipeline lock is held elsewhere, or the spool is full or corrupt; see `docs/features/postgres_mode.md`). |
+| 9464 | `ops.listen` | `GET /metrics` (Prometheus text format), `GET /healthz` (process serving, with the capture, pipeline and exchange-log counters, and a `live` section: each layer stage's handled count and the L7 watermark; with a `store` section also `bus`, `recovery` and `spool` sections), `GET /readyz` (every role's tasks running: `exchange_log`, `capture`, `live` (every layer stage), `proxy`, `api`; with a `store` section also `migrations`, `pipeline_lock`, `capture`, `pipeline` and `recovery`: ready while the database is down (capture spools to `<data dir>/spool`), not ready when migrations are behind, the pipeline lock is held elsewhere by another process at start, capture stopped, or the spool is full or corrupt; ready, degraded, while a lost lock is resumed in process; see `docs/features/postgres_mode.md`). |
 
 Environment:
 
@@ -414,16 +414,32 @@ from the host instead.
 
 ### After a network partition
 
-`serve` exits non-zero when its pipeline lock's session fails (a database
-outage or a partition) and compose restarts it. After a Postgres restart
-the old backends are gone and the new process takes the lock at once.
-After a partition the old backend can outlive the cut, holding the lock,
-until the server notices the dead peer: the restarted gateway waits up to
-about 25 s for the old session's lock (`pipeline_lock: held elsewhere`,
-forwarding and spooling meanwhile) with the server's
-`tcp_keepalives_idle=10`, `tcp_keepalives_interval=5` and
+`serve` does not exit when its pipeline lock's session fails (a database
+outage, a reset, a partition): it abandons the pipeline's incarnation and
+takes the lock again in process, the proxy listening and capture spooling
+throughout (`docs/features/postgres_mode.md`, "Losing the pipeline
+lock"). The compose `restart: unless-stopped` policy therefore only covers
+a crash (a panic, an out-of-memory kill) or a shutdown that overran its
+bound; a database outage no longer restarts the container. After a
+Postgres restart the old backends are gone and the process takes the lock
+at once. After a partition the old backend can outlive the cut, holding
+the lock, until the server notices the dead peer: the gateway waits up to
+about 25 s for its old session's lock (`pipeline_lock: held elsewhere`,
+`/readyz` 200 degraded, forwarding and spooling meanwhile) with the
+server's `tcp_keepalives_idle=10`, `tcp_keepalives_interval=5` and
 `tcp_keepalives_count=3`, which deploy/postgres sets (crosstalk-infra).
 Without them the wait follows the OS keepalive defaults, hours.
+
+The gateway notices a partition of its own lock session within 9 s (a
+5 s ping interval plus a 4 s ping deadline, `store::lock::DETECTION`)
+and reports `pipeline_lock: lost` within 11 s. That must stay strictly
+below the server's reap of the partitioned session (about 25 s with the
+settings above, or `tcp_user_timeout=25000`), since once reaped the lock
+is free for another process (INV-1236). Raising the server's keepalives
+is safe; lowering them below about 12 s (the report plus the 1 s abandon)
+is not, unless the gateway's `PING` and `PING_TIMEOUT` shrink with them.
+A `docker restart` (SIGTERM) still stops the proxy for the shutdown and
+the new start: about 40 requests refused per restart at the bench's rate.
 
 ## Invariants and constraints
 

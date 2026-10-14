@@ -118,6 +118,14 @@ impl DatabaseUrl {
         }
     }
 
+    /// The same database and credentials, reached at `host:port` (a test
+    /// relay such as `DbLink` in front of the server).
+    pub fn with_address(&self, host: &str, port: u16) -> Self {
+        Self {
+            options: self.options.clone().host(host).port(port),
+        }
+    }
+
     /// `host:port/database` for logs and errors (no user, no password).
     pub fn target(&self) -> String {
         format!(
@@ -384,6 +392,15 @@ mod tests {
         let other = url.with_database("crosstalk_test_1");
         assert_eq!(other.target(), "h:5433/crosstalk_test_1");
         assert_eq!(other.connect_options().get_username(), "u");
+        Ok(())
+    }
+
+    #[test]
+    fn with_address_keeps_the_database_and_credentials() -> Result<(), ConfigError> {
+        let url = DatabaseUrl::parse(DATABASE_URL_VAR, "postgres://u:p@h:5433/db")?;
+        let relayed = url.with_address("127.0.0.1", 40001);
+        assert_eq!(relayed.target(), "127.0.0.1:40001/db");
+        assert_eq!(relayed.connect_options().get_username(), "u");
         Ok(())
     }
 

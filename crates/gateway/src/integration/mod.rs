@@ -4,6 +4,9 @@
 //! `TestDb::new_or_skip` (the node0 server named by `TEST_DATABASE_URL`)
 //! and skips, passing, without one.
 
+mod lock;
+mod pool_close;
+
 use std::future::Future;
 use std::num::{NonZeroU16, NonZeroU32};
 use std::sync::Arc;

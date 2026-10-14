@@ -24,6 +24,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
+use tokio::task::AbortHandle;
 use tokio::time::Instant;
 
 use super::Shared;
@@ -36,6 +37,8 @@ struct Progress {
     began: Instant,
     phase_at: Instant,
     last_poll: Instant,
+    /// Aborts the take's task: set once it is spawned.
+    abort: Option<AbortHandle>,
 }
 
 /// The reaper's liveness: when it last went round its loop, and how many
@@ -120,6 +123,7 @@ impl Takes {
                 began: now,
                 phase_at: now,
                 last_poll: now,
+                abort: None,
             },
         );
         id
@@ -140,6 +144,44 @@ impl Takes {
 
     pub(crate) fn finished(&self, id: u64) {
         self.running().remove(&id);
+    }
+
+    /// Give take `id` the handle that aborts its task. A take that already
+    /// finished (unregistered) is left alone.
+    pub(crate) fn attach(&self, id: u64, abort: AbortHandle) {
+        if let Some(progress) = self.running().get_mut(&id) {
+            progress.abort = Some(abort);
+        }
+    }
+
+    /// Abort every take in flight; how many there were.
+    pub(crate) fn abort_all(&self) -> usize {
+        let running = self.running();
+        for progress in running.values() {
+            if let Some(abort) = &progress.abort {
+                abort.abort();
+            }
+        }
+        running.len()
+    }
+
+    /// How many takes are in flight.
+    pub(crate) fn in_flight(&self) -> usize {
+        self.running().len()
+    }
+
+    /// Wait until no take is in flight (every aborted take's future has
+    /// been dropped, unregistering it), or `deadline`; whether none is.
+    pub(crate) async fn none_by(&self, deadline: Instant) -> bool {
+        loop {
+            if self.in_flight() == 0 {
+                return true;
+            }
+            if Instant::now() >= deadline {
+                return false;
+            }
+            tokio::time::sleep(Duration::from_millis(2)).await;
+        }
     }
 
     /// The phase take `id` is in, if it still runs.
@@ -251,6 +293,52 @@ mod tests {
         assert_eq!(takes.phase_of(id), None);
         takes.count_stalled();
         assert_eq!(takes.stalled(), 1);
+    }
+
+    /// An abandoned bus aborts its takes and waits for each to be dropped:
+    /// a take's transaction must not commit after its bus was abandoned.
+    #[tokio::test]
+    async fn aborted_takes_are_gone_once_none_by_returns() {
+        let takes = std::sync::Arc::new(Takes::default());
+        let mut handles = Vec::new();
+        for _ in 0..3 {
+            let id = takes.register("relay");
+            let unregister = std::sync::Arc::clone(&takes);
+            let guard = Unregister(unregister, id);
+            let task = tokio::spawn(async move {
+                let _guard = guard;
+                std::future::pending::<()>().await;
+            });
+            takes.attach(id, task.abort_handle());
+            handles.push(task);
+        }
+        // A take that finished before its handle arrived stays unknown.
+        let gone = takes.register("relay");
+        takes.finished(gone);
+        takes.attach(gone, tokio::spawn(async {}).abort_handle());
+        assert_eq!(takes.in_flight(), 3);
+        assert!(
+            !takes
+                .none_by(Instant::now() + Duration::from_millis(20))
+                .await,
+            "nothing aborted yet"
+        );
+        assert_eq!(takes.abort_all(), 3);
+        assert!(
+            takes.none_by(Instant::now() + Duration::from_secs(5)).await,
+            "every aborted take unregistered"
+        );
+        for handle in handles {
+            assert!(handle.await.is_err_and(|error| error.is_cancelled()));
+        }
+    }
+
+    struct Unregister(std::sync::Arc<Takes>, u64);
+
+    impl Drop for Unregister {
+        fn drop(&mut self) {
+            self.0.finished(self.1);
+        }
     }
 
     #[test]

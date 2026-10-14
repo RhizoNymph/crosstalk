@@ -197,10 +197,11 @@ impl PgSubscription {
                     self.retry,
                     provisional,
                 );
-                (
-                    id,
-                    tokio::spawn(Tracked::new(Arc::clone(&self.shared), id, take)),
-                )
+                let task = tokio::spawn(Tracked::new(Arc::clone(&self.shared), id, take));
+                // The bus owns its takes: an abandoned bus aborts and
+                // joins every one, whatever became of this subscription.
+                self.shared.takes.attach(id, task.abort_handle());
+                (id, task)
             }
         }
     }

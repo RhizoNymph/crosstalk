@@ -11,10 +11,10 @@ use common::gateway::*;
 use common::migrated;
 
 /// The database cut mid-stream: forwarding never changes and captures
-/// spool; the lost pipeline lock makes the process exit non-zero
-/// (`Running::fatal`, what `serve` exits on); a fresh start on the same
-/// data directory spools on while the database is down, drains once it is
-/// back, and the run ends as an uninterrupted one.
+/// spool; the lost pipeline lock abandons the pipeline's incarnation while
+/// the process spools on with the database down; once it is back the same
+/// process takes the lock again, recovers and drains, and the run ends as
+/// an uninterrupted one.
 #[test]
 fn database_cut_mid_stream_spools_then_drains_to_the_uninterrupted_answers() {
     common::big_stack(body);

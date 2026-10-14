@@ -44,7 +44,7 @@ pub use bus::{DeadLetters, GroupDepth, MemoryHandledIds, MpscBus, MpscSubscripti
 pub use config::{BusConfig, DeliveryOrder, InvalidBusConfig, NonZeroDuration};
 pub use dedup::{Dedup, HandledIds};
 pub use pg::{
-    GroupStats, InvalidPgBusConfig, PgBus, PgBusConfig, PgDeadLetters, PgSubscription,
+    Abandoned, GroupStats, InvalidPgBusConfig, PgBus, PgBusConfig, PgDeadLetters, PgSubscription,
     ReaperReport, Recovered, TakeReport,
 };
 pub use spool::{

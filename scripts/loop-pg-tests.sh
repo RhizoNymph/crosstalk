@@ -28,6 +28,7 @@ TARGETS=(
   "crosstalk-e2e:spool_outage_serve_runtime"
   "crosstalk-e2e:spool_kill"
   "crosstalk-e2e:postgres"
+  "crosstalk-e2e:lock_loss"
 )
 
 cargo test --manifest-path "$ROOT/Cargo.toml" -p crosstalk-e2e --tests --no-run >"$OUT/build.txt" 2>&1 || {

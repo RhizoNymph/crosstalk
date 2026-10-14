@@ -47,8 +47,8 @@ mod stats;
 mod subscription;
 
 use std::hash::RandomState;
-use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
+use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use crosstalk_spec::events::{Envelope, Subject};
@@ -59,6 +59,7 @@ use sqlx::PgPool;
 use sqlx::migrate::Migrator;
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
+use tokio::time::Instant;
 
 pub use config::{InvalidPgBusConfig, PgBusConfig};
 pub use dead_letters::PgDeadLetters;
@@ -99,6 +100,9 @@ pub(crate) struct Shared {
     /// Whether the reaper sweeps stale holds: set once this bus subscribes
     /// a group (a consuming process; the `api` role's bus never does).
     pub(crate) sweeps: std::sync::atomic::AtomicBool,
+    /// Which background tasks the bus runs: a publish-only bus refuses
+    /// subscriptions (nothing would wake or reap them).
+    background: Background,
 }
 
 impl std::fmt::Debug for Shared {
@@ -124,13 +128,20 @@ impl Shared {
 #[derive(Debug)]
 struct Tasks {
     shared: Arc<Shared>,
-    handles: Vec<JoinHandle<()>>,
+    /// Taken out by [`PgBus::abandon`] to be joined.
+    handles: Mutex<Vec<JoinHandle<()>>>,
 }
 
 impl Tasks {
+    fn handles(&self) -> std::sync::MutexGuard<'_, Vec<JoinHandle<()>>> {
+        // Only pushes and drains happen under the lock: a poisoned list is
+        // still consistent.
+        self.handles.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
     fn stop(&self) {
         self.shared.closed.send_replace(true);
-        for handle in &self.handles {
+        for handle in self.handles().iter() {
             handle.abort();
         }
     }
@@ -140,6 +151,18 @@ impl Drop for Tasks {
     fn drop(&mut self) {
         self.stop();
     }
+}
+
+/// How [`PgBus::abandon`] went.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Abandoned {
+    /// The listener and the reaper ended before the deadline.
+    pub tasks_joined: bool,
+    /// Takes in flight when the bus was abandoned, all aborted.
+    pub takes_aborted: usize,
+    /// Every aborted take was dropped (its transaction can no longer
+    /// commit) before the deadline.
+    pub takes_joined: bool,
 }
 
 /// How many deliveries [`PgBus::recover_held`] returned.
@@ -175,6 +198,28 @@ impl PgBus {
         clock: Arc<dyn Clock>,
         config: PgBusConfig,
     ) -> Result<Self, StartError> {
+        Self::start(pool, clock, config, Background::ListenAndReap)
+    }
+
+    /// A bus that only publishes (and reads its statistics): no `LISTEN`
+    /// task, no reaper. What a gateway's capture side appends through,
+    /// whatever becomes of the consuming side's buses: it never
+    /// subscribes, so it has no hold to reap and no `next` to wake; a
+    /// subscribe on it is refused (`PublishRejected`).
+    pub fn publisher(
+        pool: PgPool,
+        clock: Arc<dyn Clock>,
+        config: PgBusConfig,
+    ) -> Result<Self, StartError> {
+        Self::start(pool, clock, config, Background::None)
+    }
+
+    fn start(
+        pool: PgPool,
+        clock: Arc<dyn Clock>,
+        config: PgBusConfig,
+        background: Background,
+    ) -> Result<Self, StartError> {
         let runtime = tokio::runtime::Handle::try_current().map_err(|_| StartError::NoRuntime)?;
         let (reaper_tx, reaper_rx) = mpsc::unbounded_channel();
         let shared = Arc::new(Shared {
@@ -189,20 +234,27 @@ impl PgBus {
             takes: progress::Takes::default(),
             reaper_beat: progress::ReaperBeat::default(),
             sweeps: std::sync::atomic::AtomicBool::new(false),
+            background,
         });
-        let handles = vec![
-            runtime.spawn(listen::run(Arc::clone(&shared))),
-            runtime.spawn(reaper::run(Arc::clone(&shared), reaper_rx)),
-        ];
+        let handles = match background {
+            Background::ListenAndReap => vec![
+                runtime.spawn(listen::run(Arc::clone(&shared))),
+                runtime.spawn(reaper::run(Arc::clone(&shared), reaper_rx)),
+            ],
+            // The reaper's receiver is dropped: what a subscription would
+            // tell it goes nowhere.
+            Background::None => Vec::new(),
+        };
         tracing::info!(
             group_capacity = config.group_capacity.get(),
             ack_timeout_ms =
                 u64::try_from(config.ack_timeout.get().as_millis()).unwrap_or(u64::MAX),
+            background = background.label(),
             "postgres bus started"
         );
         let tasks = Arc::new(Tasks {
             shared: Arc::clone(&shared),
-            handles,
+            handles: Mutex::new(handles),
         });
         Ok(Self { shared, tasks })
     }
@@ -326,6 +378,69 @@ impl PgBus {
         self.tasks.stop();
         tracing::info!("postgres bus stopped");
     }
+
+    /// Stop for good as a lost lock's holder must: the bus closes (waiting
+    /// `next` calls return `None`), the listener and the reaper are
+    /// aborted, every take in flight is aborted, and each is joined by
+    /// `deadline`. Once every take is joined none can commit: a take's
+    /// transaction lives in its task. Nothing in the database is touched:
+    /// held deliveries stay held for the next holder's
+    /// [`PgBus::recover_held`], and the reaper fails nothing on the way out.
+    /// The pool is the caller's: close it first, so a connection an
+    /// aborted take returns is closed rather than pinged.
+    pub async fn abandon(&self, deadline: Instant) -> Abandoned {
+        self.shared.closed.send_replace(true);
+        let handles: Vec<JoinHandle<()>> = self.tasks.handles().drain(..).collect();
+        for handle in &handles {
+            handle.abort();
+        }
+        let takes_aborted = self.shared.takes.abort_all();
+        let mut tasks_joined = true;
+        for handle in handles {
+            // An aborted task's join reports the cancellation.
+            if tokio::time::timeout_at(deadline, handle).await.is_err() {
+                tasks_joined = false;
+            }
+        }
+        let takes_joined = self.shared.takes.none_by(deadline).await;
+        let abandoned = Abandoned {
+            tasks_joined,
+            takes_aborted,
+            takes_joined,
+        };
+        match tasks_joined && takes_joined {
+            true => tracing::info!(
+                takes_aborted,
+                "postgres bus abandoned: listener, reaper and takes joined"
+            ),
+            false => tracing::warn!(
+                tasks_joined,
+                takes_joined,
+                takes_aborted,
+                takes_left = self.shared.takes.in_flight(),
+                "postgres bus abandoned; not every task ended by the deadline"
+            ),
+        }
+        abandoned
+    }
+}
+
+/// Which background tasks a bus runs.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Background {
+    /// The `LISTEN` task and the reaper: a bus that subscribes.
+    ListenAndReap,
+    /// Neither: a bus that only publishes.
+    None,
+}
+
+impl Background {
+    fn label(self) -> &'static str {
+        match self {
+            Self::ListenAndReap => "listen_and_reap",
+            Self::None => "publish_only",
+        }
+    }
 }
 
 impl EventBus for PgBus {
@@ -343,6 +458,14 @@ impl EventBus for PgBus {
         group: ConsumerGroup,
         retry: RetryPolicy,
     ) -> Result<PgSubscription, BusError> {
+        if self.shared.background == Background::None {
+            return Err(BusError::PublishRejected {
+                reason: format!(
+                    "group {}: a publish-only bus takes no subscription (nothing would wake or reap it)",
+                    group.0
+                ),
+            });
+        }
         let subscribed = subscription::subscribe(&self.shared, subjects, group, retry).await?;
         self.shared
             .sweeps
@@ -359,5 +482,49 @@ impl DrainTarget for PgBus {
     /// One transaction for the whole batch, in order, idempotent on ids.
     async fn publish_batch(&self, envelopes: Vec<Envelope>) -> Result<(), BusError> {
         publish::publish(&self.shared, &envelopes).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::Duration;
+
+    use crosstalk_spec::events::Subject;
+    use crosstalk_spec::interfaces::l2_transport::{
+        BusError, ConsumerGroup, EventBus, RetryPolicy,
+    };
+    use crosstalk_spec::support::SystemClock;
+    use sqlx::postgres::PgPoolOptions;
+
+    use super::{PgBus, PgBusConfig};
+
+    /// A capture side's bus only appends: a subscription on it would never
+    /// be woken but by its poll and its holds never reaped, so it is
+    /// refused before any database is touched.
+    #[tokio::test]
+    async fn a_publish_only_bus_refuses_subscriptions() {
+        let pool = PgPoolOptions::new()
+            .connect_lazy("postgres://nobody@127.0.0.1:1/none")
+            .expect("a lazy pool");
+        let bus = PgBus::publisher(
+            pool,
+            std::sync::Arc::new(SystemClock),
+            PgBusConfig::default(),
+        )
+        .expect("a bus");
+        let retry = RetryPolicy::new(
+            std::num::NonZeroU32::MIN,
+            Duration::from_millis(1),
+            Duration::from_millis(1),
+        )
+        .expect("a retry policy");
+        let refused = bus
+            .subscribe(&[Subject::Changed], ConsumerGroup("g".to_owned()), retry)
+            .await;
+        assert!(
+            matches!(&refused, Err(BusError::PublishRejected { reason }) if reason.contains("publish-only")),
+            "{refused:?}"
+        );
+        assert!(bus.tasks.handles().is_empty(), "no listener, no reaper");
     }
 }
