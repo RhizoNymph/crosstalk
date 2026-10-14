@@ -11,16 +11,16 @@ fn section(json: serde_json::Value) -> Result<StoreSection, serde_json::Error> {
 }
 
 #[test]
-fn the_defaults_are_a_minute_and_fifteen_seconds() {
+fn the_defaults_are_twenty_and_fifteen_seconds_and_fifteen_minutes() {
     let defaults = PipelineTimeouts::default();
     assert_eq!(defaults.retention(), Duration::from_secs(15 * 60));
     assert_eq!(
         PipelineTimeouts::DEFAULT_RETENTION,
         Duration::from_secs(15 * 60)
     );
-    assert_eq!(defaults.statement(), Duration::from_secs(60));
+    assert_eq!(defaults.statement(), Duration::from_secs(20));
     assert_eq!(defaults.lock(), Duration::from_secs(15));
-    assert_eq!(PipelineTimeouts::DEFAULT_STATEMENT, Duration::from_secs(60));
+    assert_eq!(PipelineTimeouts::DEFAULT_STATEMENT, Duration::from_secs(20));
     assert_eq!(PipelineTimeouts::DEFAULT_LOCK, Duration::from_secs(15));
 }
 
@@ -113,9 +113,9 @@ fn the_session_settings_are_whole_milliseconds() {
     assert_eq!(
         PipelineTimeouts::default().session_settings(),
         [
-            ("statement_timeout", "60000ms".to_owned()),
+            ("statement_timeout", "20000ms".to_owned()),
             ("lock_timeout", "15000ms".to_owned()),
-            ("crosstalk.statement_timeout", "60000ms".to_owned()),
+            ("crosstalk.statement_timeout", "20000ms".to_owned()),
             ("crosstalk.retention_timeout", "900000ms".to_owned()),
         ]
     );
@@ -148,7 +148,7 @@ fn the_store_section_defaults_them() {
     assert_eq!(
         partial.pipeline_timeouts,
         PipelineTimeouts::new(
-            Duration::from_secs(60),
+            Duration::from_secs(20),
             Duration::from_secs(5),
             PipelineTimeouts::DEFAULT_RETENTION
         )
@@ -257,5 +257,39 @@ fn the_store_section_reads_the_retention_bound() {
         store.pipeline_timeouts.retention(),
         Duration::from_secs(30 * 60)
     );
-    assert_eq!(store.pipeline_timeouts.statement(), Duration::from_secs(60));
+    assert_eq!(store.pipeline_timeouts.statement(), Duration::from_secs(20));
+}
+
+/// A stalled statement must be cancelled before its delivery's hold times
+/// out: the reaper's take-back counts an attempt, a stage's release does
+/// not. So the statement bound must stay below the bus's ack timeout; the
+/// defaults (20 s, 30 s) do.
+#[test]
+fn the_statement_bound_must_stay_below_the_ack_timeout() {
+    let defaults = PipelineTimeouts::default();
+    assert_eq!(
+        defaults.check_ack_timeout(crosstalk_transport::PgBusConfig::DEFAULT_ACK_TIMEOUT),
+        Ok(())
+    );
+    let minute = PipelineTimeouts::new(
+        Duration::from_secs(60),
+        Duration::from_secs(15),
+        PipelineTimeouts::DEFAULT_RETENTION,
+    )
+    .expect("valid on its own");
+    assert_eq!(
+        minute.check_ack_timeout(Duration::from_secs(30)),
+        Err(InvalidPipelineTimeouts::StatementNotBelowAckTimeout {
+            statement_ms: 60_000,
+            ack_timeout_ms: 30_000
+        })
+    );
+    assert_eq!(
+        minute.check_ack_timeout(Duration::from_secs(60)),
+        Err(InvalidPipelineTimeouts::StatementNotBelowAckTimeout {
+            statement_ms: 60_000,
+            ack_timeout_ms: 60_000
+        })
+    );
+    assert_eq!(minute.check_ack_timeout(Duration::from_secs(61)), Ok(()));
 }

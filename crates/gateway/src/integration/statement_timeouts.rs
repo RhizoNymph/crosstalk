@@ -80,7 +80,7 @@ where
 }
 
 /// A pipeline incarnation's sessions carry the configured bounds (the
-/// defaults when none are configured: 60 s and 15 s); capture's publisher
+/// defaults when none are configured: 20 s and 15 s); capture's publisher
 /// pool carries none (capture is never cancelled by them, and a stalled
 /// append spools at the publish's own client-side timeout).
 #[tokio::test(flavor = "multi_thread")]
@@ -111,7 +111,7 @@ async fn pg_pipeline_pools_carry_the_bounds_and_the_publisher_pool_none() {
         "crosstalk-timeouts-test-defaults",
         Epoch::new(0),
     );
-    assert_eq!(show(&defaults, "statement_timeout").await, "1min");
+    assert_eq!(show(&defaults, "statement_timeout").await, "20s");
     assert_eq!(show(&defaults, "lock_timeout").await, "15s");
 
     let publisher = derived_pool(&template, 2, "crosstalk-timeouts-test-capture");
