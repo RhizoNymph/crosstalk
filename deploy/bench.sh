@@ -30,6 +30,9 @@
 
 # Inside the compose network.
 bench_api_url="http://crosstalk:8081"
+# 1 with --standby: steps 6 to 7 read whichever gateway holds the pipeline
+# lock, and the snapshot takes both gateways' exchange logs and blobs.
+bench_standby=0
 # Where the `data` volume is mounted (read-only) in the bench container;
 # the gateway's data directory (blobs.root's parent).
 bench_data_dir="/var/lib/crosstalk"
@@ -102,6 +105,31 @@ standby_ops_url() {
     port="$(env_value CROSSTALK_STANDBY_OPS_PORT)"
     [[ -z "$bind" || "$bind" == "0.0.0.0" ]] && bind="127.0.0.1"
     printf 'http://%s:%s\n' "$bind" "${port:-29464}"
+}
+
+# With --standby, the service holding the pipeline lock after a takeover
+# test (crosstalk or crosstalk-standby): it runs Live and serves the
+# detections. Without --standby, always crosstalk.
+lock_holder() {
+    local lock
+    if ((bench_standby == 1)); then
+        lock="$(readyz_field pipeline_lock "$(curl -sS --max-time 5 "$(standby_ops_url)/readyz" 2>/dev/null)")"
+        if [[ "$lock" == held ]]; then
+            echo crosstalk-standby
+            return
+        fi
+    fi
+    echo crosstalk
+}
+
+# The lock holder's ops listener from this host, and its API inside the
+# compose network.
+holder_ops_url() {
+    if [[ "$(lock_holder)" == crosstalk-standby ]]; then standby_ops_url; else ops_url; fi
+}
+
+holder_api_url() {
+    printf 'http://%s:8081\n' "$(lock_holder)"
 }
 
 api_url() {
@@ -306,8 +334,10 @@ run_swarm() {
 # snapshot; empty when the gateway has no `live` section.
 healthz_watermark() {
     local out="$1" body
-    body="$(curl -fsS --max-time 5 "$(ops_url)/healthz")" \
-        || bench_fail "$(ops_url)/healthz did not answer"
+    local url
+    url="$(holder_ops_url)"
+    body="$(curl -fsS --max-time 5 "${url}/healthz")" \
+        || bench_fail "${url}/healthz did not answer"
     printf '%s\n' "$body" >"$out"
     sed -n 's/.*"watermark_micros":[[:space:]]*\([0-9][0-9]*\).*/\1/p' <<<"$body"
 }
@@ -342,7 +372,7 @@ fetch_detections() {
     dir="${here}/bench/${run}"
     if [[ "$quiet" != 1 ]]; then
         compose --profile bench run --rm --no-deps -T bench \
-            swarm-fetch --api "$bench_api_url" --token-env CROSSTALK_API_TOKEN \
+            swarm-fetch --api "$(holder_api_url)" --token-env CROSSTALK_API_TOKEN \
             --truth "/bench/${run}/truth.jsonl" --out "/bench/${run}" \
             || bench_fail "ct-eval swarm-fetch failed; the detection state is still in crosstalk until it restarts"
         return
@@ -352,7 +382,7 @@ fetch_detections() {
     # and byte sizes. On failure the output is kept in fetch.err for
     # debugging: a failed fetch is not a usable holdout anyway.
     out="$(compose --profile bench run --rm --no-deps -T bench \
-        swarm-fetch --api "$bench_api_url" --token-env CROSSTALK_API_TOKEN \
+        swarm-fetch --api "$(holder_api_url)" --token-env CROSSTALK_API_TOKEN \
         --truth "/bench/${run}/truth.jsonl" --out "/bench/${run}" 2>&1)" || rc=$?
     if ((rc != 0)); then
         printf '%s\n' "$out" >"${dir}/fetch.err"
@@ -372,13 +402,26 @@ fetch_detections() {
 # from-export reads them beside the truth and the export). Both accumulate
 # across runs (blobs are content-addressed), so this copies everything so
 # far; the importer joins on the run's sessions.
+# With --standby the exchange log is written by whichever gateway held the
+# pipeline lock (its exchange-log group), so after a takeover the run's log
+# is split across the two data volumes: both logs are concatenated
+# (crosstalk's first) and both blob stores merged (content-addressed).
 snapshot_inputs() {
-    local run="$1" id dir="${here}/bench/${run}"
+    local run="$1" id sid dir="${here}/bench/${run}"
     id="$(compose ps -q crosstalk)"
     [[ -n "$id" ]] || bench_fail "no crosstalk container to copy the exchange log and blobs from"
     docker cp "${id}:${bench_data_dir}/exchanges/exchange-log.jsonl" "${dir}/exchange-log.jsonl" \
         && docker cp "${id}:${bench_data_dir}/blobs" "${dir}/blobs" \
         || bench_fail "could not copy the exchange log and blobs into ${dir}"
+    ((bench_standby == 1)) || return 0
+    sid="$(compose ps -q crosstalk-standby)"
+    [[ -n "$sid" ]] || bench_fail "no crosstalk-standby container to copy its exchange log and blobs from"
+    if docker cp "${sid}:${bench_data_dir}/exchanges/exchange-log.jsonl" "${dir}/exchange-log.standby.jsonl" 2>/dev/null; then
+        cat "${dir}/exchange-log.standby.jsonl" >>"${dir}/exchange-log.jsonl"
+    fi
+    if docker cp "${sid}:${bench_data_dir}/blobs" "${dir}/blobs.standby" 2>/dev/null; then
+        cp -rn "${dir}/blobs.standby/." "${dir}/blobs/" && rm -rf "${dir}/blobs.standby"
+    fi
 }
 
 # One ct-bench-detect step in the bench container; its output goes to
@@ -406,7 +449,7 @@ bench_detect_step() {
 bench_detect_inputs() {
     local run="$1" quiet="$2"
     bench_detect_step "$run" "$quiet" detect-fetch \
-        fetch --api "$bench_api_url" --token-env CROSSTALK_API_TOKEN \
+        fetch --api "$(holder_api_url)" --token-env CROSSTALK_API_TOKEN \
         --truth "/bench/${run}/truth.jsonl" --out "/bench/${run}"
     bench_detect_step "$run" "$quiet" from-export \
         from-export --run "/bench/${run}" --out "/bench/${run}/bench-input"
@@ -497,6 +540,7 @@ bench() {
     need_env
     compose_files+=(-f "${here}/compose.demo.yaml")
     ((standby == 1)) && compose_files+=(-f "${here}/compose.standby.yaml")
+    bench_standby="$standby"
     command -v curl >/dev/null 2>&1 || bench_fail "needs curl on this host (to read /readyz and /healthz)"
     BENCH_UID="$(id -u)"
     BENCH_GID="$(id -g)"

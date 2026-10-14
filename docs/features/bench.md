@@ -137,8 +137,21 @@ bash deploy/run.sh bench --yes --holdout --seed 1000002 --scenario boilerplate
 `crosstalk-standby` on the run's database (deploy.md, "Standby gateway").
 The bench waits until the standby is healthy (`/healthz`) and its
 `/readyz` reports `pipeline_lock: held elsewhere`, then runs as usual:
-the swarm's traffic goes only through crosstalk's proxy, and the export,
-fetch and score read crosstalk's API. A standby left from an earlier run
+the swarm's traffic goes only through crosstalk's proxy. After the swarm
+the bench follows the lock, since a takeover moves Live and the operator
+API to the other gateway:
+
+- **Watermark and fetches** (steps 6 and 7) read whichever gateway's
+  `/readyz` says `pipeline_lock: held` (`lock_holder`: the standby if it
+  holds the lock, else crosstalk): its `/healthz` watermark and its API
+  (`http://<holder>:8081`) for `swarm-fetch` and `ct-bench-detect fetch`.
+- **Snapshot.** The exchange log is written by the lock holder's
+  `exchange-log` group, so after a takeover the run's log is split across
+  the two data volumes. `snapshot_inputs` appends the standby's log to
+  crosstalk's (kept as `exchange-log.standby.jsonl` too) and merges the
+  standby's blobs into `blobs/` (content-addressed, so a union).
+
+A standby left from an earlier run
 (it would be on that run's database) is removed at the start. Fault
 scripts beside the bench kill, terminate or partition `crosstalk` and
 watch the standby take over. `bench.env` records `standby=1`. Not with
@@ -332,7 +345,7 @@ the upstream URL) to differ:
 | File | Role |
 | --- | --- |
 | `deploy/run.sh` | Usage text and the `bench` subcommand; sources `deploy/bench.sh` |
-| `deploy/bench.sh` | The bench: one function per step (`confirm_restart`, `start_stack`, `require_detection`, `fresh_world`, `start_standby`, `run_swarm`, `wait_caught_up`, `fetch_detections`, `score`), plus `bench` (options), `ops_url`, `standby_ops_url`, `api_url`, `env_value`, `ready_task`, `readyz_field`, `wait_pipeline_recovered`, `healthz_watermark`, `demo_flow_ms`, `wait_healthy` |
+| `deploy/bench.sh` | The bench: one function per step (`confirm_restart`, `start_stack`, `require_detection`, `fresh_world`, `start_standby`, `run_swarm`, `wait_caught_up`, `fetch_detections`, `score`), plus `bench` (options), `ops_url`, `standby_ops_url`, `lock_holder`, `holder_ops_url`, `holder_api_url`, `api_url`, `env_value`, `ready_task`, `readyz_field`, `wait_pipeline_recovered`, `healthz_watermark`, `demo_flow_ms`, `wait_healthy` |
 | `deploy/compose.standby.yaml` | `crosstalk-standby` (profile `standby`) for `--standby`: see deploy.md, "Standby gateway" |
 | `deploy/compose.demo.yaml` | The `bench` service: the demo image with entrypoint `ct-eval`, profile `bench`, `restart: "no"`, `user: ${BENCH_UID:-65532}:${BENCH_GID:-65532}`, `CROSSTALK_API_TOKEN`, `./bench:/bench` and `data:/var/lib/crosstalk:ro` |
 | `deploy/demo.Dockerfile` | Builds `crosstalk-demo`, `ct-eval` and `ct-bench-detect` in one cargo invocation, and `a2a-bench` from the bench mirror (the `a2a` build context) at `ARG A2A_BENCH_REF`; ships `a2a-bench` at `/usr/local/bin/a2a-bench`, the bench repo's `gates/*.toml` at `/usr/local/share/a2a-bench/gates/` and `/usr/local/share/a2a-bench/REF` (`bench_ref`, `bench_commit`), which `bench_ref_lines` copies into `bench.env`. The `.dockerignore` already admits `crates/` and `spec/` and excludes only `deploy`, `target`, VCS and editor files, which the build does not need |
