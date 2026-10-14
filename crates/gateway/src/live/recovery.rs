@@ -370,6 +370,56 @@ mod tests {
         assert_eq!(json["last_loss"]["reason"], "ping_timed_out");
     }
 
+    /// Fencing (the lock taken, waiting for an earlier incarnation's
+    /// connections to close) is on the way to running: ready, degraded,
+    /// recovery pending, the lock held; for a standby taking over and for
+    /// an owner resuming after a loss alike.
+    #[test]
+    fn fencing_is_ready_degraded_with_recovery_pending() {
+        let mut status = PipelineStatus::waiting();
+        status.migrations = MigrationState::AtHead;
+        status.lock = LockState::Held;
+        status.phase = PipelinePhase::Fencing;
+        status.report.epoch = Epoch::new(4);
+        assert_eq!(status.pipeline_text(), "fencing");
+        assert_eq!(status.recovery_text(), "pending");
+        assert_eq!(status.lock_text(), "held");
+        assert!(status.degraded() && !status.blocks_readiness());
+        status.report.lock_losses = 2;
+        assert!(status.degraded() && !status.blocks_readiness());
+    }
+
+    /// The report's epoch: a number, 0 before the first take, decoded
+    /// strictly beside the other fields.
+    #[test]
+    fn the_report_carries_the_epoch() {
+        let report = RecoveryReport {
+            incarnation: 2,
+            epoch: Epoch::new(7),
+            lock_losses: 1,
+            ..RecoveryReport::default()
+        };
+        let json = serde_json::to_value(report).expect("encodes");
+        assert_eq!(json["epoch"], 7);
+        assert_eq!(json["incarnation"], 2);
+        let decoded: RecoveryReport = serde_json::from_value(json.clone()).expect("decodes");
+        assert_eq!(decoded, report);
+        assert_eq!(RecoveryReport::default().epoch, Epoch::new(0));
+        let mut without = json.clone();
+        without
+            .as_object_mut()
+            .expect("an object")
+            .remove("epoch");
+        let decoded: RecoveryReport = serde_json::from_value(without).expect("decodes");
+        assert_eq!(decoded.epoch, Epoch::new(0), "absent: 0");
+        let mut negative = json.clone();
+        negative["epoch"] = serde_json::json!(-1);
+        assert!(serde_json::from_value::<RecoveryReport>(negative).is_err());
+        let mut surprise = json;
+        surprise["epochs"] = serde_json::json!(1);
+        assert!(serde_json::from_value::<RecoveryReport>(surprise).is_err());
+    }
+
     #[test]
     fn a_lock_held_elsewhere_blocks_readiness() {
         let mut status = PipelineStatus::waiting();

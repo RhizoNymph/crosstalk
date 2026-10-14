@@ -236,16 +236,25 @@ pub async fn sessions_by_name(db: &TestDb) -> BTreeMap<String, i64> {
 }
 
 /// The pipeline incarnations' `application_name`s this process opened
-/// sessions under (`crosstalk-pipeline-<pid>-<n>`), by incarnation.
+/// sessions under (`crosstalk-pipeline-<pid>-<n>-e<epoch>`), by
+/// incarnation.
 pub fn incarnations(names: &BTreeMap<String, i64>) -> BTreeMap<u64, i64> {
     let prefix = format!("crosstalk-pipeline-{}-", std::process::id());
     names
         .iter()
         .filter_map(|(name, count)| {
-            let n = name.strip_prefix(&prefix)?.parse::<u64>().ok()?;
-            Some((n, *count))
+            let (n, _epoch) = name.strip_prefix(&prefix)?.split_once("-e")?;
+            Some((n.parse::<u64>().ok()?, *count))
         })
         .collect()
+}
+
+/// The epoch a pipeline incarnation's `application_name`
+/// (`crosstalk-pipeline-<pid>-<n>-e<epoch>`) names, any process's.
+pub fn epoch_of(name: &str) -> Option<u64> {
+    let rest = name.strip_prefix("crosstalk-pipeline-")?;
+    let (_, epoch) = rest.rsplit_once("-e")?;
+    epoch.parse().ok()
 }
 
 /// End the session holding the pipeline lock, as a crash of the server's

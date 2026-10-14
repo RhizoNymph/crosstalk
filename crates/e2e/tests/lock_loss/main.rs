@@ -16,6 +16,11 @@
 //!   is held elsewhere, then resumes.
 //! - `repeated`: five losses and resumes in one process, each returning
 //!   the runtime's tasks and the server's sessions to their baseline.
+//! - `standby`: two gateways on one database, the owner's lock session
+//!   terminated (or the owner killed) and the standby taking over: its
+//!   take fences the owner's epoch, so no write of the older epoch commits
+//!   once the standby's incarnation began; the old owner stands by,
+//!   capturing throughout.
 //!
 //! The tests take turns (`harness::serial`): each runs a gateway against
 //! its own database, and the loss detection's timing must not depend on
@@ -28,3 +33,4 @@ mod harness;
 mod partition;
 mod repeated;
 mod rival;
+mod standby;

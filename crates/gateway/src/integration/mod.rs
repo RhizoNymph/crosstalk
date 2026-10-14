@@ -4,6 +4,7 @@
 //! `TestDb::new_or_skip` (the node0 server named by `TEST_DATABASE_URL`)
 //! and skips, passing, without one.
 
+mod fence;
 mod lock;
 mod pool_close;
 
@@ -288,7 +289,7 @@ async fn pg_readyz_reports_behind_then_every_recovery_step() {
     let ready = ops.readiness().await;
     assert!(!ready.ready, "{ready:?}");
     assert!(
-        ready.migrations.starts_with("behind: transport 0 < 2"),
+        ready.migrations.starts_with("behind: transport 0 < 3"),
         "{}",
         ready.migrations
     );

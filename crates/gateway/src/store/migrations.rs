@@ -188,6 +188,25 @@ mod tests {
         assert_eq!(seen.len(), LAYERS.len());
     }
 
+    /// Transport's head creates the pipeline epoch the lock's holder bumps
+    /// and every pipeline connection checks.
+    #[test]
+    fn transport_head_creates_the_pipeline_epoch() {
+        let transport = &LAYERS[0];
+        assert_eq!(transport.head(), 3);
+        let epoch = transport
+            .migrator
+            .iter()
+            .find(|migration| migration.version == 3)
+            .expect("migration 3");
+        assert_eq!(epoch.description, "pipeline epoch");
+        assert!(
+            epoch.sql.contains("CREATE TABLE pipeline_epoch"),
+            "{}",
+            epoch.sql
+        );
+    }
+
     #[test]
     fn behind_reads_as_readyz_shows_it() {
         let text = describe(&[
