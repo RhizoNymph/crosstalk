@@ -110,10 +110,10 @@ services:
 
   # ct-bench-detect, one subcommand per `run.sh bench` step (the options
   # replace the empty command; the a2a-bench steps override the
-  # entrypoint). Reads the gateway's exchange log and blobs from the `data`
-  # volume, read-only, and writes under deploy/bench/.
+  # entrypoint). Reads the gateway only through its API and writes under
+  # deploy/bench/; it mounts no gateway volume.
   # run.sh sets BENCH_UID/BENCH_GID to the invoking user so the run's files
-  # are theirs; the volume's files are world-readable (0644/0755).
+  # are theirs.
   bench:
     <<: *demo-image
     profiles: [bench]
@@ -127,4 +127,3 @@ services:
       CROSSTALK_API_TOKEN: ${CROSSTALK_API_TOKEN:?run deploy/run.sh init}
     volumes:
       - ./bench:/bench
-      - data:/var/lib/crosstalk:ro
