@@ -19,7 +19,7 @@
 #                            [--scenario S] [--settle-timeout SECS] [--holdout] [--yes] [-- swarm options...]
 #       one scored detection benchmark on the demo stack: restarts wiki and
 #       crosstalk, runs the swarm with ground truth, waits for the gateway to
-#       settle, exports its detections and scores them with ct-eval into
+#       settle, exports its detections and scores them with a2a-bench into
 #       deploy/bench/<run>/ (exit 2 = a gate failed). See docs/features/bench.md.
 set -euo pipefail
 
