@@ -506,7 +506,7 @@ as its own publish timeout does.
 | outbox relays while running (L7 relay task; L3, L5, L6 relays after a write) | a relay error | warn, next wake-up or poll; stamped rows republished under their ids (INV-1211 to INV-1213) | retried |
 | recovery (`recover_held`, `PgStores::open`, the relays, `restore`, `InProcess::host`, subscribing) | `LiveError` (never `is_permanent` for a database error) | `StartFailed::Retry`: the incarnation is abandoned and started again after `RETRY` | retried |
 | surface relay's node facts (`NodeFeeder::apply_all`) | a read error | warn `node facts not refreshed`; not retried until the next start rebuilds them | counted, continues (as for any database error before) |
-| `/healthz` `group_stats` (capture's bus: no server-side bound) | - | bounded client-side: `HEALTH_BUS_BOUND` (2 s), then `bus: {"unavailable": {"timed_out": {"bound_ms": 2000}}}` (warn); a failed read `{"unavailable": {"failed": {"error"}}}` | answers |
+| `/healthz` `group_stats` (capture's bus: no server-side bound) | - | bounded client-side: `HEALTH_BUS_BOUND` (2 s), then `bus: {"unavailable": {"timed_out": {"bound_ms": 2000}}}` (warn); a failed read (database out of reach) leaves `bus` out | answers |
 | LISTEN `recv` (`listen.rs`, an incarnation connection) | no statement runs while it waits, so neither bound applies | not bounded and need not be: notifications are hints (each waiting `next` re-reads at the poll, 250 ms), the task blocks nothing, a partition is caught by the lock's `DETECTION` and the abandon aborts and joins it | covered |
 
 **Long statements on the pipeline pool**, against the 20 s default on a
@@ -773,8 +773,8 @@ drained back to `direct` since.
 
 `/healthz` adds `bus.groups.<name>.{pending, oldest_pending_micros,
 dead_letters}` (read from the database within `HEALTH_BUS_BOUND`, 2 s;
-otherwise `bus.unavailable.timed_out.bound_ms` or
-`bus.unavailable.failed.error`), `statement_timeouts.{statement, lock}`
+otherwise `bus.unavailable.timed_out.bound_ms`; left out while the
+database refuses the read), `statement_timeouts.{statement, lock}`
 (statements the server cancelled at a pipeline bound, see "Bounded
 statements"), `recovery.{outbox_relayed, flow_checkpoint_micros,
 accesses_refed, deliveries_redelivered, incarnation, epoch, lock_losses,
