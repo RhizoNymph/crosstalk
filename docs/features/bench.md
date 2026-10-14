@@ -149,7 +149,8 @@ API to the other gateway:
   `exchange-log` group, so after a takeover the run's log is split across
   the two data volumes. `snapshot_inputs` appends the standby's log to
   crosstalk's (kept as `exchange-log.standby.jsonl` too) and merges the
-  standby's blobs into `blobs/` (content-addressed, so a union).
+  standby's blobs into `blobs/` (content-addressed, so a union; with the
+  shared blob mount they are the same store).
 
 A standby left from an earlier run
 (it would be on that run's database) is removed at the start. Fault

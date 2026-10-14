@@ -6,8 +6,10 @@
 #   bash deploy/run.sh bench --standby ...     # the bench starts it (step 4b)
 #
 # Under the `standby` profile, so a plain `up` with this file never starts it.
-# It has its own data volume (spool and blobs are per process and must never
-# be shared) and its own host ports; agents keep using crosstalk's proxy. See
+# It has its own data volume (the spool is per process and must never be
+# shared) but mounts crosstalk's blob store, so after a takeover it can read
+# the bodies crosstalk captured; and its own host ports; agents keep using
+# crosstalk's proxy. See
 # docs/features/deploy.md ("Standby gateway").
 
 services:
@@ -21,6 +23,16 @@ services:
     volumes: !override
       - ./demo/crosstalk.demo.json:/etc/crosstalk/crosstalk.json:ro
       - standby-data:/var/lib/crosstalk
+      # Takeover tests only: crosstalk's blob store, shared. The lock holder's
+      # L3 reads message bodies the capturing gateway stored, and each
+      # gateway's store is otherwise its own volume. Safe to share:
+      # FsBlobStore is content-addressed, writes a create_new temp file then
+      # renames it into place, and never deletes. The spool stays per process.
+      - type: volume
+        source: data
+        target: /var/lib/crosstalk/blobs
+        volume:
+          subpath: blobs
     ports: !override
       - ${CROSSTALK_BIND:-127.0.0.1}:${CROSSTALK_STANDBY_PROXY_PORT:-28080}:8080
       - ${CROSSTALK_BIND:-127.0.0.1}:${CROSSTALK_STANDBY_API_PORT:-28081}:8081
