@@ -26,7 +26,8 @@ through the wiki. The compose override `deploy/compose.demo.yaml` and
   model's GET and PUT calls against the wiki and send back their results.
   The driver reports throughput, client-observed latency and the expected
   cross-agent transmissions, and can write that ground truth as JSON lines
-  ([schema v2](#ground-truth-v2), which ct-eval scores against).
+  ([schema v2](#ground-truth-v2), which a2a-transmission-bench's demo-swarm
+  converter labels and scores against).
 - The container healthcheck (`healthcheck`), since the runtime image is
   distroless.
 - The compose override, the image, the demo gateway config and the
@@ -376,7 +377,8 @@ writes the file below. `--json` prints the report as JSON instead of text.
 
 ### Ground truth v2
 
-The schema is agreed with ct-eval's owner. Every line is one JSON object;
+The schema was agreed with ct-eval's owner (ct-eval's demo-swarm
+converter now lives in a2a-transmission-bench). Every line is one JSON object;
 the first line is the header. `turn` is the 0-based ordinal of generation
 requests (POST /v1/messages) the agent sent in that session that may have
 reached the gateway, counting failed and retried ones and nothing else. A
@@ -599,8 +601,8 @@ demo services.
 | `crates/demo/Cargo.toml` | `crosstalk-demo`: spec, testkit; blake3, bytes, http-body-util, hyper (client, http1, server), hyper-util (tokio), serde, serde_json, sha2, thiserror, tokio (fs, io-util, macros, net, rt, rt-multi-thread, signal, sync, time), tracing, tracing-subscriber (env-filter, fmt, json, std); bin `crosstalk-demo` |
 | `crates/demo/src/**` | See [Layout and reuse](#layout-and-reuse) |
 | `crates/gateway/tests/architecture.rs` | Adds the `Tool` role (`demo`), `Violation::LayerOnTool`, and tests for it |
-| `deploy/demo.Dockerfile` (+ `.dockerignore`) | Builds `crosstalk-demo` like `crosstalk.Dockerfile` (same toolchain, cache mounts and distroless runtime), and `ct-eval` with `crates/eval/gates.toml` for `run.sh bench` ([bench.md](bench.md)) |
-| `deploy/compose.demo.yaml` | Override: swaps the config mount of `migrate` and `crosstalk` to the demo config; adds `fake-upstream`, `wiki`, `swarm` (profile `swarm`, `restart: "no"`) and `bench` (ct-eval, profile `bench`, see [bench.md](bench.md)) |
+| `deploy/demo.Dockerfile` (+ `.dockerignore`) | Builds `crosstalk-demo` like `crosstalk.Dockerfile` (same toolchain, cache mounts and distroless runtime), and the bench tools for `run.sh bench`: `ct-bench-detect` (`-p crosstalk-bench-adapter`) and `a2a-bench` with the bench repo's gates ([bench.md](bench.md)) |
+| `deploy/compose.demo.yaml` | Override: swaps the config mount of `migrate` and `crosstalk` to the demo config; adds `fake-upstream`, `wiki`, `swarm` (profile `swarm`, `restart: "no"`) and `bench` (ct-bench-detect, profile `bench`, see [bench.md](bench.md)) |
 | `deploy/demo/crosstalk.demo.json` | `deploy/config/crosstalk.json` with the Anthropic route's `base_url` set to `http://fake-upstream:8070` |
 | `deploy/run.sh` | `demo up`, `demo run [swarm options]`, `demo down`, `demo logs` |
 

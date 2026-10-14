@@ -115,7 +115,9 @@ ct-bench-detect swarm-fetch --api URL [--token-env VAR] [--truth FILE | --since-
   `started_at_unix_ms` (or `--since-unix-ms`, default 0) to an hour past
   now. It prints one line naming both files and their counts (what
   `run.sh bench`'s holdout mode keeps out of its log). It is what `ct-eval
-  swarm-fetch` was, unchanged.
+  swarm-fetch` was, unchanged. `deploy/demo.Dockerfile` builds
+  `ct-bench-detect` into the demo image, and it is the compose `bench`
+  service's entrypoint, so `run.sh bench`'s fetch step runs it.
 
 ## Header
 

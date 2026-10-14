@@ -227,10 +227,11 @@ Overview:
       stored, how they run and how they scale is in docs/infrastructure.md.
       run.sh bench drives one scored detection benchmark on that stack: the
       demo swarm through the real gateway, its detections exported over the
-      L8 API, and ct-eval (shipped in the demo image) scoring them; the
-      crosstalk-infra switch moves it to ct-bench-detect swarm-fetch and
-      from-export plus the bench's scorer (ct-eval's scoring is retired
-      from the workspace).
+      L8 API with ct-bench-detect swarm-fetch, turned into bench input with
+      ct-bench-detect from-export, and scored by a2a-bench (the
+      a2a-transmission-bench scorer) with the bench repo's gates, all
+      shipped in the demo image. crosstalk itself no longer scores
+      (formerly ct-eval).
 
     ui: >
       Crate crosstalk-ui (ui/, a workspace member; Topcoat): the operator
@@ -1585,7 +1586,8 @@ Features Index:
       content's hashes and its exact message/block in the reader's request),
       which the bench's demo-swarm converter labels (formerly ct-eval).
       healthcheck serves the distroless image. deploy/compose.demo.yaml,
-      deploy/demo.Dockerfile (which also ships ct-eval for run.sh bench),
+      deploy/demo.Dockerfile (which also ships ct-bench-detect and
+      a2a-bench for run.sh bench),
       deploy/demo/crosstalk.demo.json and run.sh demo up|run|down|logs run
       the demo on the compose stack. It reuses
       testkit's harness client and SSE parser and the spec's seeded random
@@ -1609,8 +1611,8 @@ Features Index:
       gateway writing ground truth v2 to deploy/bench/<run>/ (gitignored,
       run id a UTC timestamp), wait until /healthz live.watermark_micros
       passes the swarm's end (exports are cut at the watermark), export the
-      gateway's detections with ct-bench-detect swarm-fetch over the L8 API, copy
-      the exchange log and blobs into the run, turn the run into bench
+      gateway's detections with ct-bench-detect swarm-fetch over the L8
+      API, copy the exchange log and blobs into the run, turn the run into bench
       input with ct-bench-detect, and score it with a2a-bench (the
       a2a-transmission-bench scorer, at the release tag A2A_BENCH_REF in
       deploy/demo.Dockerfile, recorded as bench_ref in bench.env) and the

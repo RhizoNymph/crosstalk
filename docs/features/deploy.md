@@ -163,7 +163,7 @@ without breaking the linking of exchanges across the change:
 | `deploy/grafana/dashboards/gateway.json` | "crosstalk / gateway" (uid `crosstalk-gateway`): health, capture, pipeline, the capture spool (Postgres mode: its state, size against the 1 GiB `spool.max_bytes` default, oldest capture's age, appended/drained/rejected rates), exchange log, the captured → published → written funnel, and the gateway's WARN/ERROR logs. |
 | `deploy/loki/loki.yaml` | Single-binary Loki on the filesystem, 7-day retention. The ingester WAL refuses writes only above 99% disk use (`disk_full_threshold: 0.99`; Loki's default 0.9 drops every log on a shared host whose disk is fuller than that). |
 | `deploy/alloy/config.alloy` | Docker log discovery, `service`/`container`/`stream` labels, JSON `level` label for crosstalk, migrate and ui. |
-| `deploy/compose.demo.yaml`, `deploy/demo.Dockerfile`, `deploy/demo/` | The token-free demo (fake upstream, wiki, agent swarm; `run.sh demo ...`): see [demo.md](demo.md). The image also carries the bench tools (`ct-eval`, `ct-bench-detect`, and `a2a-bench` at `A2A_BENCH_REF` with the bench repo's gates; [bench.md](bench.md)), and the override adds the `bench` service (profile `bench`). |
+| `deploy/compose.demo.yaml`, `deploy/demo.Dockerfile`, `deploy/demo/` | The token-free demo (fake upstream, wiki, agent swarm; `run.sh demo ...`): see [demo.md](demo.md). The image also carries the bench tools (`ct-bench-detect`, and `a2a-bench` at `A2A_BENCH_REF` with the bench repo's gates; [bench.md](bench.md)), and the override adds the `bench` service (profile `bench`). |
 | `deploy/bench.sh`, `deploy/bench/` (gitignored) | `run.sh bench`: one scored detection benchmark on the demo stack, its runs under `deploy/bench/<run>/`; see [bench.md](bench.md). |
 
 ## Store tests against the compose Postgres
@@ -357,7 +357,7 @@ rsync -a --delete --exclude deploy/.env --exclude deploy/bench --exclude target 
 
 ### The private bench dependency
 
-`crates/eval` depends on the private `a2a-transmission-bench` repository by
+`crates/bench-adapter` (`crosstalk-bench-adapter`) depends on the private `a2a-transmission-bench` repository by
 git tag; `Cargo.lock` pins its URL and commit. Image builds never see a
 GitHub token: each Rust image's build stage gets a bare mirror of that repo
 as the `a2a` build context, and git's `insteadOf` sends cargo's fetch of
