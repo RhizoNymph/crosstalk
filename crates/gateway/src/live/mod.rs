@@ -41,6 +41,8 @@ pub mod wiring;
 
 #[cfg(test)]
 mod tests;
+#[cfg(test)]
+mod stall_tests;
 
 use std::collections::BTreeMap;
 use std::sync::Arc;

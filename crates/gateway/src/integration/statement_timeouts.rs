@@ -338,64 +338,146 @@ async fn pg_a_stage_write_blocked_past_the_lock_timeout_is_retried_and_completes
         .expect("publishes");
 
     let group = Slot::L4Provenance.group().0;
-    let retried = eventually(Duration::from_secs(10), || async {
-        let (n,): (i64,) = sqlx::query_as(
-            "SELECT count(*) FROM transport.deliveries \
-             WHERE group_name = $1 AND last_error LIKE '%55P03%'",
-        )
-        .bind(&group)
-        .fetch_one(db.pool())
-        .await
-        .expect("reads the deliveries");
-        n > 0
+    let released = eventually(Duration::from_secs(10), || async {
+        l4_row(&db, &group)
+            .await
+            .is_some_and(|(_, _, error)| error.is_some_and(|error| error.contains("55P03")))
     })
     .await;
     assert!(
-        retried,
-        "L4's blocked write was not cancelled at the configured lock bound and nacked"
+        released,
+        "L4's blocked write was not cancelled at the configured lock bound and released\n{}",
+        diagnosis(&db).await
     );
     assert!(statement_timeouts().lock > before.lock);
-    assert_eq!(
-        count(&db, "SELECT count(*) FROM transport.dead_letters").await,
-        0,
-        "a cancelled write is retried, not given up on"
+
+    // Held across more rounds than the group has attempts (each round: the
+    // 300 ms lock bound, then the stall backoff): a stall spends none.
+    let attempts = crate::pipeline::Settings::from_config(
+        &GatewayConfig::from_json(
+            &serde_json::json!({
+                "ingress": {"listen": "127.0.0.1:0", "routes": [],
+                            "secrets": {"current": {"version": 1, "env": "CROSSTALK_SECRET_V1"}}},
+                "ops": {"listen": "127.0.0.1:0"},
+                "blobs": {"root": "/nonexistent/blobs"},
+            })
+            .to_string(),
+        )
+        .expect("the config parses"),
+    )
+    .consumer_retry
+    .max_attempts()
+    .get();
+    let rounds = Duration::from_millis(300) + crate::live::STALL_RETRY;
+    tokio::time::sleep(rounds * (attempts + 1)).await;
+    let row = l4_row(&db, &group).await;
+    assert!(
+        row.as_ref().is_some_and(|(attempt, _, _)| *attempt <= 1),
+        "a stalled delivery spent attempts or left its group: {row:?}\n{}",
+        diagnosis(&db).await
     );
+    assert_no_stall_dead_letters(&db, &group).await;
 
     blocker.commit().await.expect("the blocker lets go");
     let stored = eventually(Duration::from_secs(60), || async {
         count(&db, "SELECT count(*) FROM provenance.exchanges").await > 0
     })
     .await;
-    assert!(stored, "the redelivered exchange was recorded");
+    assert!(
+        stored,
+        "the redelivered exchange was recorded\n{}",
+        diagnosis(&db).await
+    );
     let settled = eventually(Duration::from_secs(60), || async {
-        let (n,): (i64,) =
-            sqlx::query_as("SELECT count(*) FROM transport.deliveries WHERE group_name = $1")
-                .bind(&group)
-                .fetch_one(db.pool())
-                .await
-                .expect("reads the deliveries");
-        n == 0
+        l4_row(&db, &group).await.is_none()
     })
     .await;
-    assert!(settled, "L4 acked the delivery once its write committed");
-    let (letters,): (i64,) =
-        sqlx::query_as("SELECT count(*) FROM transport.dead_letters WHERE group_name = $1")
-            .bind(&group)
-            .fetch_one(db.pool())
-            .await
-            .expect("reads the dead letters");
-    assert_eq!(letters, 0);
+    assert!(
+        settled,
+        "L4 acked the delivery once its write committed\n{}",
+        diagnosis(&db).await
+    );
+    assert_no_stall_dead_letters(&db, &group).await;
 
     stop_pipeline(task, &probe).await;
     db.close().await.expect("drops");
 }
 
+/// The L4 group's one delivery: attempt, state, last error.
+async fn l4_row(db: &TestDb, group: &str) -> Option<(i32, String, Option<String>)> {
+    sqlx::query_as(
+        "SELECT attempt, state, last_error FROM transport.deliveries WHERE group_name = $1",
+    )
+    .bind(group)
+    .fetch_optional(db.pool())
+    .await
+    .expect("reads the deliveries")
+}
+
+/// Every delivery and dead letter, with the event's subject: what a failed
+/// assertion prints (the lib tests install no tracing subscriber).
+async fn diagnosis(db: &TestDb) -> String {
+    let deliveries: Vec<(String, i64, i32, String, Option<String>, Option<String>)> =
+        sqlx::query_as(
+            "SELECT d.group_name, d.seq, d.attempt, d.state, d.last_error, e.subject \
+             FROM transport.deliveries d LEFT JOIN transport.events e ON e.seq = d.seq \
+             ORDER BY d.group_name, d.seq",
+        )
+        .fetch_all(db.pool())
+        .await
+        .unwrap_or_default();
+    format!(
+        "deliveries (group, seq, attempt, state, last_error, subject): {deliveries:?}\n\
+         dead letters (group, attempts, last_error, subject): {:?}",
+        dead_letter_rows(db).await
+    )
+}
+
+async fn dead_letter_rows(db: &TestDb) -> Vec<(String, i32, String, Option<String>)> {
+    sqlx::query_as(
+        "SELECT l.group_name, l.attempts, l.last_error, e.subject \
+         FROM transport.dead_letters l LEFT JOIN transport.events e ON e.seq = l.seq \
+         ORDER BY l.group_name",
+    )
+    .fetch_all(db.pool())
+    .await
+    .expect("reads the dead letters")
+}
+
+/// No dead letter is a stall's: none in L4's group (whose write was
+/// blocked), none whose last error is a statement or lock timeout. L3
+/// dead-letters this test's exchange for a reason of the message's own
+/// (its bodies were never stored: `integration::pg_settle_finishes_while_a_delivery_is_retried`
+/// relies on the same), which is not a stall and stays allowed.
+async fn assert_no_stall_dead_letters(db: &TestDb, l4: &str) {
+    let rows = dead_letter_rows(db).await;
+    let stalls: Vec<_> = rows
+        .iter()
+        .filter(|(group, _, error, _)| {
+            group == l4 || error.contains("55P03") || error.contains("57014")
+        })
+        .collect();
+    assert!(
+        stalls.is_empty(),
+        "a stall dead-lettered a delivery: {stalls:?}\nall dead letters (group, attempts, last_error, subject): {rows:?}"
+    );
+    let others: Vec<_> = rows
+        .iter()
+        .filter(|(group, _, _, _)| group != &Slot::L3Reconstruct.group().0)
+        .collect();
+    assert!(
+        others.is_empty(),
+        "unexpected dead letters: {others:?}\nall: {rows:?}"
+    );
+}
+
 /// The reaper survives a stalled sweep: with `transport.groups` locked
-/// elsewhere, its stale-hold sweep (which joins the groups) is cancelled at
-/// the lock bound instead of waiting for the blocker, and the reaper goes
-/// on to take back an expired hold (which touches only the deliveries).
-/// Without the bound the sweep, fired before the hold's deadline, would
-/// wait as long as the blocker holds, and the hold would never be reaped.
+/// elsewhere, a stale-hold sweep (which joins the groups) returns at the
+/// lock bound instead of waiting for the blocker (checked directly, with
+/// its result and timing), and the reaper's loop, whose own sweeps keep
+/// being cancelled, goes on to take back an expired hold (which touches
+/// only the deliveries). Without the bound a sweep would wait as long as
+/// the blocker holds, and so would every deadline behind it.
 #[tokio::test(flavor = "multi_thread")]
 async fn pg_the_reaper_survives_a_stalled_sweep() {
     let Some(db) = migrated("pg_the_reaper_survives_a_stalled_sweep").await else {
@@ -443,14 +525,36 @@ async fn pg_the_reaper_survives_a_stalled_sweep() {
         .expect("decodes");
     assert_eq!(delivery.attempt.get(), 1);
 
-    // Held from now until the end: every sweep of the reaper waits on it.
+    // Held from now until the end: every sweep waits on it.
     let mut blocker = db.pool().begin().await.expect("begins");
     sqlx::query("LOCK TABLE transport.groups IN ACCESS EXCLUSIVE MODE")
         .execute(&mut *blocker)
         .await
         .expect("the blocker locks the groups");
-    let before = statement_timeouts();
+    let blocked_at = Instant::now();
 
+    // A sweep run now waits on the blocker and returns at the lock bound.
+    let began = Instant::now();
+    let swept = tokio::time::timeout(Duration::from_secs(30), bus.sweep_stale_holds()).await;
+    let took = began.elapsed();
+    assert!(
+        matches!(
+            swept,
+            Ok(Err(
+                crosstalk_spec::interfaces::l2_transport::BusError::Disconnected
+            ))
+        ),
+        "a blocked sweep returns a timeout (Disconnected) at the lock bound: got {swept:?} after {took:?}"
+    );
+    assert!(
+        took < Duration::from_millis(300) + SLACK,
+        "the blocked sweep returned after {took:?}, past the 300 ms lock bound"
+    );
+
+    // The reaper's own sweeps (every ack timeout) are cancelled the same way
+    // and its loop goes on: it takes the expired hold back, and keeps going
+    // round, while every sweep stays blocked.
+    let before = statement_timeouts();
     let reaped = eventually(ack_timeout * 5, || async {
         let row: Option<(String, Option<String>)> = sqlx::query_as(
             "SELECT state, last_error FROM transport.deliveries WHERE group_name = 'reaped'",
@@ -461,13 +565,32 @@ async fn pg_the_reaper_survives_a_stalled_sweep() {
         matches!(row, Some((state, Some(error))) if state == "delayed" && error.starts_with("ack timeout"))
     })
     .await;
+    let row: Option<(String, i32, Option<String>)> = sqlx::query_as(
+        "SELECT state, attempt, last_error FROM transport.deliveries WHERE group_name = 'reaped'",
+    )
+    .fetch_optional(db.pool())
+    .await
+    .expect("reads the delivery");
     assert!(
         reaped,
-        "the reaper did not take the expired hold back while its sweep was blocked"
+        "the reaper did not take the expired hold back while its sweeps were blocked: \
+         row {row:?}, {:?} after the blocker, reaper {:?}",
+        blocked_at.elapsed(),
+        bus.reaper()
     );
+    // At least one reaper sweep ran while blocked (one every ack timeout).
+    let cancelled = eventually(ack_timeout * 2 + SLACK, || async {
+        statement_timeouts().lock > before.lock
+    })
+    .await;
     assert!(
-        statement_timeouts().lock > before.lock,
-        "the blocked sweep was cancelled at the lock bound"
+        cancelled,
+        "no sweep of the reaper's was cancelled at the lock bound in {:?} of blocking \
+         (lock timeouts {:?} -> {:?}); reaper {:?}",
+        blocked_at.elapsed(),
+        before,
+        statement_timeouts(),
+        bus.reaper()
     );
     let report = bus.reaper();
     assert!(

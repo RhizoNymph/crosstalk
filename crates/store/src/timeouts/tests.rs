@@ -149,3 +149,49 @@ fn other_failures_are_not_counted() {
         assert!(!classify(&server(code)).is_timeout(), "{code}");
     }
 }
+
+/// A timeout classified inside [`observe`] is seen by it; nothing else is;
+/// an inner scope's timeout is seen by the outer scope too.
+#[tokio::test]
+async fn a_timeout_classified_inside_a_scope_is_observed() {
+    let ((), seen) = observe(async {
+        let _ = classify(&server("55P03"));
+    })
+    .await;
+    assert_eq!(seen, Some(TimeoutKind::Lock));
+
+    let ((), none) = observe(async {
+        let _ = classify(&server("40001"));
+        let _ = classify(&server("42P01"));
+    })
+    .await;
+    assert_eq!(none, None);
+
+    let (inner, outer) = observe(async {
+        observe(async {
+            let _ = classify(&server("57014"));
+        })
+        .await
+        .1
+    })
+    .await;
+    assert_eq!(inner, Some(TimeoutKind::Statement));
+    assert_eq!(outer, Some(TimeoutKind::Statement));
+
+    // Outside any scope a timeout is still classified and counted.
+    assert!(classify(&server("57014")).is_timeout());
+}
+
+/// A scope sees only its own task's timeouts.
+#[tokio::test(flavor = "multi_thread")]
+async fn another_tasks_timeout_is_not_observed() {
+    let ((), seen) = observe(async {
+        tokio::spawn(async {
+            let _ = classify(&server("55P03"));
+        })
+        .await
+        .expect("joins");
+    })
+    .await;
+    assert_eq!(seen, None);
+}
