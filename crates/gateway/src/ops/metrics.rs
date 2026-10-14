@@ -15,8 +15,9 @@
 //! lock's series follow: `crosstalk_pipeline_lock_losses_total`,
 //! `crosstalk_pipeline_lock_last_loss_timestamp_seconds` (0 before the
 //! first loss), `crosstalk_pipeline_lock_last_loss_reason{reason}` (1 for
-//! the last loss's reason) and `crosstalk_pipeline_incarnation` (the
-//! pipeline incarnations started so far).
+//! the last loss's reason), `crosstalk_pipeline_incarnation` (the
+//! pipeline incarnations started so far) and `crosstalk_pipeline_epoch`
+//! (the pipeline epoch this process last took the lock under).
 
 use std::fmt::Write as _;
 
@@ -159,6 +160,12 @@ fn lock_series(out: &mut String, recovery: &RecoveryReport) {
         "crosstalk_pipeline_incarnation",
         "Pipeline incarnations this process started (each start after a lost lock is a new one).",
         recovery.incarnation,
+    );
+    gauge(
+        out,
+        "crosstalk_pipeline_epoch",
+        "The pipeline epoch this process last took the lock under (fencing or running); 0 before its first take.",
+        recovery.epoch.get(),
     );
 }
 

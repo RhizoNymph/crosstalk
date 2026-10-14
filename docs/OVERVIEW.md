@@ -920,8 +920,8 @@ Features Index:
       keeps captures made while the database is down and drains them in
       order under their envelope ids, PgTopicCatalog, PgProjectionStore, PgAuditLog,
       PgOperatorStore and PgSinkRegistry, PgFrontierSource in the
-      composer, one pipeline process per database (advisory lock),
-      retention per store, and the restart semantics of /readyz, /healthz
+      composer, one pipeline process per database (advisory lock, fenced
+      by an epoch: pipeline_fence), retention per store, and the restart semantics of /readyz, /healthz
       and the API. Includes the test strategy (reference-model agreement,
       restart equivalence, conformance on Postgres), the spec changes
       (landed), the parallel workstreams and the nine recorded decisions.
@@ -956,8 +956,11 @@ Features Index:
       mode starts the proxy and capture at once over the spool (capture
       appends through a publish-only PgBus over a pool of its own), then
       waits for the database, migrations at head and the pipeline advisory
-      lock, and starts a pipeline incarnation (its own pool, named
-      crosstalk-pipeline-<pid>-<n>, and its own PgBus). A lost lock never
+      lock, fenced (the take bumps the pipeline epoch and waits until no
+      connection of an earlier incarnation, of any process, is left:
+      pipeline fencing), and starts a pipeline incarnation (its own pool,
+      named crosstalk-pipeline-<pid>-<n>-e<epoch>, each connection joining
+      the fence, and its own PgBus). A lost lock never
       stops the process: the incarnation is abandoned (pool fenced, every
       task and take aborted and joined, nothing drained, no owner write
       after) and the loop waits for the database and the lock again, the
@@ -967,7 +970,7 @@ Features Index:
       spool corrupt, stopped), pipeline (abandoning after a loss) and
       recovery, ready while the database is down and through a resume;
       /healthz adds bus, recovery (lock losses, the last loss, the
-      incarnation) and spool sections; spool_full is a capture outcome. crosstalk migrate
+      incarnation, the epoch) and spool sections; spool_full is a capture outcome. crosstalk migrate
       runs every layer and --reset-correlator; crosstalk spool
       --discard-corrupt. Memory mode's replays are byte-identical. Tested
       end to end (W9): crosstalk-e2e's restart tests kill Postgres-mode Live
@@ -980,8 +983,9 @@ Features Index:
       while spooling, spool full); its lock_loss tests hold a partition or a
       reset past the loss bounds (zero refused connects), terminate the
       lock's session under a rival holder with a commit-time audit (no
-      owner write after the abandon) and lose the lock five times (no
-      leaked session or task); the L8 conformance suite runs over PgStores in process
+      owner write after the abandon), lose the lock five times (no
+      leaked session or task) and hand the pipeline to a standby gateway
+      (no write of an older epoch once the standby's incarnation began); the L8 conformance suite runs over PgStores in process
       and over HTTP, each test process seeding the world once into a
       template database and each test hosting the surface over its own
       clone of it.
@@ -1001,6 +1005,32 @@ Features Index:
       - crates/api/tests/support/pg_world.rs
     depends_on: [postgres_stores, gateway, pg_bus, publish_spool, store, reconstruct, provenance, flow_store, flow_correlator, flow_extract, search_alerts, topology_store, surface_service]
     doc: docs/features/postgres_mode.md
+  pipeline_fence:
+    description: >
+      The pipeline lock's fence, so a standby gateway on the same database
+      is safe: each taking of the lock bumps transport.pipeline_epoch
+      (committed) and then polls a second advisory key, PIPELINE_FENCE,
+      exclusively on the lock's session until no connection of an earlier
+      pipeline incarnation (any process) holds it shared, reporting
+      pipeline fencing (200 degraded) and logging the blockers at a bounded
+      rate; the wait never gives up, and a lock session failing during it
+      is a lock loss. Every connection of an incarnation pool takes the
+      fence shared in after_connect, after the session setup, then reads
+      the epoch and refuses itself (FenceError::Fenced or Fencing) unless
+      it is its own, so an older incarnation can never connect once a
+      newer epoch is taken. Capture's publisher pool, the template pool,
+      the api role and the lock session never join. The epoch is in
+      /healthz's recovery report, crosstalk_pipeline_epoch and each
+      incarnation's application_name.
+    entry_points:
+      - crates/gateway/src/store/fence/mod.rs
+      - crates/gateway/src/store/fence/wait.rs
+      - crates/gateway/src/store/lock.rs
+      - crates/gateway/src/gateway/postgres/mod.rs
+      - crates/transport/migrations/0003_pipeline_epoch.sql
+      - crates/e2e/tests/lock_loss/standby.rs
+    depends_on: [postgres_mode, pg_bus, store]
+    doc: docs/features/pipeline_fence.md
   sim:
     description: >
       crosstalk-sim, the deterministic simulation kit for every dst

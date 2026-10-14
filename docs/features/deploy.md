@@ -480,7 +480,19 @@ the new start: about 40 requests refused per restart at the bench's rate.
 - **One pipeline process per database.** `serve` takes a Postgres
   advisory lock; a second one stays not ready (`pipeline_lock: held
   elsewhere`). The publish spool (`<data dir>/spool`) is locked per data
-  directory too.
+  directory too, so a second gateway needs a data directory of its own
+  (its blob store shared with the owner's, so its pipeline can read the
+  bodies the owner captured).
+- **A standby gateway is safe.** Taking the lock bumps the pipeline epoch
+  and waits until every connection of the previous owner's pipeline is
+  gone (`pipeline: fencing`, 200 degraded; `docs/features/pipeline_fence.md`),
+  so a standby that takes over while the old owner has not yet noticed
+  its loss never runs beside it. A previous owner stopped with its
+  connections open (`SIGSTOP`, a hung host) blocks the takeover until
+  those connections die; the fencing warning names them
+  (`pg_terminate_backend` ends them). `crosstalk migrate` must have run
+  transport migration 3 (`transport.pipeline_epoch`) before `serve`
+  starts, as for any migration.
 - **The data volume is writable by uid 65532.** The image creates
   `/var/lib/crosstalk` and `/var/lib/crosstalk/blobs` with that owner, and
   a fresh named volume copies the ownership. A bind mount in its place must

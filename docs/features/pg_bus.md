@@ -29,8 +29,11 @@ whenever a `store` is configured (wired by W8: [postgres_mode](postgres_mode.md)
 - `prune(now, keep)` for log retention (decision Q6).
 - `DrainTarget` for the spool: `probe` and a one-transaction
   `publish_batch`.
-- Migrations (`crates/transport/migrations/0001_bus.sql`), `MIGRATIONS`
-  and `migrate`.
+- Migrations (`crates/transport/migrations/0001_bus.sql`,
+  `0002_held_at.sql`, `0003_pipeline_epoch.sql`), `MIGRATIONS` and
+  `migrate`. The third adds `transport.pipeline_epoch`, the one-row epoch
+  the gateway's pipeline lock bumps and its pipeline connections check
+  ([pipeline_fence.md](pipeline_fence.md)); the bus itself never reads it.
 - Structured config (`PgBusConfig`).
 
 ## Non-scope
@@ -235,6 +238,8 @@ checkpoint interval; W8 checks that at start.
 | File | Role | Key exports |
 | --- | --- | --- |
 | `crates/transport/migrations/0001_bus.sql` | the schema | - |
+| `crates/transport/migrations/0002_held_at.sql` | when each hold was taken (the stale-hold sweep) | - |
+| `crates/transport/migrations/0003_pipeline_epoch.sql` | the pipeline epoch (the gateway's fence; not the bus's) | - |
 | `src/pg/mod.rs` | the bus handle, tasks, recovery, abandon, the publish-only bus, trait impls | `PgBus`, `PgBus::{publisher, abandon}`, `Abandoned`, `Recovered`, `MIGRATIONS`, `migrate` |
 | `src/pg/progress.rs` | each take in flight: its phase, its abort handle; abort and join them all | `Takes::{attach, abort_all, none_by}` (crate), `TakeReport`, `ReaperReport` |
 | `src/pg/config.rs` | config and its checked decode | `PgBusConfig`, `InvalidPgBusConfig` |

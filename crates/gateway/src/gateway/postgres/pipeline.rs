@@ -4,16 +4,22 @@
 //! ```text
 //!            ┌──────────────────────────────────────────────────────────────┐
 //!            ▼                                                              │
-//! Waiting ─ database, migrations, lock ─▶ Starting{lock} ─ start_pg ─▶ Running(Incarnation)
-//!   ▲   (held elsewhere: retried)            │ lost / failed: parts abandoned      │ lost
-//!   │                                        ▼                                     ▼
-//!   └──────────────────────────────── (waiting again) ◀──── Abandoning{incarnation, loss}
+//! Waiting ─ database, migrations, lock, fence ─▶ Starting{lock} ─ start_pg ─▶ Running(Incarnation)
+//!   ▲   (held elsewhere: retried)                   │ lost / failed: parts abandoned      │ lost
+//!   │   (lost while fencing: counted, retried)      ▼                                     ▼
+//!   └──────────────────────────────────────── (waiting again) ◀──── Abandoning{incarnation, loss}
 //! ```
 //!
-//! Each [`State::Starting`] builds incarnation `n`: a pool of its own
-//! (`application_name` `crosstalk-pipeline-<pid>-<n>`, so its sessions are
-//! told apart in `pg_stat_activity`) and a `PgBus` over it, whose
-//! listener, reaper and takes belong to it. A lost lock abandons the
+//! Taking the lock bumps the pipeline epoch, and the take returns only once
+//! no connection of an earlier incarnation (of any process) is left: the
+//! status reads `fencing` meanwhile (`store::fence`). Each
+//! [`State::Starting`] then builds incarnation `n` under the lock's epoch
+//! `e`: a pool of its own (`application_name`
+//! `crosstalk-pipeline-<pid>-<n>-e<e>`, so its sessions are told apart in
+//! `pg_stat_activity`, across processes too; each connection joins the
+//! fence and refuses itself once `e` is not the current epoch) and a
+//! `PgBus` over it, whose listener, reaper and takes belong to it. A lost
+//! lock abandons the
 //! incarnation and never drains it: the status reads `lost` /
 //! `abandoning` at once, the API and the ops handles are cleared, the pool
 //! is closed without waiting (the fence: every acquire fails from then on,
@@ -37,8 +43,8 @@ use tokio::sync::oneshot;
 use tokio::time::Instant;
 
 use super::{
-    LOST_SHUTDOWN, PipelineHeld, PipelineStart, SERVE_IDS, StopHandle, close_bounded, derived_pool,
-    pause, wait_for_database, wait_for_migrations,
+    LOST_SHUTDOWN, PipelineHeld, PipelineStart, SERVE_IDS, StopHandle, close_bounded,
+    incarnation_pool, pause, wait_for_database, wait_for_migrations,
 };
 use crate::gateway::{StartError, access};
 use crate::live::pg::{PgParts, PgSet, bus_clock};
@@ -46,7 +52,8 @@ use crate::live::recovery::{LastLoss, LockState, PipelinePhase};
 use crate::live::{BlobConfig, Live, LiveBlobs, LiveConfig, Ticking};
 use crate::log::ExchangeLog;
 use crate::pipeline::Settings;
-use crate::store::lock::{LockLoss, PipelineLock};
+use crate::store::fence::Epoch;
+use crate::store::lock::{LockLoss, PipelineLock, TakeError};
 
 /// Run the pipeline task: see the module docs.
 pub fn spawn_pipeline(start: PipelineStart) -> StopHandle<PipelineHeld> {
@@ -70,8 +77,9 @@ enum State {
     },
 }
 
-/// One run of the pipeline under one taking of the lock. Its pool and bus
-/// (`live.layers()`) were built for it and are never reused.
+/// One run of the pipeline under one taking of the lock (its epoch is
+/// the lock's). Its pool and bus (`live.layers()`) were built for it and
+/// are never reused.
 struct Incarnation {
     number: u64,
     live: Live<PgSet>,
@@ -85,17 +93,22 @@ struct Parts {
     bus: PgBus,
 }
 
-/// The `application_name` of incarnation `number`'s sessions.
-pub fn application_name(number: u64) -> String {
-    format!("crosstalk-pipeline-{}-{number}", std::process::id())
+/// The `application_name` of the sessions of incarnation `number`, run
+/// under `epoch`: `crosstalk-pipeline-<pid>-<number>-e<epoch>`.
+pub fn application_name(number: u64, epoch: Epoch) -> String {
+    format!(
+        "crosstalk-pipeline-{}-{number}-e{epoch}",
+        std::process::id()
+    )
 }
 
 impl Parts {
-    fn new(start: &PipelineStart, number: u64) -> Result<Self, StartError> {
-        let pool = derived_pool(
+    fn new(start: &PipelineStart, number: u64, epoch: Epoch) -> Result<Self, StartError> {
+        let pool = incarnation_pool(
             &start.pool,
             start.pool.options().get_max_connections(),
-            &application_name(number),
+            &application_name(number, epoch),
+            epoch,
         );
         // Delays on the wall clock even when the live process runs on a
         // manual one (`live::pg::bus_clock`).
@@ -172,8 +185,9 @@ async fn run_pipeline(start: PipelineStart, mut stop: oneshot::Receiver<()>) -> 
     }
 }
 
-/// Wait for the database, migrations at head and the lock; `None` when
-/// told to stop.
+/// Wait for the database, migrations at head and the lock, fenced;
+/// `None` when told to stop. The fence wait may be long (an earlier
+/// owner's connections still open), so a stop ends it too.
 async fn wait_for_lock(
     start: &PipelineStart,
     stop: &mut oneshot::Receiver<()>,
@@ -185,7 +199,25 @@ async fn wait_for_lock(
         {
             return None;
         }
-        match PipelineLock::try_take(&start.url).await {
+        let fencing = {
+            let status = status.clone();
+            move |epoch: Epoch| {
+                tracing::info!(
+                    epoch = epoch.get(),
+                    "pipeline lock taken; fencing the earlier incarnations"
+                );
+                status.update(|status| {
+                    status.lock = LockState::Held;
+                    status.phase = PipelinePhase::Fencing;
+                    status.report.epoch = epoch;
+                });
+            }
+        };
+        let taken = tokio::select! {
+            taken = PipelineLock::try_take_reporting(&start.url, fencing) => taken,
+            _ = &mut *stop => return None,
+        };
+        match taken {
             Ok(Some(lock)) => return Some(lock),
             Ok(None) => {
                 tracing::warn!("the pipeline lock is held by another process; waiting");
@@ -194,12 +226,45 @@ async fn wait_for_lock(
                     status.phase = PipelinePhase::WaitingForLock;
                 });
             }
-            Err(error) => tracing::warn!(error = %error, "taking the pipeline lock failed"),
+            Err(TakeError::Lost(loss)) => report_fence_loss(start, &loss),
+            Err(error) => {
+                tracing::warn!(error = %error, "taking the pipeline lock failed");
+                // A take that failed after it reported fencing holds
+                // nothing any more.
+                status.update(|status| {
+                    if status.phase == PipelinePhase::Fencing {
+                        status.lock = LockState::NotTaken;
+                        status.phase = PipelinePhase::WaitingForDatabase;
+                    }
+                });
+            }
         }
         if pause(stop).await {
             return None;
         }
     }
+}
+
+/// The lock's session failed while fencing: a loss like any other
+/// (`pipeline_lock: lost`, counted), with no incarnation to abandon.
+fn report_fence_loss(start: &PipelineStart, loss: &LockLoss) {
+    let at_micros = start.clock.reader().now().as_micros();
+    tracing::error!(
+        cause = "pipeline_lock_lost",
+        reason = loss.reason(),
+        session = %loss,
+        "the pipeline lock's session failed while fencing; taking it again once the database \
+         answers and the lock is free"
+    );
+    start.status.update(|status| {
+        status.lock = LockState::Lost;
+        status.phase = PipelinePhase::WaitingForDatabase;
+        status.report.lock_losses = status.report.lock_losses.saturating_add(1);
+        status.report.last_loss = Some(LastLoss {
+            reason: loss.kind(),
+            at_micros,
+        });
+    });
 }
 
 /// How an incarnation's start ended.
@@ -231,7 +296,8 @@ async fn start_incarnation(
     mut lock: PipelineLock,
     stop: &mut oneshot::Receiver<()>,
 ) -> Started {
-    let parts = match Parts::new(start, number) {
+    let epoch = lock.epoch();
+    let parts = match Parts::new(start, number, epoch) {
         Ok(parts) => parts,
         Err(error) => {
             tracing::error!(error = %error, "the pipeline's bus did not start");
@@ -244,10 +310,12 @@ async fn start_incarnation(
     start.status.update(|status| {
         status.lock = LockState::Held;
         status.report.incarnation = number;
+        status.report.epoch = epoch;
     });
     tracing::info!(
         incarnation = number,
-        application_name = %application_name(number),
+        epoch = epoch.get(),
+        application_name = %application_name(number, epoch),
         "pipeline incarnation starting"
     );
     let cut = {
