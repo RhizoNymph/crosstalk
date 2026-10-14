@@ -102,7 +102,8 @@ pub struct HealthReport {
     /// mode the watermark is the persisted one, from the first report.
     pub live: Option<LiveReport>,
     /// Postgres mode: each pipeline group's backlog and dead letters, or
-    /// why they were not read (within [`HEALTH_BUS_BOUND`]).
+    /// that the read did not answer within [`HEALTH_BUS_BOUND`]; left out
+    /// while the database refuses the read (out of reach).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bus: Option<BusSection>,
     /// Postgres mode: what recovery did at start.
@@ -123,8 +124,8 @@ pub struct HealthReport {
 /// with the bus section unavailable.
 pub const HEALTH_BUS_BOUND: Duration = Duration::from_secs(2);
 
-/// `/healthz`'s `bus` section: the groups' statistics, or why they are
-/// missing. Read as `{"groups": {...}}` or `{"unavailable": {...}}`.
+/// `/healthz`'s `bus` section: the groups' statistics, or that the read
+/// stalled. Read as `{"groups": {...}}` or `{"unavailable": {...}}`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(untagged, deny_unknown_fields)]
 pub enum BusSection {
@@ -141,8 +142,6 @@ pub enum BusSection {
 pub enum BusUnavailable {
     /// The read did not answer within [`HEALTH_BUS_BOUND`].
     TimedOut { bound_ms: u64 },
-    /// The read failed (the database out of reach, a refused statement).
-    Failed { error: String },
 }
 
 /// `/healthz`'s `statement_timeouts` section (`/metrics`:
@@ -335,11 +334,12 @@ fn capture_text(stats: &SpoolStats, refusing: bool, running: bool) -> (String, b
 
 /// The groups' statistics from `bus`, within [`HEALTH_BUS_BOUND`]. A read
 /// past the bound is dropped (its connection goes back to the pool once
-/// the server answers) and reported unavailable, warned with the bound.
-async fn read_bus(bus: &PgBus) -> BusSection {
+/// the server answers) and reported unavailable, warned with the bound; a
+/// failed read (the database out of reach) leaves the section out.
+async fn read_bus(bus: &PgBus) -> Option<BusSection> {
     let bound_ms = u64::try_from(HEALTH_BUS_BOUND.as_millis()).unwrap_or(u64::MAX);
     match tokio::time::timeout(HEALTH_BUS_BOUND, bus.group_stats()).await {
-        Ok(Ok(stats)) => BusSection::Read(BusReport {
+        Ok(Ok(stats)) => Some(BusSection::Read(BusReport {
             groups: stats
                 .into_iter()
                 .map(|stats| {
@@ -353,14 +353,10 @@ async fn read_bus(bus: &PgBus) -> BusSection {
                     )
                 })
                 .collect(),
-        }),
+        })),
         Ok(Err(error)) => {
-            tracing::debug!(error = ?error, "group stats unreadable; /healthz reports the bus unavailable");
-            BusSection::Unavailable {
-                unavailable: BusUnavailable::Failed {
-                    error: format!("{error:?}"),
-                },
-            }
+            tracing::debug!(error = ?error, "group stats unreadable; /healthz without the bus section");
+            None
         }
         Err(_) => {
             tracing::warn!(
@@ -368,9 +364,9 @@ async fn read_bus(bus: &PgBus) -> BusSection {
                 bound_ms,
                 "/healthz's bus read did not answer within its bound; reported unavailable"
             );
-            BusSection::Unavailable {
+            Some(BusSection::Unavailable {
                 unavailable: BusUnavailable::TimedOut { bound_ms },
-            }
+            })
         }
     }
 }
@@ -420,12 +416,12 @@ impl Ops {
     }
 
     /// [`Ops::health`] with the bus's per-group backlog read from the
-    /// database within [`HEALTH_BUS_BOUND`]; past it, or when the read
-    /// fails, the section says why instead.
+    /// database within [`HEALTH_BUS_BOUND`]; past it the section says so,
+    /// and while the read fails (the database out of reach) it is left out.
     pub async fn health_full(&self) -> HealthReport {
         let mut report = self.health();
         if let Some(pg) = &self.postgres {
-            report.bus = Some(read_bus(&pg.bus).await);
+            report.bus = read_bus(&pg.bus).await;
         }
         report
     }
