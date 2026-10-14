@@ -22,9 +22,9 @@ services:
       - ./demo/crosstalk.demo.json:/etc/crosstalk/crosstalk.json:ro
       - standby-data:/var/lib/crosstalk
     ports: !override
-      - ${CROSSTALK_BIND:-127.0.0.1}:${CROSSTALK_STANDBY_PROXY_PORT:-18080}:8080
-      - ${CROSSTALK_BIND:-127.0.0.1}:${CROSSTALK_STANDBY_API_PORT:-18081}:8081
-      - ${CROSSTALK_BIND:-127.0.0.1}:${CROSSTALK_STANDBY_OPS_PORT:-19464}:9464
+      - ${CROSSTALK_BIND:-127.0.0.1}:${CROSSTALK_STANDBY_PROXY_PORT:-28080}:8080
+      - ${CROSSTALK_BIND:-127.0.0.1}:${CROSSTALK_STANDBY_API_PORT:-28081}:8081
+      - ${CROSSTALK_BIND:-127.0.0.1}:${CROSSTALK_STANDBY_OPS_PORT:-29464}:9464
     # /readyz is 503 on a standby by design; liveness is /healthz (200
     # while the process serves).
     healthcheck: !override

@@ -164,7 +164,7 @@ without breaking the linking of exchanges across the change:
 | `deploy/loki/loki.yaml` | Single-binary Loki on the filesystem, 7-day retention. The ingester WAL refuses writes only above 99% disk use (`disk_full_threshold: 0.99`; Loki's default 0.9 drops every log on a shared host whose disk is fuller than that). |
 | `deploy/alloy/config.alloy` | Docker log discovery, `service`/`container`/`stream` labels, JSON `level` label for crosstalk, migrate and ui. |
 | `deploy/compose.demo.yaml`, `deploy/demo.Dockerfile`, `deploy/demo/` | The token-free demo (fake upstream, wiki, agent swarm; `run.sh demo ...`): see [demo.md](demo.md). The image also carries the bench tools (`ct-eval`, `ct-bench-detect`, and `a2a-bench` at `A2A_BENCH_REF` with the bench repo's gates; [bench.md](bench.md)), and the override adds the `bench` service (profile `bench`). |
-| `deploy/compose.standby.yaml` | Takeover tests only: `crosstalk-standby` (profile `standby`), extending `crosstalk` from the same image and demo config on the same database, with its own `standby-data` volume, its own host ports (`CROSSTALK_STANDBY_PROXY_PORT` 18080, `CROSSTALK_STANDBY_API_PORT` 18081, `CROSSTALK_STANDBY_OPS_PORT` 19464, on `CROSSTALK_BIND`) and a `/healthz` healthcheck; started by `run.sh bench --standby`. See "Standby gateway". |
+| `deploy/compose.standby.yaml` | Takeover tests only: `crosstalk-standby` (profile `standby`), extending `crosstalk` from the same image and demo config on the same database, with its own `standby-data` volume, its own host ports (`CROSSTALK_STANDBY_PROXY_PORT` 28080, `CROSSTALK_STANDBY_API_PORT` 28081, `CROSSTALK_STANDBY_OPS_PORT` 29464, on `CROSSTALK_BIND`) and a `/healthz` healthcheck; started by `run.sh bench --standby`. See "Standby gateway". |
 | `deploy/bench.sh`, `deploy/bench/` (gitignored) | `run.sh bench`: one scored detection benchmark on the demo stack, its runs under `deploy/bench/<run>/`; see [bench.md](bench.md). |
 
 ## Store tests against the compose Postgres
@@ -491,8 +491,10 @@ environment and so the same `DATABASE_URL`, including the bench's
 - **Its own data volume, `standby-data`.** The spool and blobs are one
   process's; two gateways must never share them.
 - **Its own host ports** on `CROSSTALK_BIND`: proxy
-  `CROSSTALK_STANDBY_PROXY_PORT` (18080), API `CROSSTALK_STANDBY_API_PORT`
-  (18081), ops `CROSSTALK_STANDBY_OPS_PORT` (19464). Agents keep using
+  `CROSSTALK_STANDBY_PROXY_PORT` (28080), API `CROSSTALK_STANDBY_API_PORT`
+  (28081), ops `CROSSTALK_STANDBY_OPS_PORT` (29464). The defaults sit
+  clear of both the main defaults and the 18080/18081/19464 a shared host
+  moves them to ("Port clashes"). Agents keep using
   crosstalk's proxy; the standby's proxy captures only what is sent to it.
 - **The demo config** (`deploy/demo/crosstalk.demo.json`): the overlay is
   layered over `compose.demo.yaml` and forwards to `fake-upstream`.

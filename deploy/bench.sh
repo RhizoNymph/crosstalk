@@ -101,7 +101,7 @@ standby_ops_url() {
     bind="$(env_value CROSSTALK_BIND)"
     port="$(env_value CROSSTALK_STANDBY_OPS_PORT)"
     [[ -z "$bind" || "$bind" == "0.0.0.0" ]] && bind="127.0.0.1"
-    printf 'http://%s:%s\n' "$bind" "${port:-19464}"
+    printf 'http://%s:%s\n' "$bind" "${port:-29464}"
 }
 
 api_url() {
