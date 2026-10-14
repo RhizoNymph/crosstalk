@@ -14,6 +14,9 @@
 #                               running and the API takes the token
 #   4. fresh_world              restart wiki and crosstalk, wait for health,
 #                               check step 3 again
+#      start_standby            --standby only: a second gateway on the same
+#                               database (compose.standby.yaml), started now
+#                               that crosstalk holds the lock: a standby
 #   5. run_swarm                the swarm, writing ground truth v2
 #   6. wait_caught_up           /healthz `live.watermark_micros` past the
 #                               swarm's end (exports are cut at the watermark)
@@ -55,6 +58,11 @@ bench_usage() {
                          a seed >= 1000000, writes deploy/bench/holdout/<run>/,
                          stops after fetching (no scoring, no report/, no
                          metrics printed). See docs/features/bench.md.
+  --standby              also start a standby gateway (compose.standby.yaml:
+                         crosstalk-standby, same database, own data volume
+                         and ports) once crosstalk holds the pipeline lock,
+                         for takeover tests; traffic still goes only through
+                         crosstalk's proxy. Not with --holdout.
   --yes                  do not ask before restarting wiki and crosstalk
   -- ...                 further crosstalk-demo swarm options, passed as is
 USAGE
@@ -87,6 +95,15 @@ ops_url() {
 }
 
 # The operator API as published on this host (CROSSTALK_BIND, as ops_url).
+# The standby's ops listener (compose.standby.yaml), from this host.
+standby_ops_url() {
+    local bind port
+    bind="$(env_value CROSSTALK_BIND)"
+    port="$(env_value CROSSTALK_STANDBY_OPS_PORT)"
+    [[ -z "$bind" || "$bind" == "0.0.0.0" ]] && bind="127.0.0.1"
+    printf 'http://%s:%s\n' "$bind" "${port:-19464}"
+}
+
 api_url() {
     local bind port
     bind="$(env_value CROSSTALK_BIND)"
@@ -242,6 +259,25 @@ fresh_world() {
     wait_healthy wiki 120
     wait_healthy crosstalk 180
     require_detection
+}
+
+# 4b. With --standby: crosstalk-standby on the run's database, started only
+# now, with crosstalk holding the pipeline lock, so it waits as a standby
+# (/readyz 503, pipeline_lock "held elsewhere"). Its liveness is /healthz.
+start_standby() {
+    local deadline ready lock
+    compose --profile standby up -d --no-deps crosstalk-standby
+    wait_healthy crosstalk-standby 180
+    deadline=$((SECONDS + 120))
+    while true; do
+        ready="$(curl -sS --max-time 5 "$(standby_ops_url)/readyz" 2>/dev/null)" || ready=""
+        lock="$(readyz_field pipeline_lock "$ready")"
+        [[ "$lock" == "held elsewhere" ]] && break
+        ((SECONDS >= deadline)) \
+            && bench_fail "crosstalk-standby never reported pipeline_lock \"held elsewhere\" (/readyz: ${ready:-no answer})"
+        sleep 2
+    done
+    echo "run.sh bench: crosstalk-standby up (pipeline_lock held elsewhere)" >&2
 }
 
 # 5. The swarm against the real gateway (through the fake upstream), writing
@@ -429,7 +465,7 @@ bench_ref_lines() {
 
 bench() {
     local agents=20 duration=2m seed=42 scenario=headline shape=0 yes=0 timeout=900 run rc=0 end_ms
-    local holdout=0
+    local holdout=0 standby=0
     local extra=()
     while (($# > 0)); do
         case "$1" in
@@ -444,6 +480,7 @@ bench() {
             --settle-timeout) positive_int "$1" "${2-}"; timeout="$2"; shift 2 ;;
             --yes | -y) yes=1; shift ;;
             --holdout) holdout=1; shift ;;
+            --standby) standby=1; shift ;;
             --) shift; extra=("$@"); break ;;
             -h | --help) bench_usage; exit 0 ;;
             *) bench_usage; exit 2 ;;
@@ -456,8 +493,10 @@ bench() {
         ((seed < bench_holdout_seed)) \
             || bench_fail "seed ${seed} is reserved for holdout runs (>= ${bench_holdout_seed}); pass --holdout or a seed below it"
     fi
+    ((holdout == 1 && standby == 1)) && bench_fail "--standby is for takeover tests, not holdout runs"
     need_env
     compose_files+=(-f "${here}/compose.demo.yaml")
+    ((standby == 1)) && compose_files+=(-f "${here}/compose.standby.yaml")
     command -v curl >/dev/null 2>&1 || bench_fail "needs curl on this host (to read /readyz and /healthz)"
     BENCH_UID="$(id -u)"
     BENCH_GID="$(id -g)"
@@ -470,11 +509,15 @@ bench() {
     confirm_restart "$yes"
     local stamp
     stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+    # A standby left from an earlier run would sit on that run's database;
+    # remove it so this run's starts only after crosstalk holds the lock.
+    ((standby == 1)) && compose --profile standby rm -s -f crosstalk-standby
     fresh_database "$stamp"
     start_stack
     wait_healthy crosstalk 180
     require_detection
     fresh_world
+    ((standby == 1)) && start_standby
 
     run="$stamp"
     if ((holdout == 1)); then
@@ -489,6 +532,7 @@ bench() {
         echo "scenario=${scenario}"
         echo "seed=${seed}"
         echo "holdout=${holdout}"
+        echo "standby=${standby}"
         # The crosstalk commit this checkout was synced from (the sync
         # writes deploy/SOURCE_COMMIT; a rsynced copy has no .git).
         echo "crosstalk_commit=$(cat "${here}/SOURCE_COMMIT" 2>/dev/null || echo unknown)"

@@ -1,0 +1,45 @@
+# A standby gateway for takeover tests: a second `serve --role all` from the
+# same image and config, on the same database, that waits for the pipeline
+# lock while `crosstalk` holds it (/readyz 503, pipeline_lock "held
+# elsewhere"). Layered over compose.yaml and compose.demo.yaml:
+#
+#   bash deploy/run.sh bench --standby ...     # the bench starts it (step 4b)
+#
+# Under the `standby` profile, so a plain `up` with this file never starts it.
+# It has its own data volume (spool and blobs are per process and must never
+# be shared) and its own host ports; agents keep using crosstalk's proxy. See
+# docs/features/deploy.md ("Standby gateway").
+
+services:
+  crosstalk-standby:
+    extends:
+      file: compose.yaml
+      service: crosstalk
+    profiles: [standby]
+    # Runs the image `crosstalk` builds; never builds it a second time.
+    build: !reset null
+    volumes: !override
+      - ./demo/crosstalk.demo.json:/etc/crosstalk/crosstalk.json:ro
+      - standby-data:/var/lib/crosstalk
+    ports: !override
+      - ${CROSSTALK_BIND:-127.0.0.1}:${CROSSTALK_STANDBY_PROXY_PORT:-18080}:8080
+      - ${CROSSTALK_BIND:-127.0.0.1}:${CROSSTALK_STANDBY_API_PORT:-18081}:8081
+      - ${CROSSTALK_BIND:-127.0.0.1}:${CROSSTALK_STANDBY_OPS_PORT:-19464}:9464
+    # /readyz is 503 on a standby by design; liveness is /healthz (200
+    # while the process serves).
+    healthcheck: !override
+      test: ["CMD", "/usr/local/bin/crosstalk", "healthcheck", "--url", "http://127.0.0.1:9464/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+      start_period: 20s
+    # Started after crosstalk holds the lock, so the standby never wins the
+    # first take.
+    depends_on: !override
+      crosstalk:
+        condition: service_healthy
+      fake-upstream:
+        condition: service_healthy
+
+volumes:
+  standby-data:

@@ -1646,11 +1646,14 @@ Features Index:
       headline (default, high-entropy prose: the headline precision and
       recall) or boilerplate (templated prose unrelated agents share: a
       regression scenario for false positives on shared text), recorded in
-      bench.env.
+      bench.env. --standby (takeover tests) also starts crosstalk-standby
+      (deploy/compose.standby.yaml: same image and database, own data
+      volume and ports) once crosstalk holds the pipeline lock.
     entry_points:
       - deploy/run.sh
       - deploy/bench.sh
       - deploy/compose.demo.yaml
+      - deploy/compose.standby.yaml
       - deploy/demo.Dockerfile
     depends_on: [demo, eval, deploy, gateway, http_api]
     doc: docs/features/bench.md
