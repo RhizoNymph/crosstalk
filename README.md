@@ -48,6 +48,8 @@ The step-by-step plan and current progress are in [`docs/roadmap.md`](docs/roadm
 
 All results below are on synthetic traffic: crosstalk's demo swarm, whose agents read and write a shared wiki through the real gateway, with known ground truth. They are scored by [a2a-transmission-bench](#benchmark-a2a-transmission-bench), not by crosstalk's own code.
 
+These results apply to the build tagged [`post-2026-10`](https://github.com/RhizoNymph/crosstalk/tree/post-2026-10) (staging `5295fdd`). The fault runs used the same code as that tag. The held-out runs used an earlier build with the same detection, described below. Changes merged after the tag are not covered until the next measurement.
+
 ### Held-out detection
 
 Six demo swarm runs on seeds no development run used (1000001–1000006). They were saved without scoring and never inspected on crosstalk's side, then scored once by the bench, against its naive reference matcher. The full report, with provenance and the commands to reproduce it, is the bench's [release results](https://github.com/RhizoNymph/a2a-transmission-bench/blob/main/docs/results/release-2026-10.md).
@@ -61,7 +63,7 @@ Six demo swarm runs on seeds no development run used (1000001–1000006). They w
 
 `headline` traffic writes wiki pages with distinctive text. `boilerplate` fills them with shared template sentences, the hard case for content matching. One boilerplate run failed the false-positive gate (115 per 1,000), which was set from development runs before these were made.
 
-These runs used staging [`7d678e2`](https://github.com/RhizoNymph/crosstalk/commit/7d678e2) with the gateway in memory mode, scored by bench tag `a2a-bench-v1.0.1`. Current staging has the same detection, plus one fix: it closes a rare race in which a match and a classification landing on one transmission at the same moment could lose one of them. The fix can only keep matched content that the held-out build might have dropped. It never changes which transmissions are found or how they are attributed.
+These runs used staging [`7d678e2`](https://github.com/RhizoNymph/crosstalk/commit/7d678e2) with the gateway in memory mode, scored by bench tag `a2a-bench-v1.0.1`. The tagged build has the same detection, plus one fix: it closes a rare race in which a match and a classification landing on one transmission at the same moment could lose one of them. The fix can only keep matched content that the held-out build might have dropped. It never changes which transmissions are found or how they are attributed.
 
 The same release also scores crosstalk on public multi-agent datasets (SALT, AgentDojo, τ², AI Village and others). crosstalk was developed and tuned on those, so they are development numbers, not held-out ones.
 
