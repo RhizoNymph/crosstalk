@@ -1,0 +1,19 @@
+[invariant]
+id = "analysis.projection.watermark-at-sample"
+statement = "A ready projection's watermark, in its Fitted record and its frame header, is the aggregate Watermark current when ProjectionSource::sample read its sample."
+kind = "domain"
+property = "postcondition"
+requires = ["integration"]
+rationale = """
+Late content matches and suspected-to-confirmed upgrades can still add
+transmissions to buckets at or after the watermark, so a projection fitted
+from a recent window may omit them. Recording the watermark of the sample,
+not of the request or of the read, says exactly which part of the window
+was settled in what the layout shows.
+"""
+
+[evidence]
+integration = "crosstalk::analysis::integration::projection_watermark_is_sample_time_watermark"
+
+[evidence-review]
+integration = { agent = "false", human = "false" }

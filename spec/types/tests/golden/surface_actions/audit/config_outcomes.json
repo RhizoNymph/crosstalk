@@ -1,0 +1,17 @@
+[
+  {
+    "type": "applied"
+  },
+  {
+    "type": "rejected",
+    "data": {
+      "type": "conflict",
+      "data": {
+        "type": "pattern_overlaps",
+        "data": {
+          "existing": "01J9Z3M2C5D6E7F8G9H0J1K2M3"
+        }
+      }
+    }
+  }
+]

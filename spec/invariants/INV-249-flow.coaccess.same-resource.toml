@@ -1,0 +1,20 @@
+[invariant]
+id = "flow.coaccess.same-resource"
+statement = "The write and read accesses joined by a CoAccess are on the same ResourceId."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+A CoAccess is the claim that the reader could have seen what the writer
+wrote. Joining accesses on different resources, even on one channel, makes
+that claim false and inflates suspected transmissions. `CoAccess::new`
+rejects such a pair with `InvalidCoAccess::DifferentResources`, and the
+fields are private.
+"""
+
+[evidence]
+type = "crosstalk_spec::derived::flow::evidence::CoAccess::new"
+unit = "crosstalk_spec::tests::flow::co_access_rejects_invalid_pairs"
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

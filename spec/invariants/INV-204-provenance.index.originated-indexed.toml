@@ -1,0 +1,20 @@
+[invariant]
+id = "provenance.index.originated-indexed"
+statement = "Processing a ConversationDelta inserts every below-cutoff fingerprint of each span it classifies Originated into the FingerprintIndex."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+A span that is classified Originated but never indexed cannot be found in
+any later reader's input, so every transmission of it goes undetected. The
+property test looks up an originated span's own text after processing and
+expects a hit on that span.
+"""
+
+[evidence]
+unit = "crosstalk::provenance::tests::originated_span_fingerprints_are_indexed"
+property = "crosstalk::provenance::props::originated_span_is_found_by_its_own_text"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+property = { agent = "false", human = "false" }

@@ -1,0 +1,18 @@
+[invariant]
+id = "provenance.fingerprint.reproducible"
+statement = "Fingerprinter::fingerprints agrees with a pinned set of golden vectors for the same text and WinnowParams in every process and build."
+kind = "domain"
+property = "model-based"
+requires = ["unit"]
+rationale = """
+Fingerprints persist in Postgres and are computed on many nodes. A
+per-process hash seed or a hash or normalization change between builds
+would make every stored fingerprint unmatchable after a restart or deploy.
+Changing the hash is a migration, and the golden vectors make it explicit.
+"""
+
+[evidence]
+unit = "crosstalk::provenance::tests::fingerprints_match_golden_vectors"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

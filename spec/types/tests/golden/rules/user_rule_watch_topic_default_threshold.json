@@ -1,0 +1,12 @@
+{
+  "type": "watched_topic",
+  "data": {
+    "topics": {
+      "version": 3,
+      "topics": [
+        "01J9Z3N4P5Q6R7S8T9V0W1X2Y3"
+      ]
+    },
+    "remap_threshold": null
+  }
+}

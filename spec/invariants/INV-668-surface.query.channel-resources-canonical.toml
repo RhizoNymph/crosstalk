@@ -1,0 +1,20 @@
+[invariant]
+id = "surface.query.channel-resources-canonical"
+statement = "QueryApi::channel_resources for a channel names its canonical channel and lists, across a full traversal, each resource of that channel or of a channel it superseded that was accessed in the window exactly once, with writers and readers resolved to canonical agents and merged aliases' counts summed."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+After a promotion the absorbed pages are part of the wiki. Listing only
+the promoted channel's own resources would hide the pages that made the
+operator promote it; answering a superseded id for its superseder keeps
+old links working.
+"""
+
+[evidence]
+unit = "crosstalk::surface::tests::channel_resources_include_superseded"
+integration = "crosstalk::flow::tests::pg_resource_use_pages"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

@@ -1,0 +1,24 @@
+[invariant]
+id = "topology.graph.nodes-canonical"
+statement = "No node of a TopologyGraph or BipartiteGraph is a merged agent or a superseded channel: every node id equals its canonical id at query time."
+kind = "domain"
+property = "invariant"
+requires = ["type", "property"]
+rationale = """
+Edges are keyed by canonical ids, so a node under an alias would never be
+an endpoint and would show twice. The node kinds exclude the alias states
+(CanonicalStateKind has no Merged, CanonicalOriginKind has no superseded
+origin); that the id itself is canonical needs the directories at query
+time.
+"""
+
+[evidence]
+type = [
+    "crosstalk_spec::aggregates::node::CanonicalStateKind",
+    "crosstalk_spec::aggregates::node::CanonicalOriginKind",
+]
+property = "crosstalk::topology::props::graph_nodes_are_canonical"
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+property = { agent = "false", human = "false" }

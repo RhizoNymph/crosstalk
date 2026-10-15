@@ -1,0 +1,17 @@
+[invariant]
+id = "reconstruct.agent-directory.cache-applies-merges"
+statement = "An AgentDirectory that caches the merge table serves no read that follows an AgentMerged or AgentUnmerged without that event applied."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+Every reader resolves stored agent ids through the directory, so a stale
+cache shows a merge that was undone, or splits a cluster that was just
+merged, in graphs, filters and the live feed, while the agent list says
+otherwise. Merges and unmerges are rare, so invalidating on them is cheap.
+"""
+
+[evidence]
+dst = "crosstalk::reconstruct::tests::dst_directory_cache_follows_merges"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

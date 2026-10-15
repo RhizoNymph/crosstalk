@@ -1,0 +1,28 @@
+[invariant]
+id = "surface.export.rows-checked"
+statement = "ExportSealer::push accepts a row only when it is of the header's dataset, carries content columns exactly when the request includes content, has a RowKey strictly after the previous accepted row's, and is within the header's planned count, and after one refusal it refuses every later row."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+Every row passes the sealer before it is sent, so an export never mixes
+datasets, never leaks content a View caller did not ask for, never repeats
+or reorders a row and never sends more than its header promised. Staying
+refused after the first refusal means a malformed export can only be
+sealed as Failed.
+"""
+
+[evidence]
+type = "crosstalk_spec::interfaces::l8_surface::export::seal::ExportSealer::push"
+unit = [
+    "crosstalk_spec::tests::export_stream::sealer_refuses_a_row_of_another_dataset",
+    "crosstalk_spec::tests::export_stream::sealer_refuses_content_the_request_did_not_ask_for_and_its_absence",
+    "crosstalk_spec::tests::export_stream::sealer_refuses_rows_out_of_order_and_repeats",
+    "crosstalk_spec::tests::export_stream::sealer_refuses_rows_beyond_the_plan",
+    "crosstalk_spec::tests::export_stream::after_a_refusal_every_row_is_refused_and_the_trailer_fails",
+    "crosstalk_spec::tests::export_stream::edge_rows_order_by_bucket_then_endpoints_route_and_topic",
+    "crosstalk_spec::tests::export_stream::access_rows_put_writes_before_reads",
+]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

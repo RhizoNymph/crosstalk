@@ -1,0 +1,9 @@
+[
+  "end_turn",
+  "tool_use",
+  "max_tokens",
+  "stop_sequence",
+  "refusal",
+  "aborted",
+  "other"
+]

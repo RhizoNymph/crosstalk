@@ -1,0 +1,21 @@
+[invariant]
+id = "analysis.version.superseded-by-first-activation"
+statement = "Every Superseded version in a TopicVersionHistory names as by the first newer version that was activated, and its superseded_at is that version's activation time."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+A version stops being read when the next activation happens, so that
+activation is what superseded it. Pinning by and superseded_at to it lets
+the UI draw each version's active span without gaps or overlaps, including
+versions that were overtaken before they were ever active.
+TopicVersionInfo::new rejects a by that is not newer (SupersededByOlder)
+and TopicVersionHistory::new returns WrongSupersessor otherwise.
+"""
+
+[evidence]
+type = ["crosstalk_spec::aggregates::topic_history::TopicVersionInfo::new", "crosstalk_spec::aggregates::topic_history::TopicVersionHistory::new"]
+unit = ["crosstalk_spec::tests::topic_history::superseded_only_by_newer_version", "crosstalk_spec::tests::topic_history::superseded_names_the_first_later_activation"]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

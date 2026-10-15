@@ -1,0 +1,23 @@
+{
+  "dataset": {
+    "type": "transmissions",
+    "data": {
+      "window": {
+        "start": "2026-10-04T00:00:00.000000Z",
+        "end": "2026-10-05T00:00:00.000000Z"
+      },
+      "filter": {
+        "agents": [],
+        "channels": [],
+        "route_kinds": [],
+        "topics": [],
+        "topic_version": {
+          "type": "current"
+        },
+        "false_detections": "include"
+      }
+    }
+  },
+  "format": "jsonl",
+  "include_content": true
+}

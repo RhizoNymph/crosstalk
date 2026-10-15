@@ -1,0 +1,16 @@
+[invariant]
+id = "analysis.perf.projection-fit-duration"
+statement = "A projection fit of 100,000 points with default params completes, from claim to Ready, within 10 minutes at p99 on the reference node."
+kind = "performance"
+requires = ["bench"]
+rationale = """
+Operators wait for a fit after asking for it; beyond a few minutes they
+re-request, which fills the queue. The figure is a proposed initial
+threshold for a single-threaded, seeded UMAP over 100,000 embeddings.
+"""
+
+[evidence]
+bench = "crosstalk::analysis::bench::projection_fit_100k_p99"
+
+[evidence-review]
+bench = { agent = "false", human = "false" }

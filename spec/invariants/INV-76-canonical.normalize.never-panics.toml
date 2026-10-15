@@ -1,0 +1,26 @@
+[invariant]
+id = "canonical.normalize.never-panics"
+statement = "Normalizing a RawExchange with arbitrary request and response bytes returns a result and never panics or hangs."
+kind = "domain"
+property = "invariant"
+requires = ["fuzz"]
+rationale = """
+Request and response bodies come from harnesses, vendor APIs and
+self-hosted servers the gateway does not control. A panic in the capture
+task would lose the exchange, and a hang would stall capture for every
+exchange behind it. Malformed input must surface as a NormalizeError or a
+warning. One fuzz target per wire protocol, each seeded with every dialect's
+recorded traffic.
+"""
+
+[evidence]
+fuzz = [
+  "crosstalk::canonical::fuzz::normalize_anthropic_messages",
+  "crosstalk::canonical::fuzz::normalize_openai_chat",
+  "crosstalk::canonical::fuzz::normalize_openai_responses",
+  "crosstalk::canonical::fuzz::normalize_gemini_generate",
+  "crosstalk::canonical::fuzz::normalize_gemini_code_assist",
+]
+
+[evidence-review]
+fuzz = { agent = "false", human = "false" }

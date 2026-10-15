@@ -1,0 +1,17 @@
+[invariant]
+id = "flow.transmission.channel-open-requires-coaccess"
+statement = "Every OpenChannel update carries a CoAccess."
+kind = "representation"
+requires = ["type"]
+rationale = """
+A channel-routed transmission opens on a cross access, and its CoAccess is
+the evidence that AwaitingContent, Suspected and Discarded carry.
+`TransmissionUpdate::OpenChannel` has a required `co_access: CoAccess`, and a
+CoAccess can only be built by its checked constructor.
+"""
+
+[evidence]
+type = "crosstalk_spec::interfaces::l5_flow::TransmissionUpdate"
+
+[evidence-review]
+type = { agent = "true", human = "false" }

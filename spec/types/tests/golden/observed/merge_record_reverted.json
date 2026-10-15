@@ -1,0 +1,20 @@
+{
+  "id": "01J9Z3Q8R9S0T1V2W3X4Y5Z6A7",
+  "from": "01J9Z3P6Q7R8S9T0V1W2X3Y4Z5",
+  "into": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+  "by": {
+    "type": "operator",
+    "data": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3"
+  },
+  "at": "2026-10-04T13:00:00.000000Z",
+  "repointed": [
+    "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA"
+  ],
+  "reverted": {
+    "by": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3",
+    "at": "2026-10-04T14:15:30.500000Z",
+    "restored": [
+      "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA"
+    ]
+  }
+}

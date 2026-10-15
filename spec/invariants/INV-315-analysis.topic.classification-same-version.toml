@@ -1,0 +1,20 @@
+[invariant]
+id = "analysis.topic.classification-same-version"
+statement = "Every topic named by a Classification belongs to the TopicModelVersion the classification carries."
+kind = "domain"
+property = "invariant"
+requires = ["property", "integration"]
+rationale = """
+Topic ids are only meaningful within the fit that produced them. A
+classification pointing at a topic from another version would label a
+transmission with an unrelated cluster, and topology slots, topic counts
+and watched-topic alerts would silently be wrong after every re-fit.
+"""
+
+[evidence]
+property = "crosstalk::analysis::tests::classification_topic_belongs_to_its_version"
+integration = "crosstalk::analysis::tests::stored_assignments_reference_topics_of_same_version"
+
+[evidence-review]
+property = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

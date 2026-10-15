@@ -1,0 +1,79 @@
+{
+  "meta": {
+    "id": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+    "protocol": "open_ai_responses",
+    "transport": "web_socket",
+    "model": "gpt-5-codex",
+    "client": {
+      "ingress": {
+        "type": "forward_proxy",
+        "data": {
+          "host": "chatgpt.com"
+        }
+      },
+      "upstream": {
+        "id": "chatgpt-codex",
+        "kind": {
+          "type": "subscription",
+          "data": {
+            "type": "open_ai"
+          }
+        }
+      },
+      "credential": {
+        "scheme": "oauth_access_token",
+        "hash": {
+          "key": 3,
+          "digest": "e265b6f564601a1fe8dc42785cd18a868bd8013eb5899560e79248767a683e6b"
+        }
+      },
+      "account": {
+        "key": 3,
+        "digest": "9af211329b2fc82e5efe906062c730082819b23fe8394bc435e0b1bf0458eb54"
+      },
+      "previous_digests": {
+        "credential": {
+          "key": 2,
+          "digest": "0ec70a04edb4449fd2dd7f2119fff1fc0b9d8883c152b4d81284658b0f8b681a"
+        },
+        "account": {
+          "key": 2,
+          "digest": "856c88930ee7c7123f3b42fbd942ad983f7874c3a634b040a37f0246c589b0e1"
+        }
+      },
+      "harness": {
+        "family": "codex",
+        "version": "0.46.0",
+        "user_agent": "codex_cli_rs/0.46.0"
+      },
+      "ids": {
+        "session": "0199b0f2-6c1e-7d3a-8f42-5e9a1c7b3d20",
+        "agent": "0199b0f2-7a44-7c19-b0de-2f6e8d1a9c53",
+        "parent_agent": "0199b0f2-6c1e-7d3a-8f42-5e9a1c7b3d20"
+      },
+      "class": "subagent"
+    },
+    "started_at": "2026-10-04T12:34:56.789012Z"
+  },
+  "continuation": {
+    "type": "increment",
+    "data": {
+      "previous": "resp_68e1a2b3c4d5e6f708192a3b",
+      "connection": "01J9Z3Q8R9S0T1V2W3X4Y5Z6A7"
+    }
+  },
+  "request": [
+    "90c6783d80fad0eefa7c2c8887502d4a9d8839e043cd5f51582aa89f71cc9fb5"
+  ],
+  "outcome": {
+    "type": "failed",
+    "data": {
+      "partial_response": "9834a14ab9bcaa0f6a8da71073617eac8f004e596a3fa11d807b84631b825d9d",
+      "first_chunk_at": "2026-10-04T12:34:58.000250Z",
+      "failed_at": "2026-10-04T12:35:10.500000Z",
+      "failure": {
+        "type": "stream_truncated"
+      }
+    }
+  }
+}

@@ -1,0 +1,5 @@
+[
+  "http",
+  "sse",
+  "web_socket"
+]

@@ -1,0 +1,18 @@
+[invariant]
+id = "flow.transmission.late-match-confirms"
+statement = "A content match for a Suspected transmission processed before the transmission expires moves it to Confirmed."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Content matches come from another consumer group and can lag the window.
+Suspected is a provisional verdict; when content evidence turns up later it
+must still confirm the transmission, so the edge and policy routing are not
+lost to consumer lag.
+"""
+
+[evidence]
+unit = "crosstalk::flow::correlator::tests::late_match_confirms_suspected"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

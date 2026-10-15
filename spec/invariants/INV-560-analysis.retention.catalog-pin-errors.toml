@@ -1,0 +1,17 @@
+[invariant]
+id = "analysis.retention.catalog-pin-errors"
+statement = "TopicCatalog::pin returns UnknownVersion, StillFitting or VersionNotRetained, changing nothing, for a version that is unknown, fitting or dropped."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+The surface maps these to NotFound, Conflict(TopicVersionFitting) and
+Conflict(TopicVersionDropped), so the operator learns why the pin was
+refused, and the audit record says the same.
+"""
+
+[evidence]
+unit = "crosstalk::analysis::tests::catalog_pin_rejects_unknown_fitting_and_dropped"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

@@ -1,0 +1,21 @@
+[invariant]
+id = "topology.edge.distinct-endpoints"
+statement = "No EdgeKey has the same agent as from and to."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+An agent reading its own output is not communication, and a self-edge
+would take share away from real edges. EdgeKey's fields are private and it
+is built only through EdgeKey::new, which returns SelfEdge when from == to,
+so no stored bucket can be a self-edge. This covers agents as attributed;
+self-edges that appear only after merge resolution are handled at query
+time (topology.graph.no-self-edges).
+"""
+
+[evidence]
+type = "crosstalk_spec::aggregates::edge::EdgeKey::new"
+unit = "crosstalk_spec::tests::aggregates::edge_key_rejects_self_edge"
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

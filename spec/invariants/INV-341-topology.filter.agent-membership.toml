@@ -1,0 +1,21 @@
+[invariant]
+id = "topology.filter.agent-membership"
+statement = "When a filter's agents list is non-empty, every edge in the graph has a from or a to equal to AgentDirectory::canonical of some listed agent."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+An agent filter shows an agent's neighbourhood: everything it sent or
+read, so sender OR reader. Matching happens after alias resolution on both
+sides: edges are compared under their canonical agents, and listed ids are
+resolved too, so filtering by an id that has since been merged away still
+finds that agent's communication instead of returning nothing.
+"""
+
+[evidence]
+unit = "crosstalk::topology::tests::agent_filter_resolves_merged_ids"
+property = "crosstalk::topology::props::agent_filter_keeps_edges_touching_listed_agents"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+property = { agent = "false", human = "false" }

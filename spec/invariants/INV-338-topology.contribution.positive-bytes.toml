@@ -1,0 +1,20 @@
+[invariant]
+id = "topology.contribution.positive-bytes"
+statement = "Every EdgeContribution carries a matched_bytes of at least 1."
+kind = "representation"
+requires = ["type"]
+rationale = """
+A confirmed transmission exists because some of the sender's text reached
+the reader, so zero matched bytes is a contradiction. Allowing it would let
+a bucket exist with a zero MatchedBytes stat: under MatchedBytes weighting
+the window total could be zero while edges exist (shares undefined), and
+switching weighting could no longer keep the edge set fixed. The field is a
+NonZeroU64, which is also what lets EdgeStats hold both counts as
+NonZeroU64.
+"""
+
+[evidence]
+type = "crosstalk_spec::interfaces::l7_topology::EdgeContribution"
+
+[evidence-review]
+type = { agent = "true", human = "false" }

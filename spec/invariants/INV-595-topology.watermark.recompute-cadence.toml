@@ -1,0 +1,16 @@
+[invariant]
+id = "topology.watermark.recompute-cadence"
+statement = "While the topology consumer runs, it calls advance_watermark at least once per bucket width."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+The watermark moves in whole buckets. Recomputing at least once per
+bucket width keeps it at most one bucket behind what the frontier allows,
+so in steady state it advances once per bucket.
+"""
+
+[evidence]
+dst = "crosstalk::topology::dst::watermark_recomputed_every_bucket"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

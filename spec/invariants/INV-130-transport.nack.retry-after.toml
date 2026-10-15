@@ -1,0 +1,19 @@
+[invariant]
+id = "transport.nack.retry-after"
+statement = "After nack(id, retry_after, reason) returns Ok, the envelope is not delivered to that consumer group again until at least the smaller of retry_after and the group's RetryPolicy::max_backoff has elapsed since the nack."
+kind = "performance"
+requires = ["dst"]
+rationale = """
+Consumers nack with a delay when a dependency (Postgres, an embedder) is
+down; immediate redelivery would turn one failure into a hot retry loop. The
+bus clamps retry_after to initial_backoff..=max_backoff, so the group's
+max_backoff caps the delay a single nack can impose and a consumer cannot
+park an envelope indefinitely (transport.retry.backoff-ceiling). Classified
+as performance because it is a quantitative bound on time.
+"""
+
+[evidence]
+dst = "crosstalk::transport::dst::nack_delays_redelivery"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

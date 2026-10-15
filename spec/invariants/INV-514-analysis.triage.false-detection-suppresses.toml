@@ -1,0 +1,20 @@
+[invariant]
+id = "analysis.triage.false-detection-suppresses"
+statement = "AlertTriage::transmission_judged with a FalseDetection verdict at a revision newer than triage's copy moves exactly the Open or Acknowledged alerts whose subject is that transmission, of every rule, to Suppressed with reason OperatorRejected, in the same transaction as the copy's update."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+An operator who judged a transmission a false detection has said the
+alerts about it are noise, whichever rule raised them. Alerts about
+other transmissions, about the transmission's channel, and resolved or
+suppressed alerts keep their state.
+"""
+
+[evidence]
+unit = "crosstalk::analysis::tests::false_detection_suppresses_transmission_alerts"
+property = "crosstalk::analysis::tests::false_detection_suppresses_exactly"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+property = { agent = "false", human = "false" }

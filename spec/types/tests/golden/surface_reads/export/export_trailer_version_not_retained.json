@@ -1,0 +1,14 @@
+{
+  "export": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+  "rows": 1,
+  "digest": "aeb636f3fe079acc1f34effd59c7211b842338200c2c63c54d123502e8d35568",
+  "end": {
+    "type": "failed",
+    "data": {
+      "type": "version_not_retained",
+      "data": {
+        "version": 4
+      }
+    }
+  }
+}

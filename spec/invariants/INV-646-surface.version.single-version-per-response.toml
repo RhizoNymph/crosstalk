@@ -1,0 +1,18 @@
+[invariant]
+id = "surface.version.single-version-per-response"
+statement = "Every topic id in a successful topology, series, search, edge_transmissions or topics response belongs to the topic-model version that response reports."
+kind = "domain"
+property = "invariant"
+requires = ["property"]
+rationale = """
+A client colours, filters and labels by topic id and looks the labels up
+under the reported version. One id from another version would show an
+unlabelled or wrong topic, and a topic filter built from that response
+would then be refused as TopicsNotInVersion.
+"""
+
+[evidence]
+property = "crosstalk::surface::tests::prop_response_topics_belong_to_reported_version"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

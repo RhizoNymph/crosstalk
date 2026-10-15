@@ -1,0 +1,18 @@
+[invariant]
+id = "flow.registry.promote-publishes-once"
+statement = "Each ChannelRegistry::promote that returns Ok publishes exactly one ChannelPromoted, after its transaction commits, carrying the promotion's declaration and decision and the superseded channels it returned; a promote that returns Err publishes none."
+kind = "coordination"
+requires = ["integration"]
+rationale = """
+Alert triage, the live feed and cached channel directories learn of the
+promotion and the supersessions only from this event. Publishing before
+commit could suppress alerts for a promotion that rolled back; publishing
+twice is harmless to idempotent consumers but missing it would leave
+caches resolving superseded ids to themselves.
+"""
+
+[evidence]
+integration = "crosstalk::flow::tests::pg_promote_publishes_after_commit"
+
+[evidence-review]
+integration = { agent = "false", human = "false" }

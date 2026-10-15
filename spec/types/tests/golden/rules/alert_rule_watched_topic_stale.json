@@ -1,0 +1,39 @@
+{
+  "id": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+  "rule": {
+    "type": "user",
+    "data": {
+      "name": "Leaked credentials",
+      "created": [
+        "01J9Z3N4P5Q6R7S8T9V0W1X2Y3",
+        "2026-10-04T09:15:00.000000Z"
+      ],
+      "content": {
+        "type": "watched_topic",
+        "data": {
+          "watch": {
+            "type": "stale",
+            "data": {
+              "last": {
+                "version": 3,
+                "topics": [
+                  "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+                  "01J9Z3M2C5D6E7F8G9H0J1K2M3"
+                ]
+              },
+              "unmapped_in": 4,
+              "unmapped": [
+                "01J9Z3M2C5D6E7F8G9H0J1K2M3"
+              ]
+            }
+          },
+          "remap_threshold": 0.75
+        }
+      }
+    }
+  },
+  "status": "disabled",
+  "sinks": [
+    "01J9Z3M2C5D6E7F8G9H0J1K2M3"
+  ]
+}

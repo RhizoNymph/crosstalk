@@ -1,0 +1,18 @@
+[invariant]
+id = "surface.export.plan-errors-mapped"
+statement = "QueryError::from maps each ExportPlanError as the read it repeats: Store to Store, a version through VersionUnavailable as for a linked view, topics outside the version to Conflict(TopicsNotInVersion), an unaligned window to InvalidInput(UnalignedWindow), and a projection error through ProjectionStoreError as for QueryApi::projection."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+An export repeats a linked view's resolution and a projection read, so it
+must fail the way they do; a client that handles VersionNotRetained or
+ProjectionNotRetained for a view handles it for an export too. One From
+impl keeps the mapping total when a cause is added.
+"""
+
+[evidence]
+unit = "crosstalk_spec::tests::export::plan_errors_map_like_the_reads_they_repeat"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

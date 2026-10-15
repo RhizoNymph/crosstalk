@@ -1,0 +1,19 @@
+[invariant]
+id = "analysis.projection.sample-selection"
+statement = "ProjectionSource::sample reports as matching the number of transmissions its spec admits, and returns the min(matching, limit) of them with the smallest sample keys, BLAKE3 keyed by the seed over the transmission id, ties to the smaller TransmissionId, in ascending key order."
+kind = "domain"
+property = "model-based"
+requires = ["property"]
+rationale = """
+Bottom-k by a seeded hash makes the sample a pure function of the admitted
+set and the seed: refitting the same spec draws the same points, and a
+narrower filter with the same seed keeps every point of the wider sample
+it still admits. Passing points to UMAP in key order fixes the input order
+the layout depends on.
+"""
+
+[evidence]
+property = "crosstalk::analysis::tests::prop_sample_is_bottom_k_by_seeded_key"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

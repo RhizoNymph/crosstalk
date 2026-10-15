@@ -1,0 +1,24 @@
+[invariant]
+id = "reconstruct.agent-state.legal-transitions"
+statement = "Every change of an agent's AgentState variant is Registered to Provisional, Provisional to Established, Registered, Provisional or Established to Merged by a merge of that agent, or Merged back to the MergedInto.prior it was merged from by an unmerge of the record that merged it."
+kind = "domain"
+property = "postcondition"
+requires = ["property"]
+rationale = """
+The lifecycle is one-way except for an operator's exact unmerge: an
+Established agent is never demoted by traffic, a Registered agent never
+skips Provisional, and the only way out of Merged is reverting the record
+that put the agent there, which restores the active state it had when
+merged (`Agent::revert`, observed/agent/merge.rs). Any other move would
+change attribution that downstream readers already combined or split
+through the directory. Repointing a Merged agent's `into` to keep chains
+flat, or pointing it back at its source when another record is reverted
+(`Agent::restore`), keeps the variant Merged, so it is not a variant
+change and is allowed.
+"""
+
+[evidence]
+property = "crosstalk::reconstruct::tests::agent_state_changes_follow_lifecycle"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

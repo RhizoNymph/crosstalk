@@ -1,0 +1,19 @@
+[invariant]
+id = "flow.transmission.identity"
+statement = "The correlator keeps at most one transmission per reader exchange, sender and route."
+kind = "coordination"
+requires = ["property", "dst"]
+rationale = """
+A transmission is identified by (reader exchange, sender, route). Opening a
+second one for the same triple when more matches arrive, or when a match is
+redelivered, would double-count the edge and route the same traffic through
+policy twice.
+"""
+
+[evidence]
+property = "crosstalk::flow::correlator::tests::one_transmission_per_identity"
+dst = "crosstalk::flow::dst::redelivered_matches_keep_identity"
+
+[evidence-review]
+property = { agent = "false", human = "false" }
+dst = { agent = "false", human = "false" }

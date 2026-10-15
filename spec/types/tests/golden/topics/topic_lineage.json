@@ -1,0 +1,28 @@
+{
+  "from": 2,
+  "to": 3,
+  "floor": 0.3,
+  "entries": [
+    {
+      "topic": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+      "best": {
+        "topic": "01J9Z3P5Q6R7S8T9V0W1X2Y3Z4",
+        "similarity": 0.91
+      },
+      "others": [
+        {
+          "topic": "01J9Z3Q6R7S8T9V0W1X2Y3Z4A5",
+          "similarity": 0.42
+        }
+      ]
+    },
+    {
+      "topic": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+      "best": {
+        "topic": "01J9Z3Q6R7S8T9V0W1X2Y3Z4A5",
+        "similarity": 0.35
+      },
+      "others": []
+    }
+  ]
+}

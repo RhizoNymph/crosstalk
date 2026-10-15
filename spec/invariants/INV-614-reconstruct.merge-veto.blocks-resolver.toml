@@ -1,0 +1,23 @@
+[invariant]
+id = "reconstruct.merge-veto.blocks-resolver"
+statement = "IdentityResolver::merge with MergeAuthor::Resolver returns Vetoed and changes nothing when a stored MergeVeto separates the source's cluster from the target's."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+Checking clusters, not just the two named agents, keeps vetoed agents apart
+however they are reached: after b joins c, merging a into c would put a
+with b again. A cluster is a canonical agent and the agents merged into it.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::agents::a_veto_stops_the_resolver_until_an_operator_merges",
+    "crosstalk_spec::tests::agents::a_veto_keeps_whole_clusters_apart",
+    "crosstalk_spec::tests::agents::veto_separates_clusters_in_either_order",
+]
+integration = "crosstalk::reconstruct::tests::pg_veto_blocks_resolver_merge"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

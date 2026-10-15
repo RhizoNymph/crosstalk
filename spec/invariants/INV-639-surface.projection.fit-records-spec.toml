@@ -1,0 +1,20 @@
+[invariant]
+id = "surface.projection.fit-records-spec"
+statement = "A successful QueryApi::fit_projection returns a new ProjectionId whose projection_status is Queued, requested by the caller at the time of the call, with a spec holding the request's window and params, the topic version its selector resolved to during the call, and the embedding model current during the call."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+A cited projection must say exactly what it shows. Pinning the version and
+recording the model and seed at request time means a job that waits in the
+queue across a re-fit still fits what was asked for, and a projection can
+be fitted again from its spec alone.
+"""
+
+[evidence]
+unit = "crosstalk_spec::tests::projection::spec_pins_the_filter_to_the_resolved_version"
+integration = "crosstalk::surface::integration::fit_projection_records_spec"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

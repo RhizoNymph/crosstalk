@@ -1,0 +1,17 @@
+[invariant]
+id = "analysis.projection.frame-retention"
+statement = "A ready projection's frame is returned by QueryApi::projection for at least projection.frame_retention_days after its fitted_at, and once dropped the projection reads as ProjectionNotRetained while projection_status still returns its spec, requester and Fitted record."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+Citations need projections to outlive the session that made them, and
+frames are megabytes each, so they are kept for a fixed period (default 180
+days) and then dropped. The job record is kept, so a dead link still says
+what was fitted, and the spec can be fitted again with the same seed.
+"""
+
+[evidence]
+dst = "crosstalk::analysis::dst::projection_frames_expire_after_retention"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

@@ -1,0 +1,18 @@
+[invariant]
+id = "analysis.search.cursor-pins-version"
+statement = "Every page of one SearchIndex::query traversal evaluates the filter's topics under, and reports, the topic_version of its first page, even when another version becomes active mid-traversal, and once that version's assignments are dropped the next page returns Version(NotRetained) rather than InvalidCursor."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+A topic filter selects different transmissions under different versions,
+so a traversal that switched version between pages would skip or repeat
+hits. The cursor pins the version; a dropped version is reported as such so
+the client can restart under Current instead of treating its cursor as
+corrupt.
+"""
+
+[evidence]
+dst = "crosstalk::analysis::dst::search_pages_keep_version_across_activation"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

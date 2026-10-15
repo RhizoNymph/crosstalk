@@ -1,0 +1,24 @@
+[invariant]
+id = "reconstruct.agent-unmerge.round-trip"
+statement = "Merging and then reverting that merge's record, with no other merge or unmerge in between, leaves every agent's state as it was before the merge."
+kind = "domain"
+property = "metamorphic"
+requires = ["unit", "property"]
+rationale = """
+This is what restore exactly means for operators: an unmerge is the inverse
+of the merge it names, including for agents that were merged into the
+source earlier and repointed. The spec tests check the documented
+procedure on a reference table, by example and over a seeded random walk;
+the property test checks the resolver against it.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::agents::reverting_the_latest_merge_restores_every_state",
+    "crosstalk_spec::tests::agents::random_merges_and_reverts_keep_the_invariants",
+]
+property = "crosstalk::reconstruct::tests::merge_unmerge_round_trip"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+property = { agent = "false", human = "false" }

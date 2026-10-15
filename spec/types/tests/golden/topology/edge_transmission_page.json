@@ -1,0 +1,23 @@
+{
+  "watermark": "2026-10-04T12:58:00.000000Z",
+  "value": {
+    "topic_version": 3,
+    "page": {
+      "items": [
+        {
+          "transmission": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3",
+          "confirmed_at": "2026-10-04T12:41:30.250000Z",
+          "matched_bytes": 512,
+          "topic": "01J9Z3R7S8T9V0W1X2Y3Z4A5B6"
+        },
+        {
+          "transmission": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+          "confirmed_at": "2026-10-04T12:20:02.000001Z",
+          "matched_bytes": 400,
+          "topic": null
+        }
+      ],
+      "next": "ZWRnZS0wMUo5WjNLOA"
+    }
+  }
+}

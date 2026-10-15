@@ -1,0 +1,18 @@
+[invariant]
+id = "canonical.support.time-window-half-open"
+statement = "A TimeWindow contains an instant exactly when start <= instant < end."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Adjacent windows tile time for topology buckets and correlation. With a
+closed interval an event on a boundary would count in two buckets; with an
+open one it would count in none. Half-open windows put every instant in
+exactly one of a tiling's windows.
+"""
+
+[evidence]
+unit = "crosstalk_spec::tests::support::time_window_is_half_open"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

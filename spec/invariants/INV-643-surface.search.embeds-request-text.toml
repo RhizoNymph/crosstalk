@@ -1,0 +1,18 @@
+[invariant]
+id = "surface.search.embeds-request-text"
+statement = "QueryApi::search embeds the request's text with the current embedding model for Semantic and Hybrid requests and not for Text requests."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Clients send text, never vectors, so they need not know the embedding
+model, and the index is always queried with a vector from the model it
+holds. A text too long for the model is the operator's to shorten, so it is
+an input error, not a store failure.
+"""
+
+[evidence]
+unit = "crosstalk::surface::tests::search_modes_embed_only_when_needed"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

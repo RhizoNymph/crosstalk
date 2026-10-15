@@ -1,0 +1,74 @@
+[
+  {
+    "type": "declare_channel",
+    "data": {
+      "channel": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+      "pattern": {
+        "type": "url_prefix",
+        "data": {
+          "host": "wiki.corp.internal",
+          "path_prefix": "/eng"
+        }
+      },
+      "policy": "sanctioned",
+      "note": "the engineering wiki"
+    }
+  },
+  {
+    "type": "set_policy",
+    "data": {
+      "channel": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+      "policy": "unsanctioned",
+      "note": null
+    }
+  },
+  {
+    "type": "register_agent",
+    "data": {
+      "agent": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3",
+      "evidence": [
+        {
+          "type": "harness_agent",
+          "data": {
+            "scope": {
+              "type": "account",
+              "data": {
+                "key": 1,
+                "digest": "1111111111111111111111111111111111111111111111111111111111111111"
+              }
+            },
+            "agent": "planner-7"
+          }
+        }
+      ]
+    }
+  },
+  {
+    "type": "provision_rule",
+    "data": {
+      "rule": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+      "kind": "new_channel"
+    }
+  },
+  {
+    "type": "set_access_mode",
+    "data": "authenticated"
+  },
+  {
+    "type": "set_operator",
+    "data": {
+      "operator": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3",
+      "name": "Grace Hopper",
+      "permissions": [
+        "view",
+        "audit"
+      ]
+    }
+  },
+  {
+    "type": "remove_operator",
+    "data": {
+      "operator": "01J9Z3M2C5D6E7F8G9H0J1K2M3"
+    }
+  }
+]

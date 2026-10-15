@@ -1,0 +1,25 @@
+[invariant]
+id = "analysis.embedding.same-model-only"
+statement = "Every operation that scores one embedding against another returns an error or no result, never a score, when the two embeddings come from different models."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+Vectors from different embedding models live in unrelated spaces, so a
+cross-model similarity is a meaningless number that would still pass every
+threshold check. This covers TopicModel::assign (TopicError::WrongModel),
+semantic and hybrid search (SearchError::WrongModel, which the surface
+reports as Conflict(EmbeddingModelChanged)) and SemanticQuery rule
+evaluation (no draft; a rule whose query was embedded with another model
+goes stale, analysis.rule.semantic-stale-on-model-change). It is what lets
+the embedder be swapped without corrupting topics, search or alerts until
+a re-fit and re-embed complete.
+"""
+
+[evidence]
+unit = ["crosstalk::analysis::tests::assign_rejects_embedding_of_other_model", "crosstalk::analysis::tests::semantic_search_rejects_query_of_other_model", "crosstalk::analysis::tests::semantic_rule_skips_embedding_of_other_model"]
+property = "crosstalk::analysis::tests::no_cross_model_scores"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+property = { agent = "false", human = "false" }

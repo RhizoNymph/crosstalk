@@ -1,0 +1,17 @@
+[invariant]
+id = "transport.dedup.suppress-only-handled"
+statement = "The dedup wrapper withholds a delivery from consumer logic only if consumer logic of the same consumer group previously returned success for an envelope with the same Envelope::id."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+Guards the other direction from transport.dedup.at-most-once: a dedup record
+written before handling succeeds, or keyed without the group, would drop
+envelopes silently and turn at-least-once into at-most-once. Failed handling
+records nothing, so the redelivery reaches consumer logic.
+"""
+
+[evidence]
+dst = "crosstalk::transport::dst::dedup_never_suppresses_unhandled_id"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

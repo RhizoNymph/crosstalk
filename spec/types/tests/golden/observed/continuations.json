@@ -1,0 +1,19 @@
+[
+  {
+    "type": "full_history"
+  },
+  {
+    "type": "increment",
+    "data": {
+      "previous": "resp_68e1a2b3c4d5e6f708192a3b",
+      "connection": "01J9Z3Q8R9S0T1V2W3X4Y5Z6A7"
+    }
+  },
+  {
+    "type": "increment",
+    "data": {
+      "previous": "resp_68e1a2b3c4d5e6f708192a3c",
+      "connection": null
+    }
+  }
+]

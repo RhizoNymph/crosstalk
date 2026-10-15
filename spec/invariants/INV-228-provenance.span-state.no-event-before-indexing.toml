@@ -1,0 +1,21 @@
+[invariant]
+id = "provenance.span-state.no-event-before-indexing"
+statement = "SpanState::advance rejects a Hit or Expire event timestamped before the span's indexed_at."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+A span cannot be read or expire before it was indexed. Accepting such an
+event would make first_hit_at precede indexed_at, so a transmission's
+timing evidence would show the reader receiving text before the gateway
+knew it existed, and retention would be measured from the wrong instant.
+advance guards both edges with at >= indexed_at, so Propagated and Expired
+states built through it are always time-ordered.
+"""
+
+[evidence]
+type = "crosstalk_spec::derived::provenance::span::SpanState::advance"
+unit = "crosstalk_spec::tests::provenance::span_rejects_hits_and_expiry_before_indexing"
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

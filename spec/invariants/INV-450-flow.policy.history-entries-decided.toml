@@ -1,0 +1,19 @@
+[invariant]
+id = "flow.policy.history-entries-decided"
+statement = "Every PolicyHistory entry is a PolicyDecision naming its author and decision time, so Policy::Unreviewed(None) can never be recorded as a decision."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+Unreviewed(None) is the state of a channel nobody has reviewed, not a
+decision. Letting it into the history would make an entry with no author
+and no time, and would make a reset indistinguishable from never having
+been reviewed.
+"""
+
+[evidence]
+type = "crosstalk_spec::derived::flow::channel::policy::PolicyDecision"
+unit = ["crosstalk_spec::tests::policy::never_reviewed_policy_is_not_a_decision", "crosstalk_spec::tests::policy::every_decided_policy_round_trips_through_policy_decision", "crosstalk_spec::tests::policy::unreviewed_decision_is_a_reset_not_never_reviewed"]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

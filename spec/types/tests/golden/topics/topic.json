@@ -1,0 +1,32 @@
+{
+  "id": "01J9Z3P5Q6R7S8T9V0W1X2Y3Z4",
+  "version": 3,
+  "label": "credential handoffs",
+  "terms": [
+    [
+      "token",
+      0.42
+    ],
+    [
+      "vault",
+      0.31
+    ],
+    [
+      "paste",
+      0.125
+    ]
+  ],
+  "centroid": {
+    "model": {
+      "name": "nomic-embed-text-v1.5",
+      "dimension": 4
+    },
+    "values": [
+      0.5,
+      -0.5,
+      0.5,
+      0.5
+    ]
+  },
+  "fitted_at": "2026-10-04T11:10:00.000000Z"
+}

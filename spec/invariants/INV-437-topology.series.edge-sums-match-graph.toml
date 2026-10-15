@@ -1,0 +1,18 @@
+[invariant]
+id = "topology.series.edge-sums-match-graph"
+statement = "For the same window, weighting, filter and topic_version, a by-edge series has one series per edge of the graph, keyed by that edge's from, to and route, and each series sums to that edge's stat under the weighting."
+kind = "domain"
+property = "model-based"
+requires = ["property"]
+rationale = """
+The UI shows an edge's trend line next to its weight in the graph. The two
+must be the same traffic cut differently: no edge only in one of them,
+and the sum of an edge's points equal to the stat its share was computed
+from.
+"""
+
+[evidence]
+property = "crosstalk::topology::props::edge_series_sum_to_graph_edge_stats"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

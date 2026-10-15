@@ -1,0 +1,14 @@
+{
+  "id": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+  "at": "2026-10-04T12:34:56.789012Z",
+  "event": {
+    "type": "detect",
+    "data": {
+      "type": "declared_channel_unused",
+      "data": {
+        "channel": "01J9Z3Q6R7S8T9V0W1X2Y3Z4A5",
+        "since": "2026-10-08T00:00:00.000000Z"
+      }
+    }
+  }
+}

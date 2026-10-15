@@ -1,0 +1,23 @@
+[invariant]
+id = "topology.transmissions.match-graph"
+statement = "A full traversal of EdgeStore::transmissions for an edge, a window and a filter lists exactly the transmissions that the reference fold of topology.graph.matches-fold-model counts into that edge for the same window and filter, once each."
+kind = "domain"
+property = "model-based"
+requires = ["property", "integration"]
+rationale = """
+Clicking an edge must list what the edge counts: the number of rows equals
+its stats.transmissions and their matched_bytes sum to its
+stats.matched_bytes. Serving the list from the same stored contributions
+the continuous aggregates are built from, with the same alias resolution,
+active-version topics and filter, keeps the two from drifting; a list
+served from the transmission table would include confirmed transmissions
+not yet applied, or ones whose ends have since merged into one agent.
+"""
+
+[evidence]
+property = "crosstalk::topology::props::edge_transmissions_match_fold"
+integration = "crosstalk::topology::integration::timescale_edge_transmissions_match_graph"
+
+[evidence-review]
+property = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

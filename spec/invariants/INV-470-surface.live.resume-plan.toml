@@ -1,0 +1,19 @@
+[invariant]
+id = "surface.live.resume-plan"
+statement = "FeedWindow::resume plans Live for a fresh subscription, Replay after the cursor exactly when the cursor has the window's epoch and a seq from the floor to the head inclusive, and otherwise Resync with Expired, OtherEpoch, AheadOfHead or Unreadable as the case is."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+This is the rule that keeps resumption from losing updates silently. A
+cursor at the floor can still be replayed because every entry after it is
+retained; one below it cannot. A cursor from another epoch or past the
+head means the log was recreated, and replaying by its seq would skip or
+repeat entries, so the client must refetch.
+"""
+
+[evidence]
+unit = ["crosstalk_spec::tests::live::resume_replays_while_every_later_entry_is_retained", "crosstalk_spec::tests::live::resume_resyncs_instead_of_losing_entries"]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

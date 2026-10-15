@@ -1,0 +1,24 @@
+[invariant]
+id = "ingress.passthrough.request-unchanged"
+statement = "The upstream receives every request the proxy routes or intercepts with the method, path, query, headers and body bytes the client sent, including credential and anthropic-* headers and still-compressed bodies, except hop-by-hop headers and Host, whatever its EndpointKind and whether or not it decoded."
+kind = "domain"
+property = "postcondition"
+requires = ["property", "integration"]
+rationale = """
+Crosstalk is a passive observer: harnesses must behave exactly as if they
+talked to the upstream directly. Rewriting or stripping a header breaks
+real traffic (dropping the oauth-2025-04-20 beta fails Claude subscription
+requests with 401), re-serializing JSON changes what the model sees, and
+re-encoding a zstd body (Codex on ChatGPT auth) changes its bytes.
+Non-generation routes and requests that fail to decode are forwarded the
+same way, so an unsupported field or endpoint never becomes an outage.
+Host and hop-by-hop headers (RFC 9110 section 7.6.1) are connection-scoped.
+"""
+
+[evidence]
+property = "crosstalk::ingress::tests::passthrough::request_forwarded_unchanged"
+integration = "crosstalk::ingress::tests::integration::request_forwarded_unchanged_live"
+
+[evidence-review]
+property = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

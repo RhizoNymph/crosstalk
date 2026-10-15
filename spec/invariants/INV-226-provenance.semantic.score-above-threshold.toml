@@ -1,0 +1,19 @@
+[invariant]
+id = "provenance.semantic.score-above-threshold"
+statement = "Every SemanticHit that SemanticMatcher::lookup returns has a score at or above the threshold it was given."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+The threshold is the operator's precision knob for paraphrase detection.
+Returning hits below it floods L5 with weak evidence that confirms
+transmissions on topical similarity alone.
+"""
+
+[evidence]
+unit = "crosstalk::provenance::tests::semantic_lookup_respects_threshold"
+property = "crosstalk::provenance::props::semantic_hits_meet_threshold"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+property = { agent = "false", human = "false" }

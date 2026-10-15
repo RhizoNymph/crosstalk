@@ -1,0 +1,22 @@
+[invariant]
+id = "analysis.embedding.unit-norm"
+statement = "Every Embedding has an L2 norm within Embedding::NORM_TOLERANCE of 1."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+Topic assignment, semantic search and the SemanticQuery rule all score
+with the inner product and read it as cosine similarity, which is only
+true for unit vectors. An unnormalized vector would make scores depend on
+text length and could push a score outside Similarity's [0, 1] range.
+Embedding::new rejects any other norm, and a NaN norm, with
+InvalidEmbedding::NotNormalized, so the guarantee holds for every Embedder
+implementation.
+"""
+
+[evidence]
+type = "crosstalk_spec::aggregates::topic::Embedding::new"
+unit = ["crosstalk_spec::tests::aggregates::embedding_rejects_unnormalized_and_nan", "crosstalk_spec::tests::aggregates::embedding_accepts_unit_vectors_of_the_model_dimension"]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

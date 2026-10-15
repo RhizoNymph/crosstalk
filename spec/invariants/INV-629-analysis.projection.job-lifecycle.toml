@@ -1,0 +1,19 @@
+[invariant]
+id = "analysis.projection.job-lifecycle"
+statement = "A ProjectionInfo's timestamps never go backwards (requested, started, fitted or failed, expired), a fit's watermark is no later than its start, a fit holds exactly min(matching, limit) points, and its status moves only Queued to Fitting or Failed, Fitting to Queued, Ready or Failed, and Ready to Expired, with Ready keeping the start of the Fitting it came from."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+The job record is what a citation points at: when the sample was read, how
+settled the data was, how many points out of how many. A record that could
+claim a fit finished before it started, or a failed job that later turns
+ready, would make that account untrustworthy.
+"""
+
+[evidence]
+type = ["crosstalk_spec::aggregates::projection::ProjectionInfo::new", "crosstalk_spec::aggregates::projection::ProjectionInfo::start", "crosstalk_spec::aggregates::projection::ProjectionInfo::requeue", "crosstalk_spec::aggregates::projection::ProjectionInfo::complete", "crosstalk_spec::aggregates::projection::ProjectionInfo::fail", "crosstalk_spec::aggregates::projection::ProjectionInfo::expire"]
+unit = ["crosstalk_spec::tests::projection::info_accepts_every_status_with_ordered_times", "crosstalk_spec::tests::projection::info_rejects_times_out_of_order", "crosstalk_spec::tests::projection::info_rejects_watermark_after_start", "crosstalk_spec::tests::projection::info_rejects_a_count_other_than_min_of_matching_and_limit", "crosstalk_spec::tests::projection::job_runs_queued_fitting_ready_expired", "crosstalk_spec::tests::projection::lapsed_fit_requeues_and_restarts", "crosstalk_spec::tests::projection::complete_needs_the_jobs_start", "crosstalk_spec::tests::projection::complete_checks_the_fit", "crosstalk_spec::tests::projection::fail_records_whether_the_job_started", "crosstalk_spec::tests::projection::transitions_outside_the_lifecycle_are_refused"]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

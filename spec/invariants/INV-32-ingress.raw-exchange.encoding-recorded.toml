@@ -1,0 +1,19 @@
+[invariant]
+id = "ingress.raw-exchange.encoding-recorded"
+statement = "A RawExchange's request.encoding, the encoding its DecodedRequest records, is the request's Content-Encoding."
+kind = "domain"
+property = "postcondition"
+requires = ["property"]
+rationale = """
+Normalization, threading and content matching run on the captured request,
+and they need plaintext JSON, while the upstream must get the original
+compressed bytes. The DecodedRequest holds the decoded body and the
+encoding it arrived in side by side, so what detection reads can be tied
+back to exactly the bytes that were forwarded.
+"""
+
+[evidence]
+property = "crosstalk::ingress::tests::capture::request_body_is_decoded_forwarded_body"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

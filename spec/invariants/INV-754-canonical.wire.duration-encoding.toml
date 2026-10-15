@@ -1,0 +1,29 @@
+[invariant]
+id = "canonical.wire.duration-encoding"
+statement = "Every Duration on the wire encodes as its whole microseconds, a JSON number, in a field whose name ends in _micros; encoding a duration with a fraction of a microsecond or more than u64::MAX microseconds fails, and decoding accepts exactly the integers from 0 to u64::MAX."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Microseconds are the crate's time unit (a Timestamp counts them), so every
+duration between two timestamps is a whole number of them and the number is
+exact both ways. serde's default form for a Duration, {"secs", "nanos"},
+would be a second, undocumented shape that no other wire value uses, and a
+reader could not tell its unit from the JSON. Naming the field <what>_micros
+puts the unit in the key. Refusing a duration that does not fit, instead of
+rounding or saturating it, keeps every encoded duration exact; decoding
+refuses negatives, fractions, strings and the {"secs", "nanos"} object. A
+source scan keeps every serialized Duration field on the convention.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::wire::flow::duration::durations_encode_as_whole_microseconds",
+    "crosstalk_spec::tests::wire::flow::duration::durations_that_do_not_fit_fail_to_encode",
+    "crosstalk_spec::tests::wire::flow::duration::durations_refuse_every_other_shape",
+    "crosstalk_spec::tests::wire::flow::duration::every_wire_duration_field_uses_the_convention",
+    "crosstalk_spec::tests::wire::flow::transmissions::co_access_golden_carries_the_lag_in_micros",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

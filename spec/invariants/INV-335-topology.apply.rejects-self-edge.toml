@@ -1,0 +1,20 @@
+[invariant]
+id = "topology.apply.rejects-self-edge"
+statement = "apply returns EdgeError::SelfEdge and changes no stored bucket when the contribution's from equals its to."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Content matching never pairs an agent with itself, so a contribution with
+from == to means corrupt upstream data. EdgeKey cannot represent it, but
+the store also keeps per-transmission dedup rows and per-topic breakdowns
+that are not EdgeKeys; the error must come before any of them is written.
+What the consumer does with the error is a separate invariant
+(topology.consumer.acks-self-edge).
+"""
+
+[evidence]
+unit = "crosstalk::topology::tests::apply_self_edge_errors_and_stores_nothing"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

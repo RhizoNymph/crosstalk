@@ -1,0 +1,52 @@
+{
+  "superseded": [
+    "01J9Z3Q6R7S8T9V0W1X2Y3Z4A5"
+  ],
+  "covered": {
+    "shown": [
+      {
+        "id": "01J9Z3S8T9V0W1X2Y3Z4A5B6C7",
+        "locator": {
+          "type": "url",
+          "data": {
+            "scheme": "https",
+            "host": "wiki.internal.example",
+            "path": "/projects/crosstalk/notes",
+            "query": null
+          }
+        },
+        "first_seen": "2026-10-04T11:58:12.000000Z"
+      },
+      {
+        "id": "01J9Z3R7S8T9V0W1X2Y3Z4A5B6",
+        "locator": {
+          "type": "url",
+          "data": {
+            "scheme": "https",
+            "host": "wiki.internal.example",
+            "path": "/projects/crosstalk/plan",
+            "query": null
+          }
+        },
+        "first_seen": "2026-10-04T11:58:12.000000Z"
+      }
+    ],
+    "total": 2
+  },
+  "uncovered": {
+    "shown": [
+      {
+        "id": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3",
+        "locator": {
+          "type": "file",
+          "data": {
+            "host": null,
+            "path": "/srv/shared/handoff.md"
+          }
+        },
+        "first_seen": "2026-10-04T11:58:12.000000Z"
+      }
+    ],
+    "total": 1
+  }
+}

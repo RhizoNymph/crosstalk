@@ -1,0 +1,20 @@
+[invariant]
+id = "surface.query.series-matches-edge-store"
+statement = "For a Caller with View, QueryApi::series returns exactly the Watermarked result EdgeStore::series returns for the same grid, weighting, grouping and filter, watermark included."
+kind = "domain"
+property = "model-based"
+requires = ["property"]
+rationale = """
+L7 computes series so that they add up to its graphs. If the surface
+re-filtered, re-grouped or dropped points, the brush would no longer match
+the graph. Passing L7's watermark through unchanged keeps the brush's
+settled region the same as the graph's. Mapping BucketWidthMismatch to
+InvalidInput tells the UI to rebuild its grid from the store's bucket
+width, and VersionNotRetained tells it the version it pinned is gone.
+"""
+
+[evidence]
+property = "crosstalk::surface::tests::prop_series_matches_in_memory_edge_store"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

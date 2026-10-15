@@ -1,0 +1,26 @@
+[invariant]
+id = "surface.excerpt.dropped-body-typed"
+statement = "Excerpted::of returns BodyDropped naming the location's message when the blob store returned no body, the Shown excerpt Excerpt::cut gives for the named part's text when it returned one, and an ExcerptError, never a panic, when the body is another message, the part does not exist or has no text, or the range does not fit the text; QueryApi::transmission_evidence returns the evidence with BodyDropped for each side whose body is gone."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+Every body a span or match names was stored before its event was
+published, so a missing body means content retention dropped it. That is
+expected over time, and the match, its ids and byte counts are still worth
+showing, so it is an outcome on the one excerpt rather than an error that
+would hide the whole page. A location that does not fit its body is a
+fault, typed so it is diagnosed rather than sliced into a panic.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::excerpt::excerpted_cuts_the_part_the_location_names",
+    "crosstalk_spec::tests::excerpt::a_dropped_body_is_an_outcome_naming_the_message",
+    "crosstalk_spec::tests::excerpt::a_location_that_does_not_fit_its_body_is_an_error",
+]
+integration = "crosstalk::surface::integration::evidence_after_body_retention"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

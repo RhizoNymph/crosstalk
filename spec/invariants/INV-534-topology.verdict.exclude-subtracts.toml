@@ -1,0 +1,18 @@
+[invariant]
+id = "topology.verdict.exclude-subtracts"
+statement = "For the same window, weighting and topic version, and a filter equal apart from false_detections, each edge's stats under Exclude equal its stats under Include minus the summed transmissions and matched bytes of its contributions whose transmission the store's copy holds as FalseDetection, edges left at zero are dropped and shares are recomputed over what remains; series values and drill-down rows follow the same rule."
+kind = "domain"
+property = "metamorphic"
+requires = ["property"]
+rationale = """
+Subtracting at query time is the chosen way to honour verdicts in the
+edge table. Defining Exclude against Include pins the subtraction to the
+same contributions the drill-down lists, so a graph, its series and its
+drill-down agree, and graph-to-series sums keep holding under Exclude.
+"""
+
+[evidence]
+property = "crosstalk::topology::tests::prop_exclude_is_include_minus_rejected"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

@@ -1,0 +1,112 @@
+{
+  "versions": [
+    {
+      "version": 0,
+      "status": {
+        "type": "superseded",
+        "data": {
+          "fit": {
+            "type": "unfitted"
+          },
+          "activated_at": "2026-10-04T00:00:00.000000Z",
+          "by": 2,
+          "superseded_at": "2026-10-04T10:00:00.000000Z"
+        }
+      },
+      "retention": {
+        "type": "retained",
+        "data": {
+          "pin": null
+        }
+      }
+    },
+    {
+      "version": 1,
+      "status": {
+        "type": "superseded",
+        "data": {
+          "fit": {
+            "type": "fitted",
+            "data": {
+              "started_at": "2026-10-04T06:00:00.000000Z",
+              "fitted_at": "2026-10-04T06:05:00.000000Z",
+              "ready_at": "2026-10-04T06:20:00.000000Z",
+              "topics": 12
+            }
+          },
+          "activated_at": null,
+          "by": 2,
+          "superseded_at": "2026-10-04T10:00:00.000000Z"
+        }
+      },
+      "retention": {
+        "type": "dropped",
+        "data": {
+          "at": "2026-10-04T11:00:00.000000Z"
+        }
+      }
+    },
+    {
+      "version": 2,
+      "status": {
+        "type": "active",
+        "data": {
+          "fit": {
+            "type": "fitted",
+            "data": {
+              "started_at": "2026-10-04T08:30:00.000000Z",
+              "fitted_at": "2026-10-04T08:40:00.000000Z",
+              "ready_at": "2026-10-04T09:00:00.000000Z",
+              "topics": 14
+            }
+          },
+          "activated_at": "2026-10-04T10:00:00.000000Z"
+        }
+      },
+      "retention": {
+        "type": "retained",
+        "data": {
+          "pin": {
+            "by": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3",
+            "at": "2026-10-04T10:30:00.000000Z"
+          }
+        }
+      }
+    },
+    {
+      "version": 3,
+      "status": {
+        "type": "ready",
+        "data": {
+          "fit": {
+            "started_at": "2026-10-04T11:00:00.000000Z",
+            "fitted_at": "2026-10-04T11:10:00.000000Z",
+            "ready_at": "2026-10-04T11:30:00.000000Z",
+            "topics": 15
+          }
+        }
+      },
+      "retention": {
+        "type": "retained",
+        "data": {
+          "pin": null
+        }
+      }
+    },
+    {
+      "version": 4,
+      "status": {
+        "type": "fitting",
+        "data": {
+          "started_at": "2026-10-04T12:00:00.000000Z"
+        }
+      },
+      "retention": {
+        "type": "retained",
+        "data": {
+          "pin": null
+        }
+      }
+    }
+  ]
+}

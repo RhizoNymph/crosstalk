@@ -1,0 +1,19 @@
+[invariant]
+id = "canonical.capture.blob-is-canonical-encoding"
+statement = "The blob L1 writes for each message is that message's canonical encoding, not its provider wire bytes."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+The blob store keys content by the BLAKE3 of the bytes put, and consumers
+look messages up by Message.hash. Only if the stored bytes are the canonical
+encoding does the store's key equal the message's hash, so that a consumer
+holding a hash from ExchangeCaptured finds the body. Storing wire bytes
+would also fragment storage per provider and per serialization.
+"""
+
+[evidence]
+unit = "crosstalk::canonical::tests::capture_puts_canonical_encoding_under_message_hash"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

@@ -1,0 +1,12 @@
+{
+  "model": {
+    "name": "nomic-embed-text-v1.5",
+    "dimension": 4
+  },
+  "values": [
+    0.5,
+    -0.5,
+    0.5,
+    0.5
+  ]
+}

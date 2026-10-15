@@ -1,0 +1,21 @@
+[invariant]
+id = "flow.transmission.open-confirmed-not-channel"
+statement = "Every OpenConfirmed update has a Delegation, Direct or Unobserved route, never a Channel route."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+Channel-routed transmissions must open through OpenChannel so they carry a
+CoAccess and pass through AwaitingContent before content confirms them.
+`TransmissionUpdate::OpenConfirmed::route` is a `NonChannelRoute`, which has
+no Channel variant, so a channel transmission confirmed in one step cannot
+be built. It widens into `Route` only through `From`, which maps each
+variant to its namesake.
+"""
+
+[evidence]
+type = ["crosstalk_spec::interfaces::l5_flow::TransmissionUpdate", "crosstalk_spec::derived::flow::transmission::NonChannelRoute"]
+unit = "crosstalk_spec::tests::infrastructure::non_channel_routes_convert_without_channel"
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

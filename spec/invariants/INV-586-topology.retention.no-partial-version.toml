@@ -1,0 +1,17 @@
+[invariant]
+id = "topology.retention.no-partial-version"
+statement = "Every graph, series or transmissions call reading a topic-model version either counts every bucket that version had when the read began or returns VersionNotRetained."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+A drop deletes many rows. A query racing it must not see a version half
+deleted, which would look like a real drop in traffic. drop_version marks
+the version dropped before deleting rows, and queries check the mark in
+the same snapshot as the buckets.
+"""
+
+[evidence]
+dst = "crosstalk::topology::dst::queries_never_see_a_partially_dropped_version"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

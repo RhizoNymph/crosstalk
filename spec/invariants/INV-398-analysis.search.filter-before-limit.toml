@@ -1,0 +1,20 @@
+[invariant]
+id = "analysis.search.filter-before-limit"
+statement = "The hits of a full filtered SearchIndex::query traversal, its pages concatenated in order, are the hits of the same query under the default filter, in descending (score, TransmissionId), with the hits the filter does not admit removed."
+kind = "domain"
+property = "metamorphic"
+requires = ["property"]
+rationale = """
+Filtering after ranking would leave pages short or empty for a narrow
+selection even when many admitted transmissions match, and a client could
+not tell an empty page from the end of the results. The filter must be part
+of the candidate query for both the full-text and the vector side of hybrid
+search, so every page holds admitted hits only and the traversal lists each
+admitted hit once, in rank order.
+"""
+
+[evidence]
+property = "crosstalk::analysis::tests::prop_filtered_search_is_filtered_ranking"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

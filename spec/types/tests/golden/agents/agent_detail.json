@@ -1,0 +1,122 @@
+{
+  "watermark": "2026-10-04T12:58:00.000000Z",
+  "value": {
+    "cluster": {
+      "profile": {
+        "id": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+        "label": "planner",
+        "state": {
+          "type": "established",
+          "data": {
+            "since": "2026-10-01T08:00:00.000000Z"
+          }
+        },
+        "parent": "01J9Z3P5Q6R7S8T9V0W1X2Y3Z4",
+        "aliases": [
+          "01J9Z3Q6R7S8T9V0W1X2Y3Z4A5"
+        ],
+        "claims": {
+          "entries": [
+            {
+              "claim": {
+                "family": "claude_code",
+                "version": "2.1.4",
+                "user_agent": "claude-cli/2.1.4 (external, cli)"
+              },
+              "last_seen": "2026-10-04T12:41:07.120000Z"
+            }
+          ]
+        },
+        "last_seen": "2026-10-04T12:41:07.120000Z"
+      },
+      "agent": {
+        "id": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+        "evidence": [
+          {
+            "type": "harness_session",
+            "data": {
+              "scope": {
+                "type": "upstream",
+                "data": "anthropic"
+              },
+              "session": "3f0c9a2e-planner"
+            }
+          }
+        ],
+        "parent": "01J9Z3P5Q6R7S8T9V0W1X2Y3Z4",
+        "state": {
+          "type": "established",
+          "data": {
+            "since": "2026-10-01T08:00:00.000000Z"
+          }
+        },
+        "label": "planner"
+      },
+      "aliases": [
+        {
+          "id": "01J9Z3Q6R7S8T9V0W1X2Y3Z4A5",
+          "evidence": [
+            {
+              "type": "harness_session",
+              "data": {
+                "scope": {
+                  "type": "upstream",
+                  "data": "anthropic"
+                },
+                "session": "8b41d7c0-planner-restart"
+              }
+            }
+          ],
+          "parent": null,
+          "state": {
+            "type": "merged",
+            "data": {
+              "merge": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+              "into": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+              "prior": {
+                "type": "provisional",
+                "data": {
+                  "first_seen": "2026-10-03T15:58:12.000000Z"
+                }
+              },
+              "repointed_by": []
+            }
+          },
+          "label": null
+        }
+      ],
+      "children": [
+        "01J9Z3N4P5Q6R7S8T9V0W1X2Y3"
+      ],
+      "merges": [
+        {
+          "id": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+          "from": "01J9Z3Q6R7S8T9V0W1X2Y3Z4A5",
+          "into": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+          "by": {
+            "type": "operator",
+            "data": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3"
+          },
+          "at": "2026-10-03T16:20:00.000000Z",
+          "repointed": [],
+          "reverted": null
+        }
+      ],
+      "vetoes": [
+        {
+          "a": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+          "b": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+          "by": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3",
+          "at": "2026-10-03T17:05:00.000000Z"
+        }
+      ],
+      "lookup": {
+        "type": "canonical"
+      }
+    },
+    "traffic": {
+      "transmissions_in": 2,
+      "transmissions_out": 3
+    }
+  }
+}

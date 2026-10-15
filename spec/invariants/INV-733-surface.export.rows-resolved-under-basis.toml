@@ -1,0 +1,19 @@
+[invariant]
+id = "surface.export.rows-resolved-under-basis"
+statement = "Every agent and channel a transmissions, edges, accesses or topics export's rows name is canonical under the agent and channel resolution captured when the export started, every topic they name belongs to the header's topic version, and a FalseDetections::Exclude filter is applied with the verdicts captured then."
+kind = "domain"
+property = "invariant"
+requires = ["integration"]
+rationale = """
+A merge or verdict committed while a long export streams must not split
+it into rows resolved two ways: the edge rows of one bucket would then
+count an agent under two ids. Capturing resolution once makes every row
+consistent with the header and with each other, and the export as a whole
+reads as of its start, like a linked view reads as of its query.
+"""
+
+[evidence]
+integration = "crosstalk::surface::export::tests::export_resolves_once_at_start"
+
+[evidence-review]
+integration = { agent = "false", human = "false" }

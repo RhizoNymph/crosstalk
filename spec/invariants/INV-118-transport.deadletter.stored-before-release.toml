@@ -1,0 +1,20 @@
+[invariant]
+id = "transport.deadletter.stored-before-release"
+statement = "When a delivery on attempt RetryPolicy::max_attempts is nacked or its ack timeout expires, the bus stops tracking it for the group only after DeadLetterStore::put of its DeadLetter has returned Ok."
+kind = "coordination"
+requires = ["dst", "integration"]
+rationale = """
+Exhausting the retry budget must move the envelope, not drop it. If the bus
+released the delivery (acked or terminated it on JetStream) before the dead
+letter was durable, a crash in between would lose the envelope with no
+record. If put fails, the delivery stays tracked and the bus retries the put.
+DeadLetterStore::put returning Ok means the letter is durable.
+"""
+
+[evidence]
+dst = "crosstalk::transport::dst::exhausted_delivery_dead_lettered_before_release"
+integration = "crosstalk::transport::integration::jetstream_dead_letter_survives_crash_at_exhaustion"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

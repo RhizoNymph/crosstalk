@@ -1,0 +1,30 @@
+[invariant]
+id = "surface.export.header-matches-request"
+statement = "ExportHeader::new accepts a header only when its basis is of the request's dataset, a scoped basis holds the request's filter pinned to the resolved version (equal to the requested version when one was pinned) and both scoped and verdict bases hold the request's window cut at the header's watermark, a projection basis names the requested projection and plans exactly its stored points, and the watermark is no later than the start."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+The header is what makes an export citable: re-running the recorded
+request at the recorded watermark and version must select the same rows.
+A header whose basis disagrees with its request (another version, an
+unpinned filter, a window not cut at the watermark) would cite something
+other than what was sent.
+"""
+
+[evidence]
+type = "crosstalk_spec::interfaces::l8_surface::export::manifest::ExportHeader::new"
+unit = [
+    "crosstalk_spec::tests::export::header_accepts_every_dataset_with_its_basis",
+    "crosstalk_spec::tests::export::header_rejects_a_basis_for_another_dataset",
+    "crosstalk_spec::tests::export::header_pins_the_requested_version",
+    "crosstalk_spec::tests::export::header_rejects_a_filter_other_than_the_request_pinned",
+    "crosstalk_spec::tests::export::header_rejects_a_settled_window_not_cut_at_the_watermark",
+    "crosstalk_spec::tests::export::header_with_nothing_settled_plans_no_rows",
+    "crosstalk_spec::tests::export::header_rejects_a_watermark_after_its_start",
+    "crosstalk_spec::tests::export::projection_header_names_its_projection_and_plans_its_points",
+    "crosstalk_spec::tests::wire::surface_reads::export::export_headers_are_decoded_through_their_constructor",
+]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

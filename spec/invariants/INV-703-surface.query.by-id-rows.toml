@@ -1,0 +1,20 @@
+[invariant]
+id = "surface.query.by-id-rows"
+statement = "A full traversal of QueryApi::transmissions_by_id lists, newest id first, exactly one TransmissionSummary::of row for each id of the selection that names a stored transmission and none for any other id, with every row's topic read under the one version its first page resolved and every page reports."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+A lasso or a search selection names ids; the page shows their rows.
+Leaving unknown ids out keeps the call total, and pinning the version on
+the first page keeps topics comparable across pages, as for every linked
+view.
+"""
+
+[evidence]
+unit = "crosstalk::surface::tests::rows_by_id_follow_the_selection"
+integration = "crosstalk::surface::integration::pg_rows_by_id_traversal"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

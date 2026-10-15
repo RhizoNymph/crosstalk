@@ -1,0 +1,18 @@
+[invariant]
+id = "reconstruct.agent-merged.names-record"
+statement = "The AgentMerged published for record m names m's id, source and target, its author, and in repointed exactly m.repointed."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+The UI needs the record id to offer an unmerge of exactly this merge, and
+merge-table caches apply the event without reading the store: the source
+and every repointed agent resolve to the target. A missing repointed agent
+would keep resolving to the source in that cache, which is now an alias.
+"""
+
+[evidence]
+unit = "crosstalk::reconstruct::tests::agent_merged_names_record"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

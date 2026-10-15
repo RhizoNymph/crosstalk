@@ -1,0 +1,18 @@
+[invariant]
+id = "analysis.projection.honours-filter"
+statement = "Every row ProjectionSource::sample returns is for a transmission confirmed in its spec's window whose FilterSubject, with sender and reader resolved through AgentDirectory::canonical when the sample was read and its topic under the spec's pinned topic version, TopologyFilter::admits."
+kind = "domain"
+property = "postcondition"
+requires = ["property"]
+rationale = """
+The UMAP view is linked to the graph and search by one filter. A point the
+filter rejects would show content from outside the selection, which the
+operator reads as part of it. The filter is applied once, when the sample
+is read; the stored projection keeps that result.
+"""
+
+[evidence]
+property = "crosstalk::analysis::tests::prop_projection_sample_admitted_by_filter"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

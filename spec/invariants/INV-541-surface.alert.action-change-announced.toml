@@ -1,0 +1,16 @@
+[invariant]
+id = "surface.alert.action-change-announced"
+statement = "An Acknowledge or Resolve that returns Applied publishes Changed::Alert for its alert at least once, and never before the new state is visible to QueryApi::alerts."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+Operator triage changes the alert store directly in the surface, so the
+surface is the store that must announce it; other operators' views of the
+alert update only through this notification.
+"""
+
+[evidence]
+dst = "crosstalk::surface::dst::acknowledge_announces_alert_change"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

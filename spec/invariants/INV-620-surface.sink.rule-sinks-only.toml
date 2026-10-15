@@ -1,0 +1,17 @@
+[invariant]
+id = "surface.sink.rule-sinks-only"
+statement = "Each alert is delivered to exactly the sinks its rule listed when the alert was opened or changed, and to no other sink."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Operators route alerts by rule: a noisy rule to a log, an important one to
+Slack. Delivering to other sinks would leak alerts to channels not meant
+for them; skipping one loses the alert.
+"""
+
+[evidence]
+unit = "crosstalk::surface::tests::alerts_go_to_their_rule_sinks"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

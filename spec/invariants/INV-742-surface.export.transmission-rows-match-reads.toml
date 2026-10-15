@@ -1,0 +1,28 @@
+[invariant]
+id = "surface.export.transmission-rows-match-reads"
+statement = "A transmissions export's row for a transmission holds TransmissionSummary::of that transmission under the aliases and verdict copy captured at the export's start and its topic under the header's version, MatchClass::strongest of its content matches, and, when the request includes content, one MatchText per content match in stored order whose quotes are the Excerpted values the evidence assembly cuts with ExcerptWindow::MATCH_ONLY."
+kind = "domain"
+property = "model-based"
+requires = ["unit", "integration"]
+rationale = """
+An exported row and the UI's row for the same transmission at the same
+resolution must not disagree, nor the exported text and the evidence
+page's. Building one from the other's reference functions makes them
+agree by construction: TransmissionRow::of calls TransmissionSummary::of,
+and TransmissionContent::of reads TransmissionEvidence. MATCH_ONLY quotes
+the matched range alone, as the export always has; a body content
+retention dropped is BodyDropped in both. A match longer than
+Excerpt::MAX_HIGHLIGHT is cut in both, with the bytes cut counted.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::export::transmission_rows_are_the_listed_summary_of_a_confirmed_transmission",
+    "crosstalk_spec::tests::evidence::export_content_quotes_the_evidence_in_order",
+    "crosstalk_spec::tests::evidence::export_content_needs_a_match",
+]
+integration = "crosstalk::surface::export::tests::transmission_rows_match_rows_by_id_and_evidence"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

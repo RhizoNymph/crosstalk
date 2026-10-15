@@ -1,0 +1,25 @@
+[invariant]
+id = "surface.export.settled-rows-only"
+statement = "Every row of a transmissions, edges, accesses, topics or verdicts export comes from data in its header's settled window (by Confirmed::at, bucket, or Transmission::opened_at for verdicts), which is the request's window cut at the watermark EdgeStore::watermark returned before anything else was read."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+Buckets, confirmations and detector calls before the watermark no longer
+change, so reading only that part of the window is what makes a re-run
+reproduce the rows. Cutting the window rather than refusing one that ends
+after the watermark lets the UI export its current view; the header says
+exactly which part was exported, and a window wholly after the watermark
+exports no rows.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::export::settled_window_cuts_at_the_watermark",
+    "crosstalk_spec::tests::export::header_with_nothing_settled_plans_no_rows",
+]
+integration = "crosstalk::surface::export::tests::export_reads_only_before_the_start_watermark"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

@@ -1,0 +1,18 @@
+[invariant]
+id = "topology.watermark.exposed-is-settled"
+statement = "After advance_watermark(frontier) returns, EdgeStore::watermark returns the later of the previous watermark and Watermark::settled(frontier, timing, bucket_width), already persisted, and advance_watermark returned Some exactly when that is later than the previous one."
+kind = "domain"
+property = "postcondition"
+requires = ["property"]
+rationale = """
+L7 must expose what the definition says, no more (which would declare
+unsettled buckets final) and no less (which would hold clients back for
+nothing). Persisting before returning means the consumer never publishes
+an advance that a restart would forget.
+"""
+
+[evidence]
+property = "crosstalk::topology::props::advance_watermark_exposes_settled"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

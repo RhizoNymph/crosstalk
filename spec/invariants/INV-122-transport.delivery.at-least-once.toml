@@ -1,0 +1,23 @@
+[invariant]
+id = "transport.delivery.at-least-once"
+statement = "Every envelope whose publish returned Ok is delivered at least once to each consumer group that had subscribed to its subject before publish was called, whether or not a consumer of that group is connected when publish returns."
+kind = "coordination"
+requires = ["dst", "integration"]
+rationale = """
+Detection is built from evidence spread across many events; a dropped
+ContentMatched or AccessRecorded silently loses a transmission. A group is a
+standing subscription, not a live connection: envelopes published while all
+of a group's consumers are down are held for it and delivered when one
+reconnects (JetStream durable consumers; MpscBus keeps the group's queue for
+the life of the process). Groups that subscribe after publish was called are
+not owed the envelope; there is no backfill (see
+transport.equivalence.mpsc-model).
+"""
+
+[evidence]
+dst = "crosstalk::transport::dst::every_published_envelope_reaches_every_group"
+integration = "crosstalk::transport::integration::jetstream_delivers_to_disconnected_group_on_reconnect"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

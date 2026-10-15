@@ -1,0 +1,18 @@
+[invariant]
+id = "reconstruct.delta.new-system-when-changed"
+statement = "A delta's new_system is the request's system message when the delta is its conversation's first or that system message differs from the previous exchange's in the conversation, and None otherwise."
+kind = "domain"
+property = "postcondition"
+requires = ["property"]
+rationale = """
+System prompts are a carrier for relayed content, so L4 must scan each one
+once. Publishing the system message on every exchange re-scans the same
+text; omitting it after the harness changes it misses content injected into
+the new prompt.
+"""
+
+[evidence]
+property = "crosstalk::reconstruct::tests::new_system_only_when_first_or_changed"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

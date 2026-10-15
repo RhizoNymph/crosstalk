@@ -1,0 +1,31 @@
+[invariant]
+id = "surface.channels.preview-agrees-with-promote"
+statement = "In a registry state where QueryApi::promotion_preview(channel, pattern) returns a preview without a conflict, OperatorAction::PromoteChannel for that channel and pattern by a caller with Govern returns ChannelPromoted whose superseded channels equal the preview's superseded_channels (complete, never sampled) and the preview has covered and uncovered samples; where the preview has conflict k, the action returns Conflict(k) and the preview has no resource samples; and where the preview fails with NotFound or InvalidInput, the action fails with the same error."
+kind = "domain"
+property = "model-based"
+requires = ["unit", "property"]
+rationale = """
+An operator confirms a promotion on the strength of its preview. Both read
+ChannelRegistry, both run promotion::plan over the same stored channels,
+and the preview maps a refusal with the same ActionError::from as the
+action, so the preview is a model of the action's outcome: which channels
+it supersedes, or why it is refused. A conflict is part of the preview (the
+state does not allow it now), while an unknown channel or a pattern that
+misses the seed is an error, exactly as the action reports them. Only the
+resource lists are sampled; the superseded channels are compared in full,
+since they are exactly what the action records. A refused preview has no
+samples at all rather than empty ones, which would read as a pattern that
+matches nothing.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::channel_reads::coverage_and_plan_agree_on_every_request",
+    "crosstalk_spec::tests::channel_reads::the_preview_answers_as_promote_channel_would",
+    "crosstalk_spec::tests::channel_reads::preview_maps_each_refusal_as_the_action_does",
+]
+property = "crosstalk::surface::tests::prop_preview_then_promote_agree"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+property = { agent = "false", human = "false" }

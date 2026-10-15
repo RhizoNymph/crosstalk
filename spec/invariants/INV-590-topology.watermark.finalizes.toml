@@ -1,0 +1,17 @@
+[invariant]
+id = "topology.watermark.finalizes"
+statement = "Watermark::finalizes(window) is true exactly when the window's end is at or before the watermark."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+A bucket is a half-open window, so it is final once every instant in it
+is before the watermark, which is when its end is at or before it. A
+bucket that straddles the watermark is not final.
+"""
+
+[evidence]
+unit = "crosstalk_spec::tests::watermark::watermark_finalizes_buckets_ending_at_or_before_it"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

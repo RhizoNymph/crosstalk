@@ -1,0 +1,23 @@
+[invariant]
+id = "reconstruct.agent-merge.prior-active"
+statement = "The prior state of every merged agent is an active state: Registered, Provisional or Established."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+An unmerge returns the agent to its prior state, so a prior of Merged would
+leave it an alias after the unmerge. A registered agent can be merged by an
+operator who knows it is the same as one seen in traffic, so Registered is
+allowed. MergedInto::prior is an ActiveAgentState, which has no Merged
+variant, and Agent::merge_away refuses an agent already merged.
+"""
+
+[evidence]
+type = "crosstalk_spec::observed::agent::MergedInto"
+unit = [
+    "crosstalk_spec::tests::agents::merge_away_keeps_the_active_state_as_prior",
+    "crosstalk_spec::tests::agents::merge_away_refuses_another_agent_and_a_merged_one",
+]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

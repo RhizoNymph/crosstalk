@@ -1,0 +1,24 @@
+[invariant]
+id = "surface.export.audited"
+statement = "Every QueryApi::export call leaves either one Refused audit entry holding the QueryError it returned, or a Started entry holding its header, appended before the header is returned, followed by exactly one Ended entry holding the trailer sent or one Abandoned entry when the client went away first, except that a call failing with Store leaves at most one entry."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+Exports, View and Content alike, move records out in bulk, so who
+exported what, when, and whether it completed belongs in the log. Appending
+Started before any row is sent means no row leaves unaudited: if the
+append fails the export fails with Store. The Ended entry's digest lets a
+copy found later be matched to the export that produced it.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::export::export_entries_are_authored_by_the_caller_and_name_the_export",
+    "crosstalk_spec::tests::export::projection_export_entries_name_the_projection",
+]
+integration = "crosstalk::surface::export::tests::every_export_call_is_audited"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

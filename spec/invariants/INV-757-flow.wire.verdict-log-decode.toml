@@ -1,0 +1,29 @@
+[invariant]
+id = "flow.wire.verdict-log-decode"
+statement = "A VerdictLog is decoded (and rebuilt from stored records) only through VerdictLog::from_records, which accepts exactly the logs VerdictLog::record could have built: record i carries revision i + 1, every record is about the log's transmission, and no record repeats the verdict current before it; any other input is refused with an InvalidVerdictLog."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+The log is append-only with revisions equal to positions
+(flow.verdict.log-append-only), and readers line its records up with the
+VerdictSet events and verdict export rows that carry the same revisions.
+On the wire each record carries its revision so the UI can do the same; a
+decoded log with a gap, a repeat or a reordering of revisions, or with a
+record that would not have been appended (the verdict already current, so
+VerdictLog::record returns Unchanged), would show a history the store never
+held.
+"""
+
+[evidence]
+type = [
+    "crosstalk_spec::derived::flow::verdict::VerdictLog::from_records",
+    "crosstalk_spec::derived::flow::verdict::InvalidVerdictLog",
+]
+unit = [
+    "crosstalk_spec::tests::wire::flow::verdicts::verdict_logs_refuse_repeats_and_revision_gaps",
+    "crosstalk_spec::tests::wire::flow::verdicts::verdict_log_golden_carries_each_revision",
+]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

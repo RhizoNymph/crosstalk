@@ -1,0 +1,23 @@
+[invariant]
+id = "topology.apply.idempotent"
+statement = "Applying an EdgeContribution whose transmission id and classification version have already been applied together leaves every stored bucket's stats unchanged."
+kind = "coordination"
+requires = ["property", "integration"]
+rationale = """
+The bus delivers TransmissionClassified at least once, so L7 sees the same
+classification again after a nack, an ack timeout or a consumer restart. If
+a redelivery counted again, edge weights would drift upward with bus
+instability rather than with communication. The dedup key includes the
+classification version because a re-fit legitimately re-classifies every
+transmission: the same transmission under a new version counts once into
+that version's buckets, and never twice into either. The first application
+of a (transmission, version) pair wins, whatever a later one says.
+"""
+
+[evidence]
+property = "crosstalk::topology::props::apply_is_idempotent_per_transmission_and_version"
+integration = "crosstalk::topology::integration::timescale_apply_redelivery_counts_once"
+
+[evidence-review]
+property = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

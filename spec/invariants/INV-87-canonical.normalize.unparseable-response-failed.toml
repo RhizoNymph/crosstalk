@@ -1,0 +1,21 @@
+[invariant]
+id = "canonical.normalize.unparseable-response-failed"
+statement = "A complete 2xx response whose body the normalizer cannot parse normalizes to a Failed outcome with ExchangeFailure::UnparseableResponse and no partial response."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+A Completed outcome needs a response message, and inventing one from
+unparseable bytes would index garbage as the agent's output. Failing the
+whole normalization would discard the request, whose tool results read-side
+detection needs. Recording it as Failed keeps the request and makes the
+parser gap visible. The property feeds arbitrary bodies with status 200.
+"""
+
+[evidence]
+unit = "crosstalk::canonical::tests::garbled_200_body_is_unparseable_failure"
+property = "crosstalk::canonical::tests::unparseable_success_bodies_keep_request"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+property = { agent = "false", human = "false" }

@@ -1,0 +1,22 @@
+[invariant]
+id = "analysis.rule.stale-reason"
+statement = "AlertRuleDef::stale_reason returns TopicsUnmapped with the version and unmapped topics of a TopicWatch::Stale, EmbeddingModelChanged with the query's and the embedder's models of a QueryWatch::Stale, and None for every current or built-in rule."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+The UI shows why a rule stopped watching and what an update has to fix:
+which topics to pick again, or that the query will be re-embedded. The
+reason is derived from the watch, so it cannot disagree with whether the
+rule evaluates.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::rules::stale_reason_names_unmapped_topics",
+    "crosstalk_spec::tests::rules::stale_reason_names_the_embedding_models",
+    "crosstalk_spec::tests::rules::current_rules_have_no_stale_reason",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

@@ -1,0 +1,18 @@
+[invariant]
+id = "surface.query.store-errors-surface-typed"
+statement = "Whenever a store behind a QueryApi call returns an error, the call returns QueryError::from of that error, never another variant and never Store for an error that maps elsewhere."
+kind = "domain"
+property = "postcondition"
+requires = ["property"]
+rationale = """
+The mapping is only useful if every handler uses it. Injecting each store
+error variant behind each query and comparing the response with
+QueryError::from catches a handler that flattens an error to Store or
+NotFound on its own.
+"""
+
+[evidence]
+property = "crosstalk::surface::tests::prop_injected_store_errors_surface_through_from"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

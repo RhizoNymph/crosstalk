@@ -1,0 +1,19 @@
+[invariant]
+id = "surface.page.cursor-bound-to-request"
+statement = "A list call given a cursor that the surface did not issue, or issued for a request with a different filter, consumer group, edge, window or topology filter, returns InvalidCursor and no items."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+A cursor is a position in one ordered result. Reused after the filter
+changed, it would start the new result part-way through and silently hide
+its first items. The cursor carries a digest of the request and a MAC, so a
+client that changed the request or tampered with the token restarts from
+the first page instead.
+"""
+
+[evidence]
+unit = ["crosstalk::surface::tests::forged_cursor_rejected", "crosstalk::surface::tests::cursor_with_changed_filter_rejected"]
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

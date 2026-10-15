@@ -1,0 +1,54 @@
+{
+  "meta": {
+    "id": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+    "protocol": "open_ai_chat",
+    "transport": "http",
+    "model": "Qwen/Qwen3-Coder-30B-A3B-Instruct",
+    "client": {
+      "ingress": {
+        "type": "reverse_proxy",
+        "data": {
+          "route": "local-vllm"
+        }
+      },
+      "upstream": {
+        "id": "vllm",
+        "kind": {
+          "type": "inference_server",
+          "data": "vllm"
+        }
+      },
+      "credential": null,
+      "account": null,
+      "previous_digests": null,
+      "harness": null,
+      "ids": {
+        "session": null,
+        "agent": null,
+        "parent_agent": null
+      },
+      "class": "unknown"
+    },
+    "started_at": "2026-10-04T12:34:56.789012Z"
+  },
+  "continuation": {
+    "type": "full_history"
+  },
+  "request": [
+    "1f58b9145b24d108d7ac38887338b3ea3229833b9c1e418250343f907bfd1047"
+  ],
+  "outcome": {
+    "type": "failed",
+    "data": {
+      "partial_response": null,
+      "first_chunk_at": null,
+      "failed_at": "2026-10-04T12:34:56.912000Z",
+      "failure": {
+        "type": "upstream",
+        "data": {
+          "status": 429
+        }
+      }
+    }
+  }
+}

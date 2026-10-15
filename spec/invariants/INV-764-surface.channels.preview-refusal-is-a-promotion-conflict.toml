@@ -1,0 +1,23 @@
+[invariant]
+id = "surface.channels.preview-refusal-is-a-promotion-conflict"
+statement = "Every PromotionPreview that carries a conflict carries ChannelSuperseded, ChannelNotDiscovered or PatternOverlaps, the only conflicts PromoteChannel is refused with."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+A refused preview tells the operator why the promotion would fail, and
+the UI renders exactly these three reasons. PromotionPreview::from_registry
+only builds them; decoding, which cannot rerun it, refuses any other
+conflict so a response can never claim a promotion would fail for a reason
+no promotion has.
+"""
+
+[evidence]
+type = "crosstalk_spec::interfaces::l8_surface::channels::PromotionPreview"
+unit = [
+    "crosstalk_spec::tests::channel_reads::preview_maps_each_refusal_as_the_action_does",
+    "crosstalk_spec::tests::wire::surface_reads::channels::promotion_previews_refuse_conflicts_no_promotion_has",
+]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

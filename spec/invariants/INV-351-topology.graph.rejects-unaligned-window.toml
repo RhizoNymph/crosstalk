@@ -1,0 +1,22 @@
+[invariant]
+id = "topology.graph.rejects-unaligned-window"
+statement = "graph returns EdgeQueryError::UnalignedWindow when the window's start or end is not a bucket boundary."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+Buckets are the smallest unit the store keeps. A window that cuts a bucket
+cannot be answered exactly: counting the whole bucket would include
+transmissions outside the window, and dropping it would omit some inside.
+Rejecting is the only answer that is never silently wrong; the surface
+reports it as InvalidInput(UnalignedWindow), and the UI rounds the
+requested range to bucket boundaries before asking.
+"""
+
+[evidence]
+unit = "crosstalk::topology::tests::graph_rejects_window_cutting_a_bucket"
+property = "crosstalk::topology::props::graph_accepts_exactly_aligned_windows"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+property = { agent = "false", human = "false" }

@@ -1,0 +1,7 @@
+{
+  "type": "url_prefix",
+  "data": {
+    "host": "wiki.internal.example",
+    "path_prefix": "/projects/crosstalk"
+  }
+}

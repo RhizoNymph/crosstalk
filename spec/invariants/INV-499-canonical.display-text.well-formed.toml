@@ -1,0 +1,26 @@
+[invariant]
+id = "canonical.display-text.well-formed"
+statement = "Every DisplayText, and so every AgentLabel and RuleName, is trimmed, non-empty, at most its limit in characters (64 for labels, 80 for rule names) and free of control characters."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+Labels and rule names are shown in the topology view, rule lists and
+alert sinks, and matched by search. Blank text looks like no text, very
+long text breaks layout, and control characters can spoof other text in
+logs and terminals. DisplayText has a private field and is built only
+through DisplayText::new; the limit counts characters, not bytes.
+"""
+
+[evidence]
+type = "crosstalk_spec::support::DisplayText::new"
+unit = [
+    "crosstalk_spec::tests::support::display_text_is_trimmed",
+    "crosstalk_spec::tests::support::display_text_rejects_blank_long_and_control_text",
+    "crosstalk_spec::tests::support::display_text_counts_characters_not_bytes",
+    "crosstalk_spec::tests::agents::agent_labels_allow_64_characters",
+    "crosstalk_spec::tests::rules::rule_names_are_display_text",
+]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

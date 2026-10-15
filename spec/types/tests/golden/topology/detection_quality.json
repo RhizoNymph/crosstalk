@@ -1,0 +1,46 @@
+{
+  "window": {
+    "start": "2026-10-04T12:00:00.000000Z",
+    "end": "2026-10-04T13:00:00.000000Z"
+  },
+  "rows": [
+    {
+      "route_kind": "channel",
+      "match_kind": {
+        "type": "content",
+        "data": "exact"
+      },
+      "genuine": 12,
+      "false_detection": 1,
+      "unlabeled": 4
+    },
+    {
+      "route_kind": "channel",
+      "match_kind": {
+        "type": "suspected"
+      },
+      "genuine": 2,
+      "false_detection": 0,
+      "unlabeled": 7
+    },
+    {
+      "route_kind": "channel",
+      "match_kind": {
+        "type": "discarded"
+      },
+      "genuine": 0,
+      "false_detection": 3,
+      "unlabeled": 1
+    },
+    {
+      "route_kind": "direct",
+      "match_kind": {
+        "type": "content",
+        "data": "semantic"
+      },
+      "genuine": 1,
+      "false_detection": 2,
+      "unlabeled": 0
+    }
+  ]
+}

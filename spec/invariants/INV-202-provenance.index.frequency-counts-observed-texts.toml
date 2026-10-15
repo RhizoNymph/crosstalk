@@ -1,0 +1,24 @@
+[invariant]
+id = "provenance.index.frequency-counts-observed-texts"
+statement = "FingerprintIndex::frequency(f) equals the number of distinct texts containing f that were passed to FingerprintIndex::observe within the retention period."
+kind = "domain"
+property = "model-based"
+requires = ["property", "integration"]
+rationale = """
+The cutoff, Common classification and lookup filtering all read this
+count. Counting only indexed (originated) spans would never mark text
+boilerplate that agents mostly copy, and counting observations older than
+retention would keep fingerprints suppressed after the text has aged out.
+Distinct texts, not observe calls: observing the same text twice (a
+redelivery, or a tool result replayed in history) must not inflate the
+count. The property test checks the index against a reference set of
+(text, observed_at) pairs with a moving retention horizon.
+"""
+
+[evidence]
+property = "crosstalk::provenance::props::frequency_matches_observation_model"
+integration = "crosstalk::provenance::integration::pg_frequency_matches_observation_model"
+
+[evidence-review]
+property = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

@@ -1,0 +1,29 @@
+[invariant]
+id = "surface.agent.cluster-checked"
+statement = "An AgentCluster's agent record is active and agrees with its profile in id, label and state, its alias records are exactly the profile's aliases and each is merged into it, a redirect names one of those aliases, its children are distinct and outside the cluster, every merge record names the agent or an alias as source, target or repointed agent and appears once in time order, and every veto has an end in the cluster and appears once per pair."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+The agent page shows aliases with the state an unmerge would restore,
+merge history with revert state, and vetoes, and offers an unmerge per
+record. A record or veto about another cluster would offer an action on
+agents the page is not about, and an alias merged elsewhere would show a
+merge the operator cannot revert from here. Checking the pieces against
+each other where they are assembled keeps one read consistent.
+"""
+
+[evidence]
+type = "crosstalk_spec::aggregates::agents::AgentCluster::new"
+unit = [
+    "crosstalk_spec::tests::agent_reads::cluster_orders_its_lists",
+    "crosstalk_spec::tests::agent_reads::cluster_agent_agrees_with_profile",
+    "crosstalk_spec::tests::agent_reads::cluster_aliases_are_the_profiles_and_merged_into_it",
+    "crosstalk_spec::tests::agent_reads::cluster_redirects_only_from_an_alias",
+    "crosstalk_spec::tests::agent_reads::cluster_children_are_outside_it_and_distinct",
+    "crosstalk_spec::tests::agent_reads::cluster_merges_name_it_once_each",
+    "crosstalk_spec::tests::agent_reads::cluster_vetoes_touch_it_once_each",
+]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

@@ -1,0 +1,34 @@
+[invariant]
+id = "flow.promotion.coverage-partitions-held"
+statement = "When promotion::coverage accepts, its superseded channels are exactly and completely plan's, and its covered and uncovered samples partition the distinct resources held by the promoted channel and every channel the plan supersedes by whether the pattern matches their locator: each sample's total is the exact size of its side, and it shows that side's newest resources, at most COVERAGE_CAP of them, each once, newest first; when it refuses, it refuses with plan's refusal."
+kind = "domain"
+property = "postcondition"
+requires = ["type", "unit"]
+rationale = """
+The preview shows an operator what a pattern would bring together before
+they commit to it. Coverage is over every resource those channels have held,
+not a window, because promotion moves channels, not traffic. Uncovered
+resources stay with the channel (its own, or through a superseded channel
+that resolves to it), so showing them warns that the pattern is narrower
+than what the channel already holds. A broad pattern can bring thousands of
+resources together, so each side shows only its newest COVERAGE_CAP
+(200), but as a Capped whose exact total travels with it (Capped::new
+refuses more than the cap or a total below what is shown), so a capped list
+can never be read as a complete one. The superseded channels are never
+capped: the promotion records every one. Building coverage on plan, rather
+than beside it, keeps the preview and the promotion from drifting apart.
+"""
+
+[evidence]
+type = "crosstalk_spec::support::Capped::new"
+unit = [
+    "crosstalk_spec::tests::channel_reads::coverage_splits_every_held_resource_by_the_pattern",
+    "crosstalk_spec::tests::channel_reads::coverage_lists_a_resource_once_however_often_it_is_held",
+    "crosstalk_spec::tests::channel_reads::coverage_shows_the_newest_of_each_side_and_counts_them_all",
+    "crosstalk_spec::tests::channel_reads::a_sample_never_shows_more_than_its_cap_or_its_total",
+    "crosstalk_spec::tests::channel_reads::coverage_and_plan_agree_on_every_request",
+]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

@@ -1,0 +1,36 @@
+[
+  {
+    "type": "registered",
+    "data": {
+      "at": "2026-10-01T09:00:00.000000Z"
+    }
+  },
+  {
+    "type": "provisional",
+    "data": {
+      "first_seen": "2026-10-04T12:34:56.789012Z"
+    }
+  },
+  {
+    "type": "established",
+    "data": {
+      "since": "2026-10-04T12:40:00.125000Z"
+    }
+  },
+  {
+    "type": "merged",
+    "data": {
+      "merge": "01J9Z3Q8R9S0T1V2W3X4Y5Z6A7",
+      "into": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+      "prior": {
+        "type": "provisional",
+        "data": {
+          "first_seen": "2026-10-04T12:34:56.789012Z"
+        }
+      },
+      "repointed_by": [
+        "01J9Z3M2C5D6E7F8G9H0J1K2M3"
+      ]
+    }
+  }
+]

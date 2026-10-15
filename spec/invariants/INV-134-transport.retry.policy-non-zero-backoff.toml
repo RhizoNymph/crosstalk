@@ -1,0 +1,20 @@
+[invariant]
+id = "transport.retry.policy-non-zero-backoff"
+statement = "Every RetryPolicy has a non-zero initial_backoff."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+A zero initial_backoff removes the floor in transport.retry.backoff-floor: a
+consumer that nacks with no delay, or crashes on every delivery, would burn
+its whole retry budget in a tight loop before a transient failure clears.
+RetryPolicy's fields are private and RetryPolicy::new returns
+InvalidRetryPolicy::ZeroBackoff for a zero initial_backoff.
+"""
+
+[evidence]
+type = "crosstalk_spec::interfaces::l2_transport::RetryPolicy::new"
+unit = "crosstalk_spec::tests::infrastructure::retry_policy_requires_ordered_non_zero_backoff"
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

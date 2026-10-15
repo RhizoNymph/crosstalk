@@ -1,0 +1,19 @@
+[invariant]
+id = "surface.live.permission-change-ends-stream"
+statement = "When a config load changes or removes an operator, every open stream of a Caller for that operator ends with LiveEnd::SessionEnded before any item appended after the load is delivered to it."
+kind = "confidentiality"
+requires = ["dst"]
+rationale = """
+A Caller fixes its permissions when it is built, and a stream outlives the
+request that built it. Without this, removing an operator's Content
+permission would leave its open tab receiving ProjectionReady, and
+removing the operator would leave it receiving every event. Ending the
+stream makes the client reconnect and get a Caller with the new
+permissions, or none.
+"""
+
+[evidence]
+dst = "crosstalk::surface::dst::operator_change_ends_its_streams"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

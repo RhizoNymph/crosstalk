@@ -1,0 +1,18 @@
+[invariant]
+id = "provenance.match.read-at-in-reader-exchange"
+statement = "Every ContentMatch's read_at lies within a text-bearing part of a message that the reader_exchange's ConversationDelta lists in new_inputs, new_system or output."
+kind = "domain"
+property = "postcondition"
+requires = ["property"]
+rationale = """
+read_at is how operators and analysis find the text the reader received.
+Pointing into a message outside the reader's delta (the origin's message,
+or replayed history) misplaces the evidence and, for history, re-reports a
+read that an earlier delta already matched.
+"""
+
+[evidence]
+property = "crosstalk::provenance::props::read_at_points_into_reader_delta"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

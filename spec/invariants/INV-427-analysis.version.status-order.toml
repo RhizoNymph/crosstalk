@@ -1,0 +1,20 @@
+[invariant]
+id = "analysis.version.status-order"
+statement = "In a TopicVersionHistory, every version older than the active one is Superseded, every newer one is Ready or Fitting, and only the newest version may be Fitting."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+Activation never goes back (topology.version.never-rolls-back), so
+everything older than the active version has been superseded, possibly
+without ever being active when a newer version overtook it. Fits run one
+at a time, so only the newest version can still be fitting.
+TopicVersionHistory::new returns StatusOutOfPlace otherwise.
+"""
+
+[evidence]
+type = "crosstalk_spec::aggregates::topic_history::TopicVersionHistory::new"
+unit = ["crosstalk_spec::tests::topic_history::history_orders_statuses_around_the_active_version", "crosstalk_spec::tests::topic_history::history_accepts_a_consistent_lifecycle"]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

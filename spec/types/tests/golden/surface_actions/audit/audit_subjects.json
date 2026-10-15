@@ -1,0 +1,42 @@
+[
+  {
+    "type": "agent",
+    "data": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA"
+  },
+  {
+    "type": "channel",
+    "data": "01J9Z3M2C5D6E7F8G9H0J1K2M3"
+  },
+  {
+    "type": "alert",
+    "data": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3"
+  },
+  {
+    "type": "rule",
+    "data": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA"
+  },
+  {
+    "type": "transmission",
+    "data": "01J9Z3M2C5D6E7F8G9H0J1K2M3"
+  },
+  {
+    "type": "merge",
+    "data": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3"
+  },
+  {
+    "type": "operator",
+    "data": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3"
+  },
+  {
+    "type": "topic_version",
+    "data": 4
+  },
+  {
+    "type": "export",
+    "data": "01J9Z3M2C5D6E7F8G9H0J1K2M3"
+  },
+  {
+    "type": "projection",
+    "data": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA"
+  }
+]

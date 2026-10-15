@@ -1,0 +1,19 @@
+[invariant]
+id = "flow.policy.traffic-verdict"
+statement = "Policy::on_traffic returns Drop for a Sanctioned policy, Raise(UnsanctionedTraffic) for an Unsanctioned one, and Raise(UnreviewedTraffic) for an Unreviewed one whether or not it carries a reset Decision."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Sanctioned channels carry expected traffic and only that is dropped.
+Unreviewed traffic is raised so an operator reviews the channel, and
+unsanctioned traffic is raised as a violation; the two alert kinds keep
+those cases apart in triage. An operator resetting a channel to Unreviewed
+records who did it, but it must raise exactly like a never-reviewed channel.
+"""
+
+[evidence]
+unit = "crosstalk_spec::tests::flow::policy_routes_traffic"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

@@ -1,0 +1,19 @@
+[invariant]
+id = "reconstruct.agent-merge.request-not-self"
+statement = "Every MergeRequest names different source and target agents."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+A self-merge would mark an agent Merged into itself, so its records would
+resolve to an agent that reports itself as gone. `MergeRequest` has private
+fields and is built only through `MergeRequest::new`, which returns
+`SelfMerge` when the two ids are equal.
+"""
+
+[evidence]
+type = "crosstalk_spec::observed::agent::MergeRequest::new"
+unit = "crosstalk_spec::tests::observed::merge_request_rejects_self_merge"
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

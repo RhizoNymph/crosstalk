@@ -1,0 +1,21 @@
+[invariant]
+id = "analysis.rule.watched-topic-match"
+statement = "On a TransmissionClassified event with cause Confirmation, a WatchedTopic rule that evaluates (enabled, with TopicWatch::Current topics) drafts exactly when the classification's version equals its topics' version and the classification's topic is one of its topics."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+Watched topics are the operator's content watchlist, and topic ids only
+mean something within one model version. Matching an id against a
+classification from another version would compare unrelated clusters;
+drafting on outliers or unlisted topics would make the rule a firehose.
+Refit-caused classifications are excluded by analysis.rule.content-rules-confirmation-only.
+"""
+
+[evidence]
+unit = ["crosstalk::analysis::tests::watched_topic_drafts_for_listed_topic_of_its_version", "crosstalk::analysis::tests::watched_topic_silent_for_other_version", "crosstalk::analysis::tests::watched_topic_silent_for_other_topic_and_outlier"]
+property = "crosstalk::analysis::tests::watched_topic_drafts_iff_version_and_topic_match"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+property = { agent = "false", human = "false" }

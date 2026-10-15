@@ -1,0 +1,23 @@
+[invariant]
+id = "surface.audit.export-record-permission"
+statement = "ExportRecord::new builds a record whose event is Refused(Forbidden) exactly when the caller lacks the request's required permission, naming that permission, accepts any other event only for a caller holding it, and accepts a Started header only for the record's request and the caller's operator."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+As for operator records, the permission is checked before anything else,
+so a record of an export attempted by a caller who could not attempt it,
+or forbidden to one who could, is a lie the log must not be able to hold.
+Tying the header to the request and the caller keeps an entry's author and
+its export one and the same.
+"""
+
+[evidence]
+type = "crosstalk_spec::interfaces::l8_surface::export::record::ExportRecord::new"
+unit = [
+    "crosstalk_spec::tests::export::export_record_is_forbidden_exactly_without_the_permission",
+    "crosstalk_spec::tests::export::started_record_holds_the_header_of_its_request_and_caller",
+]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

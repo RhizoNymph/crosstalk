@@ -1,0 +1,29 @@
+[invariant]
+id = "surface.query.name-maps-ordered"
+statement = "QueryApi::agent_names and QueryApi::channel_names (and AgentReads::names and channels::resolve_names behind them) return a BTreeMap keyed by the id asked for, so their entries, and the keys of their JSON objects, are in ascending id order, which is ascending ULID text order."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+The UI names a page of rows with one batch call and decodes the answer
+against the goldens. A HashMap's iteration order is random, so the same
+answer would encode differently from run to run and a golden of more than
+one name would be flaky. A BTreeMap fixes one encoding per answer, as
+EdgeStore::agent_traffic's does (topology.agent-traffic.ordered-keys):
+every map keyed by an id on the wire is now ordered.
+"""
+
+[evidence]
+type = [
+    "crosstalk_spec::interfaces::l8_surface::QueryApi::agent_names",
+    "crosstalk_spec::interfaces::l8_surface::QueryApi::channel_names",
+    "crosstalk_spec::interfaces::l3_reconstruction::agents::AgentReads::names",
+    "crosstalk_spec::interfaces::l8_surface::channels::resolve_names",
+]
+unit = [
+    "crosstalk_spec::tests::wire::agents::agent_names_golden",
+    "crosstalk_spec::tests::wire::surface_reads::channels::channel_names_golden",
+]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

@@ -1,0 +1,30 @@
+[invariant]
+id = "surface.agent.filter-matches"
+statement = "AgentFilter::matches admits a canonical agent exactly when its state kind is listed in states, a claim in its ClaimSet has a family listed in claimed, the text lowercased is a substring of its label lowercased or, ignoring ASCII case, a prefix of the ULID text of the agent or one of its aliases, and its canonical parent equals the canonical form of an agent listed in parents, where an empty list or absent text does not restrict."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+The list query is checked against this definition
+(surface.query.lists-match-filter), so it has to be exact. Labels are
+words, so the text matches inside one; ids are random after their time
+prefix, so a substring of one matches almost anything and only a prefix is
+meaningful, and a prefix is how a pasted id is entered. Matching alias ids
+lets an old id find the agent it was merged into. Claims select on what
+harnesses said, never on identity evidence. Unicode default lowercasing is
+locale-independent and not full case folding, which is stated so the
+database's collation can be chosen to agree.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::agent_reads::agent_filter_matches_claimed_families_over_the_union",
+    "crosstalk_spec::tests::agent_reads::agent_filter_text_is_a_case_insensitive_label_substring",
+    "crosstalk_spec::tests::agent_reads::agent_filter_text_is_an_id_prefix_of_the_agent_or_an_alias",
+    "crosstalk_spec::tests::agent_reads::agent_filter_parents_resolve_through_merges",
+    "crosstalk_spec::tests::agent_reads::agent_filter_fields_combine_with_and",
+    "crosstalk_spec::tests::filter::agent_filter_matches_state_kind",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

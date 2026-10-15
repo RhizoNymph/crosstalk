@@ -1,0 +1,56 @@
+{
+  "watermark": "2026-10-04T12:58:00.000000Z",
+  "value": {
+    "grid": {
+      "window": {
+        "start": "2026-10-04T12:00:00.000000Z",
+        "end": "2026-10-04T13:00:00.000000Z"
+      },
+      "step": {
+        "bucket": 60000000,
+        "micros": 900000000
+      }
+    },
+    "weighting": "transmissions",
+    "topic_version": 3,
+    "groups": {
+      "type": "by_edge",
+      "data": [
+        {
+          "key": {
+            "from": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+            "to": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+            "route": {
+              "type": "channel",
+              "data": "01J9Z3Q6R7S8T9V0W1X2Y3Z4A5"
+            }
+          },
+          "values": [
+            1,
+            0,
+            2,
+            0
+          ]
+        },
+        {
+          "key": {
+            "from": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+            "to": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3",
+            "route": {
+              "type": "direct",
+              "data": {
+                "type": "user_turn"
+              }
+            }
+          },
+          "values": [
+            0,
+            0,
+            0,
+            1
+          ]
+        }
+      ]
+    }
+  }
+}

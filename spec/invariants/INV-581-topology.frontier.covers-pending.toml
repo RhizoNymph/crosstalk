@@ -1,0 +1,20 @@
+[invariant]
+id = "topology.frontier.covers-pending"
+statement = "FrontierSource::frontier returns an oldest_pending no later than the started_at of every exchange in flight at the proxy and the event time of every delivery not yet acked (pending, retrying or dead-lettered) in the reconstruct, provenance, flow, analyze and topology groups other than TransmissionClassified with cause Refit, and a ticked_through no later than any flow shard's last processed tick."
+kind = "coordination"
+requires = ["integration", "dst"]
+rationale = """
+The watermark is only as sound as this lower bound. A dead-lettered
+delivery holds it back on purpose: its input is unprocessed, so its
+buckets are not settled until it is replayed. Refit classifications are
+left out because they build a version that is not active yet, and
+activation waits for all of them.
+"""
+
+[evidence]
+integration = "crosstalk::topology::integration::pg_frontier_covers_pending_deliveries"
+dst = "crosstalk::topology::dst::frontier_bounds_every_pending_input"
+
+[evidence-review]
+integration = { agent = "false", human = "false" }
+dst = { agent = "false", human = "false" }

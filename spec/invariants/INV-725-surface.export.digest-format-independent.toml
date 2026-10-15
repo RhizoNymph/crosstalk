@@ -1,0 +1,29 @@
+[invariant]
+id = "surface.export.digest-format-independent"
+statement = "An export's trailer digest is the BLAKE3, keyed by deriving from ROW_DIGEST_CONTEXT, of each sent row's encoded length as u64 little-endian followed by its ExportRow::encode bytes, in order, so changing only the request's format leaves the rows, their count and the digest unchanged."
+kind = "domain"
+property = "metamorphic"
+requires = ["unit", "integration"]
+rationale = """
+The wire bytes belong to the encoder (JSON escaping, Parquet pages and
+compression), and two correct encoders can differ in them. Defining the
+digest over a canonical encoding of the rows lets a reader verify a JSONL
+or a Parquet export with the same check, and lets two exports of the same
+rows in different formats be recognised as the same data. The length
+prefix keeps row boundaries from shifting between rows.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::export_stream::each_row_is_hashed_after_its_length",
+    "crosstalk_spec::tests::export_stream::equal_rows_give_equal_digests_whatever_the_format",
+    "crosstalk_spec::tests::export_stream::strings_are_length_prefixed_so_boundaries_cannot_shift",
+    "crosstalk_spec::tests::export_stream::rows_differing_in_one_field_encode_differently",
+    "crosstalk_spec::tests::export_stream::route_encoding_distinguishes_every_route",
+    "crosstalk_spec::tests::export_stream::label_content_is_part_of_the_digest",
+]
+integration = "crosstalk::surface::export::tests::jsonl_and_parquet_exports_share_a_digest"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

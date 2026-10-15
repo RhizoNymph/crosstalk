@@ -1,0 +1,17 @@
+[invariant]
+id = "ingress.meta.transport-matches"
+statement = "ExchangeMeta.transport is WebSocket for a tapped WebSocket turn, Sse when the upstream response is an event stream, and Http otherwise."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+L1 parses the captured response according to the transport. An upstream
+can answer a stream request with a plain JSON error, so the transport
+follows the response actually received, not the request's stream flag.
+"""
+
+[evidence]
+unit = "crosstalk::ingress::tests::meta::transport_follows_response"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

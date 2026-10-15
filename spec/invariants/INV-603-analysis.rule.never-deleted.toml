@@ -1,0 +1,19 @@
+[invariant]
+id = "analysis.rule.never-deleted"
+statement = "No AlertRuleStore or AlertRuleSet operation removes a rule, so every rule an alert names can be read for as long as the alert is kept."
+kind = "representation"
+requires = ["type"]
+rationale = """
+Alerts name their rule, and the audit log names rules in actions. Deleting
+a rule would leave those pointing at nothing. An operator who no longer
+wants a rule disables it. Neither type has a removal operation.
+"""
+
+[evidence]
+type = [
+    "crosstalk_spec::aggregates::alert::AlertRuleSet",
+    "crosstalk_spec::interfaces::l6_analysis::AlertRuleStore",
+]
+
+[evidence-review]
+type = { agent = "true", human = "false" }

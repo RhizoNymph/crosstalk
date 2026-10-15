@@ -1,0 +1,23 @@
+[invariant]
+id = "transport.subscribe.group-retry-mismatch"
+statement = "subscribe with a consumer group whose RetryPolicy differs from the one the group was created with returns Err(BusError::GroupRetryMismatch { group }) and creates no subscription."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+Retry budgets and backoff are per group: the bus counts attempts and
+dead-letters per group, and a delivery can move between consumers of a group
+on redelivery. Two policies in one group would make max_attempts and the
+backoff bounds depend on which consumer happened to hold the delivery. Like
+the subject set, the policy is fixed for the group's lifetime, including
+across restarts on JetStream, where it is part of the durable consumer's
+configuration.
+"""
+
+[evidence]
+unit = "crosstalk::transport::tests::subscribe_rejects_different_retry_policy"
+integration = "crosstalk::transport::integration::jetstream_rejects_group_retry_mismatch"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

@@ -1,0 +1,16 @@
+[invariant]
+id = "analysis.lineage.stored-before-ready"
+statement = "The TopicLineage from a version's predecessor is stored before TopicVersionReady for that version is published."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+Rules are remapped from the stored lineage when TopicVersionReady is
+processed. If the lineage could arrive later, the remap would have nothing
+to read, and the UI could show a ready version with no lineage.
+"""
+
+[evidence]
+dst = "crosstalk::analysis::tests::lineage_stored_before_version_ready"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

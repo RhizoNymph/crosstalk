@@ -1,0 +1,7 @@
+{
+  "type": "path_prefix",
+  "data": {
+    "host": null,
+    "prefix": "/srv/shared"
+  }
+}

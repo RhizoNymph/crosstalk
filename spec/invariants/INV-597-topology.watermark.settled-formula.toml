@@ -1,0 +1,18 @@
+[invariant]
+id = "topology.watermark.settled-formula"
+statement = "Watermark::settled returns the earlier of ticked_through minus CorrelationTiming::settle_after (saturating at the epoch) and oldest_pending, rounded down to a bucket boundary."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+This is the definition of the watermark. The first term bounds what the
+correlator's held state can still confirm; the second, what is still on
+its way. Rounding down to a bucket boundary means a bucket is final
+exactly when it ends at or before the watermark.
+"""
+
+[evidence]
+unit = ["crosstalk_spec::tests::watermark::caught_up_watermark_is_settle_after_behind_the_tick", "crosstalk_spec::tests::watermark::pending_input_holds_the_watermark_back", "crosstalk_spec::tests::watermark::watermark_before_settle_after_is_the_epoch", "crosstalk_spec::tests::watermark::settled_watermark_is_always_a_bucket_boundary"]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

@@ -1,0 +1,23 @@
+[invariant]
+id = "provenance.match.none-after-expiry"
+statement = "No fingerprint or semantic lookup that begins after a span has entered SpanState::Expired returns a hit on that span."
+kind = "coordination"
+requires = ["dst", "integration"]
+rationale = """
+Expired means retention has elapsed and the span's derived data is gone.
+A span must therefore not be advanced to Expired until
+FingerprintIndex::evict for it has succeeded on every shard holding its
+fingerprints and SemanticMatcher::evict has removed its embedding, and a
+lookup racing with
+eviction must not return the span after the state change.
+SpanState::advance already rejects a Hit on an Expired span; this invariant is about the
+stores, not the state machine.
+"""
+
+[evidence]
+dst = "crosstalk::provenance::dst::expired_span_never_matched"
+integration = "crosstalk::provenance::integration::pg_lookup_after_evict_has_no_hits"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

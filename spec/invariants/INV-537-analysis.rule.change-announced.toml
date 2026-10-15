@@ -1,0 +1,16 @@
+[invariant]
+id = "analysis.rule.change-announced"
+statement = "After every committed change to a stored alert rule (created by an operator or provisioned by config, updated, enabled, disabled, or turned stale by a topic-model version) L6 publishes Changed::Rule at least once for it, and never before the change is visible to QueryApi::alert_rules."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+A rule turning stale is not an operator action: it happens when a new
+topic-model version cannot carry its watched topics over. Without a
+notification the rules view would keep showing it as live until a reload.
+"""
+
+[evidence]
+dst = "crosstalk::analysis::dst::rule_changes_announced_after_commit"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

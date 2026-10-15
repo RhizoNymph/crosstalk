@@ -1,0 +1,18 @@
+[invariant]
+id = "surface.action.set-verdict-outcome"
+statement = "OperatorActions::act for SetVerdict by a caller holding Triage returns Applied when TransmissionVerdicts::set appended a record, Unchanged when it returned Unchanged, NotFound for an unknown transmission and Conflict(TransmissionNotJudgeable) for a Detected or AwaitingContent one."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+The UI shows whether a verdict took, and the audit log records the same
+outcome. A not-judgeable transmission is a conflict, not a bad request:
+the same request succeeds once the detector has made its call. Stamping
+the author and time is surface.action.author-is-caller.
+"""
+
+[evidence]
+unit = "crosstalk::surface::tests::set_verdict_maps_outcomes"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

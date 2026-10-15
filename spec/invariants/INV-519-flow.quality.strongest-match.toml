@@ -1,0 +1,22 @@
+[invariant]
+id = "flow.quality.strongest-match"
+statement = "A confirmed, classified or aggregated transmission is counted under QualityMatch::Content of the strongest MatchClass among its content matches, in the order Exact, Normalized, Decoded, Semantic."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+A transmission may hold several matches of different kinds and must be
+counted once. It is as credible as its best evidence, so a Semantic row
+holds only transmissions with nothing but semantic matches, which is the
+precision an operator tuning the semantic threshold needs.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::quality::match_class_drops_parameters",
+    "crosstalk_spec::tests::quality::a_transmission_counts_under_its_strongest_match",
+    "crosstalk_spec::tests::quality::quality_match_follows_the_judgeable_state",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

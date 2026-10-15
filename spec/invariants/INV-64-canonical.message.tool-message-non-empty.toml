@@ -1,0 +1,18 @@
+[invariant]
+id = "canonical.message.tool-message-non-empty"
+statement = "Every Tool message holds at least one tool result."
+kind = "representation"
+requires = ["type"]
+rationale = """
+A Tool message exists only to carry tool results; an empty one would be a
+hashable message with no content that splitting artifacts could emit
+between real turns, shifting part indexes and creating spurious history
+entries. MessageBody::Tool wraps NonEmpty<ToolResult>, so it cannot be
+empty.
+"""
+
+[evidence]
+type = "crosstalk_spec::observed::message::MessageBody::Tool"
+
+[evidence-review]
+type = { agent = "true", human = "false" }

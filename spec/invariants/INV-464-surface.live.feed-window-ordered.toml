@@ -1,0 +1,18 @@
+[invariant]
+id = "surface.live.feed-window-ordered"
+statement = "Every FeedWindow has a floor no greater than its head."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+The window says entries floor + 1 through head are retained. A floor above
+the head would describe a log that dropped entries it never appended, and
+resume would plan replays from entries that do not exist.
+"""
+
+[evidence]
+type = "crosstalk_spec::interfaces::l8_surface::live::FeedWindow::new"
+unit = "crosstalk_spec::tests::live::feed_window_rejects_floor_above_head"
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

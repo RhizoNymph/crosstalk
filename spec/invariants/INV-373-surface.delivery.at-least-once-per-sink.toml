@@ -1,0 +1,19 @@
+[invariant]
+id = "surface.delivery.at-least-once-per-sink"
+statement = "Every AlertOpened event is delivered at least once to every sink its rule lists, with failed deliveries retried until the sink accepts it, including across a gateway restart."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+An alert nobody receives is a missed detection. Sinks fail transiently
+(Slack rate limits, webhook endpoints down), so delivery state is
+persisted per (alert, sink) and the AlertOpened delivery is acked to the
+bus only once every listed sink has accepted. Which sinks those are is
+surface.sink.rule-sinks-only. At-least-once means a sink may see an alert
+twice; surface.delivery.carries-alert-id lets it deduplicate.
+"""
+
+[evidence]
+dst = "crosstalk::surface::dst::alert_delivered_to_every_enabled_sink_under_faults_and_restart"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

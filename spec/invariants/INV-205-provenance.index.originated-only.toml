@@ -1,0 +1,21 @@
+[invariant]
+id = "provenance.index.originated-only"
+statement = "Every span passed to FingerprintIndex::insert is in state Originated, Indexed or Propagated."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+Only originated text identifies its author. Indexing a Relayed span would
+credit the relayer as the origin of text it copied, indexing a Common span
+would match boilerplate in every agent's input, and indexing an Expired span
+would undo its eviction. FingerprintIndex::insert takes an &OriginatedSpan,
+whose field is private and whose only constructor, OriginatedSpan::new,
+returns None unless the span is Originated, Indexed or Propagated.
+"""
+
+[evidence]
+type = ["crosstalk_spec::derived::provenance::span::OriginatedSpan::new", "crosstalk_spec::interfaces::l4_provenance::FingerprintIndex::insert"]
+unit = "crosstalk_spec::tests::provenance::only_live_originated_spans_can_be_indexed"
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

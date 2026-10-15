@@ -1,0 +1,18 @@
+[invariant]
+id = "reconstruct.thread.fork-prefix-is-lcp"
+statement = "A Forks outcome's shared_prefix equals the length of the longest common prefix of the request's non-system messages and the parent's non-system stored history."
+kind = "domain"
+property = "postcondition"
+requires = ["property"]
+rationale = """
+shared_prefix decides which messages were already scanned in the parent and
+which are new to the fork. Too long and fork-specific inputs are skipped;
+too short and parent messages are scanned again and their matches counted
+twice.
+"""
+
+[evidence]
+property = "crosstalk::reconstruct::tests::fork_shared_prefix_is_longest_common_prefix"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

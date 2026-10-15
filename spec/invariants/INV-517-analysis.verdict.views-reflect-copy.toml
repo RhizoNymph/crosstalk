@@ -1,0 +1,16 @@
+[invariant]
+id = "analysis.verdict.views-reflect-copy"
+statement = "A search or projection query that starts after the analyze consumer has acked a VerdictSet evaluates FalseDetections::Exclude against a copy at least as new as that event's revision."
+kind = "coordination"
+requires = ["integration"]
+rationale = """
+Search and the projection keep their own verdict copy. If a query could
+read an older copy than the graph, excluding false detections would hide a
+transmission in the graph but still show it as a search hit or a point.
+"""
+
+[evidence]
+integration = "crosstalk::analysis::tests::pg_exclude_reflects_acked_verdicts"
+
+[evidence-review]
+integration = { agent = "false", human = "false" }

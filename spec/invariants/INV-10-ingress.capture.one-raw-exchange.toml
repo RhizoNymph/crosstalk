@@ -1,0 +1,23 @@
+[invariant]
+id = "ingress.capture.one-raw-exchange"
+statement = "Every exchange that enters Forwarded (an HTTP generation request or a WebSocket turn) and whose request decodes produces exactly one RawExchange, whether it ends Completed or Failed, including when the client disconnects, and one whose request fails to decode produces none."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+Failed exchanges still carry their request, and the request holds the tool
+results that read-side detection needs, so losing failures loses reads.
+Two RawExchanges for one exchange would double-count it under one
+ExchangeId. Once an exchange is Forwarded, no path (disconnect, timeout,
+upstream error, framer error, connection close) may skip or repeat the
+hand-off. Forwarding does not wait for decoding
+(ingress.forwarding.never-waits-on-decode), so an HTTP exchange is Forwarded
+before its decode can fail; a request that fails to decode has nothing to
+capture, and is counted uncaptured as a decode error
+(ingress.capture.loss-counted) instead.
+"""
+
+[evidence]
+dst = "crosstalk::ingress::tests::sim::one_raw_exchange_per_forwarded_exchange"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

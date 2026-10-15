@@ -1,0 +1,18 @@
+[invariant]
+id = "analysis.projection.frame-round-trip"
+statement = "For every valid ProjectionFrame f, ProjectionFrame::decode of f.encode() returns f."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+The store keeps frames as bytes and the UI and tests decode them; a frame
+that did not survive the round trip would change between fit and read.
+"""
+
+[evidence]
+unit = "crosstalk_spec::tests::projection_frame::decode_inverts_encode"
+property = "crosstalk::analysis::tests::prop_frame_decode_inverts_encode"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+property = { agent = "false", human = "false" }

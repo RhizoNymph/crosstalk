@@ -1,0 +1,18 @@
+[invariant]
+id = "surface.action.created-ids-returned"
+statement = "A MergeAgents that returns Ok returns ActionOutcome::Merged with the new merge record's id, and a CreateRule that returns Ok returns ActionOutcome::RuleCreated with the new rule's id."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+The ids are server-assigned and the UI needs them: the merge id is what an
+unmerge names, and the rule id is where the editor navigates after
+creating. Without them the client would have to search for what it just
+made.
+"""
+
+[evidence]
+unit = "crosstalk::surface::tests::created_ids_are_returned"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

@@ -1,0 +1,18 @@
+[invariant]
+id = "reconstruct.delta.agent-is-attributed"
+statement = "A delta's agent is the agent the exchange was attributed to by resolution, not that agent's canonical agent."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Merges are aliases resolved at read time. Writing canonical ids into deltas
+would bake the merge table of the moment into immutable events, so a later
+merge correction could not be applied cleanly and the audit trail of what
+was attributed to whom would be lost.
+"""
+
+[evidence]
+unit = "crosstalk::reconstruct::tests::delta_carries_attributed_agent_id"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

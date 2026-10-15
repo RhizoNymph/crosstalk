@@ -1,0 +1,21 @@
+{
+  "type": "topic",
+  "data": {
+    "topic": "01J9Z3T9W0X1Y2Z3A4B5C6D7E8",
+    "transmissions": 9,
+    "matched_bytes": 1204,
+    "content": {
+      "label": "release planning",
+      "terms": [
+        [
+          "release",
+          0.42
+        ],
+        [
+          "friday",
+          0.17
+        ]
+      ]
+    }
+  }
+}

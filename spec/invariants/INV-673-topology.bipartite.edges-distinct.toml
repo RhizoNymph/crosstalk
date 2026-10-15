@@ -1,0 +1,19 @@
+[invariant]
+id = "topology.bipartite.edges-distinct"
+statement = "A BipartiteGraph has at most one access edge per agent, channel and operation, at most one transmission edge per sender, reader and route, and no transmission edge from an agent to itself."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+Access buckets and edges are summed per key after alias resolution; a
+repeated key means the sum was skipped and the UI would draw two
+overlapping edges with split weights. A self-edge after merges is one
+agent re-reading itself and is dropped, as in the agent-centred graph.
+"""
+
+[evidence]
+type = "crosstalk_spec::aggregates::access::BipartiteGraph::new"
+unit = "crosstalk_spec::tests::graph::bipartite_edges_are_distinct_and_never_self_edges"
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

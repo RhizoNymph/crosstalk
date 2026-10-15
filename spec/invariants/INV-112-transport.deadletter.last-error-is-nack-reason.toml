@@ -1,0 +1,20 @@
+[invariant]
+id = "transport.deadletter.last-error-is-nack-reason"
+statement = "When a delivery's final attempt ends in a nack, the DeadLetter stored for it has last_error equal to that nack's reason."
+kind = "domain"
+property = "postcondition"
+requires = ["dst"]
+rationale = """
+The operator decides whether a replay will help from last_error; the
+consumer's own reason (a constraint violation, a dependency outage) is the
+only description of why handling failed. When the final attempt ends in an
+ack timeout instead, there is no consumer reason and last_error records the
+timeout. Separate from transport.deadletter.record-contents, which covers the
+group, envelope and attempts.
+"""
+
+[evidence]
+dst = "crosstalk::transport::dst::dead_letter_last_error_is_final_nack_reason"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

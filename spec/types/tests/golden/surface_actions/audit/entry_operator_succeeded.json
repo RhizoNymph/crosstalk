@@ -1,0 +1,30 @@
+{
+  "id": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+  "at": "2026-10-04T12:34:56.789012Z",
+  "body": {
+    "type": "operator",
+    "data": {
+      "caller": {
+        "operator": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3",
+        "permissions": [
+          "view",
+          "govern"
+        ]
+      },
+      "action": {
+        "type": "set_policy",
+        "data": {
+          "channel": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+          "policy": "unsanctioned",
+          "note": "public paste site"
+        }
+      },
+      "outcome": {
+        "type": "succeeded",
+        "data": {
+          "type": "applied"
+        }
+      }
+    }
+  }
+}

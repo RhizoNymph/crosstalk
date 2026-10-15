@@ -1,0 +1,32 @@
+{
+  "id": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+  "request": {
+    "dataset": {
+      "type": "verdicts",
+      "data": {
+        "start": "2026-10-04T00:00:00.000000Z",
+        "end": "2026-10-05T00:00:00.000000Z"
+      }
+    },
+    "format": "jsonl",
+    "include_content": false
+  },
+  "by": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3",
+  "started_at": "2026-10-04T12:05:30.120000Z",
+  "watermark": "2026-10-04T12:00:00.000000Z",
+  "basis": {
+    "type": "verdicts",
+    "data": {
+      "settled": {
+        "start": "2026-10-04T00:00:00.000000Z",
+        "end": "2026-10-04T12:00:00.000000Z"
+      }
+    }
+  },
+  "embedding_model": {
+    "name": "text-embedding-3-small",
+    "dimension": 1536
+  },
+  "gateway": "0.4.1",
+  "rows": 12
+}

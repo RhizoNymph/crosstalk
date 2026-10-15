@@ -1,0 +1,22 @@
+[invariant]
+id = "transport.deadletter.replay-redelivers"
+statement = "After DeadLetterStore::replay(group, id) returns Ok, the dead-lettered envelope with that EventId is delivered again to that consumer group and to no other group."
+kind = "coordination"
+requires = ["dst", "integration"]
+rationale = """
+Replay is how an operator recovers after fixing the cause. Delivering the
+envelope to other groups would make them handle it twice; groups that
+already acked it rely on transport.ack.ends-redelivery. The replayed
+envelope is the published one, so the dedup wrapper still keys it by
+Envelope::id, and its retry budget restarts
+(transport.delivery.attempt-counts-deliveries). replay re-enqueues the
+envelope durably before it returns Ok.
+"""
+
+[evidence]
+dst = "crosstalk::transport::dst::replay_redelivers_to_one_group"
+integration = "crosstalk::transport::integration::jetstream_replay_redelivers_to_one_group"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

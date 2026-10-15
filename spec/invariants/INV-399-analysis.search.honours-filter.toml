@@ -1,0 +1,22 @@
+[invariant]
+id = "analysis.search.honours-filter"
+statement = "Every hit SearchIndex::query returns is for a transmission whose FilterSubject, with sender and reader resolved through AgentDirectory::canonical at query time and its topic under the returned topic_version, TopologyFilter::admits."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+Search is a linked view of the graph: an operator who selects an edge or a
+channel and then searches expects hits from that selection only. The
+filter needs the transmission's canonical agents, route and topic, so the
+index stores sender, reader, route and topic beside each document and
+resolves aliases at query time, as the edge store does, so a merge takes
+effect without re-indexing.
+"""
+
+[evidence]
+unit = "crosstalk::analysis::tests::search_filter_field_cases"
+integration = "crosstalk::analysis::tests::pg_hybrid_search_honours_filter"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

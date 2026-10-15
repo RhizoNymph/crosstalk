@@ -1,0 +1,33 @@
+{
+  "id": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+  "evidence": [
+    {
+      "type": "harness_agent",
+      "data": {
+        "scope": {
+          "type": "credential",
+          "data": {
+            "key": 2,
+            "digest": "e265b6f564601a1fe8dc42785cd18a868bd8013eb5899560e79248767a683e6b"
+          }
+        },
+        "agent": "planner"
+      }
+    },
+    {
+      "type": "stable_credential",
+      "data": {
+        "key": 2,
+        "digest": "e265b6f564601a1fe8dc42785cd18a868bd8013eb5899560e79248767a683e6b"
+      }
+    }
+  ],
+  "parent": null,
+  "state": {
+    "type": "established",
+    "data": {
+      "since": "2026-10-04T12:40:00.125000Z"
+    }
+  },
+  "label": "research lead"
+}

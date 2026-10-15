@@ -1,0 +1,22 @@
+[invariant]
+id = "surface.query.list-unauthorized-forbidden"
+statement = "Every QueryApi list call whose Caller lacks the permission it requires (View for channels, agents, alert_rules and edge_transmissions; Operate for dead_letters) returns Forbidden."
+kind = "confidentiality"
+requires = ["unit", "integration"]
+rationale = """
+Dead letters hold whole envelopes and consumer error text, and a replay can
+reopen alerts, so they are an operator's tool, not a viewer's. The other
+lists expose only who and what exists, the same level as the topology view.
+The rows behind an edge carry ids, times, byte counts and topic ids but no
+message text, so they need View, not Content; content stays behind
+transmission and search. The check is per endpoint, so a new list without a
+permission is a test failure rather than an open door.
+"""
+
+[evidence]
+unit = ["crosstalk::surface::tests::view_lists_without_view_forbidden", "crosstalk::surface::tests::dead_letters_without_operate_forbidden"]
+integration = "crosstalk::surface::integration::http_list_routes_enforce_permissions"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

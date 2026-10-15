@@ -1,0 +1,22 @@
+[invariant]
+id = "flow.quality.tally-counts-once"
+statement = "DetectionQuality::tally counts each transmission whose opened_at lies in the window and whose state is judgeable exactly once, in the row of its route kind and QualityMatch, under genuine, false_detection or unlabeled by its current verdict, and counts no other transmission."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+This is the definition the query must meet. opened_at is used because
+every state has it and none changes it, so a suspected transmission that
+is later confirmed or discarded stays in its window. Suspected and
+Discarded rows keep Genuine verdicts apart as recall evidence: a Genuine
+verdict on a discarded transmission is a false negative.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::quality::tally_counts_each_judgeable_transmission_once_under_its_verdict",
+    "crosstalk_spec::tests::quality::tally_of_nothing_is_empty",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

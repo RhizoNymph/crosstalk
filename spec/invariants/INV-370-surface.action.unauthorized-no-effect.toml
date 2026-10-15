@@ -1,0 +1,26 @@
+[invariant]
+id = "surface.action.unauthorized-no-effect"
+statement = "An operator action whose Caller lacks the permission OperatorAction::required_permission names returns Forbidden naming that permission, publishes no event, forwards nothing to L3, L5 or L6, replays nothing and changes no stored state other than appending its one Forbidden audit entry."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+Operator actions change what the gateway alerts on (policy, rules), whose
+traffic is whose (merges, unmerges, promotions) and what operators are
+told is handled (alerts, verdicts). A rejected request that still
+published a PolicyChanged or forwarded a merge would let any viewer
+sanction a channel or rewrite identity. Which permission each action needs
+is surface.action.permission-by-concern; Govern and Triage are separate so
+an on-call operator can work alerts without changing policy. The
+permission is checked before any effect, so Forbidden is all-or-nothing;
+the attempt itself is audited (surface.audit.outcome-matches-permission),
+so probing for permissions an operator lacks stays visible.
+"""
+
+[evidence]
+unit = ["crosstalk::surface::tests::set_policy_without_govern_has_no_effect", "crosstalk::surface::tests::merge_without_govern_has_no_effect", "crosstalk::surface::tests::alert_action_without_triage_has_no_effect"]
+integration = "crosstalk::surface::integration::forbidden_action_leaves_postgres_and_bus_unchanged"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

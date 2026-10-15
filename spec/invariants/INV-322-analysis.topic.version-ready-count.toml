@@ -1,0 +1,17 @@
+[invariant]
+id = "analysis.topic.version-ready-count"
+statement = "The transmissions count in TopicVersionReady equals the number of distinct transmissions for which TransmissionClassified was published under that version before it."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+Readers switch to a version only after applying that many classifications
+under it, so the count is their completeness check. An overcount would
+make readers wait forever; an undercount would let them switch before
+every transmission has a topic in the new version.
+"""
+
+[evidence]
+dst = "crosstalk::analysis::tests::version_ready_count_matches_published_classifications"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

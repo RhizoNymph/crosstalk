@@ -1,0 +1,17 @@
+[invariant]
+id = "flow.transmission.confirm-once"
+statement = "The correlator emits at most one Confirm or OpenConfirmed update per transmission."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+Each confirmation publishes TransmissionConfirmed, which L6 classifies, L7
+counts into an edge and the policy routes. Further evidence for a confirmed
+transmission arrives as Extend, never as a second confirmation, so the edge
+and its alert are counted once.
+"""
+
+[evidence]
+dst = "crosstalk::flow::dst::confirm_once_per_transmission"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

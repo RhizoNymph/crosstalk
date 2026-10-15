@@ -1,0 +1,21 @@
+[invariant]
+id = "reconstruct.agent.evidence-non-empty"
+statement = "Every Agent holds at least one piece of identity evidence."
+kind = "representation"
+requires = ["type"]
+rationale = """
+An agent is a claim built from evidence. An agent with no evidence could
+never be matched by a later exchange, so its traffic would spawn a fresh
+agent each time and its edges would never accumulate. `Agent::evidence` is a
+`NonEmpty`, whose fields are private and whose only constructors take at
+least one element, so an evidence-free agent cannot be built.
+"""
+
+[evidence]
+type = [
+  "crosstalk_spec::observed::agent::Agent",
+  "crosstalk_spec::support::NonEmpty",
+]
+
+[evidence-review]
+type = { agent = "true", human = "false" }

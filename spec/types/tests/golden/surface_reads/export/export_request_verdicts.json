@@ -1,0 +1,11 @@
+{
+  "dataset": {
+    "type": "verdicts",
+    "data": {
+      "start": "2026-10-04T00:00:00.000000Z",
+      "end": "2026-10-05T00:00:00.000000Z"
+    }
+  },
+  "format": "jsonl",
+  "include_content": false
+}

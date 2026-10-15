@@ -1,0 +1,19 @@
+[invariant]
+id = "canonical.normalize.deterministic"
+statement = "Normalizing the same RawExchange twice, on the same or different nodes, yields equal NormalizedExchanges."
+kind = "domain"
+property = "metamorphic"
+requires = ["property"]
+rationale = """
+A crashed capture task re-normalizes its exchange, and exchanges that failed
+with UnknownBlock are re-normalized once support lands. Consumers dedupe on
+the exchange id and message hashes, which only works if re-normalization
+reproduces them exactly. Normalization must not read clocks, random state,
+node identity or hash-map iteration order.
+"""
+
+[evidence]
+property = "crosstalk::canonical::tests::normalize_is_deterministic"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

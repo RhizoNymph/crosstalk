@@ -1,0 +1,17 @@
+[invariant]
+id = "surface.query.channel-views-need-view"
+statement = "QueryApi::channel_topology and channel_resources return Forbidden with missing View, reading nothing, when the caller lacks View."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Both carry ids, counts, times and locators, the structure View covers, and
+no message text. They follow the permission of topology and channels so
+one role sees all structural views.
+"""
+
+[evidence]
+unit = "crosstalk::surface::tests::channel_views_without_view_forbidden"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

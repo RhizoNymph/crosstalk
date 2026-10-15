@@ -1,0 +1,18 @@
+[invariant]
+id = "topology.watermark.rejects-late"
+statement = "apply returns EdgeError::LateContribution and changes no bucket for a contribution whose classification version has been activated and whose bucket ends at or before the exposed watermark."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+A contribution like this means an upstream stage broke its part of the
+watermark contract. Refusing it keeps the promise to clients; the
+topology consumer logs it at error and dead-letters it, so an operator can
+see what was late.
+"""
+
+[evidence]
+unit = "crosstalk::topology::tests::apply_into_final_bucket_is_late"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

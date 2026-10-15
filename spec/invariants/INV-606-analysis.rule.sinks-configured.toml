@@ -1,0 +1,17 @@
+[invariant]
+id = "analysis.rule.sinks-configured"
+statement = "AlertRuleStore::create and update store a rule only when every sink it lists is configured, and otherwise return UnknownSink and change nothing."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+A rule pointing at a sink that does not exist would raise alerts nobody is
+told about. Checking at write time lets the UI show the mistake when the
+operator makes it.
+"""
+
+[evidence]
+unit = "crosstalk::analysis::tests::rule_sinks_must_be_configured"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

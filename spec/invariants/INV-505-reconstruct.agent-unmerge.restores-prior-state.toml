@@ -1,0 +1,23 @@
+[invariant]
+id = "reconstruct.agent-unmerge.restores-prior-state"
+statement = "After IdentityResolver::unmerge(m) returns Ok, m.source's state is the prior state its MergedInto held."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+Restore exactly: an Established agent that was merged comes back
+Established with its original since time, so unmerging a mistaken merge
+does not demote the agent or rewrite when it was first seen. Agent::revert
+gives that state, and refuses an agent the record did not merge.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::agents::revert_returns_the_source_to_its_prior_state",
+    "crosstalk_spec::tests::agents::revert_refuses_unless_merged_by_that_record",
+]
+integration = "crosstalk::reconstruct::tests::pg_unmerge_restores_prior_state"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

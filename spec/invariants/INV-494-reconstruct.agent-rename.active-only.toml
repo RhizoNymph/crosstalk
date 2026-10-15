@@ -1,0 +1,20 @@
+[invariant]
+id = "reconstruct.agent-rename.active-only"
+statement = "Agent::rename and IdentityResolver::rename on a merged agent return AgentMerged naming its canonical agent and leave every label unchanged."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+A merged agent is shown as its canonical agent, so a label set on the alias
+would be invisible. Redirecting the rename to the canonical agent would
+rename an agent the operator did not pick. Refusing tells the UI which
+agent to rename instead.
+"""
+
+[evidence]
+unit = "crosstalk_spec::tests::agents::rename_refuses_a_merged_agent_and_keeps_its_label"
+integration = "crosstalk::reconstruct::tests::pg_rename_refuses_merged_agent"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

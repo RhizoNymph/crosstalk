@@ -1,0 +1,19 @@
+[invariant]
+id = "provenance.decode.codecs-in-decode-order"
+statement = "When text encoded with codecs c1 through cn, each of which changes the text, produces a match, the match's kind is MatchKind::Decoded listing cn through c1, the order in which they were decoded."
+kind = "domain"
+property = "metamorphic"
+requires = ["property"]
+rationale = """
+The codec chain is evidence of how the text was concealed, and analysis and
+operators read it in the order the gateway undid it. Reporting a different
+order or a subset misdescribes the transformation. A codec that leaves the
+text unchanged (URL-encoding plain alphanumerics) is excluded because the
+shorter chain already matches.
+"""
+
+[evidence]
+property = "crosstalk::provenance::props::decoded_match_lists_codecs_in_decode_order"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

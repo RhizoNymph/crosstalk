@@ -1,0 +1,26 @@
+[invariant]
+id = "reconstruct.agent-merge.into-self-refused"
+statement = "IdentityResolver::merge refuses a request whose two different agents already resolve to one canonical agent with MergeIntoSelf naming both agents and that canonical agent, before checking for a merged agent or a veto and whoever authored it, and changes nothing."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+One of the two is merged into the other, or both into a third; there is
+nothing left to merge. AgentMerged would tell the operator to name the
+canonical agent instead, and that request would merge it into itself.
+Checking this first gives the one answer that is true whichever ids of the
+cluster were named. MergeRequest::new already refuses one id named twice
+(SelfMerge), which needs no state; this is the same refusal after
+aliases are resolved, which needs the merge table.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::agent_reads::merging_two_ids_of_one_cluster_is_into_self",
+    "crosstalk_spec::tests::agent_reads::resolve_error_of_conflict_names_the_request",
+]
+integration = "crosstalk::reconstruct::tests::pg_merge_refuses_one_cluster"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

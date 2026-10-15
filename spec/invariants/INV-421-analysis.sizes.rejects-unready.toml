@@ -1,0 +1,19 @@
+[invariant]
+id = "analysis.sizes.rejects-unready"
+statement = "TopicCatalog::sizes returns StillFitting for a version whose status is Fitting, UnknownVersion for a version not in the history, and VersionNotRetained for a dropped version queried with a window."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+A fitting version's assignments are incomplete, so its sizes would look
+like a real, smaller topic distribution. Returning an error instead of
+partial counts keeps the UI from charting them. A dropped version has no
+assignments left to count over a window, so it is refused the same way
+rather than answered with empty sizes.
+"""
+
+[evidence]
+unit = ["crosstalk::analysis::tests::sizes_of_fitting_version_rejected", "crosstalk::analysis::tests::sizes_of_unknown_version_rejected", "crosstalk::analysis::tests::windowed_sizes_of_dropped_version_rejected"]
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

@@ -1,0 +1,20 @@
+[invariant]
+id = "reconstruct.merge-veto.operator-clears"
+statement = "IdentityResolver::merge with MergeAuthor::Operator applies the merge even when a MergeVeto separates the two clusters, and deletes every such veto in the same transaction."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+An operator merge is a deliberate decision that the agents are the same, so
+it overrides an earlier unmerge. Deleting the vetoes it overrides keeps the
+stored vetoes meaning "kept apart"; a later unmerge of this merge records
+a fresh one.
+"""
+
+[evidence]
+unit = "crosstalk_spec::tests::agents::a_veto_stops_the_resolver_until_an_operator_merges"
+integration = "crosstalk::reconstruct::tests::pg_operator_merge_clears_veto"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

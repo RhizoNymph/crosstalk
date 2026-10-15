@@ -1,0 +1,21 @@
+[invariant]
+id = "topology.series.no-zero-groups"
+statement = "Every series of a by-topic, by-route-kind or by-edge TopologySeries has at least one non-zero value."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+Grouped series list the keys that counted something in the window, as a
+graph lists only edges that exist. Without this, a store could return one
+all-zero series per topic of every version or per edge ever seen, and a
+by-edge series would no longer have the same keys as the graph. The total
+series is always present and may be all zeros. TopologySeries::new returns
+ZeroSeries otherwise.
+"""
+
+[evidence]
+type = "crosstalk_spec::aggregates::series::TopologySeries::new"
+unit = ["crosstalk_spec::tests::series::series_rejects_all_zero_group", "crosstalk_spec::tests::series::series_total_may_be_all_zero"]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

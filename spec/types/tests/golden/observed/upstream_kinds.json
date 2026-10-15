@@ -1,0 +1,18 @@
+[
+  {
+    "type": "vendor_api",
+    "data": {
+      "type": "google"
+    }
+  },
+  {
+    "type": "subscription",
+    "data": {
+      "type": "github_copilot"
+    }
+  },
+  {
+    "type": "inference_server",
+    "data": "sglang"
+  }
+]

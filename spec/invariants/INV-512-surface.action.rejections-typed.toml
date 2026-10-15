@@ -1,0 +1,40 @@
+[invariant]
+id = "surface.action.rejections-typed"
+statement = "An operator action other than SetVerdict, PinTopicVersion and UnpinTopicVersion that L3, L5 or L6 refuses returns NotFound for ResolveError::UnknownAgent and UnknownMerge, PromotionRefusal::UnknownChannel and RuleError::UnknownRule; Conflict(AgentMerged) for ResolveError::AgentMerged; Conflict(MergeIntoSelf) for ResolveError::MergeIntoSelf, naming the request's two agents and their canonical agent; Conflict(MergeAlreadyReverted) for MergeAlreadyReverted; Conflict(ChannelSuperseded) for PromotionRefusal::Superseded; Conflict(ChannelNotDiscovered) for NotDiscovered; Conflict(PatternOverlaps) for PatternOverlaps; InvalidInput(PatternMissesSeed) for PatternMissesSeed; Conflict(RuleNotEditable) for RuleError::NotEditable; Conflict(RuleStale) for RuleError::Stale; Conflict(TopicVersionNotCurrent) for TopicVersionNotCurrent; InvalidInput(UnknownTopics) for UnknownTopics; InvalidInput(UnknownSink) for UnknownSink; InvalidInput(QueryTooLong) for Embed(TooLong); and Store for ResolveError::Vetoed, which only a resolver merge can meet, and for RuleError::Embed(Model), a failure of the embedding model rather than of the request."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+The UI shows these to the operator. Collapsing them into a store error
+would hide that a retry is pointless (already unmerged, a built-in rule)
+or that the request needs changing (rename the canonical agent instead,
+overlapping pattern, pick topics from the current version, choose a
+configured sink, shorten the query, update a stale rule instead of
+enabling it), or that the request belongs on another channel
+(superseded). The rule store's mapping is the From<RuleError> impl in
+query_errors.rs. The wave-1 reasons map as follows: an
+unmerge names a merge record, so NotMerged became NotFound (UnknownMerge)
+or Conflict(MergeAlreadyReverted); KindChanged is Conflict(RuleNotEditable);
+NotCurrentVersion is Conflict(TopicVersionNotCurrent); UnknownTopic is
+InvalidInput(UnknownTopics). NotSuspected and DuplicateId no longer exist:
+verdicts replaced dismissal, and the server assigns rule ids.
+MergeIntoSelf tells the operator the two agents are already one, so no
+other id will make the merge succeed; AgentMerged alone would send them to
+the canonical agent, and that merge would merge it into itself. A
+MergeAgents request naming one agent twice never reaches L3: the surface
+refuses it as InvalidInput(SelfMerge) while building the action
+(surface.action.self-merge-invalid-input). No action returns
+ExportTooLarge, TooManyIds, EmptySelection or ExcerptContextTooLong;
+those are query refusals.
+"""
+
+[evidence]
+unit = [
+    "crosstalk::surface::tests::layer_rejections_map_to_action_errors",
+    "crosstalk_spec::tests::channels::promotion_refusals_map_to_action_errors",
+    "crosstalk_spec::tests::query_errors::rule_store_errors_map_to_typed_action_errors",
+    "crosstalk_spec::tests::agent_reads::resolve_errors_map_to_action_errors",
+]
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

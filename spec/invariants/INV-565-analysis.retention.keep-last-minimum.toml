@@ -1,0 +1,19 @@
+[invariant]
+id = "analysis.retention.keep-last-minimum"
+statement = "Every RetentionPolicy keeps at least the 2 most recent versions that have been active."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+The active version and the one it replaced: a query or a paged traversal
+that began just before an activation still reads the replaced version, and
+it is what the new fit is compared against. RetentionPolicy::new returns
+TooFew otherwise.
+"""
+
+[evidence]
+type = "crosstalk_spec::aggregates::retention::RetentionPolicy::new"
+unit = "crosstalk_spec::tests::retention::policy_keeps_at_least_two"
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

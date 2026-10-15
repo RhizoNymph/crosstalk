@@ -1,0 +1,19 @@
+[invariant]
+id = "provenance.match.reader-output-relayed-span"
+statement = "Every ContentMatch with carrier ReaderOutput has read_at inside a span of the reader's output classified Relayed with RelaySource::Span naming the match's origin."
+kind = "domain"
+property = "postcondition"
+requires = ["property"]
+rationale = """
+The two records of the same event must agree: the span classification says
+the reader relayed the origin's text, and the match says where and how it
+was read. A ReaderOutput match over text classified Originated would index
+the origin's words under the reader, and one whose span relays a different
+source would credit two authors for the same bytes.
+"""
+
+[evidence]
+property = "crosstalk::provenance::props::reader_output_match_agrees_with_relay_span"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

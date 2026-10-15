@@ -1,0 +1,18 @@
+[invariant]
+id = "surface.operators.load-diff"
+statement = "OperatorDirectory::load returns a SetAccessMode change first exactly when the mode differs from the previous directory's (or there is none), then in id order a SetOperator for each configured operator that is new or whose name or permissions differ, and a RemoveOperator for each operator that had permissions and is no longer configured; loading a config the directory already reflects returns no changes and an equal directory."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+These changes are what the audit log records for operator config, so a
+missing one hides a permission grant and a spurious one makes every
+restart look like a reconfiguration. The mode change comes first because
+it is the most consequential: switching to trusted turns off login.
+"""
+
+[evidence]
+unit = ["crosstalk_spec::tests::operators::first_load_records_mode_then_operators_by_id", "crosstalk_spec::tests::operators::reloading_the_same_config_changes_nothing", "crosstalk_spec::tests::operators::changed_permissions_are_recorded", "crosstalk_spec::tests::operators::switching_to_trusted_records_mode_first", "crosstalk_spec::tests::operators::former_operator_returns_when_configured_again"]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

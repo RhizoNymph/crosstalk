@@ -1,0 +1,18 @@
+[invariant]
+id = "analysis.triage.verdict-reopens-nothing"
+statement = "AlertTriage::transmission_judged with a Genuine verdict, a withdrawal or a revision not newer than triage's copy changes no alert's state."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Suppressed is final in the alert lifecycle. A withdrawn verdict means the
+operator is unsure again, not that the old alerts were right; reopening
+them would re-notify sinks for alerts already handled. A stale revision
+is a redelivery and must change nothing.
+"""
+
+[evidence]
+unit = "crosstalk::analysis::tests::verdict_withdrawal_reopens_nothing"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

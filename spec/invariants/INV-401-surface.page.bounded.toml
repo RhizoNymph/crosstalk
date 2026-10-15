@@ -1,0 +1,19 @@
+[invariant]
+id = "surface.page.bounded"
+statement = "Every page holds at most its request's PageSize items, every PageSize is between 1 and 500, and a page with a next cursor holds at least one item."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+A zero page size or an empty page with a next cursor would let a client
+follow cursors forever without progress; an unbounded size would let one
+request read a whole table. Page::more takes a NonEmpty, so an empty page
+with more to follow cannot be built.
+"""
+
+[evidence]
+type = ["crosstalk_spec::paging::PageSize::new", "crosstalk_spec::paging::Page::last", "crosstalk_spec::paging::Page::more"]
+unit = ["crosstalk_spec::tests::paging::page_size_rejects_zero_and_above_max", "crosstalk_spec::tests::paging::page_size_accepts_one_through_max", "crosstalk_spec::tests::paging::last_page_rejects_more_items_than_its_size", "crosstalk_spec::tests::paging::more_page_rejects_more_items_than_its_size", "crosstalk_spec::tests::paging::more_page_keeps_items_in_order_and_its_cursor"]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

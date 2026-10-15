@@ -1,0 +1,342 @@
+[
+  {
+    "caller": {
+      "operator": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3",
+      "permissions": [
+        "view",
+        "govern"
+      ]
+    },
+    "action": {
+      "type": "set_policy",
+      "data": {
+        "channel": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+        "policy": "sanctioned",
+        "note": "the team wiki, expected"
+      }
+    },
+    "outcome": {
+      "type": "succeeded",
+      "data": {
+        "type": "applied"
+      }
+    }
+  },
+  {
+    "caller": {
+      "operator": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3",
+      "permissions": [
+        "view",
+        "govern"
+      ]
+    },
+    "action": {
+      "type": "merge_agents",
+      "data": {
+        "from": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+        "into": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+        "by": {
+          "type": "operator",
+          "data": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3"
+        }
+      }
+    },
+    "outcome": {
+      "type": "succeeded",
+      "data": {
+        "type": "applied"
+      }
+    }
+  },
+  {
+    "caller": {
+      "operator": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3",
+      "permissions": [
+        "view",
+        "govern"
+      ]
+    },
+    "action": {
+      "type": "unmerge",
+      "data": {
+        "merge": "01J9Z3M2C5D6E7F8G9H0J1K2M3"
+      }
+    },
+    "outcome": {
+      "type": "succeeded",
+      "data": {
+        "type": "applied"
+      }
+    }
+  },
+  {
+    "caller": {
+      "operator": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3",
+      "permissions": [
+        "view",
+        "govern"
+      ]
+    },
+    "action": {
+      "type": "rename_agent",
+      "data": {
+        "agent": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+        "label": "planner"
+      }
+    },
+    "outcome": {
+      "type": "succeeded",
+      "data": {
+        "type": "applied"
+      }
+    }
+  },
+  {
+    "caller": {
+      "operator": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3",
+      "permissions": [
+        "view",
+        "govern"
+      ]
+    },
+    "action": {
+      "type": "promote_channel",
+      "data": {
+        "channel": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+        "pattern": {
+          "type": "url_prefix",
+          "data": {
+            "host": "wiki.corp.internal",
+            "path_prefix": "/eng"
+          }
+        },
+        "policy": "sanctioned",
+        "note": null
+      }
+    },
+    "outcome": {
+      "type": "succeeded",
+      "data": {
+        "type": "applied"
+      }
+    }
+  },
+  {
+    "caller": {
+      "operator": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3",
+      "permissions": [
+        "view",
+        "triage"
+      ]
+    },
+    "action": {
+      "type": "acknowledge",
+      "data": {
+        "alert": "01J9Z3M2C5D6E7F8G9H0J1K2M3"
+      }
+    },
+    "outcome": {
+      "type": "succeeded",
+      "data": {
+        "type": "applied"
+      }
+    }
+  },
+  {
+    "caller": {
+      "operator": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3",
+      "permissions": [
+        "view",
+        "triage"
+      ]
+    },
+    "action": {
+      "type": "resolve",
+      "data": {
+        "alert": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+        "note": "expected: the planner briefs the coder"
+      }
+    },
+    "outcome": {
+      "type": "succeeded",
+      "data": {
+        "type": "applied"
+      }
+    }
+  },
+  {
+    "caller": {
+      "operator": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3",
+      "permissions": [
+        "view",
+        "govern"
+      ]
+    },
+    "action": {
+      "type": "create_rule",
+      "data": {
+        "name": "Deploy keys leaving the wiki",
+        "rule": {
+          "type": "watched_topic",
+          "data": {
+            "topics": {
+              "version": 4,
+              "topics": [
+                "01J9Z3M2C5D6E7F8G9H0J1K2M3"
+              ]
+            },
+            "remap_threshold": 0.75
+          }
+        },
+        "sinks": [
+          "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA"
+        ]
+      }
+    },
+    "outcome": {
+      "type": "succeeded",
+      "data": {
+        "type": "applied"
+      }
+    }
+  },
+  {
+    "caller": {
+      "operator": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3",
+      "permissions": [
+        "view",
+        "triage"
+      ]
+    },
+    "action": {
+      "type": "set_verdict",
+      "data": {
+        "transmission": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3",
+        "verdict": "false_detection",
+        "note": "shared template, not a handoff"
+      }
+    },
+    "outcome": {
+      "type": "succeeded",
+      "data": {
+        "type": "applied"
+      }
+    }
+  },
+  {
+    "caller": {
+      "operator": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3",
+      "permissions": [
+        "view",
+        "govern"
+      ]
+    },
+    "action": {
+      "type": "update_rule",
+      "data": {
+        "id": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3",
+        "name": "Deploy keys leaving the wiki",
+        "rule": {
+          "type": "semantic_query",
+          "data": {
+            "text": "ssh private keys or deploy tokens",
+            "threshold": 0.5
+          }
+        },
+        "sinks": []
+      }
+    },
+    "outcome": {
+      "type": "succeeded",
+      "data": {
+        "type": "applied"
+      }
+    }
+  },
+  {
+    "caller": {
+      "operator": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3",
+      "permissions": [
+        "view",
+        "govern"
+      ]
+    },
+    "action": {
+      "type": "set_rule_enabled",
+      "data": {
+        "id": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3",
+        "enabled": false
+      }
+    },
+    "outcome": {
+      "type": "succeeded",
+      "data": {
+        "type": "applied"
+      }
+    }
+  },
+  {
+    "caller": {
+      "operator": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3",
+      "permissions": [
+        "view",
+        "operate"
+      ]
+    },
+    "action": {
+      "type": "replay_dead_letter",
+      "data": {
+        "group": "flow",
+        "id": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA"
+      }
+    },
+    "outcome": {
+      "type": "succeeded",
+      "data": {
+        "type": "applied"
+      }
+    }
+  },
+  {
+    "caller": {
+      "operator": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3",
+      "permissions": [
+        "view",
+        "govern"
+      ]
+    },
+    "action": {
+      "type": "pin_topic_version",
+      "data": {
+        "version": 4
+      }
+    },
+    "outcome": {
+      "type": "succeeded",
+      "data": {
+        "type": "applied"
+      }
+    }
+  },
+  {
+    "caller": {
+      "operator": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3",
+      "permissions": [
+        "view",
+        "govern"
+      ]
+    },
+    "action": {
+      "type": "unpin_topic_version",
+      "data": {
+        "version": 3
+      }
+    },
+    "outcome": {
+      "type": "succeeded",
+      "data": {
+        "type": "applied"
+      }
+    }
+  }
+]

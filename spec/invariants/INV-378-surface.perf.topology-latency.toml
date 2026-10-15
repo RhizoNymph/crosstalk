@@ -1,0 +1,17 @@
+[invariant]
+id = "surface.perf.topology-latency"
+statement = "QueryApi::topology answers within 200 ms at p99 for windows up to 7 days on a store with 1,000 agents and 100,000 edge buckets."
+kind = "performance"
+requires = ["bench"]
+rationale = """
+The graph view re-queries on every window drag and filter change, so it
+must feel interactive. The bound is achievable because edges are
+pre-aggregated in continuous aggregates and a query is a union of buckets,
+and it rules out computing topology from raw transmissions at query time.
+"""
+
+[evidence]
+bench = "crosstalk::surface::bench::topology_p99"
+
+[evidence-review]
+bench = { agent = "false", human = "false" }

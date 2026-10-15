@@ -1,0 +1,18 @@
+[invariant]
+id = "flow.resource.pattern-scope"
+statement = "A Host, UrlPrefix, PathPrefix or McpServer pattern matches a locator only when the locator is of the pattern's kind and has the pattern's host or MCP server."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Declared channels are defined by patterns before any traffic. A host pattern
+that also matched files, or a URL prefix that ignored the host, would pull
+unrelated resources into a declared (often sanctioned) channel, whose policy
+would then drop their traffic instead of raising it.
+"""
+
+[evidence]
+unit = ["crosstalk_spec::tests::flow::host_pattern_matches_any_path_on_host", "crosstalk_spec::tests::flow::url_prefix_pattern_needs_host_and_prefix", "crosstalk_spec::tests::flow::path_prefix_pattern_matches_files_only", "crosstalk_spec::tests::flow::mcp_server_pattern_matches_any_tool_on_server"]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

@@ -1,0 +1,24 @@
+[invariant]
+id = "surface.version.pinned-resolution"
+statement = "A topology, series, search, edge_transmissions or fit_projection call whose filter pins topic-model version v is computed under v when v is active, or was active and is still retained by the store serving it, and otherwise returns NotFound for an unknown v, Conflict(TopicVersionFitting) for a fitting v, Conflict(TopicVersionNotActivated) for a v that is ready or was superseded without being activated, and VersionNotRetained for a v whose data was dropped."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+Pinning is how a cited view stays reproducible across re-fits, so a pinned
+request must either be answered under exactly that version or say why it
+cannot be. Each refusal tells the client something different: refetch the
+history (unknown), wait (fitting), pick an activated version (never
+activated, whose edge buckets were never complete), or fall back to the
+current version (dropped). TopicVersionSelector::resolve is the single
+definition every store applies, so the views cannot disagree about which
+versions are queryable.
+"""
+
+[evidence]
+unit = ["crosstalk_spec::tests::topic_version::pinned_active_or_retained_superseded_version_resolves_to_itself", "crosstalk_spec::tests::topic_version::pinned_version_no_longer_retained_is_not_retained", "crosstalk_spec::tests::topic_version::pinned_version_never_activated_is_refused_whatever_is_retained", "crosstalk_spec::tests::topic_version::pinned_fitting_version_is_fitting", "crosstalk_spec::tests::topic_version::pinned_unknown_version_is_unknown", "crosstalk_spec::tests::query_errors::unavailable_versions_map_by_cause"]
+integration = "crosstalk::surface::integration::linked_views_resolve_pinned_versions"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

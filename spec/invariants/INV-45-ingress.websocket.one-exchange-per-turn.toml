@@ -1,0 +1,18 @@
+[invariant]
+id = "ingress.websocket.one-exchange-per-turn"
+statement = "On a tapped WebSocket, each response.create client frame starts exactly one exchange, and no other client frame starts one."
+kind = "coordination"
+requires = ["property", "dst"]
+rationale = """
+A WebSocket connection carries many turns. Treating the connection as one
+exchange would merge turns; treating other frames as turns would invent
+exchanges with no request. One turn, one exchange matches the HTTP case.
+"""
+
+[evidence]
+property = "crosstalk::ingress::tests::websocket::one_started_per_response_create"
+dst = "crosstalk::ingress::tests::sim::websocket_turns_yield_one_exchange_each"
+
+[evidence-review]
+property = { agent = "false", human = "false" }
+dst = { agent = "false", human = "false" }

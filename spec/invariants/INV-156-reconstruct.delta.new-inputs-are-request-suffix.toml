@@ -1,0 +1,19 @@
+[invariant]
+id = "reconstruct.delta.new-inputs-are-request-suffix"
+statement = "For a full-history exchange threaded as Starts, Extends or Forks, the delta's new_inputs are the request's non-system messages after the first n of them, in order, where n is zero for Starts, the number of non-system messages in the stored history for Extends, and shared_prefix for Forks."
+kind = "domain"
+property = "postcondition"
+requires = ["property"]
+rationale = """
+Read-side detection scans only new_inputs. Dropping a new message misses a
+transmission; including an old one re-scans it and double-counts matches.
+The rule is positional, not a set difference, so a tool result that repeats
+an earlier message verbatim is still scanned. The system message travels in
+new_system instead.
+"""
+
+[evidence]
+property = "crosstalk::reconstruct::tests::new_inputs_are_request_suffix"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

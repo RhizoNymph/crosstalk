@@ -1,0 +1,17 @@
+[invariant]
+id = "reconstruct.agent-merge.serializable"
+statement = "Merges applied concurrently leave the same agent states as applying them one at a time in some order."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+Merges come from the resolver on any reconstruct consumer and from operators
+through L8, so two can race. Concurrent A-into-B and B-into-A, or A-into-B
+and B-into-C, applied without isolation produce a cycle or an unflattened
+chain that no sequential order could produce.
+"""
+
+[evidence]
+dst = "crosstalk::reconstruct::tests::dst_concurrent_merges_are_serializable"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

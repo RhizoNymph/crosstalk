@@ -1,0 +1,23 @@
+[invariant]
+id = "surface.agent.rows-canonical"
+statement = "Every row on a page of QueryApi::agents, whatever the filter, describes a canonical agent (AgentDirectory::canonical(id) = id): its aliases are exactly the agents that resolve to it, its parent is the canonical form of its stored parent unless that is the agent itself, its claims are the ClaimSet::union over it and its aliases, and its last_seen is the latest exchange start recorded for any of them; no merged agent is ever a row."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+A merged agent's records, claims and activity already count toward the
+agent it resolves to. A row of its own would count them twice, disagree
+with every graph (which never draws a merged agent) and invite an
+operator to act on an id every action refuses with AgentMerged. A merged
+agent stays reachable: as an alias in its canonical agent's detail, by its
+id in the filter's text, and by redirect from QueryApi::agent. The filter
+lists CanonicalStateKind, so it cannot ask for merged agents.
+"""
+
+[evidence]
+unit = "crosstalk::surface::tests::agent_rows_are_canonical"
+property = "crosstalk::reconstruct::tests::prop_agent_list_matches_merge_table_model"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+property = { agent = "false", human = "false" }

@@ -1,0 +1,23 @@
+[invariant]
+id = "transport.subscribe.group-subject-mismatch"
+statement = "subscribe with a consumer group whose subject set, compared as a set, differs from the one the group was created with returns Err(BusError::GroupSubjectMismatch { group }) and creates no subscription."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+Consumers in a group share deliveries, so each must be able to handle every
+subject the group receives; a consumer subscribed to a subset would be
+handed envelopes it cannot process, and one subscribed to a superset would
+silently widen the group. A group is a standing subscription
+(transport.delivery.at-least-once), so its subject set is fixed for the
+group's lifetime, including across restarts on JetStream, where it is the
+durable consumer's filter. Order and duplicates in the slice are ignored.
+"""
+
+[evidence]
+unit = "crosstalk::transport::tests::subscribe_rejects_different_subject_set"
+integration = "crosstalk::transport::integration::jetstream_rejects_group_subject_mismatch"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

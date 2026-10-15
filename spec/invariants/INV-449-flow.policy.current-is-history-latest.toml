@@ -1,0 +1,20 @@
+[invariant]
+id = "flow.policy.current-is-history-latest"
+statement = "After every ChannelRegistry::declare or set_policy, each channel's stored Policy equals PolicyHistory::current of its stored history."
+kind = "domain"
+property = "invariant"
+requires = ["unit", "integration"]
+rationale = """
+The history and the current policy are two views of the same decisions; if
+they disagreed, traffic would be routed by one policy while the channel
+view and the history showed another. set_policy writes the history entry
+and the current policy in one transaction.
+"""
+
+[evidence]
+unit = "crosstalk::flow::tests::stored_policy_is_history_current"
+integration = "crosstalk::flow::integration::policy_and_history_written_atomically"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

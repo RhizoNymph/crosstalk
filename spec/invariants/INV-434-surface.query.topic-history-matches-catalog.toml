@@ -1,0 +1,20 @@
+[invariant]
+id = "surface.query.topic-history-matches-catalog"
+statement = "For a Caller with View, QueryApi topic_versions and topic_lineage return exactly what TopicCatalog returns, and topic_sizes returns what TopicCatalog::sizes returns, with a missing version resolved to the history's active version."
+kind = "domain"
+property = "model-based"
+requires = ["property"]
+rationale = """
+The catalog is the single record of versions, sizes and lineage. Passing
+it through unchanged keeps the UI's version list, size charts and lineage
+in step with what alert rules were remapped from. Resolving a missing
+version to the active one makes the default view the version graphs read.
+Sizes come from L6, so the surface attaches L7's watermark, read first,
+to say which part of them is final.
+"""
+
+[evidence]
+property = "crosstalk::surface::tests::prop_topic_history_matches_catalog"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

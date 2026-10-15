@@ -1,0 +1,12 @@
+{
+  "type": "exact",
+  "data": {
+    "type": "url",
+    "data": {
+      "scheme": "https",
+      "host": "wiki.internal.example",
+      "path": "/projects/crosstalk/plan",
+      "query": null
+    }
+  }
+}

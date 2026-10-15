@@ -1,0 +1,27 @@
+[
+  {
+    "type": "too_few_points",
+    "data": {
+      "needed": 16,
+      "got": 9
+    }
+  },
+  {
+    "type": "version_not_retained",
+    "data": {
+      "version": 4
+    }
+  },
+  {
+    "type": "embedding_model_unavailable",
+    "data": {
+      "model": {
+        "name": "nomic-embed-text-v1.5",
+        "dimension": 768
+      }
+    }
+  },
+  {
+    "type": "non_finite_layout"
+  }
+]

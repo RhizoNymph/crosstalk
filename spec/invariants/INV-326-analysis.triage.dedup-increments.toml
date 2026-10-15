@@ -1,0 +1,17 @@
+[invariant]
+id = "analysis.triage.dedup-increments"
+statement = "A Deduplicated triage increases the target alert's occurrences by exactly one and changes none of its other fields."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Occurrences is how operators judge how loud a condition is. The state,
+raised_at and acknowledger must be untouched so a repeat does not reopen,
+re-date or un-acknowledge an alert someone is already handling.
+"""
+
+[evidence]
+unit = ["crosstalk::analysis::tests::dedup_increments_occurrences_by_one", "crosstalk::analysis::tests::dedup_preserves_state_and_raised_at"]
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

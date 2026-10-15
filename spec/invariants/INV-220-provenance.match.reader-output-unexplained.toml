@@ -1,0 +1,21 @@
+[invariant]
+id = "provenance.match.reader-output-unexplained"
+statement = "A ContentMatch with carrier ReaderOutput is made only for output text that shares no below-cutoff fingerprint with any of the reader exchange's inputs, in raw or decoded form."
+kind = "domain"
+property = "postcondition"
+requires = ["property"]
+rationale = """
+Text the reader copied from a visible input is already explained by that
+input; it is either matched where it was read (a tool result, user turn or
+system prompt) or came from a non-agent source. Reporting it again as
+ReaderOutput would double-count the read and claim a hidden channel that
+does not exist. The check is against the exchange's full request history,
+not only the delta's new inputs. Unexplained text is both classified
+Relayed with RelaySource::Span and reported as a ReaderOutput match.
+"""
+
+[evidence]
+property = "crosstalk::provenance::props::reader_output_match_absent_from_inputs"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

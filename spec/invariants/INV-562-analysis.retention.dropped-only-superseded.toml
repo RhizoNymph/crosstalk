@@ -1,0 +1,20 @@
+[invariant]
+id = "analysis.retention.dropped-only-superseded"
+statement = "Every dropped TopicVersionInfo is Superseded, has no pin, and was dropped no earlier than it was superseded."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+Only superseded versions can fall outside what retention protects; the
+active and pending versions are always kept. A dropped version cannot
+hold a pin because Retention::Dropped has no pin field.
+TopicVersionInfo::with_retention returns DroppedNotSuperseded or
+TimestampsOutOfOrder otherwise.
+"""
+
+[evidence]
+type = ["crosstalk_spec::aggregates::retention::Retention", "crosstalk_spec::aggregates::topic_history::TopicVersionInfo::with_retention"]
+unit = ["crosstalk_spec::tests::retention::only_superseded_versions_are_dropped", "crosstalk_spec::tests::retention::retention_times_follow_the_lifecycle"]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

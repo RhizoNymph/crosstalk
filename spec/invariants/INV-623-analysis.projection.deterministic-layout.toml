@@ -1,0 +1,18 @@
+[invariant]
+id = "analysis.projection.deterministic-layout"
+statement = "LayoutFitter::fit called twice with the same embeddings in the same order and the same params returns bit-identical coordinates."
+kind = "domain"
+property = "metamorphic"
+requires = ["property"]
+rationale = """
+Determinism makes a projection's spec a complete recipe: fitting the same
+sample again with the same seed reproduces the stored layout, which is how
+an expired projection is restored and how a fitter crash mid-fit is
+harmless. It requires a seeded random state and a single-threaded fit.
+"""
+
+[evidence]
+property = "crosstalk::analysis::tests::prop_layout_is_deterministic"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

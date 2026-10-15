@@ -1,0 +1,32 @@
+[invariant]
+id = "flow.wire.partial-decode-checks"
+statement = "Decoding a CoAccess refuses the same access as write and read and a zero lag, and decoding a PromotionCoverage refuses a channel superseded twice, a resource sample not in strictly descending id order, and a resource shown as both covered and uncovered; the checks their builders make against the two accesses, the correlation window or the channel registry are not rerun on decode."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+CoAccess::new reads the two accesses (resources, agents, operations,
+times) and the correlation window, and promotion::coverage reads the
+registry; a decoded value holds none of these, so decoding cannot rerun
+them, and it is trusted for them as a response from the gateway. What a
+value can know about itself is still checked, so a decoded co-access or
+coverage never contradicts its own fields: one access is not both a write
+and a read, a read after a write has a positive lag, and a coverage's
+samples are the newest-first partition coverage builds.
+TransmissionVerdict decodes field by field for the same reason (its check
+reads the transmission's state) and has nothing of its own to check.
+"""
+
+[evidence]
+type = [
+    "crosstalk_spec::derived::flow::evidence::CoAccess",
+    "crosstalk_spec::derived::flow::channel::promotion::PromotionCoverage",
+    "crosstalk_spec::derived::flow::channel::promotion::InvalidCoverage",
+]
+unit = [
+    "crosstalk_spec::tests::wire::flow::transmissions::co_access_refuses_what_it_can_check_and_other_shapes",
+    "crosstalk_spec::tests::wire::flow::channels::promotion_coverage_refuses_what_coverage_never_builds",
+]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

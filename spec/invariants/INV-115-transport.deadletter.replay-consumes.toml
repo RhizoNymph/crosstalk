@@ -1,0 +1,19 @@
+[invariant]
+id = "transport.deadletter.replay-consumes"
+statement = "A replay that returns Ok removes that DeadLetter from the store, so each DeadLetter is replayed at most once."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+Without this, two operators replaying the same letter, or one retrying a
+replay whose response was lost, would enqueue the envelope twice; the second
+replay instead gets UnknownDeadLetter (transport.deadletter.replay-unknown).
+The letter is removed only after the envelope is re-enqueued, so a crash
+between the two leaves the letter in place rather than losing the envelope.
+If the replayed envelope fails again it is dead-lettered as a new DeadLetter.
+"""
+
+[evidence]
+dst = "crosstalk::transport::dst::replay_removes_dead_letter"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

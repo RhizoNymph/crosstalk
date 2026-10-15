@@ -1,0 +1,17 @@
+[invariant]
+id = "surface.live.heartbeat-interval"
+statement = "An open live stream that has sent no item for LiveConfig::heartbeat sends a Heartbeat."
+kind = "performance"
+requires = ["dst"]
+rationale = """
+Heartbeats keep intermediaries from closing an idle SSE connection and
+keep the client's cursor recent. LiveConfig requires retention to outlast
+the heartbeat interval, so a client that reconnects at once after its last
+heartbeat can always replay.
+"""
+
+[evidence]
+dst = "crosstalk::surface::dst::idle_stream_sends_heartbeat"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

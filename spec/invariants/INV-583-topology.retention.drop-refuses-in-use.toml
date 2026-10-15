@@ -1,0 +1,19 @@
+[invariant]
+id = "topology.retention.drop-refuses-in-use"
+statement = "EdgeStore::drop_version returns VersionInUse and deletes nothing when the version is the active one or newer."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+The active version is what graphs read, and a newer version is being
+built from classifications whose deliveries were already acked: deleting
+either would empty the graph or leave a version that can never complete.
+The catalog never asks for either, so a request for one is a bug that must
+not cost data.
+"""
+
+[evidence]
+unit = "crosstalk::topology::tests::drop_version_refuses_active_and_newer"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

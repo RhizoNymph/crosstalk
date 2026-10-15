@@ -1,0 +1,18 @@
+[invariant]
+id = "analysis.retention.pin-transitions"
+statement = "TopicVersionHistory::pin pins a retained, non-fitting version (Changed), leaves an existing pin as it was (Unchanged), and rejects an unknown, fitting or dropped version with no change; unpin removes a pin (Changed), returns Unchanged for any version without one, dropped ones included, and rejects only an unknown version."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Pinning is idempotent so a retried action is safe, and keeps the first
+pin's author and time. Unpinning a dropped version succeeds unchanged so
+a retried unpin that already allowed the drop does not fail. Pinning a
+dropped version is an error because its data cannot come back.
+"""
+
+[evidence]
+unit = ["crosstalk_spec::tests::retention::pin_pins_a_retained_version_once", "crosstalk_spec::tests::retention::pin_rejects_unknown_fitting_and_dropped_versions", "crosstalk_spec::tests::retention::unpin_is_idempotent"]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

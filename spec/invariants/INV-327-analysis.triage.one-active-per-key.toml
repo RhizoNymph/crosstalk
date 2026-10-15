@@ -1,0 +1,20 @@
+[invariant]
+id = "analysis.triage.one-active-per-key"
+statement = "At every instant there is at most one Open or Acknowledged alert per (rule, subject), even when drafts with the same rule and subject are triaged concurrently."
+kind = "coordination"
+requires = ["dst", "integration"]
+rationale = """
+A burst of traffic on one channel produces many drafts at once, and the
+alerts consumer may run several workers. Check-then-insert without
+serialization would open duplicate alerts and page operators twice. The
+store enforces it with a partial unique index on (rule, subject) over the
+active states.
+"""
+
+[evidence]
+dst = "crosstalk::analysis::tests::concurrent_triage_opens_one_alert_per_key"
+integration = "crosstalk::analysis::tests::alert_store_rejects_second_active_alert_per_key"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

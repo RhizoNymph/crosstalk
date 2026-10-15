@@ -1,0 +1,17 @@
+[invariant]
+id = "flow.policy.in-force-at"
+statement = "PolicyHistory::in_force_at(t) returns the policy of the latest entry whose decision time is at or before t, or Unreviewed(None) when there is none."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+A channel-routed transmission is judged by the policy in force when it was
+confirmed. Reading that from the history makes the verdict independent of
+when the routing step runs relative to later policy changes.
+"""
+
+[evidence]
+unit = ["crosstalk_spec::tests::policy::policy_in_force_is_latest_decision_at_or_before", "crosstalk_spec::tests::policy::empty_history_is_never_reviewed"]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

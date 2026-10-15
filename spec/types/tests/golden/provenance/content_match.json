@@ -1,0 +1,24 @@
+{
+  "origin": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3",
+  "origin_agent": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+  "reader": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+  "reader_exchange": "01J9Z3R0S1T2V3W4X5Y6Z7A8B9",
+  "read_at": {
+    "part": {
+      "message": "90c6783d80fad0eefa7c2c8887502d4a9d8839e043cd5f51582aa89f71cc9fb5",
+      "index": 2
+    },
+    "range": {
+      "start": 120,
+      "end": 1144
+    }
+  },
+  "carrier": {
+    "type": "tool_result",
+    "data": "toolu_01A09q90qw90lq917835lq9"
+  },
+  "kind": {
+    "type": "exact"
+  },
+  "matched_bytes": 1024
+}

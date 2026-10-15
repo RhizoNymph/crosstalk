@@ -1,0 +1,20 @@
+[invariant]
+id = "topology.verdict.buckets-untouched"
+statement = "EdgeStore::judge changes no bucket, and graph, series and transmissions queries with FalseDetections::Include return the same result before and after any judge."
+kind = "domain"
+property = "metamorphic"
+requires = ["unit", "property"]
+rationale = """
+Verdicts are operator judgement, not detector data. Keeping them out of
+the buckets means a verdict never makes a settled bucket unsettled, never
+re-aggregates a window, and leaves the detector's record intact for
+measuring it.
+"""
+
+[evidence]
+unit = "crosstalk::topology::tests::judge_leaves_buckets"
+property = "crosstalk::topology::tests::prop_include_ignores_verdicts"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+property = { agent = "false", human = "false" }

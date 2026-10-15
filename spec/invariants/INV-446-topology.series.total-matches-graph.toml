@@ -1,0 +1,20 @@
+[invariant]
+id = "topology.series.total-matches-graph"
+statement = "For any grid, weighting, grouping and filter, when series over the grid and graph over the grid's window with the same weighting and filter report the same topic_version, TopologySeries::total equals TopologyGraph::total."
+kind = "domain"
+property = "model-based"
+requires = ["property"]
+rationale = """
+The time brush and the graph are drawn from different queries. If summing
+the series did not give the graph's total, brushing a range would show a
+different amount of traffic than the graph for that range. The relation
+holds for every grouping, because each grouping partitions the same
+counted transmissions. It is stated only when both report the same version:
+an activation between the two queries switches buckets.
+"""
+
+[evidence]
+property = "crosstalk::topology::props::series_total_equals_graph_total"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

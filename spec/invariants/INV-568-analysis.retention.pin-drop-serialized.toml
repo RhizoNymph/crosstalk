@@ -1,0 +1,16 @@
+[invariant]
+id = "analysis.retention.pin-drop-serialized"
+statement = "A version is marked dropped only if it had no pin at the moment of the mark, and a pin that returned Changed or Unchanged keeps its version retained until the version is unpinned."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+A pin and a retention pass can race. If both could succeed, the operator
+would be told the version is kept while its data is deleted. The catalog
+serializes them in its store, so exactly one order happens.
+"""
+
+[evidence]
+dst = "crosstalk::analysis::tests::pin_and_drop_never_both_win"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

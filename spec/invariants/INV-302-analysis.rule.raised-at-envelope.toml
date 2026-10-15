@@ -1,0 +1,17 @@
+[invariant]
+id = "analysis.rule.raised-at-envelope"
+statement = "Every AlertDraft's raised_at equals the at of the envelope it was evaluated from."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Taking the time from the envelope rather than the evaluation clock is what
+makes evaluation deterministic and makes an alert's time the time of the
+condition, even when the alerts consumer is behind or replaying.
+"""
+
+[evidence]
+unit = "crosstalk::analysis::tests::draft_raised_at_is_envelope_at"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

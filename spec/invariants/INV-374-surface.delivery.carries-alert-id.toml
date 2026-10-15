@@ -1,0 +1,17 @@
+[invariant]
+id = "surface.delivery.carries-alert-id"
+statement = "Every payload a sink sends for an alert, including retries, contains that alert's AlertId."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Delivery is at least once, so a receiver will sometimes get the same alert
+twice. The AlertId is stable for the alert's life, so receivers can
+deduplicate on it and link back to the alert in the UI.
+"""
+
+[evidence]
+unit = ["crosstalk::surface::tests::webhook_payload_has_alert_id", "crosstalk::surface::tests::slack_payload_has_alert_id", "crosstalk::surface::tests::log_sink_line_has_alert_id"]
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

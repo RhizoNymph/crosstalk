@@ -1,0 +1,27 @@
+{
+  "id": "01J9Z3P5Q6R7S8T9V0W1X2Y3Z4",
+  "origin": {
+    "type": "discovered",
+    "data": {
+      "seed": {
+        "resource": "01J9Z3R7S8T9V0W1X2Y3Z4A5B6",
+        "first_access": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA"
+      },
+      "detection": {
+        "type": "candidate",
+        "data": {
+          "first_cross_access": {
+            "write": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+            "read": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+            "lag_micros": 30250000
+          }
+        }
+      }
+    }
+  },
+  "resources": [],
+  "policy": {
+    "type": "unreviewed",
+    "data": null
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "id": "01J9Z4A1B2C3D4E5F6G7H8J9K0",
+  "at": "2026-10-04T12:35:04.001337Z",
+  "event": {
+    "type": "ingest",
+    "data": {
+      "type": "agent_seen",
+      "data": {
+        "agent": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+        "evidence": {
+          "type": "harness_session",
+          "data": {
+            "scope": {
+              "type": "upstream",
+              "data": "vllm"
+            },
+            "session": "6f1c2a9e-4b7d-4e2a-9c3f-1d8e5b0a7c42"
+          }
+        }
+      }
+    }
+  }
+}

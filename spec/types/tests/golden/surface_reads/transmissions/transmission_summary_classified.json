@@ -1,0 +1,24 @@
+{
+  "id": "01J9Z3S8V9W0X1Y2Z3A4B5C6D7",
+  "to": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+  "route": {
+    "type": "channel",
+    "data": "01J9Z3P5R6S7T8V9W0X1Y2Z3A4"
+  },
+  "opened_at": "2026-10-04T09:16:40.002513Z",
+  "state": {
+    "type": "classified",
+    "data": {
+      "delivery": {
+        "from": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+        "confirmed_at": "2026-10-04T09:16:41.250000Z",
+        "matched_bytes": 47
+      },
+      "topic": {
+        "type": "topic",
+        "data": "01J9Z3T9W0X1Y2Z3A4B5C6D7E8"
+      },
+      "verdict": "genuine"
+    }
+  }
+}

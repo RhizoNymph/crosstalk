@@ -1,0 +1,21 @@
+[invariant]
+id = "surface.export.too-large-refused"
+statement = "An export whose plan counts more rows than ExportLimits::max_rows fails with Conflict(ExportTooLarge) naming the count and the limit, before its header is returned or any row is sent."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+Counting before streaming refuses an oversized export whole, instead of
+cutting it short at the limit, which would send a prefix that looks like
+a smaller dataset. It is a conflict, not invalid input: a smaller window,
+a narrower filter or a higher configured limit makes the same request
+pass.
+"""
+
+[evidence]
+unit = "crosstalk_spec::tests::export::limits_refuse_more_rows_than_the_maximum"
+integration = "crosstalk::surface::export::tests::oversized_export_is_refused_before_streaming"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

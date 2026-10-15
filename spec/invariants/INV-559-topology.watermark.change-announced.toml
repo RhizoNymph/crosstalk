@@ -1,0 +1,17 @@
+[invariant]
+id = "topology.watermark.change-announced"
+statement = "Each time the edge store's watermark advances, L7 publishes Changed::Watermark with the new watermark at least once, and only after graph and series queries report a watermark at or after it."
+kind = "coordination"
+requires = ["dst"]
+rationale = """
+The UI refreshes the graph, series and edge lists on watermark events
+rather than on every EdgeUpdated. An event announcing a watermark that
+queries do not yet report would make the client re-query, see an older
+watermark, and wait for an event that already passed.
+"""
+
+[evidence]
+dst = "crosstalk::topology::dst::watermark_announced_after_queries_report_it"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }

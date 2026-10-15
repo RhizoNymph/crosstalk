@@ -1,0 +1,15 @@
+{
+  "type": "promote_channel",
+  "data": {
+    "channel": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+    "pattern": {
+      "type": "url_prefix",
+      "data": {
+        "host": "wiki.corp.internal",
+        "path_prefix": "/eng"
+      }
+    },
+    "policy": "sanctioned",
+    "note": null
+  }
+}

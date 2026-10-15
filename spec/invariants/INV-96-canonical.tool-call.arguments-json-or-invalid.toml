@@ -1,0 +1,22 @@
+[invariant]
+id = "canonical.tool-call.arguments-json-or-invalid"
+statement = "A tool call's arguments are ToolArguments::Json exactly when the model's argument text parses as JSON, and otherwise ToolArguments::Invalid holding that text unchanged."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+Protocols that carry arguments as a string (OpenAI Chat and Responses) can
+carry text that is not JSON, typically a truncated or malformed generation.
+Canonicalizing it is impossible and discarding it would lose what the
+model produced, so it is kept exactly. Classifying valid JSON as Invalid
+would make the echo, which arrives as an object in some protocols, hash
+differently.
+"""
+
+[evidence]
+unit = "crosstalk::canonical::tests::malformed_arguments_kept_as_invalid"
+property = "crosstalk::canonical::tests::arguments_classified_by_parse"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+property = { agent = "false", human = "false" }

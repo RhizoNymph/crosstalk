@@ -1,0 +1,33 @@
+[
+  {
+    "type": "url",
+    "data": {
+      "scheme": "https",
+      "host": "wiki.internal.example",
+      "path": "/projects/crosstalk/plan",
+      "query": "rev=12&view=raw"
+    }
+  },
+  {
+    "type": "file",
+    "data": {
+      "host": "build-01",
+      "path": "/srv/shared/handoff.md"
+    }
+  },
+  {
+    "type": "mcp",
+    "data": {
+      "server": "linear",
+      "tool": "get_issue",
+      "target": "ENG-1423"
+    }
+  },
+  {
+    "type": "opaque",
+    "data": {
+      "tool": "kv_put",
+      "key": "handoff/latest"
+    }
+  }
+]

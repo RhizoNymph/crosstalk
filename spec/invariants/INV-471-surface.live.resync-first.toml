@@ -1,0 +1,18 @@
+[invariant]
+id = "surface.live.resync-first"
+statement = "When a subscription's resume plan is Resync, the stream's first item is LiveItem::Resync with the plan's reason and the head cursor, and every event it delivers afterwards was appended after that head."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Resync tells the client to re-query everything it shows through QueryApi
+and then handle what follows. If an event from before the head followed
+the marker, the client would re-query needlessly at best; if the marker
+were omitted, the client would not know it had missed changes.
+"""
+
+[evidence]
+unit = "crosstalk::surface::tests::unresumable_cursor_gets_resync_first"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

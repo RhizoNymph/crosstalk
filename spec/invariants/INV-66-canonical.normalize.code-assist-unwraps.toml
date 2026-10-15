@@ -1,0 +1,21 @@
+[invariant]
+id = "canonical.normalize.code-assist-unwraps"
+statement = "Wrapping a GeminiGenerate exchange in the Code Assist v1internal envelope and normalizing it as GeminiCodeAssist yields a NormalizedExchange that differs from the unwrapped one only in meta."
+kind = "domain"
+property = "metamorphic"
+requires = ["unit", "property"]
+rationale = """
+Gemini CLI and Antigravity subscriptions call `v1internal:streamGenerateContent`,
+which wraps the generateContent request (alongside project and session
+fields) and each response chunk in an envelope. The content inside is
+generateContent's. Treating the envelope as content would give the same
+conversation different hashes on a subscription than on the API.
+"""
+
+[evidence]
+unit = "crosstalk::canonical::tests::recorded_code_assist_matches_generate"
+property = "crosstalk::canonical::tests::code_assist_envelope_is_transparent"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+property = { agent = "false", human = "false" }

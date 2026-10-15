@@ -1,0 +1,24 @@
+[invariant]
+id = "transport.wire.event-tag-is-subject"
+statement = "In the JSON of a BusEvent, the inner type tag of an ingest, detect or insight event is the JSON string of its Subject, and the outer type tag of a Changed notification is the JSON string of Subject::Changed."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Consumers subscribe by Subject, and the NATS payload is the Envelope's
+JSON. Tying a layer event's tag to its subject's string means a payload
+read off the bus (a dead letter, a replay, a capture) names its own
+subject without a lookup table, and renaming an event variant renames its
+subject and its tag together, a change both goldens show. Change
+notifications share one subject by design, so their layer tag is the
+subject and their inner tag names the entity.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::wire::bus::an_events_tag_is_its_subject",
+    "crosstalk_spec::tests::wire::bus::every_subject_golden",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

@@ -1,0 +1,21 @@
+[
+  {
+    "type": "shown",
+    "data": {
+      "text": "e plan: ship v2.4 on Friday after QA signs off Thursday. Owners",
+      "highlight": {
+        "start": 8,
+        "end": 55
+      },
+      "elided_before": 6,
+      "elided_after": 7,
+      "highlight_cut": 0
+    }
+  },
+  {
+    "type": "body_dropped",
+    "data": {
+      "message": "20272e353c434a51585f666d747b828990979ea5acb3bac1c8cfd6dde4ebf2f9"
+    }
+  }
+]

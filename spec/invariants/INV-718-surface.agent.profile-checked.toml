@@ -1,0 +1,26 @@
+[invariant]
+id = "surface.agent.profile-checked"
+statement = "An AgentProfile's state is active, its parent is neither the agent nor one of its aliases, its aliases are distinct, ascending and exclude the agent, and it has a last-seen time unless its state is Registered."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+A self-parent or an alias as parent would draw a cycle in the sub-agent
+tree; a repeated alias would be counted twice. A provisional or
+established agent was created by an exchange, so a missing last-seen time
+means the activity store lost a write. A registered agent from config may
+never have sent traffic, and the UI shows that as never seen rather than
+inventing a time.
+"""
+
+[evidence]
+type = "crosstalk_spec::aggregates::agents::AgentProfile::new"
+unit = [
+    "crosstalk_spec::tests::agent_reads::profile_sorts_aliases",
+    "crosstalk_spec::tests::agent_reads::profile_rejects_a_parent_in_its_cluster",
+    "crosstalk_spec::tests::agent_reads::profile_rejects_bad_aliases",
+    "crosstalk_spec::tests::agent_reads::only_a_registered_agent_may_be_unseen",
+]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

@@ -1,0 +1,19 @@
+[invariant]
+id = "analysis.retention.pin-not-fitting"
+statement = "No TopicVersionInfo whose status is Fitting has a pin."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+A fitting version may fail and leave no version behind, so a pin on it
+could dangle; and a pending version is retained anyway, so the pin would
+add nothing until much later. TopicVersionInfo::with_retention returns
+PinnedWhileFitting otherwise.
+"""
+
+[evidence]
+type = "crosstalk_spec::aggregates::topic_history::TopicVersionInfo::with_retention"
+unit = "crosstalk_spec::tests::retention::fitting_version_cannot_be_pinned"
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

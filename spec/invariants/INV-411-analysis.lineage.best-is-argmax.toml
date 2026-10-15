@@ -1,0 +1,21 @@
+[invariant]
+id = "analysis.lineage.best-is-argmax"
+statement = "In every stored TopicLineage, each entry's best link is the to version's topic whose centroid is most similar to the entry topic's centroid, ties to the lower topic id, with that similarity, and is absent only when the to version has no topics."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+This is the "most similar centroid" of the WatchedTopic remap
+(analysis.rule.watched-remap), computed once and stored, with ties broken
+deterministically. Because remapping reads the best link instead of
+recomputing similarity, this one rule decides both what the UI shows a
+topic became and where a rule moves.
+"""
+
+[evidence]
+unit = "crosstalk::analysis::tests::lineage_best_is_most_similar_centroid"
+property = "crosstalk::analysis::tests::lineage_best_is_argmax_over_centroids"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+property = { agent = "false", human = "false" }

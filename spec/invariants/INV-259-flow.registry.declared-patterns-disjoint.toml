@@ -1,0 +1,25 @@
+[invariant]
+id = "flow.registry.declared-patterns-disjoint"
+statement = "After any sequence of ChannelRegistry::declare and ChannelRegistry::promote calls, no locator matches the patterns of two declared channels, promoted channels included."
+kind = "domain"
+property = "invariant"
+requires = ["property", "integration"]
+rationale = """
+`lookup` returns a single Declared channel, and that channel's policy
+decides whether traffic is dropped or raised. If two patterns overlapped,
+the choice would be arbitrary and could flip between sanctioned and
+unsanctioned. Overlap is semantic, not syntactic: `Host(h)` overlaps every
+`UrlPrefix` on `h`, and `ResourcePattern::overlaps` is exact. `declare`
+rejects an overlapping pattern with
+`RegistryError::OverlappingDeclaration`, and `promote`, which gives a
+discovered channel a pattern, refuses one with
+`PromotionRefusal::PatternOverlaps` and changes nothing.
+"""
+
+[evidence]
+property = "crosstalk::flow::registry::tests::declared_patterns_never_overlap"
+integration = "crosstalk::flow::registry::integration::pg_declare_rejects_overlap"
+
+[evidence-review]
+property = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

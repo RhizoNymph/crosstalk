@@ -1,0 +1,23 @@
+[invariant]
+id = "analysis.rule.builtin-exactly-once"
+statement = "An AlertRuleSet holds each BuiltinRule exactly once, from construction, and never holds a second rule of a built-in kind."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+Each built-in rule is one switch the operator flips. Two NewChannel rules
+would raise every alert twice and leave the UI unsure which to show as the
+setting. The set keeps one slot per built-in, filled at construction, has
+no removal, and refuses to insert a built-in rule; AlertRuleDef::builtin
+always takes the rule's fixed id.
+"""
+
+[evidence]
+type = "crosstalk_spec::aggregates::alert::AlertRuleSet"
+unit = [
+    "crosstalk_spec::tests::rules::rule_set_holds_every_builtin_once_from_the_start",
+    "crosstalk_spec::tests::rules::rule_set_refuses_a_second_builtin_and_a_taken_id",
+]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

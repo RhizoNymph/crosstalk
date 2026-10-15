@@ -1,0 +1,18 @@
+[invariant]
+id = "transport.deadletter.not-redelivered"
+statement = "Once an envelope is dead-lettered for a consumer group, the bus does not deliver it to that group again unless an operator replays it."
+kind = "coordination"
+requires = ["dst", "integration"]
+rationale = """
+Dead-lettering is the end of automatic retry: a poison envelope stops
+consuming the group's capacity. Other groups are unaffected and keep their
+own deliveries of the same envelope.
+"""
+
+[evidence]
+dst = "crosstalk::transport::dst::dead_lettered_envelope_not_redelivered"
+integration = "crosstalk::transport::integration::jetstream_dead_lettered_envelope_not_redelivered"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

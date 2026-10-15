@@ -1,0 +1,17 @@
+[invariant]
+id = "analysis.retention.topics-and-lineage-kept"
+statement = "Marking a version dropped changes neither what TopicCatalog::lineage returns from or to it nor its topics' labels, terms and centroids."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Topics and lineage are what let the UI follow "topic 12 became 31" across
+versions, and stale watched-topic rules name topics of old versions. Both
+are small, so retention never touches them.
+"""
+
+[evidence]
+unit = "crosstalk::analysis::tests::drop_keeps_topics_and_lineage"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

@@ -1,0 +1,20 @@
+[invariant]
+id = "flow.coaccess.lag-is-difference"
+statement = "A CoAccess's lag equals its read access's timestamp minus its write access's timestamp."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+Content cannot travel back in time, so a read at or before the write cannot
+have returned what was written (`InvalidCoAccess::ReadNotAfterWrite`). The
+lag is computed by `CoAccess::new` from access timestamps, never supplied by
+the caller and never taken from processing time, so consumer lag cannot
+distort it.
+"""
+
+[evidence]
+type = "crosstalk_spec::derived::flow::evidence::CoAccess::new"
+unit = ["crosstalk_spec::tests::flow::co_access_records_lag", "crosstalk_spec::tests::flow::co_access_rejects_invalid_pairs"]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

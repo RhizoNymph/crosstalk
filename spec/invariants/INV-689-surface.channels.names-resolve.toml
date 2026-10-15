@@ -1,0 +1,25 @@
+[invariant]
+id = "surface.channels.names-resolve"
+statement = "QueryApi::channel_names returns exactly channels::resolve_names of its IdBatch over the registered channels: keyed by each id of the batch the registry knows, the ChannelName of the channel that id resolves to, whose id is that channel in force and whose shape is its pattern when declared and its seed locator when discovered, and no entry for an unknown id."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+Every page names the channels its rows mention in one call. Keying by the id
+asked for lets the page look up the id it holds, even a superseded one, and
+get the channel now in force, as every other read resolves it. Leaving
+unknown ids out instead of failing keeps one stale id from blanking a page.
+The batch's bound is the IdBatch type's, shared with agent_names
+(surface.query.names-batch-bounded).
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::channel_reads::names_resolve_each_known_id_to_the_channel_in_force",
+    "crosstalk_spec::tests::channel_reads::a_name_is_only_built_for_a_channel_in_force_with_a_readable_seed",
+]
+property = "crosstalk::surface::tests::prop_channel_names_match_reference"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+property = { agent = "false", human = "false" }

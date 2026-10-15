@@ -1,0 +1,18 @@
+[invariant]
+id = "ingress.continuation.matches-previous-response-id"
+statement = "An exchange whose request carries previous_response_id has Continuation::Increment naming that response id, with its ConnectionId when it arrived on a WebSocket, and every other exchange has Continuation::FullHistory."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Codex over WebSocket sends only the input added since the previous
+response. If an increment were recorded as full history, L3 would start a
+new conversation each turn; if the response id or connection were lost,
+it could not stitch the increment onto its history.
+"""
+
+[evidence]
+unit = "crosstalk::ingress::tests::continuation::previous_response_id_recorded"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }

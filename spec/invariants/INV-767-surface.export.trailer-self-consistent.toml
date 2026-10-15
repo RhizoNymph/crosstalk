@@ -1,0 +1,25 @@
+[invariant]
+id = "surface.export.trailer-self-consistent"
+statement = "Every ExportTrailer whose end is CountMismatch records its own row count as produced and a planned count that differs from it, and every ExportTrailer whose end is InvalidRow records the refusal at its own row count, never as AfterRefusal, and a BeyondPlan refusal only after exactly the planned rows."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+The sealer builds every trailer, and these are the facts it guarantees that
+the trailer alone can show: it stops accepting rows at the first refusal,
+and a count mismatch is the rows it accepted against the plan. A decoded
+trailer cannot rerun the sealer, so its decode checks them instead
+(the rows and digest are checked against the received rows by
+verify_export), and a reader never holds a trailer no sealer could have
+sent.
+"""
+
+[evidence]
+type = "crosstalk_spec::interfaces::l8_surface::export::manifest::ExportTrailer"
+unit = [
+    "crosstalk_spec::tests::wire::surface_reads::export::export_trailers_golden_for_every_end",
+    "crosstalk_spec::tests::wire::surface_reads::export::export_trailers_refuse_what_no_sealer_builds",
+]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

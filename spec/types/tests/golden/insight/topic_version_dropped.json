@@ -1,0 +1,13 @@
+{
+  "id": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3",
+  "at": "2026-10-04T12:00:00.000000Z",
+  "event": {
+    "type": "insight",
+    "data": {
+      "type": "topic_version_dropped",
+      "data": {
+        "version": 1
+      }
+    }
+  }
+}

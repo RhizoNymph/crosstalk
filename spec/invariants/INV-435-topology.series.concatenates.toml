@@ -1,0 +1,19 @@
+[invariant]
+id = "topology.series.concatenates"
+statement = "For grids G1 and G2 with the same step where G2's window starts at G1's end, the series over their union with the same weighting, grouping, filter and topic_version has, for each key, G1's values followed by G2's, a key missing from one part contributing zeros there."
+kind = "domain"
+property = "inductive"
+requires = ["property"]
+rationale = """
+The base case is a one-point grid, whose values are a graph over that
+step (topology.series.total-matches-graph). The composition law makes
+every point independent of the rest of the window, so panning the brush
+never changes a point that stays in view, and points can be cached and
+fetched incrementally.
+"""
+
+[evidence]
+property = "crosstalk::topology::props::series_concatenate_over_adjacent_grids"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

@@ -1,0 +1,16 @@
+[invariant]
+id = "surface.evidence.access-agent-canonical"
+statement = "AccessDetail::agent is its access's stored agent resolved through the aliases the surface read with, while the access record keeps the agent id it was stored with."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Accesses are records of what was observed and keep their ids; the co-access timeline still has to name agents the way every other view does, so
+a merged writer shows as its canonical agent.
+"""
+
+[evidence]
+unit = "crosstalk_spec::tests::evidence::access_detail_names_the_canonical_agent_and_keeps_the_record"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

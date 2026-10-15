@@ -1,0 +1,35 @@
+[invariant]
+id = "surface.audit.subjects-cover-touched"
+statement = "AuditEntry::subjects returns, without duplicates, the ids the operator action or config change names as requested (OperatorAction::subjects, ConfigChange::subjects), followed for a succeeded operator call by the ids its outcome names (ActionOutcome::subjects): a created rule or merge record, or a promotion's channel and every channel it superseded; and for an export entry its ExportId once it started and the projection a projection export reads (ExportRecord::subjects)."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+The audit view filters by the entity an operator is looking at. A merge's
+id exists only in the outcome, so without it "what happened to this merge"
+finds nothing; likewise the channels a promotion superseded are known only
+once it is applied, and without them a superseded channel's history would
+not show the promotion that retired it. A rejected call created and
+retired nothing, so it adds nothing. Ids are kept as recorded, not
+resolved through merges or supersession, because the log records what
+happened to each id: a merge refused as MergeIntoSelf names the two
+agents asked for, not their canonical agent. An export's start and end
+share its id, so the subject filter finds them together; a refused export
+has no id and is found by its author.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::audit::every_action_reports_its_kind_permission_and_subjects",
+    "crosstalk_spec::tests::audit::outcomes_name_the_ids_they_created",
+    "crosstalk_spec::tests::audit::operator_entry_subjects_include_created_ids",
+    "crosstalk_spec::tests::audit::every_config_change_names_its_subjects",
+    "crosstalk_spec::tests::audit::a_promotion_entry_names_every_channel_it_superseded",
+    "crosstalk_spec::tests::audit::a_refused_promotion_names_only_the_requested_channel",
+    "crosstalk_spec::tests::audit::superseded_channels_are_sorted_and_listed_once",
+    "crosstalk_spec::tests::export::export_entries_are_authored_by_the_caller_and_name_the_export",
+    "crosstalk_spec::tests::export::projection_export_entries_name_the_projection",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

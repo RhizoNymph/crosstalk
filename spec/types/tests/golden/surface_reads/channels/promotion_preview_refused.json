@@ -1,0 +1,9 @@
+{
+  "type": "refused",
+  "data": {
+    "type": "pattern_overlaps",
+    "data": {
+      "existing": "01J9Z3Q6S7T8V9W0X1Y2Z3A4B5"
+    }
+  }
+}

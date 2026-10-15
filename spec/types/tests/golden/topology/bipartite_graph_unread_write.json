@@ -1,0 +1,45 @@
+{
+  "window": {
+    "start": "2026-10-04T12:00:00.000000Z",
+    "end": "2026-10-04T13:00:00.000000Z"
+  },
+  "weighting": "transmissions",
+  "topic_version": 3,
+  "nodes": [
+    {
+      "type": "agent",
+      "data": {
+        "id": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+        "label": "planner",
+        "state_kind": "established",
+        "parent": null,
+        "claims": {
+          "entries": []
+        },
+        "transmissions_in": 0,
+        "transmissions_out": 0
+      }
+    },
+    {
+      "type": "channel",
+      "data": {
+        "id": "01J9Z3Q6R7S8T9V0W1X2Y3Z4A5",
+        "label": null,
+        "origin_kind": "discovered",
+        "detection_kind": "active",
+        "policy_kind": "unreviewed",
+        "locator_summary": "https://wiki.example/team/plan (+2)"
+      }
+    }
+  ],
+  "accesses": [
+    {
+      "agent": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+      "channel": "01J9Z3Q6R7S8T9V0W1X2Y3Z4A5",
+      "op": "write",
+      "accesses": 2,
+      "share": 1.0
+    }
+  ],
+  "transmissions": []
+}

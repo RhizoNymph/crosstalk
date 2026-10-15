@@ -1,0 +1,24 @@
+[invariant]
+id = "flow.resource.pattern-overlap-exact"
+statement = "ResourcePattern::overlaps(p, q) is true exactly when some locator matches both p and q, and equals overlaps(q, p)."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+Declaring and promoting refuse overlapping patterns so a lookup never has
+two declared channels to choose from. A false negative would let two
+channels with different policies claim one resource; a false positive
+would refuse a valid promotion. Segment prefixes make /a and /ab disjoint
+and /a and /a/b overlapping.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::pattern_overlap::pattern_overlap_cases",
+    "crosstalk_spec::tests::pattern_overlap::overlap_is_implied_by_a_shared_match",
+]
+property = "crosstalk::flow::props::overlap_iff_shared_locator"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+property = { agent = "false", human = "false" }

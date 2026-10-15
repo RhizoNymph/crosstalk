@@ -1,0 +1,20 @@
+[invariant]
+id = "analysis.alert.sanction-covers-superseded"
+statement = "AlertTriage::channel_sanctioned for a channel suppresses the active alerts whose subject is that channel or a channel it superseded, and no others."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "integration"]
+rationale = """
+Sanctioning the promoted wiki answers the alerts raised on its absorbed
+pages too. Leaving them open would make the operator dismiss the same
+medium once per page; suppressing beyond the superseded set would hide
+unrelated channels.
+"""
+
+[evidence]
+unit = "crosstalk::analysis::tests::sanction_suppresses_superseded_channel_alerts"
+integration = "crosstalk::analysis::tests::pg_sanction_after_promotion"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

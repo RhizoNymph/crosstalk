@@ -1,0 +1,27 @@
+{
+  "id": "01J9Z3P6Q7R8S9T0V1W2X3Y4Z5",
+  "evidence": [
+    {
+      "type": "prompt_fingerprint",
+      "data": "cf07194ee232eb531e15f690000d19846dea69cf05504782658afcfacb9228a2"
+    }
+  ],
+  "parent": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA",
+  "state": {
+    "type": "merged",
+    "data": {
+      "merge": "01J9Z3Q8R9S0T1V2W3X4Y5Z6A7",
+      "into": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+      "prior": {
+        "type": "provisional",
+        "data": {
+          "first_seen": "2026-10-04T12:34:56.789012Z"
+        }
+      },
+      "repointed_by": [
+        "01J9Z3M2C5D6E7F8G9H0J1K2M3"
+      ]
+    }
+  },
+  "label": null
+}

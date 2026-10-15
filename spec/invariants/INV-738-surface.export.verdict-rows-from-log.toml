@@ -1,0 +1,25 @@
+[invariant]
+id = "surface.export.verdict-rows-from-log"
+statement = "A verdicts export's rows are, for each judgeable transmission opened in the header's settled window in id order, verdict_rows of the transmission and its VerdictLog: one row per record in revision order with the record's verdict, author, time and note and the transmission's route kind and detector call."
+kind = "domain"
+property = "model-based"
+requires = ["unit", "integration"]
+rationale = """
+Verdicts are the ground truth for measuring the detector. Carrying the
+detector's call (QualityMatch) and route kind on every row lets the
+export reproduce DetectionQuality::tally offline, and exporting every
+record, withdrawals included, keeps the full history rather than the
+current verdict alone.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_spec::tests::export::verdict_rows_follow_the_log_with_the_detector_call",
+    "crosstalk_spec::tests::export::verdict_rows_exist_only_for_judgeable_states",
+    "crosstalk_spec::tests::export::verdict_rows_refuse_another_transmissions_log",
+]
+integration = "crosstalk::surface::export::tests::verdict_export_matches_logs"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

@@ -1,0 +1,18 @@
+[invariant]
+id = "topology.apply.no-lost-updates"
+statement = "When applies of distinct transmissions to the same bucket run concurrently, the bucket's stats afterwards include every one of them."
+kind = "coordination"
+requires = ["integration"]
+rationale = """
+Several gateway nodes can consume the `topology` group against one
+TimescaleEdgeStore, and bursts of traffic on one edge land in the same
+bucket. A read-modify-write without row locking or an atomic upsert would
+silently drop counts under exactly the load the topology view is meant to
+show.
+"""
+
+[evidence]
+integration = "crosstalk::topology::integration::timescale_concurrent_applies_same_bucket"
+
+[evidence-review]
+integration = { agent = "false", human = "false" }

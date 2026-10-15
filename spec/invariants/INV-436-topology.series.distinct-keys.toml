@@ -1,0 +1,19 @@
+[invariant]
+id = "topology.series.distinct-keys"
+statement = "No two series of a grouped TopologySeries have the same key."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+Two series for one topic, route kind or edge would draw two lines for one
+thing and leave which one is right to the client. Keys are distinct by
+construction, so each key's series sums to that key's share of the total.
+TopologySeries::new returns DuplicateKey otherwise.
+"""
+
+[evidence]
+type = "crosstalk_spec::aggregates::series::TopologySeries::new"
+unit = "crosstalk_spec::tests::series::series_rejects_duplicate_keys"
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

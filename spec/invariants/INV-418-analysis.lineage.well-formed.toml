@@ -1,0 +1,20 @@
+[invariant]
+id = "analysis.lineage.well-formed"
+statement = "Every TopicLineage goes from an older version to a newer one, has at most one entry per topic, and has every non-best link at or above its floor."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+Lineage is directional: older topics map to newer ones. One entry per
+topic gives each watched topic exactly one remap outcome. The floor only
+trims what the UI draws; the best link is kept below it so that remapping
+with any threshold sees the true most similar topic. TopicLineage::new
+returns NotForward, DuplicateEntry or BelowFloor otherwise.
+"""
+
+[evidence]
+type = "crosstalk_spec::aggregates::topic_history::TopicLineage::new"
+unit = ["crosstalk_spec::tests::topic_history::lineage_goes_forward", "crosstalk_spec::tests::topic_history::lineage_has_one_entry_per_topic", "crosstalk_spec::tests::topic_history::lineage_floor_bounds_others_not_best"]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

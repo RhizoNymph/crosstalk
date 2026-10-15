@@ -1,0 +1,38 @@
+{
+  "id": "01J9Z3P5Q6R7S8T9V0W1X2Y3Z4",
+  "origin": {
+    "type": "declared",
+    "data": {
+      "declaration": {
+        "pattern": {
+          "type": "url_prefix",
+          "data": {
+            "host": "wiki.internal.example",
+            "path_prefix": "/projects/crosstalk"
+          }
+        },
+        "by": {
+          "type": "config"
+        },
+        "at": "2026-10-01T00:00:00.000000Z"
+      },
+      "history": {
+        "type": "before_traffic",
+        "data": {
+          "type": "awaiting_traffic"
+        }
+      }
+    }
+  },
+  "resources": [],
+  "policy": {
+    "type": "sanctioned",
+    "data": {
+      "by": {
+        "type": "config"
+      },
+      "at": "2026-10-01T00:00:00.000000Z",
+      "note": null
+    }
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "id": "01J9Z3P5R6S7T8V9W0X1Y2Z3A4",
+  "shape": {
+    "type": "seed",
+    "data": {
+      "type": "url",
+      "data": {
+        "scheme": "https",
+        "host": "wiki.example.com",
+        "path": "/team/release-plan",
+        "query": null
+      }
+    }
+  }
+}

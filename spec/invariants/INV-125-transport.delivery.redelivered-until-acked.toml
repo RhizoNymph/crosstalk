@@ -1,0 +1,21 @@
+[invariant]
+id = "transport.delivery.redelivered-until-acked"
+statement = "An envelope delivered to a consumer group is delivered to that group again after each nack or ack timeout of its delivery, until a consumer of that group acks it or the delivery reaches the group's RetryPolicy::max_attempts."
+kind = "coordination"
+requires = ["dst", "integration"]
+rationale = """
+A consumer that crashes or fails mid-handling must not lose the envelope, so
+every failure short of the retry budget leads to another delivery. The
+budget bounds how long a poison envelope can occupy a group; what happens
+when it runs out is transport.deadletter.stored-before-release and
+transport.deadletter.not-redelivered. Undecodable stored bytes never become
+an envelope and are handled by transport.codec.undecodable-not-redelivered.
+"""
+
+[evidence]
+dst = "crosstalk::transport::dst::unacked_delivery_is_redelivered_until_budget"
+integration = "crosstalk::transport::integration::jetstream_redelivers_after_ack_wait"
+
+[evidence-review]
+dst = { agent = "false", human = "false" }
+integration = { agent = "false", human = "false" }

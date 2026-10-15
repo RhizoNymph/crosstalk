@@ -1,0 +1,24 @@
+[invariant]
+id = "flow.quality.rows-well-formed"
+statement = "A DetectionQuality holds at most one row per (route_kind, match_kind), no row whose three counts are all zero, and its rows ordered by route kind and then match kind."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+Two rows for one key would make a client sum or pick between them, and an
+all-zero row is noise that differs between equal tallies. Fixed order
+makes two responses comparable row by row.
+"""
+
+[evidence]
+type = [
+    "crosstalk_spec::aggregates::quality::DetectionQuality::new",
+    "crosstalk_spec::aggregates::quality::DetectionQuality::tally",
+]
+unit = [
+    "crosstalk_spec::tests::quality::quality_rejects_duplicate_and_empty_rows",
+    "crosstalk_spec::tests::quality::quality_rows_are_sorted_by_route_then_match",
+]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

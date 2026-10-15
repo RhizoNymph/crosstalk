@@ -1,0 +1,47 @@
+[
+  {
+    "type": "store",
+    "data": {
+      "reason": "connection reset by peer"
+    }
+  },
+  {
+    "type": "not_found"
+  },
+  {
+    "type": "forbidden",
+    "data": {
+      "missing": "content"
+    }
+  },
+  {
+    "type": "version_not_retained",
+    "data": {
+      "version": 2
+    }
+  },
+  {
+    "type": "conflict",
+    "data": {
+      "type": "rule_stale",
+      "data": {
+        "rule": "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA"
+      }
+    }
+  },
+  {
+    "type": "invalid_input",
+    "data": {
+      "type": "unaligned_window"
+    }
+  },
+  {
+    "type": "invalid_cursor"
+  },
+  {
+    "type": "projection_not_retained",
+    "data": {
+      "projection": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3"
+    }
+  }
+]

@@ -1,0 +1,17 @@
+[invariant]
+id = "surface.operators.former-kept"
+statement = "Every operator any earlier load defined stays in the directory, and one the current config does not define has no permissions and keeps the name it last had."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+Policy decisions and audit entries name operators by id for as long as
+they are kept. Dropping a removed operator from the directory would turn
+its past decisions into bare ids in the UI.
+"""
+
+[evidence]
+unit = ["crosstalk_spec::tests::operators::removed_operator_keeps_its_name_and_loses_its_caller", "crosstalk_spec::tests::operators::trusted_mode_has_one_operator_with_permissions"]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

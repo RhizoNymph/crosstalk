@@ -1,0 +1,51 @@
+{
+  "id": "01J9Z3N4P5Q6R7S8T9V0W1X2Y3",
+  "at": "2026-10-04T12:00:00.000000Z",
+  "event": {
+    "type": "insight",
+    "data": {
+      "type": "alert_rule_changed",
+      "data": {
+        "rule": {
+          "id": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+          "rule": {
+            "type": "user",
+            "data": {
+              "name": "Credential handoffs",
+              "created": [
+                "01J9Z3N4P5Q6R7S8T9V0W1X2Y3",
+                "2026-10-04T09:15:00.000000Z"
+              ],
+              "content": {
+                "type": "watched_topic",
+                "data": {
+                  "watch": {
+                    "type": "stale",
+                    "data": {
+                      "last": {
+                        "version": 2,
+                        "topics": [
+                          "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA"
+                        ]
+                      },
+                      "unmapped_in": 3,
+                      "unmapped": [
+                        "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA"
+                      ]
+                    }
+                  },
+                  "remap_threshold": 0.75
+                }
+              }
+            }
+          },
+          "status": "enabled",
+          "sinks": [
+            "01J9Z3K8M4Q7R2T5V6W8X9Y0ZA"
+          ]
+        },
+        "revision": 2
+      }
+    }
+  }
+}

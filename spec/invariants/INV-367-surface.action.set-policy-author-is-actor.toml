@@ -1,0 +1,22 @@
+[invariant]
+id = "surface.action.set-policy-author-is-actor"
+statement = "For every PolicyKind, the decision in a PolicyChanged published for a SetPolicy has PolicyAuthor::Operator of the Caller's OperatorId as its author and the time the action was accepted as its time."
+kind = "domain"
+property = "postcondition"
+requires = ["unit", "property"]
+rationale = """
+SetPolicy carries only a PolicyKind and a note, so a caller cannot supply an
+author or time; the surface builds the Decision for all three kinds,
+including a reset to Unreviewed. This pins down what it builds: the
+authenticated caller, never PolicyAuthor::Config and never a fixed service
+identity, so policy provenance in L5 and in the channel view always names
+the operator who made the call.
+"""
+
+[evidence]
+unit = "crosstalk::surface::tests::set_policy_stamps_caller_and_time"
+property = "crosstalk::surface::tests::prop_set_policy_decision_author_is_caller"
+
+[evidence-review]
+unit = { agent = "false", human = "false" }
+property = { agent = "false", human = "false" }

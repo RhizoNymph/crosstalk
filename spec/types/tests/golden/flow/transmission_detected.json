@@ -1,0 +1,12 @@
+{
+  "id": "01J9Z3S8T9V0W1X2Y3Z4A5B6C7",
+  "to": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+  "route": {
+    "type": "channel",
+    "data": "01J9Z3P5Q6R7S8T9V0W1X2Y3Z4"
+  },
+  "opened_at": "2026-10-04T12:00:30.250000Z",
+  "state": {
+    "type": "detected"
+  }
+}

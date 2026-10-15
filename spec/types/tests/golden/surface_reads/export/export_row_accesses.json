@@ -1,0 +1,13 @@
+{
+  "type": "access",
+  "data": {
+    "agent": "01J9Z3M2C5D6E7F8G9H0J1K2M3",
+    "channel": "01J9Z3P5R6S7T8V9W0X1Y2Z3A4",
+    "op": "read",
+    "bucket": {
+      "start": "2026-10-04T09:00:00.000000Z",
+      "end": "2026-10-04T10:00:00.000000Z"
+    },
+    "accesses": 5
+  }
+}

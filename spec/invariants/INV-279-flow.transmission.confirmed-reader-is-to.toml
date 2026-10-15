@@ -1,0 +1,18 @@
+[invariant]
+id = "flow.transmission.confirmed-reader-is-to"
+statement = "The reader of every content match in a Confirmed transmission is the transmission's `to` agent."
+kind = "domain"
+property = "invariant"
+requires = ["property"]
+rationale = """
+`Confirmed::new` guarantees one reader, but `Transmission::to` is a separate
+field set when the transmission opened. A match attached to another reader's
+transmission would draw the edge to the wrong agent, which the types cannot
+catch.
+"""
+
+[evidence]
+property = "crosstalk::flow::correlator::tests::confirmed_reader_is_to"
+
+[evidence-review]
+property = { agent = "false", human = "false" }

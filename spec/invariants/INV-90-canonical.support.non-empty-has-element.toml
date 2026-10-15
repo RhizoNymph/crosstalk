@@ -1,0 +1,23 @@
+[invariant]
+id = "canonical.support.non-empty-has-element"
+statement = "Every NonEmpty holds at least one element."
+kind = "representation"
+requires = ["type", "unit"]
+rationale = """
+NonEmpty marks lists where emptiness would be a lie: the matches behind a
+confirmed transmission, the identity evidence behind an agent, the results
+in a Tool message. The head is a required private field, and from_vec
+returns None for an empty vec, so no empty value can be built and count is
+always at least one.
+"""
+
+[evidence]
+type = "crosstalk_spec::support::NonEmpty"
+unit = [
+  "crosstalk_spec::tests::support::non_empty_rejects_empty_vec",
+  "crosstalk_spec::tests::support::non_empty_single_counts_one",
+]
+
+[evidence-review]
+type = { agent = "true", human = "false" }
+unit = { agent = "true", human = "false" }

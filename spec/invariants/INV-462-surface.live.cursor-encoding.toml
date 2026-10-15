@@ -1,0 +1,18 @@
+[invariant]
+id = "surface.live.cursor-encoding"
+statement = "LiveCursor::decode returns c for LiveCursor::encode(c) for every cursor c, and None for any text that is not two non-empty runs of ASCII digits, each fitting a u64, joined by a single hyphen."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+The cursor travels as the SSE event id and comes back as Last-Event-ID,
+which a client or proxy may mangle. Decoding something else into a
+plausible cursor would replay from the wrong place; returning None makes
+it Resume::Unreadable, which resyncs.
+"""
+
+[evidence]
+unit = ["crosstalk_spec::tests::live::cursor_round_trips_through_its_encoding", "crosstalk_spec::tests::live::cursor_decoding_rejects_anything_else", "crosstalk_spec::tests::live::last_event_id_becomes_resume_point"]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }

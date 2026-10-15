@@ -1,0 +1,17 @@
+[invariant]
+id = "flow.resource.prefix-whole-segments"
+statement = "A UrlPrefix or PathPrefix pattern matches a path only when the prefix equals the path or ends at a `/` segment boundary of it."
+kind = "domain"
+property = "postcondition"
+requires = ["unit"]
+rationale = """
+A declared `/shared` that also matched `/shared-other/x` or `/sharedx`
+would pull unrelated resources into a declared, often sanctioned, channel
+whose policy would then drop their traffic.
+"""
+
+[evidence]
+unit = "crosstalk_spec::tests::flow::prefixes_match_whole_segments_only"
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
