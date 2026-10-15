@@ -8,6 +8,8 @@
 //!   ─▶ recovering: recovering_bus ─▶ relaying_outboxes ─▶ restoring_flow ─▶ rebuilding_nodes
 //!                  ─▶ subscribing ─▶ running
 //! running (lock held) ─ lock lost ─▶ abandoning (lock lost) ─▶ waiting_for_database ─▶ ...
+//! running (lock held) ─ shutdown ─▶ handing_over: quiescing ─▶ releasing_holds ─▶ closing_pool
+//!   ─▶ releasing_lock ─▶ handed_over (lock released); the process then exits
 //! ```
 //!
 //! A lost lock never stops the process: the pipeline incarnation is
@@ -45,6 +47,48 @@ pub enum LockState {
     /// The lock's session failed or went silent: the pipeline is abandoned
     /// and the process waits to take the lock again.
     Lost,
+    /// Let go on purpose at the end of a planned handover: the process is
+    /// stopping.
+    Released,
+}
+
+/// A step of a planned handover (`gateway::postgres::handover`), in the
+/// order they run: the order is fixed by the handover's types.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HandoverStep {
+    /// No delivery is taken any more; each stage finishes the one it
+    /// handles, L5 checkpoints and acks what it holds, every task ends.
+    Quiescing,
+    /// Deliveries still held go back ready, their attempts given back.
+    ReleasingHolds,
+    /// The incarnation's pool closes: its connections leave the fence.
+    ClosingPool,
+    /// The lock is unlocked and its session closed.
+    ReleasingLock,
+    /// Handed over: the lock is free for a standby.
+    Done,
+}
+
+impl HandoverStep {
+    /// Every step, in order.
+    pub const ALL: [Self; 5] = [
+        Self::Quiescing,
+        Self::ReleasingHolds,
+        Self::ClosingPool,
+        Self::ReleasingLock,
+        Self::Done,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Quiescing => "quiescing",
+            Self::ReleasingHolds => "releasing_holds",
+            Self::ClosingPool => "closing_pool",
+            Self::ReleasingLock => "releasing_lock",
+            Self::Done => "done",
+        }
+    }
 }
 
 /// A step of the recovery sequence.
@@ -95,6 +139,8 @@ pub enum PipelinePhase {
     /// The lock was lost: the incarnation's tasks are being aborted and
     /// joined, nothing drained; then the process waits for the database.
     Abandoning,
+    /// A planned shutdown hands the pipeline over: at a step, or done.
+    HandingOver(HandoverStep),
     /// The pipeline did not start or stopped, with why.
     Stopped(String),
 }
@@ -157,6 +203,11 @@ pub struct RecoveryReport {
     /// The last loss, once there was one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub last_loss: Option<LastLoss>,
+    /// Once a planned shutdown began handing the pipeline over: its step
+    /// (`quiescing`, `releasing_holds`, `closing_pool`, `releasing_lock`,
+    /// `done`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handover: Option<HandoverStep>,
 }
 
 /// A snapshot of a Postgres-mode process's progress.
@@ -199,6 +250,7 @@ impl PipelineStatus {
             LockState::Held => "held",
             LockState::HeldElsewhere => "held elsewhere",
             LockState::Lost => "lost",
+            LockState::Released => "released",
         }
     }
 
@@ -213,7 +265,18 @@ impl PipelineStatus {
             PipelinePhase::Recovering(_) => "recovering".to_owned(),
             PipelinePhase::Running => "running".to_owned(),
             PipelinePhase::Abandoning => "abandoning".to_owned(),
+            PipelinePhase::HandingOver(HandoverStep::Done) => "handed_over".to_owned(),
+            PipelinePhase::HandingOver(_) => "handing_over".to_owned(),
             PipelinePhase::Stopped(why) => format!("stopped: {why}"),
+        }
+    }
+
+    /// The handover's step, once a planned shutdown began handing the
+    /// pipeline over (`/readyz`'s and `/healthz`'s `handover`).
+    pub fn handover(&self) -> Option<HandoverStep> {
+        match self.phase {
+            PipelinePhase::HandingOver(step) => Some(step),
+            _ => None,
         }
     }
 
@@ -227,7 +290,7 @@ impl PipelineStatus {
             | PipelinePhase::Fencing
             | PipelinePhase::Abandoning => "pending".to_owned(),
             PipelinePhase::Recovering(step) => step.label().to_owned(),
-            PipelinePhase::Running => "done".to_owned(),
+            PipelinePhase::Running | PipelinePhase::HandingOver(_) => "done".to_owned(),
             PipelinePhase::Stopped(why) => format!("failed: {why}"),
         }
     }
@@ -238,11 +301,15 @@ impl PipelineStatus {
     /// after a loss stays ready, degraded, through `lost`, `abandoning`
     /// and `held elsewhere`: it still forwards and captures durably, as at
     /// its start. `fencing` holds the lock: ready, degraded, as
-    /// recovering is.
+    /// recovering is. Handing over (a planned shutdown) is not ready: the
+    /// process is stopping, so load balancers move traffic away.
     pub fn blocks_readiness(&self) -> bool {
         matches!(self.migrations, MigrationState::Behind(_))
             || (self.lock == LockState::HeldElsewhere && self.report.lock_losses == 0)
-            || matches!(self.phase, PipelinePhase::Stopped(_))
+            || matches!(
+                self.phase,
+                PipelinePhase::Stopped(_) | PipelinePhase::HandingOver(_)
+            )
     }
 
     /// Whether the process is on its way but not there yet (degraded, not
@@ -429,6 +496,51 @@ mod tests {
         let mut surprise = json;
         surprise["epochs"] = serde_json::json!(1);
         assert!(serde_json::from_value::<RecoveryReport>(surprise).is_err());
+    }
+
+    /// A planned handover walks its steps in order: not ready throughout,
+    /// recovery done, the lock held until released; `/readyz` reads
+    /// `handing_over` and the step, then `handed_over` and `released`.
+    #[test]
+    fn a_handover_is_not_ready_and_names_its_step() {
+        let mut status = PipelineStatus::waiting();
+        status.migrations = MigrationState::AtHead;
+        status.lock = LockState::Held;
+        status.phase = PipelinePhase::Running;
+        assert_eq!(status.handover(), None);
+        for step in &HandoverStep::ALL[..4] {
+            status.phase = PipelinePhase::HandingOver(*step);
+            assert_eq!(status.pipeline_text(), "handing_over");
+            assert_eq!(status.handover(), Some(*step));
+            assert_eq!(status.recovery_text(), "done");
+            assert_eq!(status.lock_text(), "held");
+            assert!(status.blocks_readiness(), "{status:?}");
+        }
+        status.phase = PipelinePhase::HandingOver(HandoverStep::Done);
+        status.lock = LockState::Released;
+        assert_eq!(status.pipeline_text(), "handed_over");
+        assert_eq!(status.lock_text(), "released");
+        assert!(status.blocks_readiness());
+        let labels: Vec<&str> = HandoverStep::ALL.iter().map(|step| step.label()).collect();
+        assert_eq!(
+            labels,
+            [
+                "quiescing",
+                "releasing_holds",
+                "closing_pool",
+                "releasing_lock",
+                "done"
+            ]
+        );
+        let mut sorted = HandoverStep::ALL;
+        sorted.sort();
+        assert_eq!(sorted, HandoverStep::ALL, "declared in the order they run");
+        for step in HandoverStep::ALL {
+            assert_eq!(
+                serde_json::to_value(step).expect("encodes"),
+                serde_json::json!(step.label())
+            );
+        }
     }
 
     #[test]

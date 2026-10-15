@@ -135,6 +135,11 @@ and why. `/metrics`: `crosstalk_pipeline_epoch`.
   `LOST_SHUTDOWN` plus `CLOSE_BOUND`), then starts.
 - The old owner killed or its database sessions ended: the server drops
   its sessions with their locks; the fence finds nothing to wait for.
+- The old owner stopped on purpose (SIGTERM): it hands the pipeline over
+  ([planned_handover.md](planned_handover.md)), closing its incarnation's
+  pool before it unlocks the lock, so the fence finds nothing to wait for
+  either; a pool whose close ran past its bound leaves its open
+  connections' shared fence, which the take waits for.
 - The old owner partitioned: its partitioned sessions keep their shared
   fence until the server reaps them (about 25 s with deploy's
   `tcp_keepalives_*`, `SERVER_REAP`), as they keep the lock itself.
@@ -143,7 +148,8 @@ and why. `/metrics`: `crosstalk_pipeline_epoch`.
   `last_loss`), and the loop takes the lock again later; the bump stays,
   which only fences more.
 - A stop during the wait drops the take: the session goes with it, and
-  the lock.
+  the lock. A stop of a running incarnation is a planned handover
+  (INV-1242): the lock is unlocked explicitly, last.
 - **Safety over liveness.** The wait never gives up and never proceeds
   without the fence. An old owner stopped with its connections open
   (`SIGSTOP`, a hung host whose TCP stays up) blocks the takeover until

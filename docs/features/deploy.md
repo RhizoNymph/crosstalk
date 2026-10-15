@@ -27,7 +27,7 @@
 
 | Command | Behaviour |
 |---|---|
-| `crosstalk serve --role <all\|proxy\|pipeline\|api\|analysis> --config <path>` | Runs the role(s). `all` is the only role compose uses today. Exits non-zero on bad config. Handles SIGTERM by refusing new exchanges and letting in-flight streams finish (compose waits 60 s). |
+| `crosstalk serve --role <all\|proxy\|pipeline\|api\|analysis> --config <path>` | Runs the role(s). `all` is the only role compose uses today. Exits non-zero on bad config. Handles SIGTERM by refusing new exchanges and letting in-flight streams finish (compose waits 60 s); `/readyz` is 503 from the signal on. In Postgres mode a running pipeline is then handed over within `shutdown.flush_timeout_ms`: in-flight work finished or released without spending an attempt, its pool closed, then the pipeline lock unlocked, so a standby takes it within about 2 s (`docs/features/planned_handover.md`). |
 | `crosstalk migrate --config <path> [--reset-correlator]` | Ensures the extensions and runs every layer's migrations, each in its own schema (`transport`, `canonical`, `reconstruct`, `provenance`, `flow`, `analysis`, `topology`, `surface`), then exits 0. Idempotent. `--reset-correlator` also resets L5's checkpoint, after a start refused an incompatible one (decision Q2). `serve` never migrates and consumes only against a database at head. |
 | `crosstalk spool --config <path> --discard-corrupt` | With the gateway stopped: drops the corrupt record that stopped the publish spool's drain (`/readyz` `capture: spool corrupt: <segment>`) and everything after it in its segment. |
 | `crosstalk healthcheck --url <url>` | GETs the URL; exits 0 on 2xx, 1 otherwise. The runtime image is distroless (no shell, no curl), so the container healthcheck needs this. |
@@ -67,7 +67,11 @@ conventions (snake_case, unknown fields refused), secrets only by `{"env":
 Optional keys the gateway also accepts, all defaulted when absent: `bus`,
 `pipeline` (blob put retries), `shutdown` (`drain_timeout_ms` 45 000 +
 `flush_timeout_ms` 10 000, chosen to fit compose's 60 s
-`stop_grace_period`), `extract` (L5's extractor configuration,
+`stop_grace_period`; in Postgres mode the pipeline's handover ends within
+the flush timeout, so the lock is unlocked explicitly by 55 s; keep
+`drain_timeout_ms + flush_timeout_ms` below the grace period, or a
+SIGKILL ends the handover and the server releases the lock with the
+session, the next holder counting the attempts of what was in flight), `extract` (L5's extractor configuration,
 crosstalk-flow's `ExtractConfig`: `mcp_servers`, `http_tools`,
 `fetch_tools`, `sites`; see `docs/features/flow_extract.md`) and `flow`,
 L5's correlation timing, every key defaulted:

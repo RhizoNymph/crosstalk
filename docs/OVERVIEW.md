@@ -980,12 +980,15 @@ Features Index:
       task and take aborted and joined, nothing drained, no owner write
       after) and the loop waits for the database and the lock again, the
       proxy listening throughout; serve stops only on a signal, every
-      database step of its shutdown bounded. /readyz reports migrations,
-      pipeline_lock, capture (spooling, draining, dropping: spool full,
-      spool corrupt, stopped), pipeline (abandoning after a loss) and
-      recovery, ready while the database is down and through a resume;
+      database step of its shutdown bounded, and a running incarnation is
+      handed over on the way out (planned_handover). /readyz reports
+      migrations, pipeline_lock, capture (spooling, draining, dropping:
+      spool full, spool corrupt, stopped), pipeline (abandoning after a
+      loss; handing_over, handed_over on a planned shutdown), recovery and
+      handover, ready while the database is down and through a resume;
       /healthz adds bus (read within 2 s, else reported unavailable),
-      recovery (lock losses, the last loss, the incarnation, the epoch),
+      recovery (lock losses, the last loss, the incarnation, the epoch,
+      the handover's step),
       spool and statement_timeouts sections; spool_full is a capture outcome. crosstalk migrate
       runs every layer and --reset-correlator; crosstalk spool
       --discard-corrupt. Memory mode's replays are byte-identical. Tested
@@ -1052,6 +1055,36 @@ Features Index:
       - crates/e2e/tests/lock_loss/standby.rs
     depends_on: [postgres_mode, pg_bus, store]
     doc: docs/features/pipeline_fence.md
+  planned_handover:
+    description: >
+      A clean pipeline handover when the lock's holder is stopped on
+      purpose (SIGTERM, docker stop, a rolling restart) in Postgres mode.
+      After the proxy's and capture's existing drain, the shutdown hands a
+      running incarnation over in an order its types fix
+      (Handover<Quiescing> ... Handover<PoolClosed>; only the last step can
+      make the PoolsClosed proof PipelineLock::release takes): the bus stops
+      handing out deliveries and each stage finishes the one it handles
+      (L5 answers L4's last inputs, then checkpoints and acks through a
+      pump that keeps serving acks after its subscription ended), every
+      take is joined, PgBus::release_held gives back what is still held
+      (ready at once, the attempt given back, never dead-lettered), the
+      incarnation's pool closes, and pg_advisory_unlock runs on the lock's
+      own session before it closes. Each step is bounded and a stalled one
+      never stops the later ones: the quiesce gets the flush deadline minus
+      TAIL (5.5 s), so the handover ends within shutdown.flush_timeout_ms,
+      and whatever a cut step leaves the fence covers. A standby takes the
+      lock at its next retry (2 s) and finds nothing to fence. /readyz is
+      503 (draining) with pipeline handing_over and handover <step>, then
+      handed_over / released; /healthz has recovery.handover.
+    entry_points:
+      - crates/gateway/src/gateway/postgres/handover/mod.rs
+      - crates/gateway/src/live/pg/quiesce.rs
+      - crates/gateway/src/gateway/postgres/mod.rs
+      - crates/gateway/src/store/lock.rs
+      - crates/transport/src/pg/mod.rs
+      - crates/e2e/tests/lock_loss/handover.rs
+    depends_on: [postgres_mode, pipeline_fence, pg_bus]
+    doc: docs/features/planned_handover.md
   sim:
     description: >
       crosstalk-sim, the deterministic simulation kit for every dst

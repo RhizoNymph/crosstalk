@@ -1,0 +1,52 @@
+[invariant]
+id = "transport.pipeline-lock.planned-handover-clean"
+statement = "A pipeline lock holder that stops on purpose hands the pipeline over in a fixed order, each step bounded: it stops taking deliveries, lets each stage finish the delivery it handles (L5 checkpointing and acking what it holds), gives every delivery still held back to its group ready at once on the same attempt (none dead-lettered for it), closes its incarnation's pool, and only then unlocks the lock on its own session; releasing the lock before those steps is unrepresentable, and a step that stalls never stops the later ones or the process's exit within its flush timeout."
+kind = "coordination"
+requires = ["unit", "integration"]
+rationale = """
+Before, a SIGTERM drained the stages until every pipeline group was empty
+(with another gateway capturing, a moving target, cut at the flush
+deadline), stopped the bus (aborting its reaper), joined the stages
+(aborting those past the deadline), dropped the lock's connection and only
+then closed the incarnation's pool. Deliveries still held stayed held, so
+the next holder's recover_held readied them with their attempt counted (one
+spent per planned restart, a dead letter on a group's last attempt); the
+durable flow consumer's last acks went to a pump that had already ended
+(Disconnected), so the deliveries its last checkpoint covered were
+redelivered and handled again; L4 deltas whose inputs the flow consumer
+never answered were nacked (NotDurable::Stopped); and the lock was let go
+while the old incarnation's connections were still open, so the standby's
+fence waited for them. Now the handover's typestate (Handover<Quiescing>
+... Handover<PoolClosed>) orders the steps and only its last step can make
+the PoolsClosed proof PipelineLock::release takes. The pump keeps serving
+acks after the bus stops, the flow consumer answers L4 until L4 ends, and
+PgBus::release_held gives back every hold left (attempt - 1, ready, no
+backoff, so taken first by seq), under the lock, before the pool closes.
+The standby's take then finds the lock free at its next try and no older
+connection to fence: the gap is about one retry (2 s). Each step is
+bounded (QUIESCE_BACKSTOP, RELEASE_HOLDS_BOUND, CLOSE_BOUND, UNLOCK_BOUND;
+the quiesce gets the flush deadline minus their sum), and whatever a cut
+step leaves the fence covers (INV-1239): an open connection keeps its
+shared fence, a lock not unlocked goes with its session.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_gateway::gateway::postgres::handover::tests::the_steps_run_in_order_each_reported_while_it_runs",
+    "crosstalk_gateway::gateway::postgres::handover::tests::a_stalled_quiesce_still_hands_over_within_the_bound",
+    "crosstalk_gateway::gateway::postgres::handover::tests::each_stalled_step_is_cut_at_its_bound",
+    "crosstalk_gateway::gateway::postgres::handover::tests::every_step_stalled_ends_by_the_deadline_and_the_tail",
+    "crosstalk_gateway::gateway::postgres::handover::tests::the_tail_fits_inside_the_default_flush_timeout",
+    "crosstalk_gateway::live::pg::pump::tests::acks_after_the_subscription_ended_still_land",
+    "crosstalk_gateway::live::recovery::tests::a_handover_is_not_ready_and_names_its_step",
+    "crosstalk_gateway::ops::handover_tests::readyz_and_healthz_name_the_handover_step",
+]
+integration = [
+    "crosstalk_transport::integration::handover::pg_released_holds_are_ready_at_once_on_the_same_attempt",
+    "crosstalk_transport::integration::handover::pg_a_release_with_nothing_held_releases_nothing",
+    "crosstalk_e2e::lock_loss::handover::a_planned_shutdown_hands_the_pipeline_to_the_standby_cleanly",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "true", human = "false" }
