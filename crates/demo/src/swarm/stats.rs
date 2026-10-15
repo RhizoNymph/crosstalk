@@ -23,7 +23,11 @@ pub enum Outcome {
     Ok,
     /// A non-2xx status.
     Status(u16),
-    /// No connection, no head, a cut body or a stall.
+    /// The request never left the client: the connection was refused (the
+    /// gateway down or restarting) or could not be set up. The gateway saw
+    /// nothing, so it claims no turn ordinal.
+    Unsent,
+    /// Sent, then no head, a cut body or a stall.
     Transport,
     /// A 2xx whose body is not a whole message.
     Malformed,
@@ -34,6 +38,7 @@ impl fmt::Display for Outcome {
         match self {
             Outcome::Ok => f.write_str("ok"),
             Outcome::Status(status) => write!(f, "http {status}"),
+            Outcome::Unsent => f.write_str("unsent"),
             Outcome::Transport => f.write_str("transport"),
             Outcome::Malformed => f.write_str("malformed"),
         }
