@@ -40,7 +40,7 @@ const RIVAL_HOLDS: Duration = Duration::from_secs(10);
 /// audited table records the table, the session's `application_name` and
 /// `clock_timestamp()` as the writing transaction commits; a rolled-back
 /// write records nothing.
-async fn install_audit(db: &TestDb) {
+pub async fn install_audit(db: &TestDb) {
     let mut statements = vec![
         "CREATE TABLE public.owner_writes (tbl text NOT NULL, app text NOT NULL, \
          at_micros bigint NOT NULL)"

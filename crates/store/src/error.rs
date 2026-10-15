@@ -3,8 +3,9 @@
 //! [`classify`] turns a [`sqlx::Error`] into a [`DbFailure`]: the handful of
 //! outcomes a layer crate maps into its spec error (a unique violation is a
 //! conflict, a serialization failure is retried, a lost connection is
-//! unavailability). Everything else is `Server` (with its SQLSTATE) or
-//! `Client` (a driver-side failure such as a decode error).
+//! unavailability, a statement cancelled at its `statement_timeout` or
+//! `lock_timeout` is a timeout, counted). Everything else is `Server` (with
+//! its SQLSTATE) or `Client` (a driver-side failure such as a decode error).
 
 use std::fmt;
 use std::num::NonZeroU32;
@@ -12,6 +13,7 @@ use std::num::NonZeroU32;
 use crate::config::ConfigError;
 use crate::extensions::Extension;
 use crate::layer::Layer;
+use crate::timeouts::{self, TimeoutKind};
 
 /// What a failed database call means to the caller.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -44,6 +46,10 @@ pub enum DbFailure {
     ConnectionLost,
     /// No pooled connection became free within the acquire timeout.
     PoolTimedOut,
+    /// The server cancelled the statement at a bound: `statement_timeout`
+    /// (SQLSTATE `57014`) or `lock_timeout` (`55P03`). The statement's
+    /// transaction is aborted; a later try can succeed.
+    TimedOut(TimeoutKind),
     /// A query expected a row and got none.
     RowNotFound,
     /// Any other error the server reported, with its SQLSTATE.
@@ -72,6 +78,18 @@ impl DbFailure {
     pub fn is_unavailable(&self) -> bool {
         matches!(self, DbFailure::ConnectionLost | DbFailure::PoolTimedOut)
     }
+
+    /// Whether the server cancelled the statement at a bound.
+    pub fn is_timeout(&self) -> bool {
+        matches!(self, DbFailure::TimedOut(_))
+    }
+
+    /// Whether a later try can succeed: the database out of reach, a
+    /// conflict, or a statement cancelled at a bound. What a consumer
+    /// retries (nack and redelivery) rather than gives up on.
+    pub fn is_transient(&self) -> bool {
+        self.is_unavailable() || self.is_retryable() || self.is_timeout()
+    }
 }
 
 impl fmt::Display for DbFailure {
@@ -90,6 +108,9 @@ impl fmt::Display for DbFailure {
             DbFailure::DeadlockDetected => f.write_str("deadlock detected"),
             DbFailure::ConnectionLost => f.write_str("connection lost"),
             DbFailure::PoolTimedOut => f.write_str("pool timed out"),
+            DbFailure::TimedOut(kind) => {
+                write!(f, "{} timeout (SQLSTATE {})", kind.label(), kind.sqlstate())
+            }
             DbFailure::RowNotFound => f.write_str("row not found"),
             DbFailure::Server {
                 sqlstate: Some(code),
@@ -114,7 +135,9 @@ mod sqlstate {
     pub const CANNOT_CONNECT_NOW: &str = "57P03";
 }
 
-/// Classifies a driver error.
+/// Classifies a driver error. A statement cancelled at a bound is counted
+/// and logged ([`crate::timeouts`]): classify each failed statement once,
+/// where it is converted.
 pub fn classify(err: &sqlx::Error) -> DbFailure {
     match err {
         sqlx::Error::Database(db) => classify_database(db.as_ref()),
@@ -154,8 +177,14 @@ fn classify_database(db: &dyn sqlx::error::DatabaseError) -> DbFailure {
             DbFailure::ConnectionLost
         }
         c if c.starts_with(sqlstate::CONNECTION_EXCEPTION_CLASS) => DbFailure::ConnectionLost,
-        c => DbFailure::Server {
-            sqlstate: Some(c.to_owned()),
+        c => match TimeoutKind::of_sqlstate(c) {
+            Some(kind) => {
+                timeouts::note(kind, db.message());
+                DbFailure::TimedOut(kind)
+            }
+            None => DbFailure::Server {
+                sqlstate: Some(c.to_owned()),
+            },
         },
     }
 }

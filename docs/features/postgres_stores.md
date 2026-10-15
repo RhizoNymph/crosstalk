@@ -808,6 +808,20 @@ lock, the bus can reset `held` deliveries at start, and the correlator can
 assume it is the only writer of `checkpoints`. The `api` role (API only)
 takes no lock and reads the stores.
 
+The lock comes with a fence ([pipeline_fence.md](pipeline_fence.md),
+INV-1239). Each taking of the lock bumps the pipeline epoch
+(`transport.pipeline_epoch`, committed) and then waits, on the same
+session, until it can take a second advisory key (`PIPELINE_FENCE`)
+exclusively: every connection of a pipeline incarnation holds that key
+shared for its life and, as it connects, reads the epoch and refuses
+itself unless it is its incarnation's. So when a lock's session is ended
+while the database stays reachable and another process takes the lock
+before the old holder's next ping, the new holder's incarnation starts
+only once every connection of the old one is gone, and the old one can
+never connect again: "the only writer" holds across processes, which
+makes a standby gateway safe. Capture's publisher pool and the `api` role
+never join the fence.
+
 ### Cursor keys and id generators
 
 - Page cursors that the Postgres stores issue are table rows (`flow.cursors`,

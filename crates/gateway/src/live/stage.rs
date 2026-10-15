@@ -14,6 +14,7 @@
 //! bus ── group <slot> ──▶ Stage::handle(&envelope) ─ Ok ──────────▶ ack
 //!                                                  ─ Err(Retry) ──▶ nack (redelivered, then dead-lettered)
 //!                                                  ─ Err(Reject) ─▶ ack, logged at error
+//!                                                  ─ Err(Stalled) ─▶ release (redelivered on the same attempt)
 //! Command::Tick(now) ───▶ Stage::tick(now) ──▶ done
 //! Command::Drain     ───▶ (side inputs only) ──▶ done(how many it handled)
 //! ```
@@ -210,6 +211,37 @@ pub enum StageError {
     /// Another delivery would fail the same way: acked and logged.
     #[error("rejected: {reason}")]
     Reject { reason: String },
+    /// The stage's store stalled (a statement Postgres cancelled at its
+    /// `statement_timeout` or `lock_timeout`), not the message: released,
+    /// redelivered after [`STALL_RETRY`] on the same attempt, never
+    /// dead-lettered for it.
+    #[error("stalled ({}): {reason}", .kind.label())]
+    Stalled {
+        kind: crosstalk_store::TimeoutKind,
+        reason: String,
+    },
+}
+
+/// How long a stalled delivery waits before it is redelivered (clamped to
+/// the group's backoff bounds). Each stalled round has already waited out
+/// a statement or lock bound, so with this a stage stalled for good tries
+/// at most once per bound plus a second.
+pub const STALL_RETRY: std::time::Duration = std::time::Duration::from_secs(1);
+
+/// A retry asked for while a statement of the stage's task was cancelled
+/// at its bound (`seen`, from `crosstalk_store::observe_timeouts`) is a
+/// stall; any other outcome stays as it is (a refusal is the message's,
+/// whatever else timed out).
+pub fn stalled(
+    outcome: Result<(), StageError>,
+    seen: Option<crosstalk_store::TimeoutKind>,
+) -> Result<(), StageError> {
+    match (outcome, seen) {
+        (Err(StageError::Retry { reason }), Some(kind)) => {
+            Err(StageError::Stalled { kind, reason })
+        }
+        (outcome, _) => outcome,
+    }
 }
 
 /// A bus consumer. Idempotent on the envelope id and the entity ids inside
@@ -464,6 +496,19 @@ pub async fn settle_delivery<Sub: Subscription>(
             );
             subscription.ack(delivery.id).await
         }
+        Err(StageError::Stalled { kind, reason }) => {
+            tracing::warn!(
+                stage = slot.name(),
+                event = %event,
+                attempt = delivery.attempt.get(),
+                kind = kind.label(),
+                sqlstate = kind.sqlstate(),
+                reason = %reason,
+                retry_ms = u64::try_from(STALL_RETRY.as_millis()).unwrap_or(u64::MAX),
+                "stage's store stalled; released without spending an attempt"
+            );
+            subscription.release(delivery.id, STALL_RETRY, reason).await
+        }
     };
     if let Err(error) = settled {
         tracing::warn!(stage = slot.name(), event = %event, error = ?error, "delivery not settled");
@@ -501,7 +546,9 @@ async fn run<S: Stage, Sub: Subscription>(mut stage: S, mut subscription: Sub, c
                         continue;
                     }
                 };
-                let outcome = stage.handle(&delivery.envelope).await;
+                let (outcome, seen) =
+                    crosstalk_store::observe_timeouts(stage.handle(&delivery.envelope)).await;
+                let outcome = stalled(outcome, seen);
                 activity.bump();
                 settle_delivery(slot, &mut subscription, retry, &delivery, outcome).await;
             }

@@ -18,11 +18,17 @@ section nothing changes: memory stores and `MpscBus` (decision Q7).
   - `Live` generic over a `LiveStoreSet` (`MemorySet`, `PgSet`), the stage
     machinery shared, the Postgres stages (`live::pg`), the recovery
     sequence (`Live::start_pg`), `PgFrontierSource`;
-  - the gate and the `spool` section (`spool.rs`), the `spool_full`
-    capture outcome;
+  - the gate and the `spool` section (`spool.rs`), the gate's watch that
+    opens it in a process without the lock once every pipeline group
+    exists (`gateway/postgres/gate_watch/`, the group list in
+    `live/pg/groups.rs`), the `spool_full` capture outcome;
   - `crosstalk migrate` running every layer's migrations,
-    `--reset-correlator`, the migration head check and the pipeline lock
-    (`store/`);
+    `--reset-correlator`, the migration head check, the pipeline lock and
+    its fence (`store/`: the epoch and the shared fence every pipeline
+    connection joins, so a standby gateway can take over safely);
+  - the statement and lock bounds every pipeline connection runs with
+    (`store.pipeline_timeouts`, `store/timeouts/`), so a stalled statement
+    is cancelled and retried instead of hanging a stage or the reaper;
   - `crosstalk spool --discard-corrupt`;
   - `/readyz`, `/healthz` and `/metrics` in Postgres mode;
   - the start of each role in Postgres mode (`gateway/postgres/`: the
@@ -56,6 +62,9 @@ lazy template pool (no connection yet) ─▶ capture's own pool ─▶ PgBus::p
    ─▶ SpoolingBus::open(<data dir>/spool, Gated<PgBus>)
    capture pipeline over the spool (Bodies::SkipStored: FsBlobStore never deletes)
    proxy listener: forwards and captures at once            ops listener   api listener (503 until set)
+gate watch (beside the pipeline task, until the gate is open; gateway::postgres::gate_watch):
+   at start, then every GATE_POLL (1 s) while this process does not hold the lock:
+   every pipeline group's row in transport.groups? ─▶ the gate opens (groups_found)
 pipeline task:
    wait for the database (status waiting_for_database)
    ─▶ migrations::check_heads: every layer's applied head == the binary's (behind: not ready, re-checked)
@@ -77,12 +86,61 @@ pipeline task:
 ```
 
 **The gate.** A consumer group that does not exist starts at the log's
-head. On a fresh database the pipeline groups are created only when
-recovery subscribes them, while capture runs from the first second. So
-the bus behind the spool refuses publishes (`Disconnected`) until every
-group subscribed: captures and recovery's own publishes wait in the
-spool, fsynced, and drain in order under their ids once the gate opens.
-`/readyz` shows `capture: spooling` until then.
+head: `PgBus::subscribe` inserts its row with `admitted_through` set to
+the log's head in the same statement, and a take admits only entries
+past it, so anything published before the row exists never reaches the
+group (lost to it, and to the detection after it). On a fresh database
+the pipeline groups are created only when recovery subscribes them,
+while capture runs from the first second. So the bus behind the spool
+refuses publishes (`Disconnected`) until every pipeline group exists:
+captures and recovery's own publishes wait in the spool, fsynced, and
+drain in order under their ids once the gate opens. `/readyz` shows
+`capture: spooling` until then. The gate opens, for good, either way it
+learns that every group exists (INV-1241
+`ingress.capture.gate-opens-once-groups-exist`):
+
+- **Subscribed** (`GateOpened::GroupsSubscribed`): this process's
+  incarnation subscribed every group (the last step of `Live::start_pg`).
+  On a fresh database this is the only way: nobody else creates them.
+- **Found** (`GateOpened::GroupsFound`): the gate's watch
+  (`gateway::postgres::gate_watch`, spawned beside the pipeline task by
+  `spawn_pipeline`, ended with it) looks at start and then every
+  `GATE_POLL` (1 s), while the gate is closed and this process does not
+  hold the lock (a holder's own subscribe opens it), for the rows of every
+  group in `live::pg::groups::PipelineGroups`: one query on the template
+  pool, in a transaction whose `statement_timeout` and `lock_timeout` are
+  the pipeline's (`store.pipeline_timeouts`, `SET LOCAL`) and bounded
+  client-side by the statement bound. All present: the gate opens and the
+  watch ends. Any missing, or the look failing or timing out: the gate
+  stays closed (a failure is warned at its first in a row and every 30th)
+  and it looks again a poll later.
+
+**Why "every row exists" is the right condition.** A group's row and its
+admission base are written in one statement, groups are never deleted,
+and an append takes a sequence number above the head every existing row
+was based at, so once every row exists each later append is admitted by
+every group at its next take, whichever process subscribes it and
+whenever. No group's base or admission needs to be checked beyond the
+row: `admitted_through` is set by the insert, and a group that has not
+taken yet admits from it. The list the watch looks for is the one
+`Live::start_pg` subscribes (`PipelineGroups`: the exchange log's group
+when the incarnation runs one, then `PG_SLOTS`, each slot filled or the
+start refused with `LiveError::SlotEmpty` / `SlotOutsideGroups`), so a
+process never opens on a subset of what its own pipeline would subscribe.
+The migrations' head is not a condition: the gate guards delivery, not
+schema compatibility, and an open gate stays open across later
+migrations as before. Gateways sharing a database run the same roles
+(the exchange log's group is in the list only for `all` and `pipeline`).
+
+**Before**, the gate opened only at this process's own subscribe, so a
+gateway restarted while another held the lock spooled every capture
+until it took the lock itself, and the holder's pipeline saw none of
+them. The node0 two-gateway fault run: `crosstalk` killed, the standby
+took the lock, `crosstalk` restarted as a non-holder; 97 exchanges sat in
+its spool (`inner bus unreachable; spooling`, `from=direct`) for five
+minutes and reached the bus only when it took the lock as epoch 4, past
+the watermark: late L7 dead letters. A gateway whose gate had opened
+before it lost the lock kept publishing (the s2/s3 runs).
 
 ### Stages over Postgres (`live::pg`)
 
@@ -192,9 +250,12 @@ runs.
 The pipeline task is one loop over an explicit state:
 
 ```text
-Waiting ─ database answers, migrations at head, PipelineLock::try_take ─▶ Starting{lock}
-Starting{lock}: incarnation n = a pool of its own (application_name crosstalk-pipeline-<pid>-<n>,
-                the template pool's options) + PgBus::new over it ─▶ Live::start_pg ─▶ Late set
+Waiting ─ database answers, migrations at head, PipelineLock::try_take_reporting ─▶ Starting{lock}
+   (the take: the lock, the epoch bumped to e, then fencing until no connection of an earlier
+    incarnation is left; a stop ends the wait; the session failing meanwhile: a loss, counted)
+Starting{lock}: incarnation n = a pool of its own (application_name crosstalk-pipeline-<pid>-<n>-e<e>,
+                the template pool's options, each connection joining the fence under e)
+                + PgBus::new over it ─▶ Live::start_pg ─▶ Late set
    the lock lost (or a stop) during the start: the start future is dropped, its pool fenced,
    its bus abandoned ─▶ Waiting
 Running(Incarnation): until the stop (handed back for the graceful drain) or the loss
@@ -230,8 +291,10 @@ aborts and joins all of them. `PgBus::shutdown` and `abandon` are
 terminal, which is why a bus is never reused across incarnations. The
 process's template pool (`crosstalk-<role>-<pid>`) only probes the
 database and checks the migrations' heads; each incarnation's pool takes
-its options (`store::lazy_pool_named`'s session setup, the acquire
-timeout, `max_connections`).
+its options (the acquire timeout, `max_connections`) and runs
+`store::session_setup` then joins the pipeline fence on every new
+connection (`incarnation_pool`; capture's `derived_pool` only runs the
+session setup).
 
 **Late handles.** `gateway::late::LateValue<T>` (a `watch` channel)
 holds the live process's reporter, stage flags and exchange-log tasks for
@@ -272,6 +335,21 @@ ping_failed|ping_timed_out|holder_stopped`, `session`, `incarnation`),
 the abandon as a warning (`incarnation`, `joined`, `tasks_joined`,
 `bus_joined`, `took_ms`). Evidence: `crosstalk-e2e`'s `lock_loss` target
 (below) and `crosstalk_transport::integration::abandon::pg_an_abandoned_bus_joins_its_takes_and_leaves_its_holds_for_recovery`.
+
+### The fence: no write from an older epoch
+
+Taking the lock bumps the pipeline epoch (`transport.pipeline_epoch`) and
+returns only once no connection of an earlier pipeline incarnation, in any
+process, is left; every incarnation connection joins a shared advisory
+fence and refuses itself unless the epoch is its own. So a standby gateway
+that takes the lock while the old owner has not yet noticed its loss (its
+lock session terminated with the database reachable) never runs beside it
+(INV-1239). While the take waits, `/readyz` reads `held` / `fencing`, 200
+degraded; `/healthz` adds `recovery.epoch`, `/metrics`
+`crosstalk_pipeline_epoch`. The wait never gives up: a stopped old owner
+with open connections blocks the takeover until they die. Data and
+control flow, the ordering argument, failure modes and files:
+[pipeline_fence.md](pipeline_fence.md).
 
 **Bounded shutdown.** A graceful shutdown never waits on a dead link: the
 pipeline task's stop is bounded by the flush deadline (past it the task is
@@ -323,6 +401,159 @@ the old `Pumped`). Memory mode never goes through `Pumped`: `MemorySet`
 uses `MpscSubscription`, whose `next` keeps its pending receiver across a
 cancellation (`crates/transport/src/bus/subscription.rs`, `next`).
 
+### Bounded statements: the pipeline's statement and lock timeouts
+
+Across a silent partition every pipeline wait is already bounded: the
+lock's ping times out within `DETECTION` (9 s) and the incarnation is
+abandoned, its tasks aborted. The case this closes is a server that still
+answers the lock's ping but stalls a pipeline statement: a row or table
+lock held by another session, a stuck vacuum, disk pressure. Before, a
+stage, the reaper or a checkpoint then waited without end while the
+gateway reported `running` (INV-1240 `transport.pipeline.statements-bounded`).
+
+**What is bounded.** Every connection of a pipeline incarnation's pool
+(`gateway::postgres::incarnation_pool_bounded`) sets, as it connects and
+for its whole session, `statement_timeout` and `lock_timeout` from the
+store section's `pipeline_timeouts` (`store::timeouts::PipelineTimeouts`):
+
+```text
+after_connect: session_setup (idle_in_transaction_session_timeout = 30s)
+   ─▶ SELECT set_config('statement_timeout', '<statement_ms>ms', false),
+             set_config('lock_timeout', '<lock_ms>ms', false),
+             set_config('crosstalk.statement_timeout', '<statement_ms>ms', false),
+             set_config('crosstalk.retention_timeout', '<retention_ms>ms', false)
+   ─▶ fence::join (shared fence, epoch check)
+```
+
+`{"statement_ms": 20000, "lock_ms": 15000, "retention_ms": 900000}` by
+default, each key optional; each at least 1 ms and at most 2147483647 ms
+(the server's range), the lock's at most the statement's (a longer one
+never fires), the retention's at least the statement's; a refused value
+is a config parse error.
+
+**Retention deletes get the longer bound.** The retention deletes are
+single unbatched `DELETE`s whose size grows with how long retention did
+not run; under the 20 s statement bound one could be cancelled every
+round after a long stop, which would silently stop retention. Each runs
+in a transaction that first raises `statement_timeout` with `SET LOCAL`
+to `retention_ms` (`crosstalk_store::raise_for_retention`, reading the
+session's `crosstalk.retention_timeout`) and, where the transaction goes
+on to a pipeline write, puts it back (`restore_after_retention`, from
+`crosstalk.statement_timeout`); `lock_timeout` is left as it is. On a
+session without the settings both are no-ops. Covered: the bus's hourly
+log `prune` (`transport/src/pg/prune.rs`), L4's `PgProvenanceStore::prune`
+(per tick), the fingerprint index's observation age-out
+(`provenance/src/index/pg.rs` `age_out`, raised then restored inside
+`insert`, `observe` and `evict`), the extraction ledger's `expire` (per
+tick), `PgProjectionStore::expire` (lapsed projection frames),
+`PgConversations::forget_seen` and `flow::store::prune_cursors` (no
+pipeline caller today). 15 min covers on the order of 10^8 deleted rows.
+The real follow-up is batching those deletes. The bus's own tighter bounds keep
+theirs: a take's `SET LOCAL lock_timeout` (`take_limit`, 10 s) and the
+reaper's `fail` (2 s). Not bounded: capture's publisher pool (`derived_pool`:
+a stalled append fails at the publish's own client-side `publish_timeout`,
+5 s, as `Disconnected`, and spools), the template pool (probes and the
+head check, each bounded client-side), the `api` role's pool, the lock's
+session (its ping deadline bounds it) and `crosstalk migrate`. In role
+`all` the API's reads go through the running incarnation's stores, so
+they are bounded too: a read past 20 s fails as a store error.
+
+**Why 20 s and 15 s.** Every pipeline statement runs in milliseconds, and
+the longest legitimate ones (below) stay well inside 20 s, while a stage
+or the reaper is never parked longer than that. The lock bound is above
+the bus's 10 s and 2 s ones. Both are below the default 30 s ack timeout,
+and the statement bound must be (`PipelineTimeouts::check_ack_timeout`,
+refused at start as `StartError::PipelineTimeouts`): a stage whose
+statement stalls to the bound releases its delivery before the reaper
+takes the hold back, and only the reaper's take-back leads to an attempt
+spent (see "A stall spends no attempt").
+
+**What a cancel becomes.** The server cancels the statement (SQLSTATE
+`57014` `query_canceled`, or `55P03` `lock_not_available`) and aborts its
+transaction. `crosstalk_store::classify` types it
+`DbFailure::TimedOut(TimeoutKind::{Statement, Lock})`, displayed
+`statement timeout (SQLSTATE 57014)` / `lock timeout (SQLSTATE 55P03)`;
+`is_transient()` (with a lost connection, a pool timeout and a conflict),
+not `is_retryable()` (`retry_serializable` does not re-run the
+transaction in place, which would multiply the stall: the caller's retry
+does). `classify` counts it by kind (`crosstalk_store::statement_timeouts`,
+`/healthz` `statement_timeouts`, `/metrics`
+`crosstalk_pg_statement_timeouts_total{kind="statement"|"lock"}`) and logs
+it once at warn (`kind`, `sqlstate`, the server's `message`); the caller's
+own warn names the stage or statement (`stage's store stalled; released
+without spending an attempt` with `stage`, `event`, `attempt`, `kind`,
+`sqlstate`, `reason`; `could not take a hold back` with `group`, `seq`,
+`timed_out`; `sweeping stale holds failed`; `checkpoint not taken`;
+`flow step failed`). The bus reports a timeout as `BusError::Disconnected`,
+as its own publish timeout does.
+
+| Wait (call site) | A cancel classifies as | The caller then | Verdict |
+| --- | --- | --- | --- |
+| reaper `fail` (`transport/src/pg/reaper.rs`, ack timeout or dropped holder) | `TimedOut(Lock)` (its `SET LOCAL` 2 s) or `TimedOut(Statement)` | warn, the hold re-queued at `now + poll` | retried |
+| reaper `sweep_stale` | `TimedOut` | warn, next sweep one ack timeout later; the loop goes on reaping deadlines | retried |
+| a take (`subscription.rs` `try_take`) | `TimedOut` | warn `next failed; retrying`, at the poll interval | retried |
+| stage ack (`PgSubscription::ack`) | `Disconnected` | hold kept, `delivery not settled` warn; the reaper redelivers at the ack deadline (stages are idempotent) | redelivered |
+| stage nack (`fail`) | `Disconnected` | warn; the reaper takes the hold back at its deadline | redelivered |
+| L3 writes (`PgExchanges::put`, reconstruct's stores) | a store error | `StageError::Retry`, a stall: release | redelivered, no attempt spent |
+| **L4 provenance writes** (`PgProvenanceStore`: `record_exchange`, the scan's records) | was `Server { 57014 }` ─▶ `ProvenanceStoreError::Rejected` ─▶ `EngineError` not transient ─▶ `StageError::Reject` ─▶ **acked: the exchange's or delta's provenance lost**. Now `Unavailable` (transient) | `StageError::Retry`, a stall: release | **fixed**: redelivered, no attempt spent |
+| L4 fingerprint index, extraction step and ledger | `IndexError::Store` (classified now, so counted), `Retry` | release | redelivered, no attempt spent |
+| L4 waiting on L5 (`DurableInputs::deliver`) when L5's store stalled | `NotDurable::Stalled(kind)` | `StageError::Stalled`: release | redelivered, no attempt spent |
+| L4 tick (`expire`, ledger expiry), L7 tick (frontier, watermark) | store errors | warn, next tick | retried |
+| L5 flow steps (registry, transmissions, agents) | `Store { reason }`: not permanent | step kept in the backlog, retried with the next input, interval or drain | retried |
+| L5 checkpoint | a durability error | warn `checkpoint not taken`; acks wait for the next checkpoint; a stalled one stops L5 taking deliveries until a checkpoint is taken again | retried, no attempt spent |
+| L6 classify (`TransmissionStore::modify`, catalog) | a store error | `StageError::Retry`, a stall: release | redelivered, no attempt spent |
+| L7 edges (`apply`, `judge`, `apply_access`, versions) | an edge error | `Outcome::Nack`, a stall: release | redelivered, no attempt spent |
+| outbox relays while running (L7 relay task; L3, L5, L6 relays after a write) | a relay error | warn, next wake-up or poll; stamped rows republished under their ids (INV-1211 to INV-1213) | retried |
+| recovery (`recover_held`, `PgStores::open`, the relays, `restore`, `InProcess::host`, subscribing) | `LiveError` (never `is_permanent` for a database error) | `StartFailed::Retry`: the incarnation is abandoned and started again after `RETRY` | retried |
+| surface relay's node facts (`NodeFeeder::apply_all`) | a read error | warn `node facts not refreshed`; not retried until the next start rebuilds them | counted, continues (as for any database error before) |
+| `/healthz` `group_stats` (capture's bus: no server-side bound) | - | bounded client-side: `HEALTH_BUS_BOUND` (2 s), then `bus: {"unavailable": {"timed_out": {"bound_ms": 2000}}}` (warn); a failed read (database out of reach) leaves `bus` out | answers |
+| LISTEN `recv` (`listen.rs`, an incarnation connection) | no statement runs while it waits, so neither bound applies | not bounded and need not be: notifications are hints (each waiting `next` re-reads at the poll, 250 ms), the task blocks nothing, a partition is caught by the lock's `DETECTION` and the abandon aborts and joins it | covered |
+
+**Long statements on the pipeline pool**, against the 20 s default on a
+large deployment: `recover_held` updates at most `group_capacity` (1024)
+held rows per group; the outbox relays go batch by batch; the flow
+restore reads one checkpoint row per shard plus the inputs since it (a
+few seconds' worth), and a checkpoint's snapshot of tens of MB writes in
+well under a second; `InProcess::host` reads the agents and channels once.
+None comes near 20 s. The retention deletes are the exception: in
+steady state each deletes an hour's or a tick's worth of rows, but after
+the gateway was stopped for days at a high capture rate the first one
+deletes everything that aged out meanwhile. They run under `retention_ms`
+(above): Postgres deletes on the order of 10^5 to 10^6 indexed rows a
+second, so 15 min covers far more than 20 s's millions.
+
+**A stall spends no attempt.** A statement or lock timeout is an
+infrastructure stall, not a property of the message, so it never
+consumes a delivery attempt and never dead-letters (before this branch a
+stall just waited and recovered when it ended; it must not now leave a
+gap that needs a replay). The generic stage loop runs each `handle` in
+`crosstalk_store::observe_timeouts` (a task-local the classification
+marks), so whatever error type a layer reports the failure through, a
+`StageError::Retry` asked for while one of the handle's statements was
+cancelled at its bound becomes `StageError::Stalled { kind, reason }`
+(`live::stage::stalled`); L4 also maps `NotDurable::Stalled`, which the
+flow consumer answers when its own store stalled
+(`FlowConsumer::handle_batch` under the same observation). A stall is
+settled with `Subscription::release` (spec, l2: by default a nack; a bus
+without such stalls may treat it so) rather than a nack. `PgBus`'s
+release (`Failure::Stalled` in the reaper's `fail`) delays the row by
+`STALL_RETRY` (1 s, clamped to the group's backoff bounds) and gives its
+attempt back (`attempt - 1`; the next take counts it again), and never
+dead-letters. A hold is now keyed by `held_at` as well as its attempt, so
+a second hold on the same attempt is never taken back by the first
+hold's deadlines. Spinning is bounded: each stalled round waits out a
+statement or lock bound, then `STALL_RETRY`. A `Reject` is the message's
+and is never turned into a stall; a failure of the message (`Retry` with
+no timeout seen, a nack) still spends attempts and dead-letters on the
+last. Two paths could still spend attempts during a stall and are
+closed: a statement stalled past the ack timeout (the reaper's take-back
+precedes the release, and the next take counts), hence the statement
+bound below the ack timeout; and L5, whose deliveries wait for a
+checkpoint, which stops taking new deliveries while its checkpoint is
+stalled. The edge left: a handle that waits out most of the lock bound,
+then stalls a later statement to the statement bound, can outlast the
+ack timeout once.
+
 ### Cancellation audit (bus reads, outbox polls, stream reads)
 
 Every cancellable point in Postgres mode, in the gateway's live process
@@ -362,8 +593,9 @@ template pool's sessions `crosstalk-<role>-<pid>`, capture's
 `crosstalk-pipeline-<pid>-<n>`, the pipeline lock
 `crosstalk-pipeline-lock-<pid>`, the e2e harness
 `crosstalk-e2e-live-<n>`), sets `idle_in_transaction_session_timeout =
-'30s'` in `after_connect`: whatever leaves a transaction idle, the server
-ends that session within 30 s and its locks are released
+'30s'` in `after_connect` (an incarnation's pool also sets its statement
+and lock bounds, "Bounded statements"): whatever leaves a transaction
+idle, the server ends that session within 30 s and its locks are released
 (`crosstalk_gateway::integration::pg_an_idle_transaction_is_ended_and_its_locks_released`).
 
 **What a stall's diagnosis shows.** `live::pg::diagnose` lists the
@@ -523,9 +755,9 @@ than `now - settle_after`).
 | `status` | `ok`, `degraded` (database down, recovery, spool not `direct`), `draining` |
 | `database` | `reachable`, `unreachable: <why>` |
 | `migrations` | `unknown`, `at_head`, `behind: flow 1 < 2, ...` |
-| `pipeline_lock` | `not_taken`, `held`, `held elsewhere`, `lost` (absent for `api`) |
+| `pipeline_lock` | `not_taken`, `held` (fencing too), `held elsewhere`, `lost` (absent for `api`) |
 | `capture` | `durable`, `spooling`, `draining (<n> records)`, `dropping: spool full`, `spool corrupt: <segment>`, `stopped` (the process drains, or the proxy's or capture's task ended) (roles that capture) |
-| `pipeline` | `waiting_for_database`, `waiting_for_migrations`, `waiting_for_lock`, `recovering`, `running`, `abandoning` (the lock was lost), `stopped: <why>` |
+| `pipeline` | `waiting_for_database`, `waiting_for_migrations`, `waiting_for_lock`, `fencing` (the lock taken, an earlier incarnation's connections closing), `recovering`, `running`, `abandoning` (the lock was lost), `stopped: <why>` |
 | `recovery` | `pending`, a step, `done`, `failed: <why>` |
 
 Ready (200) unless: the spool is full or corrupt, capture stopped,
@@ -536,8 +768,9 @@ reachable and migrations at head. A database outage, recovery or a drain
 leave it ready, degraded, and so does the whole way back after a lost
 lock: `held` / `running` ─▶ `lost` / `abandoning` ─▶ `lost` /
 `waiting_for_database` ─▶ `held elsewhere` / `waiting_for_lock` (while
-another session holds it) ─▶ `held` / `recovering` ─▶ `held` / `running`,
-every step 200 degraded, as at a start with the database down.
+another session holds it) ─▶ `held` / `fencing` ─▶ `held` / `recovering`
+─▶ `held` / `running`, every step 200 degraded, as at a start with the
+database down.
 
 The two `held elsewhere` answers differ on purpose. A resuming owner
 keeps capturing into the spool for the pipeline it will resume, so taking
@@ -549,12 +782,16 @@ steers traffic to the process that owns the pipeline.
 drained back to `direct` since.
 
 `/healthz` adds `bus.groups.<name>.{pending, oldest_pending_micros,
-dead_letters}` (read from the database; left out while it does not
-answer), `recovery.{outbox_relayed, flow_checkpoint_micros,
-accesses_refed, deliveries_redelivered, incarnation, lock_losses,
+dead_letters}` (read from the database within `HEALTH_BUS_BOUND`, 2 s;
+otherwise `bus.unavailable.timed_out.bound_ms`; left out while the
+database refuses the read), `statement_timeouts.{statement, lock}`
+(statements the server cancelled at a pipeline bound, see "Bounded
+statements"), `recovery.{outbox_relayed, flow_checkpoint_micros,
+accesses_refed, deliveries_redelivered, incarnation, epoch, lock_losses,
 last_loss.{reason, at_micros}}` (the last recovery's counts; the
-incarnations started, the locks lost and the last loss over the process's
-life) and `spool.{state, records,
+incarnations started, the pipeline epoch the process last took the lock
+under (0 before its first take), the locks lost and the last loss over
+the process's life) and `spool.{state, records,
 bytes, oldest_at_micros, oldest_age_seconds, max_bytes, appended,
 drained, rejected_full, rejected_io, truncated_bytes,
 capture_spool_full}`; `live.watermark_micros` is the persisted watermark
@@ -566,8 +803,9 @@ the names and label values crosstalk-infra's dashboard and alerts use) and the
 `crosstalk_pipeline_exchanges_total`, and the lock's series:
 `crosstalk_pipeline_lock_losses_total`,
 `crosstalk_pipeline_lock_last_loss_timestamp_seconds`,
-`crosstalk_pipeline_lock_last_loss_reason{reason}` and
-`crosstalk_pipeline_incarnation`.
+`crosstalk_pipeline_lock_last_loss_reason{reason}`,
+`crosstalk_pipeline_incarnation` and `crosstalk_pipeline_epoch`, and
+`crosstalk_pg_statement_timeouts_total{kind="statement"|"lock"}`.
 
 ### Commands
 
@@ -747,6 +985,36 @@ prober dials the proxy every 25 ms and counts refusals; a sampler reads
   previous incarnations' server sessions are gone, the current one's
   within its pool size, and the runtime's alive tasks back at the
   baseline.
+- `standby::a_standby_takes_over_a_terminated_lock_session_with_no_older_epoch_write`
+  (INV-1239): two gateways on one database (the standby's own data
+  directory, its blob store a link to the owner's), the same audit plus
+  one on `transport.pipeline_epoch`. The owner's lock session is
+  terminated with the database reachable while an exchange arrives; the
+  standby takes the lock (when the owner wins the retake race instead, its
+  session is terminated again, up to 6 rounds). No audited write of an
+  older epoch (by `application_name`'s `-e<epoch>`) commits after the
+  standby's incarnation's first write; no older-epoch session is left; the
+  old owner stands by (`held elsewhere`, 200 degraded) with zero refused
+  connects, captures the rest, and the standby drains it all to the
+  uninterrupted run's answers. The bump time, the fence wait and the older
+  writes inside it are printed.
+- `standby::a_standby_takes_over_promptly_from_a_killed_owner` (INV-1239):
+  the owner on a runtime of its own, killed; the standby is past its fence
+  within its retry and take (10 s plus slack) under the next epoch, runs,
+  captures the rest and ends as the uninterrupted run.
+- `gate::a_gateway_started_beside_a_lock_holder_publishes_its_captures_directly`
+  (INV-1241, the node0 regression): the owner runs (every group exists); a
+  second gateway (its own data directory, the owner's blob store linked)
+  starts as a non-holder, its gate opens within `GATE_POLL` plus slack of
+  its start, it captures the rest with nothing through its spool
+  (`appended == 0`, `direct`), never runs an incarnation, and the owner's
+  exchange log holds every capture; the run ends as the uninterrupted one.
+- `gate::a_gateway_on_a_fresh_database_spools_until_the_groups_exist`
+  (INV-1241): a rival session holds the lock on a fresh database; the
+  gateway's gate stays closed through three polls, its captures wait in
+  the spool, no group row and no log entry exist; once the rival lets go
+  the gateway takes the lock, its subscribe opens the gate, the spool
+  drains, and the run ends as the uninterrupted one.
 
 ### Conformance over Postgres
 
@@ -829,22 +1097,34 @@ on `crates/api/tests/support/pg_world.rs`:
 | `crates/gateway/src/live/pg/diagnose.rs` | what a stalled wait waits on | `diagnose`, `DiagnoseFrom`, `PgDiagnosis`, `bounded`, `Stalled` |
 | `crates/gateway/src/live/frontier.rs` | the frontier | `PgFrontierSource`, `SpoolBacklog`, `combine` |
 | `crates/gateway/src/live/recovery.rs` | status for ops | `PipelineStatus`, `StatusReporter`, `RecoveryStep`, `RecoveryReport` |
-| `crates/gateway/src/spool.rs` | gate, spooled bus, discard | `Gate`, `Gated`, `LiveBus`, `discard_corrupt` |
-| `crates/gateway/src/store/{mod,migrations,lock}.rs` | migrate, head check, lock, lazy pool | `migrate`, `MigrateOptions`, `LAYERS`, `check_heads`, `PipelineLock`, `lazy_pool` |
-| `crates/gateway/src/gateway/postgres/mod.rs` | Postgres-mode start: the template and capture pools, capture's publish-only bus and spool, the bounded shutdown | `PgRunning`, `CaptureSide`, `capture_side`, `derived_pool`, `close_bounded`, `StopHandle::stop_by`, `PipelineStart`, `Late`, `SERVE_IDS`, `LOST_SHUTDOWN`, `LOST_REPORTED`, `CLOSE_BOUND`, `CAPTURE_CONNECTIONS` |
-| `crates/gateway/src/gateway/postgres/pipeline.rs` | the pipeline task: waiting, starting, running and abandoning incarnations, each with its own pool and bus | `spawn_pipeline`, `application_name` |
+| `crates/gateway/src/spool.rs` | gate, spooled bus, discard | `Gate` (`open`, `open_by`), `GateOpened`, `Gated`, `LiveBus`, `discard_corrupt` |
+| `crates/gateway/src/gateway/postgres/gate_watch/mod.rs` | the gate's watch: opens a non-holder's gate once every pipeline group exists | `GATE_POLL`, `watch`, `WatchEnd`, `GateWatch` (`spawn`, `for_pipeline`), `GroupCheck`, `PgGroupCheck`, `GroupsFound`, `MissingGroups`, `missing_from`, `GroupCheckError` |
+| `crates/gateway/src/gateway/postgres/gate_watch/tests.rs` | the watch on a scripted check and paused clock | tests |
+| `crates/gateway/src/live/pg/groups.rs` | the pipeline's consumer groups: one list for the subscribe and the gate's watch | `PipelineGroups`, `ExchangeLogGroup`, `PG_SLOTS` |
+| `crates/gateway/src/integration/gate.rs` | Postgres: the group check, its bound, a non-holder publishing directly, a fresh database spooling | tests |
+| `crates/e2e/tests/lock_loss/gate.rs` | two gateways: one beside the lock holder publishing directly; a fresh database spooling until the groups exist | tests |
+| `crates/gateway/src/store/{mod,migrations,lock}.rs` | migrate, head check, lock (its take bumps the epoch and fences), lazy pool and the session setup every pooled connection runs | `migrate`, `MigrateOptions`, `LAYERS`, `check_heads`, `PipelineLock` (`try_take`, `try_take_reporting`, `epoch`, `lost`), `TakeError`, `PIPELINE_LOCK`, `PIPELINE_FENCE`, `lazy_pool`, `session_setup` |
+| `crates/gateway/src/store/fence/mod.rs` | the epoch, a pipeline connection joining the fence, the bump | `Epoch`, `EpochError`, `FenceError` (`Fenced`, `Fencing`), `join`, `read_epoch`, `FENCE_POLL`, `FENCE_REPORT` |
+| `crates/gateway/src/store/fence/wait.rs` | a new holder's wait for the fence, over any `FenceSession` (the lock's `PgConnection`) | `wait_for_fence`, `FenceSession`, `Fenced`, `FenceWaitError`, `Blocker` |
+| `crates/transport/migrations/0003_pipeline_epoch.sql` | the one-row epoch table | - |
+| `crates/gateway/src/store/timeouts/mod.rs` | the pipeline's statement and lock bounds: checked, defaulted, read from `store.pipeline_timeouts`, set on each pipeline connection | `PipelineTimeouts` (`new`, `statement`, `lock`, `session_settings`, `apply`, `DEFAULT_STATEMENT`, `DEFAULT_LOCK`), `InvalidPipelineTimeouts` |
+| `crates/store/src/retention.rs` | the longer bound retention deletes raise their transaction to | `raise_for_retention`, `restore_after_retention`, `STATEMENT_BOUND`, `RETENTION_BOUND` |
+| `crates/store/src/timeouts/mod.rs` | a statement cancelled at a bound: its kind, the process's counts | `TimeoutKind`, `TimeoutCounts`, `statement_timeouts`; `DbFailure::TimedOut`, `DbFailure::{is_timeout, is_transient}` (`error.rs`) |
+| `crates/gateway/src/integration/statement_timeouts.rs` | Postgres: the bounds on the pipeline pools only, a statement and a lock wait cancelled, a blocked stage write retried, the reaper past a blocked sweep, `/healthz` within its bound | tests |
+| `crates/gateway/src/gateway/postgres/mod.rs` | Postgres-mode start: the template and capture pools, the incarnation pools that set the statement and lock bounds and join the fence, capture's publish-only bus and spool, the bounded shutdown | `PgRunning`, `CaptureSide`, `capture_side`, `derived_pool`, `incarnation_pool`, `incarnation_pool_bounded`, `close_bounded`, `StopHandle::stop_by`, `PipelineStart`, `Late`, `SERVE_IDS`, `LOST_SHUTDOWN`, `LOST_REPORTED`, `CLOSE_BOUND`, `CAPTURE_CONNECTIONS` |
+| `crates/gateway/src/gateway/postgres/pipeline.rs` | the pipeline task: waiting (and fencing), starting, running and abandoning incarnations, each with its own pool and bus under the lock's epoch; the gate's watch spawned beside it | `spawn_pipeline`, `application_name`, `runs_exchange_log` |
 | `crates/gateway/src/gateway/postgres/api.rs` | the `api` role's surface | `spawn_api`, `ApiStart` |
 | `crates/gateway/src/gateway/late.rs` | what an incarnation sets and a loss clears: the API router (503 before), the ops handles | `LateRouter`, `LateValue` |
 | `crates/transport/src/pg/{mod,progress,subscription}.rs` | the bus an incarnation owns: abandon with every take joined; the publish-only bus capture appends through | `PgBus::abandon`, `Abandoned`, `PgBus::publisher` |
-| `crates/gateway/src/ops/{mod,metrics}.rs` | readiness, health, metrics | `PgOps`, `BusReport`, `SpoolReport` |
-| `crates/gateway/src/config/sections.rs` | `store.bus`, `spool` | `SpoolSection`, `StoreSection::MIN_CONNECTIONS` |
+| `crates/gateway/src/ops/{mod,metrics}.rs` | readiness, health (the bus read bounded), metrics | `PgOps`, `BusSection`, `BusUnavailable`, `BusReport`, `StatementTimeoutsReport`, `HEALTH_BUS_BOUND`, `SpoolReport` |
+| `crates/gateway/src/config/sections.rs` | `store.bus`, `store.pipeline_timeouts`, `spool` | `SpoolSection`, `StoreSection::MIN_CONNECTIONS`, `StoreSection::pipeline_timeouts` |
 | `crates/gateway/src/runtime.rs` | the runtime `serve` runs on, shared with the tests | `builder`, `build` |
 | `crates/e2e/src/answers.rs` | the answer set and the renaming of minted ids | `answers`, `Answers::renamed` |
 | `crates/e2e/tests/common/{mod,gateway}.rs` | the Postgres-mode harness and the gateway outage harness | `start_pg`, `uninterrupted`, `Gateway`, `Run`, `outage` |
 | `crates/e2e/tests/restart/main.rs` | kill and restart, cursors, ids (W9) | tests |
 | `crates/e2e/tests/{spool,spool_outage,spool_outage_twice,spool_kill,spool_outage_serve_runtime}/main.rs` | the spool through the gateway (W9) | tests |
 | `crates/e2e/tests/reorder/main.rs` | the relay's third exchange delivered after its fourth, memory and Postgres mode: the in-order threads and the uninterrupted answers, agents by role | tests |
-| `crates/e2e/tests/lock_loss/{main,harness,partition,rival,repeated}.rs` | the lock lost while the gateway runs: no refused connect, no owner write after the abandon, no leak | tests, `Prober`, `Sampler` |
+| `crates/e2e/tests/lock_loss/{main,harness,partition,rival,repeated,standby}.rs` | the lock lost while the gateway runs: no refused connect, no owner write after the abandon, no leak, a standby taking over with no older-epoch write | tests, `Prober`, `Sampler`, `epoch_of` |
 | `crates/gateway/src/integration/pool_close.rs` | why a shutdown across a partition hung: sqlx's `Pool::close` | test |
 | `crates/gateway/src/main.rs`, `crates/gateway/src/gateway/mod.rs` | `serve` runs until SIGINT or SIGTERM; nothing else stops it | `Running::shutdown`, `Running::shutdown_bound` |
 | `crates/api/tests/support/pg_world.rs`, `crates/{api,client}/tests/conformance_pg.rs` | conformance over Postgres (W9): a clone of the template per test | `Databases`, `provision`, `PgWorld`, `Forwarding`, `SeedClock`, `WAIT`, `TEMPLATE_WAIT`, `CLONE_IDS` |
@@ -886,6 +1166,44 @@ on `crates/api/tests/support/pg_world.rs`:
   the uninterrupted run's answers once renamed), `spool_outage_twice::database_cut_twice_drains_to_the_uninterrupted_answers`,
   and `spool_outage_serve_runtime::database_cut_on_the_serve_runtime_resumes_and_drains_to_the_uninterrupted_answers`
   (every gateway task on `runtime::builder()`, 2 MiB worker stacks).
+- Fence (Postgres): `integration::fence::pg_a_fenced_incarnation_cannot_connect_after_a_newer_epoch`,
+  `pg_a_take_waits_for_an_older_connection_and_completes_once_it_closes`
+  (past `TAKE_TIMEOUT`), `pg_the_pipeline_reports_fencing_while_an_older_connection_lives`,
+  `pg_the_publisher_pool_is_unaffected_by_the_fence`; `crosstalk-e2e`
+  `lock_loss::standby` (above). No database: `store::fence::tests::*`
+  (the wait on a scripted session and paused clock: never gives up, its
+  blockers read at most every `FENCE_REPORT`, a failed or silent try a
+  loss; the epoch), `live::recovery::tests::fencing_is_ready_degraded_with_recovery_pending`,
+  `the_report_carries_the_epoch`, `ops::tests::the_recovery_report_carries_the_epoch_in_health_and_metrics`,
+  `store::migrations::tests::transport_head_creates_the_pipeline_epoch`.
+- The capture gate (INV-1241). Postgres (written; node0 runs pending):
+  `integration::gate::{pg_the_group_check_finds_only_the_groups_that_exist,
+  pg_a_blocked_group_check_returns_at_its_lock_bound,
+  pg_a_non_holder_publishes_directly_once_the_groups_exist,
+  pg_a_non_holder_on_a_fresh_database_spools_until_the_groups_exist}`;
+  `crosstalk-e2e` `lock_loss::gate` (above). No database (run):
+  `gateway::postgres::gate_watch::tests::*` (the watch on a scripted check
+  and paused clock: opens at the first look when every group exists,
+  stays closed and looks once per poll while one is missing or a look
+  fails, never looks while this process holds the lock, ends without a
+  look once the subscribe opened the gate, stops with its handle),
+  `live::pg::groups::tests::*` (the list).
+- Bounded statements (Postgres, written; node0 runs pending):
+  `integration::statement_timeouts::{pg_pipeline_pools_carry_the_bounds_and_the_publisher_pool_none,
+  pg_a_pipeline_statement_past_its_bound_is_cancelled_as_a_statement_timeout,
+  pg_a_pipeline_lock_wait_past_its_bound_is_cancelled_as_a_lock_timeout,
+  pg_a_stage_write_blocked_past_the_lock_timeout_is_retried_and_completes,
+  pg_the_reaper_survives_a_stalled_sweep,
+  pg_healthz_answers_within_its_bound_while_group_stats_is_blocked,
+  pg_the_bounds_hold_on_every_connection_of_the_pool,
+  pg_retention_deletes_run_under_the_longer_bound,
+  pg_the_bus_prune_runs_under_the_retention_bound}`. No database (run):
+  `store::timeouts::tests::*` (defaults, checks, the store section),
+  `ops::health_bound_tests::*` (`/healthz` within its bound against a
+  server that never answers; the bus section's JSON; the counts in health
+  and metrics), `crosstalk_store::timeouts::tests::*` (typing, transience,
+  counting), `crosstalk_transport::pg::row::timeout_tests::*`,
+  `crosstalk_provenance::pg::timeout_tests::*`.
 - Lock loss (Postgres): `crosstalk-e2e` `lock_loss` (above);
   `integration::pool_close::pg_a_partitioned_pool_close_waits_for_an_aborted_query`;
   `crosstalk-transport` `integration::abandon::pg_an_abandoned_bus_joins_its_takes_and_leaves_its_holds_for_recovery`.
@@ -922,6 +1240,9 @@ on `crates/api/tests/support/pg_world.rs`:
 | INV-1236 `transport.pipeline-lock.loss-detected-before-reap` | unit `crosstalk_gateway::store::lock::tests::detection_is_one_ping_and_its_deadline` (ran); integration `crosstalk_gateway::integration::lock::pg_a_silently_partitioned_lock_session_is_lost_within_the_bound` (failed on node0 before the fix) and `pg_a_running_pipeline_reports_its_partitioned_lock_lost_within_the_bound` (now: `lost`, the incarnation abandoned, 200 degraded) |
 | INV-1237 `ingress.capture.never-stopped-by-lock-loss` | integration `crosstalk_e2e::lock_loss::partition::{a_silent_partition,a_postgres_stop,a_partition_past_the_server_reap}_never_stops_capture_and_resumes_in_process` (written; node0 runs pending) |
 | INV-1238 `transport.pipeline-lock.no-owner-write-after-abandon` | unit `crosstalk_transport::pg::progress::tests::aborted_takes_are_gone_once_none_by_returns` (ran); integration `crosstalk_e2e::lock_loss::rival::a_terminated_lock_session_and_a_rival_holder_leave_no_owner_write_after_the_abandon`, `crosstalk_e2e::lock_loss::repeated::repeated_lock_losses_leave_no_pool_listener_or_task_behind`, `crosstalk_transport::integration::abandon::pg_an_abandoned_bus_joins_its_takes_and_leaves_its_holds_for_recovery` (written; node0 runs pending) |
+| INV-1239 `transport.pipeline-lock.no-write-from-an-older-epoch` | unit `crosstalk_gateway::store::fence::tests::the_wait_never_gives_up_and_completes_once_the_fence_is_free`, `a_try_without_an_answer_is_a_lock_loss_within_the_ping_deadline`, `a_failed_try_while_waiting_is_a_lock_loss` (ran); integration `crosstalk_gateway::integration::fence::*` (four) and `crosstalk_e2e::lock_loss::standby::*` (two) (written; node0 runs pending) |
+| INV-1241 `ingress.capture.gate-opens-once-groups-exist` | unit `crosstalk_gateway::gateway::postgres::gate_watch::tests::*` (seven), `crosstalk_gateway::live::pg::groups::tests::*` (four) (ran); integration `crosstalk_gateway::integration::gate::*` (four) and `crosstalk_e2e::lock_loss::gate::*` (two) (written; node0 runs pending) |
+| INV-1240 `transport.pipeline.statements-bounded` | unit `crosstalk_store::timeouts::tests::*`, `crosstalk_transport::pg::row::timeout_tests::*`, `crosstalk_provenance::pg::timeout_tests::*`, `crosstalk_gateway::store::timeouts::tests::*`, `crosstalk_gateway::ops::health_bound_tests::healthz_answers_within_its_bound_while_the_bus_read_stalls` (ran); integration `crosstalk_gateway::integration::statement_timeouts::*` (nine; written, node0 runs pending) |
 | INV-1233 `transport.settle.quiet-covers-unadmitted` | integration `crosstalk_gateway::integration::pg_quiet_counts_entries_no_group_admitted_yet` (ran on node0; failed before the fix) |
 | INV-1221 `ingress.proxy.forwarding-independent-of-capture-store` | `crosstalk_gateway::postgres_down::proxy_forwards_through_outage_and_full_spool` (ran) |
 | INV-581 `topology.frontier.covers-pending` | `crosstalk_gateway::integration::pg_frontier_covers_pending_deliveries` (Postgres, not run) |
@@ -932,6 +1253,23 @@ on `crates/api/tests/support/pg_world.rs`:
   consumes nor relays; a lost lock abandons the pipeline's incarnation
   (its pool fenced, every task and take aborted and joined, nothing
   drained) and the process takes the lock again in process.
+- Every taking of the lock bumps the pipeline epoch (committed) before it
+  tries the exclusive fence, and returns only once the fence was granted:
+  no connection of an earlier incarnation is left in any process. Every
+  incarnation connection takes the shared fence before it reads the epoch
+  and refuses itself unless the epoch is its own. Only incarnation pools
+  join the fence. The fence wait never gives up; it is not counted against
+  `TAKE_TIMEOUT`; each try is bounded by `PING_TIMEOUT` and a failed one is
+  a lock loss.
+- Every pipeline incarnation connection runs with `statement_timeout`
+  and `lock_timeout` (`store.pipeline_timeouts`, lock at most statement,
+  both > 0), set before it joins the fence; retention deletes raise their
+  transaction's `statement_timeout` to `retention_ms` (at least the
+  statement bound), never the lock bound; no other pool or session
+  does. A statement cancelled at either bound is a transient
+  `DbFailure::TimedOut`: every pipeline caller retries it (nack and
+  redelivery, the next round), none acks it as refused (INV-1240).
+  `/healthz` bounds its bus read itself (`HEALTH_BUS_BOUND`).
 - A lost lock never stops the proxy or capture; `serve` stops only on
   SIGINT or SIGTERM, and every step of its shutdown that touches the
   database is bounded.
@@ -940,7 +1278,12 @@ on `crates/api/tests/support/pg_world.rs`:
 - Forwarding never waits on the database, the bus or the spool; capture
   publishes through the spool, which refuses only when full.
 - No pipeline group misses an envelope published before it first
-  subscribed (the gate).
+  subscribed (the gate). The capture gate opens only once every pipeline
+  group's row exists, and then within `GATE_POLL` (1 s) plus one bounded
+  look in a process that does not hold the lock (INV-1241
+  `ingress.capture.gate-opens-once-groups-exist`); the groups it looks
+  for are exactly those `Live::start_pg` subscribes
+  (`live::pg::groups::PipelineGroups`).
 - The flow group acks only after a checkpoint; the bus's ack timeout must
   exceed `flow.checkpoint_ms` and `flow.checkpoint_unacked` must fit the
   group capacity (checked at start).
@@ -955,14 +1298,18 @@ on `crates/api/tests/support/pg_world.rs`:
 
 ## Known limitations
 
-- **The `PingFailed` dual-writer window.** When the server ends the lock's
-  session while the database stays reachable (`pg_terminate_backend`, a
-  backend crash), the holder learns of it only at its next ping: up to
-  `PING` (5 s) later. Meanwhile another process may take the lock while
-  this incarnation still writes the bus's deliveries, the checkpoint and
-  the outboxes (the `rival` test prints those writes). It needs two
-  instances against one database, which deploy does not run; only a
-  fencing epoch checked on every owner write would close it. Follow-up.
+- **A stopped old owner blocks a takeover.** The fence trades liveness
+  for safety: a new holder waits for every connection of an earlier
+  incarnation to close, however long. An old owner stopped with its
+  connections open (`SIGSTOP`, a hung host whose TCP stays up) keeps the
+  new holder at `fencing` until those connections die (keepalives, the
+  owner resuming and abandoning, or an operator terminating the sessions
+  the fencing warn names). Capture keeps spooling meanwhile.
+- **The old owner still writes until its next ping.** After its lock
+  session is ended (`PingFailed`), the old incarnation keeps writing for
+  up to `PING` (5 s), but no newer incarnation runs until it stops: the
+  new holder's take waits at `fencing` (the `standby` test prints those
+  writes, all before the new incarnation's first).
 - **The SIGTERM restart gap.** A `docker restart` (or any SIGTERM) still
   stops the proxy listener for the shutdown and the new process's start:
   about 40 requests refused per restart at the bench's rate. Only a lost
@@ -978,6 +1325,12 @@ on `crates/api/tests/support/pg_world.rs`:
   consumer counts a duplicate, as after a crash.
 
 ## Gaps
+
+- The retention deletes (the bus's hourly `prune`, the per-tick
+  provenance and ledger expiries, the index age-out) are single
+  `DELETE`s, run under the longer `retention_ms` bound (15 min) so they
+  are not cancelled every round. They should delete in batches; that is
+  the real fix, after which they can run under the pipeline's bound.
 
 - `PgTransmissionStore::list` was a stub returning `Store`; W8 implemented
   it (see [flow_store](flow_store.md)). No other "not implemented on

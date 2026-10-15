@@ -78,6 +78,9 @@ use crate::tasks::Tasks;
 pub enum StartError {
     #[error(transparent)]
     Config(#[from] ConfigError),
+    /// `store.pipeline_timeouts` against the bus's ack timeout.
+    #[error("store.pipeline_timeouts: {0}")]
+    PipelineTimeouts(crate::store::timeouts::InvalidPipelineTimeouts),
     #[error("the store section: {0}")]
     Store(#[from] crosstalk_store::ConfigError),
     #[error("opening the blob store: {0}")]
@@ -414,6 +417,10 @@ async fn start_postgres(
             needed: StoreSection::MIN_CONNECTIONS,
         });
     }
+    section
+        .pipeline_timeouts
+        .check_ack_timeout(section.bus.ack_timeout.get())
+        .map_err(StartError::PipelineTimeouts)?;
     let blobs = FsBlobStore::open(&config.blobs.root).await?;
     let secret = Arc::new(crosstalk_ingress::credential::load_secrets(
         &config.ingress.secrets,
@@ -624,6 +631,7 @@ async fn start_postgres(
             capture_pool: side.capture_pool,
             bus: side.bus,
             spool: side.spool,
+            gate: side.gate,
             capture,
             capture_pipeline: side.pipeline,
             pipeline,

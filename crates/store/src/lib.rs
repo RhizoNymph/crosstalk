@@ -11,7 +11,10 @@
 //!   keeps each layer's applied versions in its own schema's table.
 //! - [`ensure_extensions`] creates `vector` and `pg_trgm`.
 //! - [`classify`] maps a [`sqlx::Error`] to a [`DbFailure`] that layer crates
-//!   map into their spec errors, and [`retry_serializable`] runs a
+//!   map into their spec errors (a statement the server cancelled at its
+//!   `statement_timeout` or `lock_timeout` is a transient
+//!   [`DbFailure::TimedOut`], counted by [`statement_timeouts`]), and
+//!   [`retry_serializable`] runs a
 //!   `SERIALIZABLE` transaction with bounded retries.
 //! - [`ColumnWindow`] maps a `TimeWindow` onto a `bigint` time column: an
 //!   end past `i64::MAX` is no upper bound, a start past it no stored time.
@@ -34,8 +37,10 @@ mod extensions;
 mod layer;
 mod migrate;
 mod pool;
+mod retention;
 mod retry;
 mod test_db;
+mod timeouts;
 mod window;
 
 pub use config::{
@@ -47,6 +52,9 @@ pub use extensions::{Extension, InstalledExtension, ensure_extension, ensure_ext
 pub use layer::{Layer, MIGRATIONS_TABLE};
 pub use migrate::{Migrations, migrate};
 pub use pool::Store;
+pub use retention::{
+    RETENTION_BOUND, STATEMENT_BOUND, raise_for_retention, restore_after_retention,
+};
 pub use retry::{
     InvalidSerializableRetry, SerializableError, SerializableRetry, TxError, TxFuture,
     retry_serializable,
@@ -55,6 +63,7 @@ pub use test_db::{
     RuntimeProblem, STALE_TEMPLATE_AGE, TEST_DB_PREFIX, TEST_TEMPLATE_PREFIX, TemplateDb,
     TemplateStep, TestDb, TestDbError, TestDbName, drop_stale_templates, test_server,
 };
+pub use timeouts::{TimeoutCounts, TimeoutKind, observe as observe_timeouts, statement_timeouts};
 pub use window::{ColumnBounds, ColumnWindow};
 
 /// The pinned sqlx, so layer crates name its types (`PgPool`, `Migrator`)

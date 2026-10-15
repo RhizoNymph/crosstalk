@@ -40,6 +40,8 @@ pub mod store_set;
 pub mod wiring;
 
 #[cfg(test)]
+mod stall_tests;
+#[cfg(test)]
 mod tests;
 
 use std::collections::BTreeMap;
@@ -76,7 +78,8 @@ pub use self::evidence::{EvidenceFeeder, IndexedSpans, SpanSource, SpanSourceErr
 pub use self::settle::{SettleError, Settled};
 pub use self::stage::{
     Activity, Command, Control, DERIVED_SUBJECTS, LayerStores, LiveStores, Publisher, RunFuture,
-    Slot, SlotTaken, Stage, StageContext, StageError, Stages, settle_delivery,
+    STALL_RETRY, Slot, SlotTaken, Stage, StageContext, StageError, Stages, settle_delivery,
+    stalled,
 };
 pub use self::store_set::{LiveStoreSet, MemoryQuiet, MemorySet, Quiet};
 use crate::capture::CaptureStage;
@@ -154,6 +157,13 @@ pub enum LiveError {
     Subscribe { slot: Slot, error: BusError },
     #[error("the exchange log did not subscribe: {0:?}")]
     LogSubscribe(BusError),
+    /// A pipeline group's slot was not filled (`live::pg::groups`).
+    #[error("the {} slot is one of the pipeline's groups but was not filled", .0.name())]
+    SlotEmpty(Slot),
+    /// A filled slot whose group is not one of the pipeline's: the gate's
+    /// watch would open without it.
+    #[error("the {} slot was filled but is not one of the pipeline's groups", .0.name())]
+    SlotOutsideGroups(Slot),
     #[error("the postgres stores did not open: {0}")]
     Stores(#[from] crosstalk_api::PgStoresError),
     #[error("recovery step {step} failed: {reason}")]
@@ -189,6 +199,8 @@ impl LiveError {
                 | Self::UnackedAboveCapacity { .. }
                 | Self::TooManyShards(_)
                 | Self::CaptureOutsidePipeline
+                | Self::SlotEmpty(_)
+                | Self::SlotOutsideGroups(_)
         )
     }
 }

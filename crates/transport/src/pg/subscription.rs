@@ -103,6 +103,7 @@ pub(crate) async fn subscribe(
 struct Hold {
     seq: i64,
     attempt: i32,
+    held_at: i64,
     deadline: Instant,
 }
 
@@ -112,6 +113,7 @@ enum Took {
     Row {
         seq: i64,
         attempt: i32,
+        held_at: i64,
         subject: String,
         envelope: String,
     },
@@ -138,7 +140,7 @@ FROM (SELECT seq FROM transport.deliveries \
       ORDER BY seq LIMIT 1 FOR UPDATE SKIP LOCKED) AS pick, \
      transport.events AS e \
 WHERE d.group_name = $1 AND d.seq = pick.seq AND e.seq = d.seq \
-RETURNING d.seq, d.attempt, e.subject, e.envelope";
+RETURNING d.seq, d.attempt, d.held_at, e.subject, e.envelope";
 
 /// A subscription to a [`PgBus`](super::PgBus) consumer group.
 ///
@@ -208,20 +210,23 @@ impl PgSubscription {
 
     /// End an undecodable delivery: no redelivery, no dead letter
     /// (`transport.codec.undecodable-not-redelivered`).
-    async fn terminate(&self, seq: i64, attempt: i32, error: &BusError) {
+    async fn terminate(&self, seq: i64, attempt: i32, held_at: i64, error: &BusError) {
         let deleted = sqlx::query(
             "DELETE FROM transport.deliveries \
-             WHERE group_name = $1 AND seq = $2 AND state = 'held' AND attempt = $3",
+             WHERE group_name = $1 AND seq = $2 AND state = 'held' AND attempt = $3 \
+               AND held_at = $4",
         )
         .bind(&self.group.0)
         .bind(seq)
         .bind(attempt)
+        .bind(held_at)
         .execute(&self.shared.pool)
         .await;
         let key = HoldKey {
             group: self.group.0.clone(),
             seq,
             attempt,
+            held_at,
         };
         let _ = self.shared.reaper.send(ReaperMsg::Settled(key));
         match deleted {
@@ -249,6 +254,7 @@ impl PgSubscription {
             group: self.group.0.clone(),
             seq: hold.seq,
             attempt: hold.attempt,
+            held_at: hold.held_at,
         }
     }
 
@@ -338,13 +344,13 @@ async fn try_take(
     .execute(&mut *tx)
     .await?;
     phase("take");
-    let taken: Option<(i64, i32, String, String)> = sqlx::query_as(TAKE)
+    let taken: Option<(i64, i32, i64, String, String)> = sqlx::query_as(TAKE)
         .bind(group)
         .bind(now)
         .fetch_optional(&mut *tx)
         .await?;
     let took = match taken {
-        Some((seq, attempt, subject, envelope)) => {
+        Some((seq, attempt, held_at, subject, envelope)) => {
             // Known to the reaper before it commits, so a call dropped
             // mid-commit is still taken back. This provisional deadline
             // is later than the real one, which `next` registers once
@@ -355,6 +361,7 @@ async fn try_take(
                 group: group.to_owned(),
                 seq,
                 attempt,
+                held_at,
             };
             let _ = shared.reaper.send(ReaperMsg::Hold {
                 key,
@@ -364,6 +371,7 @@ async fn try_take(
             Took::Row {
                 seq,
                 attempt,
+                held_at,
                 subject,
                 envelope,
             }
@@ -450,6 +458,7 @@ impl Subscription for PgSubscription {
                 Ok(Took::Row {
                     seq,
                     attempt,
+                    held_at,
                     subject,
                     envelope,
                 }) => match decode_envelope(&subject, &envelope) {
@@ -462,6 +471,7 @@ impl Subscription for PgSubscription {
                                 group: self.group.0.clone(),
                                 seq,
                                 attempt,
+                                held_at,
                             },
                             deadline,
                             retry: self.retry,
@@ -473,6 +483,7 @@ impl Subscription for PgSubscription {
                             Hold {
                                 seq,
                                 attempt,
+                                held_at,
                                 deadline,
                             },
                         );
@@ -488,7 +499,7 @@ impl Subscription for PgSubscription {
                         }));
                     }
                     Err(error) => {
-                        self.terminate(seq, attempt, &error).await;
+                        self.terminate(seq, attempt, held_at, &error).await;
                         return Some(Err(error));
                     }
                 },
@@ -511,11 +522,13 @@ impl Subscription for PgSubscription {
         let key = self.key(&hold);
         let deleted = sqlx::query(
             "DELETE FROM transport.deliveries \
-             WHERE group_name = $1 AND seq = $2 AND state = 'held' AND attempt = $3",
+             WHERE group_name = $1 AND seq = $2 AND state = 'held' AND attempt = $3 \
+               AND held_at = $4",
         )
         .bind(&key.group)
         .bind(key.seq)
         .bind(key.attempt)
+        .bind(key.held_at)
         .execute(&self.shared.pool)
         .await;
         match deleted {
@@ -543,18 +556,49 @@ impl Subscription for PgSubscription {
         retry_after: Duration,
         reason: String,
     ) -> Result<(), BusError> {
-        let hold = self.take_hold(id)?;
-        let key = self.key(&hold);
-        let failed = fail(
-            &self.shared,
-            &key,
-            &self.retry,
+        self.end_hold(
+            id,
             Failure::Nack {
                 retry_after,
                 reason,
             },
+            "nack",
         )
-        .await;
+        .await
+    }
+
+    /// Redelivered after `retry_after` on the same attempt, never
+    /// dead-lettered for it: the consumer's store stalled, the message did
+    /// not fail.
+    async fn release(
+        &mut self,
+        id: DeliveryId,
+        retry_after: Duration,
+        reason: String,
+    ) -> Result<(), BusError> {
+        self.end_hold(
+            id,
+            Failure::Stalled {
+                retry_after,
+                reason,
+            },
+            "release",
+        )
+        .await
+    }
+}
+
+impl PgSubscription {
+    /// End hold `id` by `failure` (a nack or a stall's release).
+    async fn end_hold(
+        &mut self,
+        id: DeliveryId,
+        failure: Failure,
+        op: &'static str,
+    ) -> Result<(), BusError> {
+        let hold = self.take_hold(id)?;
+        let key = self.key(&hold);
+        let failed = fail(&self.shared, &key, &self.retry, failure).await;
         match failed {
             Ok(true) => {
                 let _ = self.shared.reaper.send(ReaperMsg::Settled(key));
@@ -567,7 +611,7 @@ impl Subscription for PgSubscription {
             }
             Err(error) => {
                 self.held.insert(id, hold);
-                Err(bus_error("nack", &error))
+                Err(bus_error(op, &error))
             }
         }
     }

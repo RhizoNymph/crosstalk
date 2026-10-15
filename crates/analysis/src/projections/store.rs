@@ -313,6 +313,9 @@ impl<S: EventSink> ProjectionStore for PgProjectionStore<S> {
         let (count, pending) = finish(
             retry_serializable(&self.pool, &self.retry, |conn| {
                 Box::pin(async move {
+                    // Retention: every lapsed job's frames, unbatched, under
+                    // the session's longer retention bound.
+                    crosstalk_store::raise_for_retention(&mut *conn).await?;
                     let due = select(
                         conn,
                         "SELECT info FROM analysis.projection_jobs \

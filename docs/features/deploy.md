@@ -38,7 +38,7 @@ Listeners:
 |---|---|---|
 | 8080 | `ingress.listen` | The reverse proxy. Agents set `ANTHROPIC_BASE_URL=http://<host>:<CROSSTALK_PROXY_PORT>/anthropic` (host port, default 8080). |
 | 8081 | `api.listen` | The L8 HTTP binding over the live process's surface (roles `all` and `api`). Every request carries `Authorization: Bearer <value of the variable api.token names>` and is made as `api.operator` (default `{"name": "admin"}`, every permission); without it, `401`. |
-| 9464 | `ops.listen` | `GET /metrics` (Prometheus text format), `GET /healthz` (process serving, with the capture, pipeline and exchange-log counters, and a `live` section: each layer stage's handled count and the L7 watermark; with a `store` section also `bus`, `recovery` and `spool` sections), `GET /readyz` (every role's tasks running: `exchange_log`, `capture`, `live` (every layer stage), `proxy`, `api`; with a `store` section also `migrations`, `pipeline_lock`, `capture`, `pipeline` and `recovery`: ready while the database is down (capture spools to `<data dir>/spool`), not ready when migrations are behind, the pipeline lock is held elsewhere by another process at start, capture stopped, or the spool is full or corrupt; ready, degraded, while a lost lock is resumed in process; see `docs/features/postgres_mode.md`). |
+| 9464 | `ops.listen` | `GET /metrics` (Prometheus text format), `GET /healthz` (process serving, with the capture, pipeline and exchange-log counters, and a `live` section: each layer stage's handled count and the L7 watermark; with a `store` section also `bus` (read within 2 s, else `bus.unavailable`), `recovery`, `spool` and `statement_timeouts` sections), `GET /readyz` (every role's tasks running: `exchange_log`, `capture`, `live` (every layer stage), `proxy`, `api`; with a `store` section also `migrations`, `pipeline_lock`, `capture`, `pipeline` and `recovery`: ready while the database is down (capture spools to `<data dir>/spool`), not ready when migrations are behind, the pipeline lock is held elsewhere by another process at start, capture stopped, or the spool is full or corrupt; ready, degraded, while a lost lock is resumed in process; see `docs/features/postgres_mode.md`). |
 
 Environment:
 
@@ -59,7 +59,7 @@ conventions (snake_case, unknown fields refused), secrets only by `{"env":
 | `ingress` | `crosstalk_ingress::config::IngressConfig`, unchanged. |
 | `api` | `{"listen": SocketAddr, "token": {"env": String}, "operator": {"name": String}}`; `operator` defaults to `{"name": "admin"}` |
 | `ops` | `{"listen": SocketAddr}` |
-| `store` | `{"pool": crosstalk_store::config::PoolSettings, "bus": PgBusConfig}` (`bus` optional, each key defaulted); with it `serve` runs on the Postgres stores and the durable bus |
+| `store` | `{"pool": crosstalk_store::config::PoolSettings, "bus": PgBusConfig, "pipeline_timeouts": {"statement_ms": 20000, "lock_ms": 15000, "retention_ms": 900000}}` (`bus` and `pipeline_timeouts` optional, each key defaulted); with it `serve` runs on the Postgres stores and the durable bus. `pipeline_timeouts` sets `statement_timeout` and `lock_timeout` on every pipeline connection (not capture's, the `api` role's or the lock's): a statement Postgres stalls past them is cancelled and retried, counted in `crosstalk_pg_statement_timeouts_total{kind}` and in `/healthz` `statement_timeouts`. All at least 1 ms, `lock_ms` at most `statement_ms`, `retention_ms` at least `statement_ms`, `statement_ms` below `bus.ack_timeout_micros` (checked at start: a stalled delivery is released without spending an attempt only if its statement is cancelled before its hold times out). `retention_ms` is the bound for the retention deletes (log prune, provenance and ledger expiries), single unbatched deletes that can be large after a long stop; raise it if they keep timing out (warn `postgres cancelled a statement at its bound`, `kind=statement`, with `bus log prune failed` or `eviction failed`); see `docs/features/postgres_mode.md`, "Bounded statements". |
 | `spool` | optional: `{"dir", "max_bytes", "segment_bytes", "drain_batch", "probe_ms"}`, each defaulted (`<data dir>/spool`, 1 GiB in 64 MiB segments) |
 | `blobs` | `{"root": path}` for `FsBlobStore::open`. The `data` volume is mounted at `/var/lib/crosstalk` (owned by the runtime user), so the blob root and anything the gateway keeps beside it (P3's exchange log in the blob root's parent) persist. |
 | `embeddings` | `{"base_url": String, "model": String, "api_key": {"env": String}}`, an OpenAI-compatible endpoint. |
@@ -516,7 +516,19 @@ the new start: about 40 requests refused per restart at the bench's rate.
 - **One pipeline process per database.** `serve` takes a Postgres
   advisory lock; a second one stays not ready (`pipeline_lock: held
   elsewhere`). The publish spool (`<data dir>/spool`) is locked per data
-  directory too.
+  directory too, so a second gateway needs a data directory of its own
+  (its blob store shared with the owner's, so its pipeline can read the
+  bodies the owner captured).
+- **A standby gateway is safe.** Taking the lock bumps the pipeline epoch
+  and waits until every connection of the previous owner's pipeline is
+  gone (`pipeline: fencing`, 200 degraded; `docs/features/pipeline_fence.md`),
+  so a standby that takes over while the old owner has not yet noticed
+  its loss never runs beside it. A previous owner stopped with its
+  connections open (`SIGSTOP`, a hung host) blocks the takeover until
+  those connections die; the fencing warning names them
+  (`pg_terminate_backend` ends them). `crosstalk migrate` must have run
+  transport migration 3 (`transport.pipeline_epoch`) before `serve`
+  starts, as for any migration.
 - **The data volume is writable by uid 65532.** The image creates
   `/var/lib/crosstalk` and `/var/lib/crosstalk/blobs` with that owner, and
   a fresh named volume copies the ownership. A bind mount in its place must

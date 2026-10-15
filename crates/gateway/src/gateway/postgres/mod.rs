@@ -6,10 +6,15 @@
 //!   capture pipeline over the spool ─▶ proxy forwards and captures at once
 //!   listeners: proxy, api (503 until the surface exists), ops
 //! pipeline task (roles all, proxy, pipeline), one loop for the process's life:
+//! gate watch (beside the pipeline task, until the capture gate is open):
+//!   at start and every second while this process does not hold the lock: every
+//!   pipeline group in transport.groups? ─▶ the gate opens (captures publish directly)
 //!   waiting:    the database answers ─▶ migrations at head? (behind: not ready, re-checked)
-//!               ─▶ pipeline lock (held elsewhere: retried)
-//!   starting:   incarnation n: a pool and a PgBus of its own ─▶ Live::start_pg (recovery;
-//!               the gate opens; the spool drains) ─▶ the API router and the ops handles set
+//!               ─▶ pipeline lock (held elsewhere: retried) ─▶ the epoch bumped ─▶ fencing:
+//!               until no connection of an earlier incarnation (any process) is left
+//!   starting:   incarnation n under epoch e: a pool (each connection joins the fence and
+//!               checks e) and a PgBus of its own ─▶ Live::start_pg (recovery; the gate
+//!               opens; the spool drains) ─▶ the API router and the ops handles set
 //!   running:    until shutdown, or until the lock is lost
 //!   abandoning: lost: the handles cleared, the pool closed (the fence), every task aborted
 //!               and joined, nothing drained ─▶ waiting
@@ -27,6 +32,7 @@
 //! (`ingress.capture.never-stopped-by-lock-loss`).
 
 mod api;
+pub mod gate_watch;
 mod pipeline;
 
 use std::sync::Arc;
@@ -38,6 +44,7 @@ use crosstalk_spec::ids::{KeyedHasher, SeededRandom};
 use crosstalk_spec::support::Clock;
 use crosstalk_store::DatabaseUrl;
 use crosstalk_store::sqlx::PgPool;
+use crosstalk_store::sqlx::postgres::{PgConnectOptions, PgPoolOptions};
 use crosstalk_transport::blob::FsBlobStore;
 use crosstalk_transport::{PgBus, SpoolingBus};
 use tokio::sync::oneshot;
@@ -45,7 +52,7 @@ use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
 pub use self::api::{ApiStart, spawn_api};
-pub use self::pipeline::spawn_pipeline;
+pub use self::pipeline::{application_name, spawn_pipeline};
 use super::StartError;
 use super::late::{LateRouter, LateValue};
 use crate::config::GatewayConfig;
@@ -55,8 +62,10 @@ use crate::live::{Live, LiveBlobs, LiveClock, LiveDrained, LiveReporter, StagesR
 use crate::pipeline::{Bodies, Deps, Pipeline, Settings};
 use crate::role::Role;
 use crate::spool::{Gate, Gated, LiveBus};
+use crate::store::fence::{self, Epoch};
 use crate::store::lock::{DETECTION, PipelineLock, SERVER_REAP};
-use crate::store::migrations;
+use crate::store::timeouts::PipelineTimeouts;
+use crate::store::{migrations, session_setup};
 use crate::tasks::Tasks;
 
 /// Where `serve`'s Postgres-mode id generators draw from: OS entropy, so
@@ -157,6 +166,8 @@ pub struct PgRunning {
     /// Capture's bus (publish only); the `api` role's bus.
     pub bus: PgBus,
     pub spool: Option<LiveBus>,
+    /// The spool's gate: open once every pipeline group exists.
+    pub gate: Gate,
     pub capture: Option<JoinHandle<()>>,
     pub capture_pipeline: Option<Arc<Pipeline<LiveBlobs, LiveBus>>>,
     pub pipeline: Option<StopHandle<PipelineHeld>>,
@@ -282,19 +293,80 @@ pub struct CaptureSide {
     pub pipeline: Option<Arc<Pipeline<LiveBlobs, LiveBus>>>,
 }
 
-/// A lazy pool on `template`'s database with its options (the session
-/// setup, the acquire timeout) but at most `max` connections, its sessions
-/// named `application` in `pg_stat_activity`.
+/// A lazy pool on `template`'s database with its options (the acquire
+/// timeout) but at most `max` connections, its sessions named
+/// `application` in `pg_stat_activity` and set up by
+/// [`session_setup`]. It never joins the pipeline fence and runs without
+/// the pipeline's statement and lock bounds: capture's publisher pool is
+/// one (capture is never fenced, INV-1237; a stalled append spools at the
+/// publish's own client-side timeout).
 pub fn derived_pool(template: &PgPool, max: u32, application: &str) -> PgPool {
+    derived_options(template, max)
+        .after_connect(|connection, _meta| Box::pin(session_setup(connection)))
+        .connect_lazy_with(derived_connect(template, application))
+}
+
+/// [`incarnation_pool_bounded`] with the default bounds
+/// ([`PipelineTimeouts::default`]: 20 s per statement, 15 s per lock wait).
+pub fn incarnation_pool(template: &PgPool, max: u32, application: &str, epoch: Epoch) -> PgPool {
+    incarnation_pool_bounded(
+        template,
+        max,
+        application,
+        epoch,
+        PipelineTimeouts::default(),
+    )
+}
+
+/// A pipeline incarnation's pool: [`derived_pool`]'s, each new connection
+/// then set to cancel any statement past `timeouts` (`statement_timeout`,
+/// `lock_timeout`, for the whole session: a stalled statement is retried,
+/// never waited on without end) and joining the pipeline fence as a
+/// connection of the incarnation of `epoch` (`store::fence::join`). Once a
+/// newer epoch is taken every connect is refused (`FenceError::Fenced`, or
+/// `Fencing` while the new holder waits): the pool can never hand out a
+/// connection again. `PgPoolOptions::after_connect` replaces the template's
+/// hook, so this one runs the session setup first itself.
+pub fn incarnation_pool_bounded(
+    template: &PgPool,
+    max: u32,
+    application: &str,
+    epoch: Epoch,
+    timeouts: PipelineTimeouts,
+) -> PgPool {
+    let name = application.to_owned();
+    derived_options(template, max)
+        .after_connect(move |connection, _meta| {
+            let name = name.clone();
+            Box::pin(async move {
+                session_setup(connection).await?;
+                timeouts.apply(connection).await?;
+                fence::join(connection, epoch).await.map_err(|refused| {
+                    tracing::warn!(
+                        application_name = %name,
+                        epoch = epoch.get(),
+                        error = %refused,
+                        "a pipeline connection was refused by the fence"
+                    );
+                    refused.into_sqlx()
+                })
+            })
+        })
+        .connect_lazy_with(derived_connect(template, application))
+}
+
+/// `template`'s pool options with at most `max` connections.
+fn derived_options(template: &PgPool, max: u32) -> PgPoolOptions {
     let options = template.options().clone();
     let min = options.get_min_connections().min(max);
-    let connect = (*template.connect_options())
+    options.max_connections(max).min_connections(min)
+}
+
+/// `template`'s connect options, the sessions named `application`.
+fn derived_connect(template: &PgPool, application: &str) -> PgConnectOptions {
+    (*template.connect_options())
         .clone()
-        .application_name(application);
-    options
-        .max_connections(max)
-        .min_connections(min)
-        .connect_lazy_with(connect)
+        .application_name(application)
 }
 
 /// The bus over `pool` (for the `api` role) or, for a pipeline role, a

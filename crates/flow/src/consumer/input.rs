@@ -96,6 +96,12 @@ pub enum NotDurable {
     /// of the batch was recorded.
     #[error("the flow consumer could not record every input yet")]
     Backlogged,
+    /// As `Backlogged`, because a store statement was cancelled at its
+    /// bound (`statement_timeout`, `lock_timeout`): the store stalled, not
+    /// the inputs. The caller releases its delta without spending an
+    /// attempt rather than nacking it.
+    #[error("the flow consumer's store stalled ({} timeout)", .0.label())]
+    Stalled(crosstalk_store::TimeoutKind),
 }
 
 /// Where the extraction step hands its inputs: the flow consumer's side of

@@ -699,10 +699,16 @@ impl PgConversations {
     pub async fn forget_seen(&self, now: Timestamp) -> Result<u64, ThreadError> {
         let cutoff = self.config.seen_retention.cutoff(now);
         let sweep = async {
+            let cutoff = micros(cutoff)?;
+            // An unbatched retention delete: the session's longer
+            // retention bound.
+            let mut tx = self.pool.begin().await?;
+            crosstalk_store::raise_for_retention(&mut tx).await?;
             let done = sqlx::query("DELETE FROM reconstruct.seen_messages WHERE seen_at < $1")
-                .bind(micros(cutoff)?)
-                .execute(&self.pool)
+                .bind(cutoff)
+                .execute(&mut *tx)
                 .await?;
+            tx.commit().await?;
             Ok::<_, TxFailure>(done.rows_affected())
         };
         sweep

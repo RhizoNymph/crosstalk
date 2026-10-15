@@ -6,6 +6,11 @@
 //! it has none. Envelopes a delivery or a dead letter names are always
 //! kept (dead letters are never dropped automatically, and a replay needs
 //! the envelope's log entry). With no group at all, only age decides.
+//!
+//! The delete is one unbatched statement, so it runs under the session's
+//! longer retention bound (`crosstalk_store::raise_for_retention`), not the
+//! pipeline's statement bound: after a long stop it must not be cancelled
+//! every round. Batching it is the follow-up.
 
 use crosstalk_spec::interfaces::l2_transport::BusError;
 use crosstalk_spec::support::Timestamp;
@@ -35,11 +40,15 @@ pub(crate) async fn prune(
     keep: Duration,
 ) -> Result<u64, BusError> {
     let cutoff = micros(now)?.saturating_sub(duration_micros(keep));
-    let done = sqlx::query(PRUNE)
-        .bind(cutoff)
-        .execute(&shared.pool)
-        .await
-        .map_err(|e| bus_error("prune", &e))?;
+    let done = async {
+        let mut tx = shared.pool.begin().await?;
+        crosstalk_store::raise_for_retention(&mut tx).await?;
+        let done = sqlx::query(PRUNE).bind(cutoff).execute(&mut *tx).await?;
+        tx.commit().await?;
+        Ok::<_, sqlx::Error>(done)
+    }
+    .await
+    .map_err(|e| bus_error("prune", &e))?;
     let pruned = done.rows_affected();
     tracing::info!(pruned, cutoff_micros = cutoff, "bus log pruned");
     Ok(pruned)

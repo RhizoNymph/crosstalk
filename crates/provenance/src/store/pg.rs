@@ -962,14 +962,20 @@ impl ProvenanceStore for PgProvenanceStore {
         Ok(())
     }
 
+    /// One unbatched retention delete, under the session's longer
+    /// retention bound (`crosstalk_store::raise_for_retention`).
     async fn prune(&mut self, before: Timestamp) -> Result<(), ProvenanceStoreError> {
+        let before = time_i64(before)?;
+        let mut tx = self.pool.begin().await?;
+        crosstalk_store::raise_for_retention(&mut tx).await?;
         sqlx::query(
             "DELETE FROM provenance.exchange_requests r USING provenance.exchanges e \
              WHERE r.exchange = e.exchange AND e.started_at < $1",
         )
-        .bind(time_i64(before)?)
-        .execute(&self.pool)
+        .bind(before)
+        .execute(&mut *tx)
         .await?;
+        tx.commit().await?;
         Ok(())
     }
 }
