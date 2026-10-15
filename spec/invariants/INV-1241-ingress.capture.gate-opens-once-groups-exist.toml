@@ -1,0 +1,42 @@
+[invariant]
+id = "ingress.capture.gate-opens-once-groups-exist"
+statement = "A Postgres-mode gateway's capture gate opens once every pipeline group has its row in transport.groups, whether this process subscribed them or found them while another process holds the pipeline lock; until then captures wait in the spool, and a gateway that does not hold the lock never holds its captures back past the next group check once the groups exist."
+kind = "coordination"
+requires = ["unit", "integration"]
+rationale = """
+The gate keeps captures out of the bus until every pipeline group exists:
+a group admits the log from its subscribe onward, so an envelope appended
+before a group's row exists would never reach that group. The gate used to
+open only when this process's own incarnation subscribed, so a gateway that
+restarted while another held the lock spooled every capture until it took
+the lock itself; on node0 a restarted owner held 97 exchanges for five
+minutes, which reached the bus only after the watermark had closed their
+buckets (late L7 contributions dead-lettered, the run scored on 84 of 181
+exchanges). A group's row is inserted with its starting point at the log's
+head in the subscribe statement and is never deleted, so once every row
+exists anything appended afterwards is admitted by every group whoever
+subscribed it. A non-holder checks at start and every GATE_POLL (1 s) on
+the template pool under the pipeline's statement and lock bounds; a failed
+or timed-out check never opens the gate. Gateways sharing a database must
+agree on the exchange-log group (one role list, PipelineGroups).
+"""
+
+[evidence]
+unit = [
+    "crosstalk_gateway::gateway::postgres::gate_watch::tests::the_gate_opens_at_start_when_every_group_already_exists",
+    "crosstalk_gateway::gateway::postgres::gate_watch::tests::the_gate_stays_closed_while_a_group_is_missing_and_opens_once_all_exist",
+    "crosstalk_gateway::gateway::postgres::gate_watch::tests::a_failed_or_timed_out_look_never_opens_the_gate",
+    "crosstalk_gateway::gateway::postgres::gate_watch::tests::the_watch_does_not_look_while_this_process_holds_the_lock",
+]
+integration = [
+    "crosstalk_gateway::integration::gate::pg_the_group_check_finds_only_the_groups_that_exist",
+    "crosstalk_gateway::integration::gate::pg_a_blocked_group_check_returns_at_its_lock_bound",
+    "crosstalk_gateway::integration::gate::pg_a_non_holder_publishes_directly_once_the_groups_exist",
+    "crosstalk_gateway::integration::gate::pg_a_non_holder_on_a_fresh_database_spools_until_the_groups_exist",
+    "crosstalk_e2e::lock_loss::gate::a_gateway_started_beside_a_lock_holder_publishes_its_captures_directly",
+    "crosstalk_e2e::lock_loss::gate::a_gateway_on_a_fresh_database_spools_until_the_groups_exist",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "true", human = "false" }
