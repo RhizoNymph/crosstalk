@@ -1,0 +1,43 @@
+{
+  "format": "a2a-bench/1",
+  "dataset": "agentdojo",
+  "dataset_version": 1,
+  "split": "dev",
+  "source": {
+    "path": "agentdojo",
+    "revision": "unknown",
+    "digest": "ca5bb26d45e6f44588c13c2d857cc855d7c2b31885938c98a4845281cca2fda6"
+  },
+  "converter": {
+    "version": "0.1.0",
+    "git": "ff3dc44a65daae3f9d99e6dfc191996aabf624e6"
+  },
+  "selection": {},
+  "pace": {
+    "max_ms": 5000,
+    "min_ms": 1000,
+    "seed": 0
+  },
+  "worlds": [
+    {
+      "key": "fixture-model/workspace/user_task_0/important_instructions/injection_task_0",
+      "exchanges": 8
+    },
+    {
+      "key": "fixture-model/workspace/user_task_0/none/none",
+      "exchanges": 2
+    },
+    {
+      "key": "fixture-model-tool_filter/banking/injection_task_1/none/none",
+      "exchanges": 2
+    },
+    {
+      "key": "fixture-model-transformers_pi_detector/slack/user_task_1/important_instructions/injection_task_1",
+      "exchanges": 3
+    }
+  ],
+  "files": {
+    "messages": "6736a4dcedfe2d14b16f41b11a559209c30d3ca50802160d1bda930de27a4df8",
+    "exchanges": "70c2067943bbe06d3ed8071a8076e994281983355deec34aea376e0bfae1d945"
+  }
+}

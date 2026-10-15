@@ -1,0 +1,46 @@
+{
+  "format": "a2a-bench/1",
+  "dataset": "swe_splice",
+  "dataset_version": 1,
+  "split": "dev",
+  "source": {
+    "path": "open_swe",
+    "revision": "unknown",
+    "digest": "7bc17b7c84887db88861d7180b5d450f78cd864a6769b2f5e880f2fe6e7e6019"
+  },
+  "converter": {
+    "version": "0.1.0",
+    "git": "ff3dc44a65daae3f9d99e6dfc191996aabf624e6"
+  },
+  "selection": {
+    "corpus_seed": 0,
+    "count": 4
+  },
+  "pace": {
+    "max_ms": 5000,
+    "min_ms": 1000,
+    "seed": 0
+  },
+  "worlds": [
+    {
+      "key": "splice-0000-exact-editor_view",
+      "exchanges": 11
+    },
+    {
+      "key": "splice-0001-whitespace-shell_cat",
+      "exchanges": 9
+    },
+    {
+      "key": "splice-0002-json_string-shell_cat",
+      "exchanges": 9
+    },
+    {
+      "key": "splice-0003-base64-editor_view",
+      "exchanges": 9
+    }
+  ],
+  "files": {
+    "messages": "ad2ce125a51d7b96712e902afa0db0966b1f466263f22eb726f16d1da45b0b5d",
+    "exchanges": "8e43f9fbd33f648a19cfdc7dd61e5b3fa768a127eb743b5510df75f83116b13d"
+  }
+}

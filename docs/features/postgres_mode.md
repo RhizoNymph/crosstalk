@@ -881,7 +881,7 @@ on `crates/api/tests/support/pg_world.rs`:
   No database: `live::recovery::tests::a_resuming_process_stays_ready_degraded_after_a_loss`,
   `crosstalk_transport::pg::progress::tests::aborted_takes_are_gone_once_none_by_returns`,
   `crosstalk_transport::pg::tests::a_publish_only_bus_refuses_subscriptions`.
-- Memory mode unchanged: every `ct-eval replay` of the bench runs is
+- Memory mode unchanged: every `ct-eval replay` (since retired) of the bench runs was
   byte-identical to the base build (export, evidence, score, report).
 
 - W9 suite (Postgres unless noted; every wait bounded at five minutes
