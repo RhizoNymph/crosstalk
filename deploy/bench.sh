@@ -17,7 +17,7 @@
 #   5. run_swarm                the swarm, writing ground truth v2
 #   6. wait_caught_up           /healthz `live.watermark_micros` past the
 #                               swarm's end (exports are cut at the watermark)
-#   7. fetch_detections         ct-eval swarm-fetch (export + evidence)
+#   7. fetch_detections         ct-bench-detect swarm-fetch (export + evidence)
 #      snapshot_inputs          copy the exchange log and blobs into the run dir
 #      bench_detect_inputs      ct-bench-detect fetch (/query answers) and from-export
 #   8. score                    a2a-bench export + score (bench_ref), headline,
@@ -308,7 +308,7 @@ fetch_detections() {
         compose --profile bench run --rm --no-deps -T bench \
             swarm-fetch --api "$bench_api_url" --token-env CROSSTALK_API_TOKEN \
             --truth "/bench/${run}/truth.jsonl" --out "/bench/${run}" \
-            || bench_fail "ct-eval swarm-fetch failed; the detection state is still in crosstalk until it restarts"
+            || bench_fail "ct-bench-detect swarm-fetch failed; the detection state is still in crosstalk until it restarts"
         return
     fi
     # Holdout: swarm-fetch's own output summarises the detector (rows per
@@ -321,7 +321,7 @@ fetch_detections() {
     if ((rc != 0)); then
         printf '%s\n' "$out" >"${dir}/fetch.err"
         echo "swarm-fetch failed (exit ${rc}); output in fetch.err" >"${dir}/fetch.log"
-        bench_fail "ct-eval swarm-fetch failed (exit ${rc}); see ${dir}/fetch.err (not a usable holdout run)"
+        bench_fail "ct-bench-detect swarm-fetch failed (exit ${rc}); see ${dir}/fetch.err (not a usable holdout run)"
     fi
     {
         echo "swarm-fetch ok"

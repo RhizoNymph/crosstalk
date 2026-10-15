@@ -119,11 +119,15 @@ pub async fn prune_cursors(
     older_than: std::time::Duration,
 ) -> Result<u64, FlowStoreError> {
     let seconds = i64::try_from(older_than.as_secs()).unwrap_or(i64::MAX);
+    // An unbatched retention delete: the session's longer retention bound.
+    let mut tx = pool.begin().await?;
+    crosstalk_store::raise_for_retention(&mut tx).await?;
     let done = sqlx::query(
         "DELETE FROM flow.cursors WHERE issued_at < now() - ($1::bigint * interval '1 second')",
     )
     .bind(seconds)
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
     Ok(done.rows_affected())
 }

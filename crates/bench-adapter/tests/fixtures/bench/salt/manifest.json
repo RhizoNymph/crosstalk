@@ -1,0 +1,39 @@
+{
+  "format": "a2a-bench/1",
+  "dataset": "salt",
+  "dataset_version": 1,
+  "split": "dev",
+  "source": {
+    "path": "salt",
+    "revision": "unknown",
+    "digest": "92666ee67e0592488bdc99e0996d9b60d917b84c6f6ca5d9a667ce50e6870a58"
+  },
+  "converter": {
+    "version": "0.1.0",
+    "git": "ff3dc44a65daae3f9d99e6dfc191996aabf624e6"
+  },
+  "selection": {},
+  "pace": {
+    "max_ms": 5000,
+    "min_ms": 1000,
+    "seed": 0
+  },
+  "worlds": [
+    {
+      "key": "controlled_peer/controlled_peer__fixture-model__summary/rep001",
+      "exchanges": 3
+    },
+    {
+      "key": "main/main__fixture-model/rep001",
+      "exchanges": 17
+    },
+    {
+      "key": "memory_scope/memory_scope__fixture-model__communication-onward/rep001",
+      "exchanges": 17
+    }
+  ],
+  "files": {
+    "messages": "a4c1cc7a36fca27d094422521ffe131c3d3fa7aec546a3e842b5897387161b75",
+    "exchanges": "047d6b5df2c19b6ffe8d16fd9a9950bb670f73e89384e9e861d8aba401474a4b"
+  }
+}

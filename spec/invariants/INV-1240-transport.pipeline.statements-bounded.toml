@@ -1,0 +1,65 @@
+[invariant]
+id = "transport.pipeline.statements-bounded"
+statement = "Every statement on a pipeline incarnation's connection runs under the configured statement_timeout and lock_timeout (a retention delete under the longer retention bound, never below the statement bound); one the server cancels at either bound (SQLSTATE 57014 or 55P03) is a transient failure that the caller retries (a stage releases the delivery, which is redelivered on the same attempt and never dead-lettered for it, the reaper and the checkpoint retry at their next round), never a delivery acked as refused, and /healthz answers within its own bound whatever its bus read waits on."
+kind = "coordination"
+requires = ["unit", "integration"]
+rationale = """
+Across a silent partition the pipeline lock's ping bounds every wait: the
+incarnation is abandoned within DETECTION (INV-1236). A server that still
+answers the lock's ping but stalls a pipeline statement (a row or table lock
+held by another session, a stuck vacuum, disk pressure) was not bounded: a
+stage's store write, an ack or nack, a checkpoint, the reaper's sweep or
+fail, an outbox relay could wait forever while the gateway reported running.
+Every connection of a pipeline incarnation now sets statement_timeout and
+lock_timeout (the store section's pipeline_timeouts, default 20 s and 15 s,
+lock at most statement, statement below the ack timeout) as it connects, before it joins the fence. The
+server cancels a statement past either bound; crosstalk_store::classify
+types the cancel DbFailure::TimedOut (transient, counted by kind in
+crosstalk_pg_statement_timeouts_total, logged at warn with its SQLSTATE) and
+every pipeline caller retries it: L4's provenance store reported it as a
+refused write before, which the stage acked, losing the delta's record; the
+bus reports it Disconnected. Capture's publisher pool, the template pool,
+the api role's pool and the lock's session run without the bounds. /healthz
+reads the bus's statistics on capture's pool, so it bounds that read itself
+(HEALTH_BUS_BOUND) and reports the section unavailable past it. Retention
+deletes (the bus's log prune, the provenance and ledger expiries, the index
+age-out) are single unbatched DELETEs that grow with a long stop; under the
+statement bound they could be cancelled every round, silently stopping
+retention, so each raises its transaction's statement_timeout to
+retention_ms (default 15 min, at least the statement bound) and restores it
+before any pipeline write in the same transaction.
+"""
+
+[evidence]
+unit = [
+    "crosstalk_store::timeouts::tests::statement_and_lock_timeouts_are_typed_by_kind",
+    "crosstalk_store::timeouts::tests::a_timeout_is_transient_and_not_retried_in_place",
+    "crosstalk_store::timeouts::tests::classifying_a_timeout_counts_it_by_kind",
+    "crosstalk_transport::pg::row::timeout_tests::a_statement_or_lock_timeout_is_disconnected",
+    "crosstalk_provenance::pg::timeout_tests::a_statement_or_lock_timeout_is_transient",
+    "crosstalk_gateway::store::timeouts::tests::a_lock_bound_above_the_statement_bound_is_refused",
+    "crosstalk_gateway::store::timeouts::tests::the_store_section_refuses_invalid_bounds_and_unknown_keys",
+    "crosstalk_gateway::store::timeouts::tests::a_retention_bound_below_the_statement_bound_is_refused",
+    "crosstalk_gateway::store::timeouts::tests::the_statement_bound_must_stay_below_the_ack_timeout",
+    "crosstalk_gateway::live::stall_tests::a_retry_during_a_timeout_is_a_stall",
+    "crosstalk_gateway::live::stall_tests::a_stall_releases_and_a_retry_nacks",
+    "crosstalk_store::timeouts::tests::a_timeout_classified_inside_a_scope_is_observed",
+    "crosstalk_gateway::ops::health_bound_tests::healthz_answers_within_its_bound_while_the_bus_read_stalls",
+]
+integration = [
+    "crosstalk_gateway::integration::statement_timeouts::pg_pipeline_pools_carry_the_bounds_and_the_publisher_pool_none",
+    "crosstalk_gateway::integration::statement_timeouts::pg_a_pipeline_statement_past_its_bound_is_cancelled_as_a_statement_timeout",
+    "crosstalk_gateway::integration::statement_timeouts::pg_a_pipeline_lock_wait_past_its_bound_is_cancelled_as_a_lock_timeout",
+    "crosstalk_gateway::integration::statement_timeouts::pg_a_stage_write_blocked_past_the_lock_timeout_is_retried_and_completes",
+    "crosstalk_gateway::integration::statement_timeouts::pg_the_reaper_survives_a_stalled_sweep",
+    "crosstalk_gateway::integration::statement_timeouts::pg_healthz_answers_within_its_bound_while_group_stats_is_blocked",
+    "crosstalk_gateway::integration::statement_timeouts::pg_the_bounds_hold_on_every_connection_of_the_pool",
+    "crosstalk_gateway::integration::statement_timeouts::pg_retention_deletes_run_under_the_longer_bound",
+    "crosstalk_gateway::integration::statement_timeouts::pg_the_bus_prune_runs_under_the_retention_bound",
+    "crosstalk_transport::integration::release::pg_a_released_delivery_keeps_its_attempt_and_is_never_dead_lettered",
+    "crosstalk_transport::integration::release::pg_an_old_holds_deadline_never_reaps_the_hold_after_a_release",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "false", human = "false" }

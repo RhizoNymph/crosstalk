@@ -100,6 +100,21 @@ pub trait Subscription {
         retry_after: Duration,
         reason: String,
     ) -> impl Future<Output = Result<(), BusError>> + Send;
+
+    /// Hand the delivery back because the consumer's own infrastructure
+    /// stalled (a store statement cancelled at its bound), not because of
+    /// the message: redelivered after `retry_after` (clamped like a nack's)
+    /// on the same attempt, never dead-lettered for it. `reason` becomes its
+    /// `last_error`. A bus without such stalls may treat it as a nack (the
+    /// default).
+    fn release(
+        &mut self,
+        id: DeliveryId,
+        retry_after: Duration,
+        reason: String,
+    ) -> impl Future<Output = Result<(), BusError>> + Send {
+        self.nack(id, retry_after, reason)
+    }
 }
 
 /// How often a delivery is retried before it is dead-lettered, and how long

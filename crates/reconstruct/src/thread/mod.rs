@@ -16,6 +16,7 @@ pub mod config;
 pub mod history;
 pub mod memory;
 pub mod messages;
+pub mod order;
 pub mod pg;
 pub(crate) mod plan;
 pub mod reads;
@@ -34,6 +35,7 @@ pub use config::{DEFAULT_SEEN_RETENTION, SeenRetention, ThreadConfig, ThreadConf
 pub use history::{ChainHash, Entry};
 pub use memory::MemoryConversations;
 pub use messages::{DEFAULT_SUMMARY_PREAMBLES, Facts, MessageReader};
+pub use order::{DEFAULT_REORDER_WINDOW, ReorderWindow, TurnKey};
 pub use pg::PgConversations;
 pub use store::{ConversationStore, RequestKind, ResponseKey, ThreadInput, TranscriptEntry};
 
@@ -164,15 +166,18 @@ where
                 previous: key(previous.clone()),
             },
         };
-        let (output, response) = match &exchange.outcome {
+        let (output, response, ended_at) = match &exchange.outcome {
             ExchangeOutcome::Completed {
                 response,
                 response_id,
+                finished_at,
                 ..
-            } => (Some(*response), response_id.clone().map(key)),
+            } => (Some(*response), response_id.clone().map(key), *finished_at),
             ExchangeOutcome::Failed {
-                partial_response, ..
-            } => (*partial_response, None),
+                partial_response,
+                failed_at,
+                ..
+            } => (*partial_response, None, *failed_at),
         };
         let conversation = self
             .ids
@@ -181,6 +186,7 @@ where
         Ok(ThreadInput {
             exchange: exchange.meta.id,
             at: exchange.meta.started_at,
+            ended_at,
             agent,
             members,
             request,

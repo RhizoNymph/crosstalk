@@ -55,8 +55,9 @@ be a layer depending on the gateway, which the rule refuses.
 - **The network path.** The proxy on a socket and a fake upstream are
   `crates/gateway/tests/e2e`. Here capture runs the same L0 functions
   without a socket.
-- **Volume and realism.** That is the eval's job (`crosstalk-eval`,
-  including the collusion-wiki converter on `feat/eval-wiki-swarm`). The
+- **Volume and realism.** That is the a2a-transmission-bench's job,
+  which crosstalk runs through `ct-bench-detect`
+  ([bench_adapter.md](bench_adapter.md)). The
   smoke is the smallest scenario that ought to produce exactly one
   transmission.
 

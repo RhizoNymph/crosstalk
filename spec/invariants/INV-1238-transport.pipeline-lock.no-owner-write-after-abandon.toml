@@ -14,11 +14,12 @@ a connection an aborted task gives back is closed, not pinged), then every
 task is aborted and joined, the bus's takes included (PgBus::abandon
 aborts each registered take and waits until each has been dropped). Held
 deliveries stay held and the next holder's recover_held readies them at
-once. What this does not close: between the server ending the lock's
-session and the holder's next ping failing (up to the ping interval, 5 s)
-the old incarnation still writes; only a fencing epoch on owner writes
-would close that window (docs/features/postgres_mode.md, known
-limitations).
+once. Between the server ending the lock's session and the holder's next
+ping failing (up to the ping interval, 5 s) the old incarnation still
+writes; no other holder runs meanwhile, because a new holder's take bumps
+the pipeline epoch and waits until every connection of the older
+incarnation is gone before its own incarnation starts
+(transport.pipeline-lock.no-write-from-an-older-epoch).
 """
 
 [evidence]

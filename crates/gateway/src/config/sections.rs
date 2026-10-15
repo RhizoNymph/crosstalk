@@ -11,6 +11,8 @@ use crosstalk_store::PoolSettings;
 use crosstalk_transport::{InvalidSpoolConfig, NonZeroDuration, PgBusConfig, SpoolConfig};
 use serde::Deserialize;
 
+use crate::store::timeouts::PipelineTimeouts;
+
 /// The name of an environment variable that holds a secret:
 /// `{"env": "CROSSTALK_API_TOKEN"}`. Never the secret itself. Non-empty,
 /// without `=` or NUL.
@@ -187,6 +189,16 @@ pub struct StoreSection {
     /// retention, each defaulted (`*_micros`).
     #[serde(default)]
     pub bus: PgBusConfig,
+    /// The `statement_timeout` and `lock_timeout` every pipeline
+    /// incarnation's connection runs with, and the longer statement bound
+    /// its retention deletes run under (`{"statement_ms": 20000,
+    /// "lock_ms": 15000, "retention_ms": 900000}`, each defaulted; each at
+    /// least 1 ms, the lock's at most the statement's, the retention's at
+    /// least the statement's; the statement's below `bus`'s ack timeout,
+    /// checked at start). Capture's, the `api` role's and the lock's
+    /// sessions run without them (`store::timeouts`).
+    #[serde(default)]
+    pub pipeline_timeouts: PipelineTimeouts,
 }
 
 impl StoreSection {

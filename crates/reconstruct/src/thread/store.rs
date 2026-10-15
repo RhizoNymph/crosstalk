@@ -31,6 +31,7 @@ use crosstalk_spec::support::Timestamp;
 use serde::{Deserialize, Serialize};
 
 pub use super::history::Entry;
+pub use super::order::TurnKey;
 /// One message of a stored conversation: the spec's
 /// [`crosstalk_spec::interfaces::l3_reconstruction::conversations::TranscriptEntry`].
 pub use crosstalk_spec::interfaces::l3_reconstruction::conversations::TranscriptEntry;
@@ -61,6 +62,10 @@ pub struct ThreadInput {
     pub exchange: ExchangeId,
     /// When the exchange started: the time its messages are seen at.
     pub at: Timestamp,
+    /// When it ended (its response finished, or it failed): with its id,
+    /// where it falls in the order the stored result is defined by
+    /// ([`TurnKey`]).
+    pub ended_at: Timestamp,
     /// The agent the exchange was attributed to.
     pub agent: AgentId,
     /// Every agent of the attributed agent's cluster (its canonical agent
@@ -87,9 +92,21 @@ pub struct ThreadInput {
     pub source: TrafficSource,
 }
 
+impl ThreadInput {
+    /// Where the call falls in threading order.
+    pub fn key(&self) -> TurnKey {
+        TurnKey {
+            ended_at: self.ended_at,
+            exchange: self.exchange,
+        }
+    }
+}
+
 /// Keeps threaded conversations.
 pub trait ConversationStore: Send + Sync {
-    /// Decide and record one threading call.
+    /// Decide and record one threading call, so the store holds what
+    /// threading every exchange it was given in [`TurnKey`] order leaves
+    /// (`reconstruct.thread.order-independent`, [`super::order`]).
     fn thread(
         &self,
         input: ThreadInput,

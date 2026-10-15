@@ -34,9 +34,18 @@
 //! [`SERVER_REAP`]. Lengthen [`PING`] or [`PING_TIMEOUT`], or shorten the
 //! server's keepalives, only together.
 //!
-//! Taking the lock is bounded too ([`TAKE_TIMEOUT`]): a connect or
-//! `pg_try_advisory_lock` across a partition fails as
+//! Taking the lock is bounded too ([`TAKE_TIMEOUT`]): a connect,
+//! `pg_try_advisory_lock` or the epoch's bump across a partition fails as
 //! [`TakeError::TimedOut`] instead of hanging the pipeline's start.
+//!
+//! # The fence
+//!
+//! Once it has the lock, a take bumps the pipeline epoch and waits until
+//! no connection of an earlier pipeline incarnation (of any process) is
+//! left, on the same session ([`super::fence`]): the lock is handed out
+//! only then, with its [`Epoch`] ([`PipelineLock::epoch`]). The wait does
+//! not count against [`TAKE_TIMEOUT`] and never gives up; a lock session
+//! that fails while waiting is a [`TakeError::Lost`].
 
 use std::time::Duration;
 
@@ -46,10 +55,18 @@ use crosstalk_store::{DatabaseUrl, DbFailure, StoreError};
 use tokio::sync::oneshot;
 use tokio::task::JoinHandle;
 
+use super::fence::wait::{FenceWaitError, Fenced, wait_for_fence};
+use super::fence::{self, Epoch, FenceError};
 use crate::live::recovery::LossReason;
 
 /// The advisory lock key (`crosstal` in ASCII).
 pub const PIPELINE_LOCK: i64 = 0x6372_6f73_7374_616c;
+
+/// The pipeline fence's advisory key (`xtalkfnc` in ASCII), distinct from
+/// [`PIPELINE_LOCK`]: every connection of a pipeline incarnation holds it
+/// shared; a new holder of the lock takes it exclusively to wait until no
+/// connection of an earlier incarnation is left ([`super::fence`]).
+pub const PIPELINE_FENCE: i64 = 0x7874_616c_6b66_6e63;
 
 /// How often the holder checks its session.
 pub const PING: Duration = Duration::from_secs(5);
@@ -69,13 +86,16 @@ pub const DETECTION: Duration = PING.saturating_add(PING_TIMEOUT);
 /// `tcp_user_timeout` 25000 ms (`docs/features/deploy.md`).
 pub const SERVER_REAP: Duration = Duration::from_secs(25);
 
-/// How long taking the lock (connect and `pg_try_advisory_lock`) may take.
+/// How long taking the lock (connect, `pg_try_advisory_lock` and the
+/// epoch's bump) may take. The fence wait after it is not counted.
 pub const TAKE_TIMEOUT: Duration = Duration::from_secs(10);
 
 // INV-1236: the holder notices a lost session strictly before the server
 // can hand the lock to another process.
 const _: () = assert!(DETECTION.as_millis() < SERVER_REAP.as_millis());
 const _: () = assert!(PING_TIMEOUT.as_millis() < PING.as_millis());
+// The fence has a key of its own.
+const _: () = assert!(PIPELINE_FENCE != PIPELINE_LOCK);
 
 /// Why the lock may be lost.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
@@ -115,16 +135,38 @@ pub enum TakeError {
     /// Connecting or the lock's statement failed.
     #[error(transparent)]
     Store(#[from] StoreError),
-    /// Connecting and taking did not finish within [`TAKE_TIMEOUT`].
+    /// Bumping the epoch failed.
+    #[error("bumping the pipeline epoch: {0}")]
+    Epoch(#[source] FenceError),
+    /// Connecting, taking and the bump did not finish within
+    /// [`TAKE_TIMEOUT`].
     #[error("taking the pipeline lock did not finish within {after:?}")]
     TimedOut { after: Duration },
+    /// The lock's session failed or went silent while waiting for the
+    /// fence: the lock may be gone, a loss like any other.
+    #[error("the pipeline lock was lost while fencing: {0}")]
+    Lost(LockLoss),
+    /// The exclusive fence was gone at its release.
+    #[error("the exclusive pipeline fence was not held at its release")]
+    FenceNotHeld,
 }
 
-/// The held lock: a task owning the connection. Dropped, it releases.
+impl From<FenceWaitError> for TakeError {
+    fn from(error: FenceWaitError) -> Self {
+        match error {
+            FenceWaitError::Lost(loss) => Self::Lost(loss),
+            FenceWaitError::NotHeld => Self::FenceNotHeld,
+        }
+    }
+}
+
+/// The held lock: a task owning the connection, and the epoch its take
+/// bumped to. Dropped, it releases.
 #[derive(Debug)]
 pub struct PipelineLock {
     holder: JoinHandle<()>,
     lost: Option<oneshot::Receiver<LockLoss>>,
+    epoch: Epoch,
 }
 
 impl Drop for PipelineLock {
@@ -134,33 +176,66 @@ impl Drop for PipelineLock {
 }
 
 impl PipelineLock {
-    /// Try to take the lock on a new connection to `url`, within
-    /// [`TAKE_TIMEOUT`]. `None` when another session holds it.
+    /// Try to take the lock on a new connection to `url`, then fence the
+    /// earlier incarnations: [`PipelineLock::try_take_reporting`] reporting
+    /// nothing.
+    pub async fn try_take(url: &DatabaseUrl) -> Result<Option<Self>, TakeError> {
+        Self::try_take_reporting(url, |_| {}).await
+    }
+
+    /// Try to take the lock on a new connection to `url` and bump the
+    /// epoch, within [`TAKE_TIMEOUT`]; `None` when another session holds
+    /// the lock. Then call `fencing` with the new epoch and wait, however
+    /// long it takes, until no connection of an earlier incarnation holds
+    /// the fence ([`super::fence`]). Cancel safe: dropped at any point,
+    /// the session is dropped and the lock with it (the bump stays, which
+    /// only fences more).
     ///
     /// Timed out after the server granted the lock, the dropped session
     /// keeps it until the server notices (at most [`SERVER_REAP`] across a
-    /// partition); the next try finds it held elsewhere until then.
-    pub async fn try_take(url: &DatabaseUrl) -> Result<Option<Self>, TakeError> {
-        let connection = tokio::time::timeout(TAKE_TIMEOUT, take(url))
+    /// partition); the next try finds it held elsewhere until then. A
+    /// session that fails while fencing is [`TakeError::Lost`].
+    pub async fn try_take_reporting(
+        url: &DatabaseUrl,
+        fencing: impl FnOnce(Epoch) + Send,
+    ) -> Result<Option<Self>, TakeError> {
+        let taken = tokio::time::timeout(TAKE_TIMEOUT, take(url))
             .await
             .map_err(|_| TakeError::TimedOut {
                 after: TAKE_TIMEOUT,
             })??;
-        let Some(connection) = connection else {
+        let Some((mut connection, epoch)) = taken else {
             return Ok(None);
         };
+        fencing(epoch);
+        let Fenced {
+            waited,
+            polls,
+            reports,
+        } = wait_for_fence(&mut connection, epoch).await?;
         tracing::info!(
+            epoch = epoch.get(),
+            fence_waited_ms = u64::try_from(waited.as_millis()).unwrap_or(u64::MAX),
+            fence_polls = polls,
+            fence_reports = reports,
             ping = ?PING,
             ping_timeout = ?PING_TIMEOUT,
             detection = ?DETECTION,
-            "pipeline lock taken"
+            "pipeline lock taken; earlier incarnations fenced"
         );
         let (lost_tx, lost) = oneshot::channel();
         let holder = tokio::spawn(hold(connection, lost_tx));
         Ok(Some(Self {
             holder,
             lost: Some(lost),
+            epoch,
         }))
+    }
+
+    /// The epoch this taking of the lock bumped to: the one its
+    /// incarnation runs under.
+    pub fn epoch(&self) -> Epoch {
+        self.epoch
     }
 
     /// Resolves with why once the lock may be lost (its session failed a
@@ -177,24 +252,31 @@ impl PipelineLock {
     }
 }
 
-/// Connect and try the lock: the connection when taken, `None` when held
-/// elsewhere.
-async fn take(url: &DatabaseUrl) -> Result<Option<PgConnection>, StoreError> {
+/// Connect, try the lock and, taken, bump the epoch: the connection and
+/// the new epoch, `None` when held elsewhere.
+async fn take(url: &DatabaseUrl) -> Result<Option<(PgConnection, Epoch)>, TakeError> {
     let options = url
         .connect_options()
         .clone()
         .application_name(&format!("crosstalk-pipeline-lock-{}", std::process::id()));
-    let mut connection = PgConnection::connect_with(&options).await?;
+    let mut connection = PgConnection::connect_with(&options)
+        .await
+        .map_err(StoreError::from)?;
     let (taken,): (bool,) = sqlx::query_as("SELECT pg_try_advisory_lock($1)")
         .bind(PIPELINE_LOCK)
         .fetch_one(&mut connection)
-        .await?;
+        .await
+        .map_err(StoreError::from)?;
     if !taken {
         // Closing politely or not, the session never held the lock.
         let _ = tokio::time::timeout(PING_TIMEOUT, connection.close()).await;
         return Ok(None);
     }
-    Ok(Some(connection))
+    // Committed (autocommit) before the fence is first tried.
+    let epoch = fence::bump(&mut connection)
+        .await
+        .map_err(TakeError::Epoch)?;
+    Ok(Some((connection, epoch)))
 }
 
 /// Keep `connection` alive, pinging it every [`PING`] with a deadline of
@@ -252,6 +334,7 @@ mod tests {
         let mut lock = PipelineLock {
             holder: tokio::spawn(std::future::pending()),
             lost: Some(lost),
+            epoch: Epoch::new(1),
         };
         assert!(
             tokio::time::timeout(Duration::from_millis(10), lock.lost())

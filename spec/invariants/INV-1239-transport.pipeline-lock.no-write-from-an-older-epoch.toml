@@ -1,0 +1,47 @@
+[invariant]
+id = "transport.pipeline-lock.no-write-from-an-older-epoch"
+statement = "Once a pipeline incarnation has started under the current pipeline epoch, no session of an incarnation whose epoch is older (in this process or any other) commits a pipeline write: each taking of the pipeline lock bumps the epoch, committed, and returns only once every connection of an earlier incarnation is gone, and every connection of an incarnation joins the fence shared and then refuses itself unless the epoch it reads is its own."
+kind = "coordination"
+requires = ["unit", "integration"]
+rationale = """
+The pipeline lock alone does not exclude two writers. When the server ends
+the lock's session while the database stays reachable (pg_terminate_backend,
+a backend crash), the old holder learns of it only at its next ping, up to
+5 s later, and its incarnation's pool still has live connections; another
+process (a standby) may take the lock at once and both would write the
+bus's deliveries and groups, the correlator's checkpoint and held writes
+and the outboxes. The fence closes that window with the epoch
+(transport.pipeline_epoch) and a second advisory key (PIPELINE_FENCE). A
+new holder, on its lock session, commits epoch + 1, then polls
+pg_try_advisory_lock(PIPELINE_FENCE) until granted and releases it; every
+connection of an incarnation runs pg_try_advisory_lock_shared(PIPELINE_FENCE)
+in after_connect and then reads the epoch, failing the connect unless the
+shared lock was granted and the epoch is its incarnation's. The bump commits
+before the first exclusive try and a connection takes its shared lock before
+it reads the epoch, so every older connection either held the shared lock
+before the exclusive was granted (the new holder waits for it to close) or
+reads the newer epoch and refuses itself. The wait never gives up (safety
+over liveness: a stopped old owner with open connections blocks the takeover
+until they die) and a lock session that fails while waiting is a lock loss.
+Capture's publisher pool, the template pool, the api role and the lock's
+session never join the fence: capture is never fenced (INV-1237).
+"""
+
+[evidence]
+unit = [
+    "crosstalk_gateway::store::fence::tests::the_wait_never_gives_up_and_completes_once_the_fence_is_free",
+    "crosstalk_gateway::store::fence::tests::a_try_without_an_answer_is_a_lock_loss_within_the_ping_deadline",
+    "crosstalk_gateway::store::fence::tests::a_failed_try_while_waiting_is_a_lock_loss",
+]
+integration = [
+    "crosstalk_gateway::integration::fence::pg_a_fenced_incarnation_cannot_connect_after_a_newer_epoch",
+    "crosstalk_gateway::integration::fence::pg_a_take_waits_for_an_older_connection_and_completes_once_it_closes",
+    "crosstalk_gateway::integration::fence::pg_the_pipeline_reports_fencing_while_an_older_connection_lives",
+    "crosstalk_gateway::integration::fence::pg_the_publisher_pool_is_unaffected_by_the_fence",
+    "crosstalk_e2e::lock_loss::standby::a_standby_takes_over_a_terminated_lock_session_with_no_older_epoch_write",
+    "crosstalk_e2e::lock_loss::standby::a_standby_takes_over_promptly_from_a_killed_owner",
+]
+
+[evidence-review]
+unit = { agent = "true", human = "false" }
+integration = { agent = "true", human = "false" }

@@ -23,7 +23,7 @@ fn failures() -> FailureCounts {
         )
 }
 
-fn report() -> HealthReport {
+pub(super) fn report() -> HealthReport {
     HealthReport {
         status: Phase::Ok,
         capture: CaptureReport {
@@ -59,6 +59,7 @@ fn report() -> HealthReport {
         bus: None,
         recovery: None,
         spool: None,
+        statement_timeouts: None,
     }
 }
 
@@ -236,4 +237,39 @@ fn readiness_needs_every_task_running_and_no_drain() {
             }]
         );
     });
+}
+
+/// `/healthz`'s `recovery.epoch` and `/metrics`' `crosstalk_pipeline_epoch`
+/// gauge: the epoch this process last took the pipeline lock under.
+#[test]
+fn the_recovery_report_carries_the_epoch_in_health_and_metrics() {
+    use crate::live::recovery::RecoveryReport;
+    use crate::store::fence::Epoch;
+
+    let with_recovery = HealthReport {
+        recovery: Some(RecoveryReport {
+            incarnation: 3,
+            epoch: Epoch::new(11),
+            lock_losses: 2,
+            ..RecoveryReport::default()
+        }),
+        ..report()
+    };
+    let json = serde_json::to_value(&with_recovery).expect("encodes");
+    assert_eq!(json["recovery"]["epoch"], 11, "{json}");
+    assert_eq!(json["recovery"]["incarnation"], 3, "{json}");
+    let decoded: HealthReport = serde_json::from_value(json).expect("decodes");
+    assert_eq!(decoded, with_recovery);
+    let text = metrics::render(&with_recovery, &failures());
+    for line in [
+        "# TYPE crosstalk_pipeline_epoch gauge",
+        "crosstalk_pipeline_epoch 11",
+        "crosstalk_pipeline_incarnation 3",
+        "crosstalk_pipeline_lock_losses_total 2",
+    ] {
+        assert!(
+            text.lines().any(|candidate| candidate == line),
+            "missing {line:?} in\n{text}"
+        );
+    }
 }

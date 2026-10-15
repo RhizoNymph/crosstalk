@@ -10,6 +10,12 @@ repo's scorer, at a pinned release tag (`bench_ref`), giving precision and
 recall. The host has no Rust toolchain, so the bench tools ship in the
 `crosstalk-demo` image and run as the compose service `bench`.
 
+The scorer used to be crosstalk's own `ct-eval swarm` with
+`crates/eval/gates.toml`; it was retired in favour of the bench (its code
+stays in history at `7f8a2fb` and `4d3d2c3`), and the fetch step moved from
+`ct-eval swarm-fetch` to `ct-bench-detect swarm-fetch` with the same flags
+and output ([bench_adapter.md](bench_adapter.md)).
+
 **Status:** the running gateway cannot serve detections yet. `serve` neither
 binds the L8 API (`api.listen`, port 8081) nor runs the `Live` detection
 pipeline. Until it does, `run.sh bench` stops at step 3 with
@@ -24,7 +30,7 @@ and produces no score. See [Pending](#pending) for what is still needed.
 - The `bench` compose service (profile `bench`): the bench tools with the
   run directory bind-mounted and the gateway's `data` volume mounted
   read-only.
-- `ct-eval` (fetching), `ct-bench-detect` (bench input) and `a2a-bench` at
+- `ct-bench-detect` (fetching and bench input) and `a2a-bench` at
   `A2A_BENCH_REF` with the bench repo's gates, in the demo image.
 - The run directory `deploy/bench/<run>/` (gitignored).
 
@@ -69,7 +75,7 @@ bash deploy/run.sh bench --yes --scenario boilerplate     # the shared-boilerpla
 | `--yes`, `-y` | off | Restart `wiki` and `crosstalk` without asking |
 | `-- ...` | | Any further `crosstalk-demo swarm` options, as is |
 
-The exit code is ct-eval's: 0 when every gate passes (or none applies), 2
+The exit code is `a2a-bench score`'s: 0 when every gate passes (or none applies), 2
 when a gate fails, 1 for any failure before or during scoring.
 
 ### Scenarios
@@ -147,12 +153,14 @@ run.sh bench
                         crosstalk ─▶ data volume: exchanges/exchange-log.jsonl, blobs/
  6 wait_caught_up ─── host curl <CROSSTALK_BIND>:<CROSSTALK_OPS_PORT>/healthz until
                         live.watermark_micros ≥ the swarm's end
- 7 fetch_detections ─ compose run --no-deps bench swarm-fetch --api http://crosstalk:8081
+ 7 fetch_detections ─ compose run --no-deps bench (ct-bench-detect) swarm-fetch --api http://crosstalk:8081
                         --token-env CROSSTALK_API_TOKEN --truth … --out /bench/<run>
                         (POST /exports, GET /transmissions/{id}/evidence)
- 8 score ──────────── compose run --no-deps bench swarm --truth … --exchanges /var/lib/crosstalk/exchanges/exchange-log.jsonl
-                        --blobs /var/lib/crosstalk/blobs --export … --evidence … --gates … --out /bench/<run>/report
-                      prints the `overall:` line, the gates, the result; exits with ct-eval's code
+   snapshot_inputs ── docker cp the exchange log and blobs from crosstalk into the run
+   bench_detect_inputs  ct-bench-detect fetch (/query answers), then from-export → bench-input/
+ 8 score ──────────── compose run --no-deps --entrypoint a2a-bench bench export --dataset demo-swarm …
+                        then score --predictions bench-input/predictions.jsonl --gates … --out /bench/<run>/report
+                      prints the `overall:` line, the gates, the result; exits with a2a-bench score's code
 ```
 
 Step by step:
@@ -163,7 +171,8 @@ Step by step:
    state, while the `data` volume is kept. Without `--yes` it asks; when
    stdin is not a terminal it refuses rather than guess.
 2. **Start.** `up -d --build` with the demo override, as `demo up` does. The
-   build makes sure the demo image carries `ct-eval`. It then waits for
+   build makes sure the demo image carries the bench tools (`ct-bench-detect`,
+   `a2a-bench`). It then waits for
    `crosstalk` to be healthy.
 3. **Fail fast.** From the host, the bench reads the ops listener's
    `/readyz`. In Postgres mode (a `store` section; `/readyz` then carries
@@ -203,7 +212,7 @@ Step by step:
    after. More than `--settle-timeout` seconds stops the run (the
    detections stay in `crosstalk` until it restarts). The last body is kept
    as `healthz.json`.
-7. **Fetch.** `ct-eval swarm-fetch` exports the transmissions from the
+7. **Fetch.** `ct-bench-detect swarm-fetch` exports the transmissions from the
    truth header's `started_at_unix_ms` onward and fetches each one's
    evidence, with the deployment's API token. It writes `export.jsonl` and
    `evidence.jsonl`. This must happen before anything restarts `crosstalk`.
@@ -241,7 +250,7 @@ deploy/bench/<run>/
   truth.jsonl        ground truth v2 (the swarm)
   swarm.txt          the swarm's report
   healthz.json       the last /healthz body read while settling
-  export.jsonl       the transmissions export (ct-eval swarm-fetch)
+  export.jsonl       the transmissions export (ct-bench-detect swarm-fetch)
   evidence.jsonl     one TransmissionEvidence per exported transmission
   exchange-log.jsonl the gateway's exchange log, copied after the export
   blobs/             the gateway's blob store, copied after the export
@@ -263,15 +272,16 @@ and small); the importer only reads the run's sessions.
 
 ### Replaying a run offline
 
-`ct-eval replay --run <dir>` re-runs a saved run through the same `Live`
-composition in memory, with the run's `evidence_window_ms` and
-`suspected_ttl_ms` from `bench.env`, and scores it like step 8 (see
-eval.md, "Replay"). It needs the run's exchange log and blobs: either a
-copy beside the run (`exchange-log.jsonl`, `blobs/`) or `--exchanges` and
-`--blobs` pointing at the data volume. Only exchanges captured since the
-truth header's `started_at_unix_ms` are replayed, which is this run's
-traffic since step 4's restart. The replay of a run reproduces its
-`score.txt` when built from the commit the gateway ran.
+`ct-bench-detect replay --run <dir> --out <out>` re-runs a saved run
+through the same `Live` composition in memory, with the run's
+`evidence_window_ms` and `suspected_ttl_ms` from `bench.env`, and writes a
+bench input directory with `crosstalk-live` predictions, which `a2a-bench`
+scores like step 8 ([bench_adapter.md](bench_adapter.md)). It reads the
+run's own copy of the exchange log and blobs (`exchange-log.jsonl`,
+`blobs/`, from `snapshot_inputs`). Only exchanges captured since the truth
+header's `started_at_unix_ms` are replayed, which is this run's traffic
+since step 4's restart. (This was `ct-eval replay`, which scored the
+replay itself.)
 
 ### The data volume
 
@@ -281,10 +291,8 @@ Nothing after the export reads the gateway's `data` volume in place:
 from-export` and `a2a-bench` read only the run directory. The copy holds
 everything so far (both accumulate across runs, and nothing prunes them);
 the bench input joins on the run's own sessions, so the older entries do
-no harm. The `bench` service still mounts the volume read-only at
-`/var/lib/crosstalk`, the gateway's own path, for `ct-eval replay
---exchanges/--blobs` against the live volume; a read-only mount cannot
-disturb the running gateway.
+no harm. The `bench` service does not mount the volume: no step reads it
+in place, so it gets no access to the gateway's data.
 
 ### Why `/healthz` is read from the host
 
@@ -318,11 +326,11 @@ the upstream URL) to differ:
 | --- | --- |
 | `deploy/run.sh` | Usage text and the `bench` subcommand; sources `deploy/bench.sh` |
 | `deploy/bench.sh` | The bench: one function per step (`confirm_restart`, `start_stack`, `require_detection`, `fresh_world`, `run_swarm`, `wait_caught_up`, `fetch_detections`, `score`), plus `bench` (options), `ops_url`, `api_url`, `env_value`, `ready_task`, `readyz_field`, `wait_pipeline_recovered`, `healthz_watermark`, `demo_flow_ms`, `wait_healthy` |
-| `deploy/compose.demo.yaml` | The `bench` service: the demo image with entrypoint `ct-eval`, profile `bench`, `restart: "no"`, `user: ${BENCH_UID:-65532}:${BENCH_GID:-65532}`, `CROSSTALK_API_TOKEN`, `./bench:/bench` and `data:/var/lib/crosstalk:ro` |
-| `deploy/demo.Dockerfile` | Builds `crosstalk-demo`, `ct-eval` and `ct-bench-detect` in one cargo invocation, and `a2a-bench` from the bench mirror (the `a2a` build context) at `ARG A2A_BENCH_REF`; ships `a2a-bench` at `/usr/local/bin/a2a-bench`, the bench repo's `gates/*.toml` at `/usr/local/share/a2a-bench/gates/` and `/usr/local/share/a2a-bench/REF` (`bench_ref`, `bench_commit`), which `bench_ref_lines` copies into `bench.env`. The `.dockerignore` already admits `crates/` and `spec/` and excludes only `deploy`, `target`, VCS and editor files, which the build does not need |
+| `deploy/compose.demo.yaml` | The `bench` service: the demo image with entrypoint `ct-bench-detect` (the `a2a-bench` steps pass `--entrypoint`), profile `bench`, `restart: "no"`, `user: ${BENCH_UID:-65532}:${BENCH_GID:-65532}`, `CROSSTALK_API_TOKEN`, `./bench:/bench` (no gateway volume) |
+| `deploy/demo.Dockerfile` | Builds `crosstalk-demo` and `ct-bench-detect` (`-p crosstalk-bench-adapter`) in one cargo invocation, and `a2a-bench` from the bench mirror (the `a2a` build context) at `ARG A2A_BENCH_REF`; ships `a2a-bench` at `/usr/local/bin/a2a-bench`, the bench repo's `gates/*.toml` at `/usr/local/share/a2a-bench/gates/` and `/usr/local/share/a2a-bench/REF` (`bench_ref`, `bench_commit`), which `bench_ref_lines` copies into `bench.env`. The `.dockerignore` already admits `crates/` and `spec/` and excludes only `deploy`, `target`, VCS and editor files, which the build does not need |
 | `.gitignore` | `/deploy/bench/` |
-| `crates/eval/src/bin/ct-eval/swarm.rs` | `ct-eval swarm-fetch`, used unchanged (`ct-eval swarm` no longer scores bench runs) |
-| `crates/eval/src/bin/ct-eval/replay.rs` | `ct-eval replay`: a saved run re-scored offline through `Live` (not run by the bench) |
+| `crates/bench-adapter/src/bin/ct-bench-detect/main.rs` | `ct-bench-detect`: `swarm-fetch` (step 7, the flags and output line `ct-eval swarm-fetch` had), `fetch` and `from-export` (`bench_detect_inputs`), and `replay` (offline, not run by the bench) |
+| `crates/bench-adapter/src/swarm/fetch.rs` | The L8 HTTP reads behind `swarm-fetch` and `fetch` |
 
 **Moving to a newer bench release:** fetch its tag into the mirror
 (`git --git-dir=<A2A_BENCH_GIT> fetch --tags`), bump `A2A_BENCH_REF` in
@@ -357,6 +365,9 @@ like the `DEMO_*` variables they are not in `.env.example`.
 - **a2a-bench score's exit code is the bench's** once scoring runs (0
   pass, 2 gate failed); any earlier failure is 1 with a message naming the
   step.
+- **crosstalk never scores.** The demo image carries no crosstalk scorer
+  or gates file: crosstalk's side is `ct-bench-detect` (fetch and bench
+  input), and the score and gates are `a2a-bench`'s at `A2A_BENCH_REF`.
 - **Every scored run names its scorer:** `bench_ref` and `bench_commit` in
   `bench.env`; the run stops before the swarm if the image lacks them.
 - `deploy/bench/` is created by the invoking user before any bind mount of
@@ -373,5 +384,3 @@ like the `DEMO_*` variables they are not in `.env.example`.
 - **Lag gauge.** Waiting on the watermark is exact for exports but coarse
   (5-minute buckets); a per-consumer lag gauge is on the gateway's
   observability list.
-- **ct-eval retirement.** `ct-eval swarm-fetch` still fetches the export;
-  #122 retires ct-eval scoring and renames `ct-bench-detect`.

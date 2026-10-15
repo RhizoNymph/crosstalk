@@ -27,6 +27,7 @@
 //! stage's subscription is [`pump::Pumped`].
 
 pub mod diagnose;
+pub mod groups;
 pub mod l3;
 pub mod l4;
 pub mod l5;
@@ -54,6 +55,7 @@ use crosstalk_topology::outbox::{BusAnnouncer, OutboxIds, drain};
 use crosstalk_transport::PgBus;
 use tokio::sync::mpsc;
 
+use self::groups::{ExchangeLogGroup, PipelineGroups};
 use self::pump::{Pumped, pump};
 use super::recovery::{PipelinePhase, RecoveryStep, StatusReporter};
 use super::settle::SettleError;
@@ -552,9 +554,12 @@ impl Live<PgSet> {
         )?;
         stages.fill(Slot::SurfaceRelay, relay::SurfaceRelay::new(relay_events))?;
 
-        // Every group subscribes before the gate opens.
-        let log_subscription = match &exchange_log {
-            Some(_) => Some(pump(
+        // Every group subscribes before the gate opens: exactly the
+        // pipeline's groups (`groups::PipelineGroups`), which the gate's
+        // watch looks for in other processes too.
+        let groups = PipelineGroups::new(ExchangeLogGroup::when(exchange_log.is_some()));
+        let log_subscription = match groups.log() {
+            ExchangeLogGroup::Subscribed => Some(pump(
                 bus.subscribe(
                     &[Subject::ExchangeCaptured],
                     log_consumer::group(),
@@ -563,15 +568,20 @@ impl Live<PgSet> {
                 .await
                 .map_err(LiveError::LogSubscribe)?,
             )),
-            None => None,
+            ExchangeLogGroup::Absent => None,
         };
+        let mut plugs = stages.into_plugs();
         let mut subscribed = Vec::new();
-        for (slot, plug) in stages.into_plugs() {
+        for &slot in groups.slots() {
+            let plug = plugs.remove(&slot).ok_or(LiveError::SlotEmpty(slot))?;
             let subscription = bus
                 .subscribe(&plug.subjects, slot.group(), settings.consumer_retry)
                 .await
                 .map_err(|error| LiveError::Subscribe { slot, error })?;
             subscribed.push((slot, plug, pump(subscription)));
+        }
+        if let Some(&slot) = plugs.keys().next() {
+            return Err(LiveError::SlotOutsideGroups(slot));
         }
         let mut stage_tasks = Tasks::new();
         let running: Vec<Running> = subscribed

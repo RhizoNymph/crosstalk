@@ -46,6 +46,13 @@ enum Request {
         String,
         oneshot::Sender<Result<(), BusError>>,
     ),
+    /// A stall's release: redelivered on the same attempt.
+    Release(
+        DeliveryId,
+        Duration,
+        String,
+        oneshot::Sender<Result<(), BusError>>,
+    ),
 }
 
 /// A subscription served by a pump task. Dropping it stops the task,
@@ -93,6 +100,10 @@ async fn settle<S: Subscription>(
         }
         Request::Nack(id, delay, reason, reply) => {
             let _ = reply.send(subscription.nack(id, delay, reason).await);
+            None
+        }
+        Request::Release(id, delay, reason, reply) => {
+            let _ = reply.send(subscription.release(id, delay, reason).await);
             None
         }
     }
@@ -178,6 +189,19 @@ impl Subscription for Pumped {
         let (reply, answer) = oneshot::channel();
         self.requests
             .send(Request::Nack(id, retry_after, reason, reply))
+            .map_err(|_| BusError::Disconnected)?;
+        answer.await.map_err(|_| BusError::Disconnected)?
+    }
+
+    async fn release(
+        &mut self,
+        id: DeliveryId,
+        retry_after: Duration,
+        reason: String,
+    ) -> Result<(), BusError> {
+        let (reply, answer) = oneshot::channel();
+        self.requests
+            .send(Request::Release(id, retry_after, reason, reply))
             .map_err(|_| BusError::Disconnected)?;
         answer.await.map_err(|_| BusError::Disconnected)?
     }

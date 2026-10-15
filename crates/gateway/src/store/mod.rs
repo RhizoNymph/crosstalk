@@ -15,16 +15,24 @@
 //!   consume against a database whose applied migrations are behind the
 //!   binary's.
 //! - [`lock::PipelineLock`]: one pipeline process per database.
+//! - [`fence`]: no write from an older pipeline incarnation once a newer
+//!   one runs (the epoch and the shared fence every pipeline connection
+//!   joins).
+//! - [`timeouts`]: the `statement_timeout` and `lock_timeout` every
+//!   pipeline connection runs with, so a stalled statement is cancelled
+//!   and retried instead of hanging a stage or the reaper.
 
 use std::ffi::OsString;
 use std::time::Duration;
 
+pub mod fence;
 pub mod lock;
 pub mod migrations;
+pub mod timeouts;
 
 use crosstalk_spec::support::Clock;
 use crosstalk_store::sqlx::PgPool;
-use crosstalk_store::sqlx::postgres::PgPoolOptions;
+use crosstalk_store::sqlx::postgres::{PgConnection, PgPoolOptions};
 use crosstalk_store::{DbFailure, Store, StoreConfig, StoreError, classify};
 use tokio::sync::watch;
 
@@ -146,9 +154,8 @@ pub fn lazy_pool(config: &StoreConfig) -> PgPool {
 
 /// [`lazy_pool`] whose sessions carry `application` as their
 /// `application_name` (`pg_stat_activity` then names the process and role
-/// that owns each session) and end any transaction left idle for
-/// [`IDLE_IN_TRANSACTION_TIMEOUT`] (`idle_in_transaction_session_timeout`,
-/// set on every new connection, so no server setting is needed).
+/// that owns each session) and run [`session_setup`] on every new
+/// connection.
 pub fn lazy_pool_named(config: &StoreConfig, application: &str) -> PgPool {
     let settings = config.pool();
     let options = config
@@ -160,15 +167,24 @@ pub fn lazy_pool_named(config: &StoreConfig, application: &str) -> PgPool {
         .max_connections(settings.max_connections().get())
         .min_connections(settings.min_connections())
         .acquire_timeout(settings.acquire_timeout())
-        .after_connect(|connection, _meta| {
-            Box::pin(async move {
-                crosstalk_store::sqlx::query(IDLE_IN_TRANSACTION)
-                    .execute(connection)
-                    .await
-                    .map(|_| ())
-            })
-        })
+        .after_connect(|connection, _meta| Box::pin(session_setup(connection)))
         .connect_lazy_with(options)
+}
+
+/// What every pooled session of ours runs as it connects: end any
+/// transaction left idle for [`IDLE_IN_TRANSACTION_TIMEOUT`]
+/// (`idle_in_transaction_session_timeout`, set per session, so no server
+/// setting is needed). `PgPoolOptions::after_connect` replaces any earlier
+/// hook, so a pool that adds to it (a pipeline incarnation's sets the
+/// statement and lock bounds and joins the fence,
+/// `gateway::postgres::incarnation_pool_bounded`) runs this first itself.
+pub async fn session_setup(
+    connection: &mut PgConnection,
+) -> Result<(), crosstalk_store::sqlx::Error> {
+    crosstalk_store::sqlx::query(IDLE_IN_TRANSACTION)
+        .execute(connection)
+        .await
+        .map(|_| ())
 }
 
 /// The session setting [`lazy_pool_named`] applies to every connection.

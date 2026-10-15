@@ -1,0 +1,31 @@
+{
+  "format": "a2a-bench/1",
+  "dataset": "collusion-wiki",
+  "dataset_version": 1,
+  "split": "dev",
+  "source": {
+    "path": "root",
+    "revision": "unknown",
+    "digest": "97a438498552bf33f32668a1d206186267d1ad2b0a96ab73fc77a527e7f5bcf9"
+  },
+  "converter": {
+    "version": "0.1.0",
+    "git": "ff3dc44a65daae3f9d99e6dfc191996aabf624e6"
+  },
+  "selection": {},
+  "pace": {
+    "max_ms": 5000,
+    "min_ms": 1000,
+    "seed": 0
+  },
+  "worlds": [
+    {
+      "key": "dse/BridgeLAProd1782007689",
+      "exchanges": 14
+    }
+  ],
+  "files": {
+    "messages": "a37a38d78ce8946d45add76647df65b44aaaf55a5c4dc197a3dc651e05a04a79",
+    "exchanges": "147eeb6f3fc537793af93554bba9e46d744017cbcdf12406adfa0e8929c6da45"
+  }
+}

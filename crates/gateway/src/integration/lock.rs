@@ -37,8 +37,9 @@ async fn link_to(db: &TestDb) -> DbLink {
 /// and another session takes the lock.
 #[tokio::test(flavor = "multi_thread")]
 async fn pg_a_silently_partitioned_lock_session_is_lost_within_the_bound() {
+    // Migrated: taking the lock bumps the pipeline epoch.
     let Some(db) =
-        database("pg_a_silently_partitioned_lock_session_is_lost_within_the_bound").await
+        migrated("pg_a_silently_partitioned_lock_session_is_lost_within_the_bound").await
     else {
         return;
     };

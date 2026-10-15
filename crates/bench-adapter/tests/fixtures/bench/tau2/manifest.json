@@ -1,0 +1,35 @@
+{
+  "format": "a2a-bench/1",
+  "dataset": "tau2",
+  "dataset_version": 1,
+  "split": "dev",
+  "source": {
+    "path": "tau2",
+    "revision": "unknown",
+    "digest": "5bf54f5f38e41257566f06afa90212177e8e6f7ca7ad67b2aa8cf8457c715947"
+  },
+  "converter": {
+    "version": "0.1.0",
+    "git": "ff3dc44a65daae3f9d99e6dfc191996aabf624e6"
+  },
+  "selection": {},
+  "pace": {},
+  "worlds": [
+    {
+      "key": "fixture-agent_airline_default_fixture-user_1trials/0",
+      "exchanges": 9
+    },
+    {
+      "key": "fixture-agent_airline_default_fixture-user_1trials/1",
+      "exchanges": 3
+    },
+    {
+      "key": "fixture-agent_telecom_no-user_fixture-user_1trials/0",
+      "exchanges": 2
+    }
+  ],
+  "files": {
+    "messages": "facd1c575c3dd7e5792b5a63aca2556807c545adad857bf29f278ee336673cb6",
+    "exchanges": "78ed929a0de5f154c4fdc1797d0123287b8653eabc0b756579d87d8bee6f3102"
+  }
+}

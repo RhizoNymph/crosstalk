@@ -65,8 +65,8 @@ follow the deployment contract in `docs/features/deploy.md` (branch
   capture.
 - Application metrics beyond the capture counters, and tracing spans.
 - TLS on the listeners. The proxy speaks plain HTTP to harnesses.
-- The eval harness itself (`crates/eval`, being built separately): this
-  crate only gives it `Pipeline` and registers it as a composer in the
+- The bench adapter itself (`crates/bench-adapter`): this crate only
+  gives it `Pipeline` and `Live` and registers it as a composer in the
   architecture test.
 
 ## Commands
@@ -99,7 +99,7 @@ against the config file's directory.
 | `ingress` | yes | `crosstalk_ingress::config::IngressConfig`, unchanged: `listen`, `routes` (name, prefix, upstream id, kind, base URL), `secrets` (`current` `{version, env}` and an optional `previous` `{version, env, overlap_ends}`, an older version whose digests are also computed for exchanges that start before `overlap_ends`, an RFC 3339 timestamp at microsecond precision), `limits`, `capture.channel_capacity` |
 | `api` | no | `{"listen": SocketAddr, "token": {"env": ..}, "operator": {"name": ..}}`: the HTTP API (roles `all`, `api`); the token signs in as `operator` (default `{"name": "admin"}`, every permission) |
 | `ops` | yes | `{"listen": SocketAddr}` |
-| `store` | no | `{"pool": crosstalk_store::PoolSettings, "bus": PgBusConfig}`; the URL is `DATABASE_URL`. With it, `serve` runs in Postgres mode ([postgres_mode.md](postgres_mode.md)); `pool.max_connections` at least 3; `bus` (each key defaulted, `_micros`): `group_capacity` 1024, `ack_timeout_micros` 30 s (must exceed `flow.checkpoint_ms`), `poll_micros` 250 ms, `publish_timeout_micros` 5 s, `retention_micros` 7 days |
+| `store` | no | `{"pool": crosstalk_store::PoolSettings, "bus": PgBusConfig}`; the URL is `DATABASE_URL`. With it, `serve` runs in Postgres mode ([postgres_mode.md](postgres_mode.md)); `pool.max_connections` at least 3; `bus` (each key defaulted, `_micros`): `group_capacity` 1024, `ack_timeout_micros` 30 s (must exceed `flow.checkpoint_ms`), `poll_micros` 250 ms, `publish_timeout_micros` 5 s, `retention_micros` 7 days; `pipeline_timeouts` (each key defaulted, whole milliseconds): `statement_ms` 20 000 (below `bus.ack_timeout_micros`, checked at start) and `lock_ms` 15 000, the `statement_timeout` and `lock_timeout` every pipeline incarnation's connection runs with, and `retention_ms` 900 000, the statement bound retention deletes raise their transaction to (each at least 1 ms and at most 2 147 483 647, `lock_ms` at most `statement_ms`, `retention_ms` at least `statement_ms`; [postgres_mode.md](postgres_mode.md), "Bounded statements") |
 | `spool` | no | `{"dir": "spool", "max_bytes": 1073741824, "segment_bytes": 67108864, "drain_batch": 256, "probe_ms": 1000}`, each key defaulted: the publish spool (Postgres mode); `dir` relative to the data directory or absolute inside it; `segment_bytes` no larger than `max_bytes` |
 | `blobs` | yes | `{"root": path}` for `FsBlobStore::open`; its parent is the data directory |
 | `embeddings` | no | `{"base_url": http(s) URL, "model": non-empty, "api_key": {"env": ..}}`; checked, unused |
@@ -301,8 +301,8 @@ operator ──HTTP──▶ crosstalk_api::http::serve (api listener): Auth (Be
 
 `crosstalk_gateway::pipeline` (roadmap P3.1) is the gateway's composition
 behind the proxy, usable without the binary. The `serve` roles build one
-(`gateway::start`), and so does the eval harness (`crosstalk-eval`, a
-composer in the architecture test), over the simulation's stores and
+(`gateway::start`), and so does the bench adapter
+(`crosstalk-bench-adapter`, a composer in the architecture test), over the simulation's stores and
 clock.
 
 ```rust
@@ -379,8 +379,8 @@ let id: EventId = pipeline.ingest(normalized, at).await?;   // Result<EventId, I
 
 `crosstalk_gateway::live::Live` is every layer and the L8 surface in one
 process, over one set of in-memory stores: what the UI binary hosts, what
-the e2e smoke (`crosstalk_e2e::compose`) drives, and what eval builds
-against. It is memory-only (`crosstalk-memory`'s reference stores, plus
+the e2e smoke (`crosstalk_e2e::compose`) drives, and what the bench
+adapter builds against. It is memory-only (`crosstalk-memory`'s reference stores, plus
 L3's `MemoryConversations` and L4's `MemoryProvenanceStore`); the blob
 store is in memory or on disk.
 
@@ -686,7 +686,7 @@ CROSSTALK_SIM_SEEDS=300 cargo test -p crosstalk-gateway tests::dst   # a wider s
 
 ## Invariants and constraints
 
-- Only the composers (`gateway`, and `api`, `client`, `eval` beside it)
+- Only the composers (`gateway`, and `api`, `client`, `bench-adapter` beside it)
   depend on layer crates (`tests/architecture.rs`).
 - There is one path after L1: the capture stage normalizes and calls
   `Ingester::ingest`, the same function `Pipeline::ingest` is.

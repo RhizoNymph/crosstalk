@@ -13,6 +13,7 @@
 //! live here, at `crosstalk_transport::integration::<name>`.
 
 mod abandon;
+mod release;
 
 use std::num::NonZeroUsize;
 use std::sync::Arc;

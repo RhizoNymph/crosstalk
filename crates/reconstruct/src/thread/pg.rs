@@ -17,8 +17,16 @@
 //! `0004_conversation_reads`); its `reads` submodule serves the spec's
 //! `ConversationReads` from them. [`PgConversations`] also serves the
 //! spec's `ExchangePlacements` from `thread_records`.
+//!
+//! The transaction also numbers the turn in the order the store took it,
+//! keeps the call (`thread_calls`, pruned after the reorder window) and,
+//! when the exchange arrived after turns of its cluster that ended after
+//! it, undoes and rethreads them (`super::order`, migration
+//! `0006_threading_order`, its `rewind` and `calls` submodules).
 
+mod calls;
 mod reads;
+mod rewind;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -35,7 +43,8 @@ use sqlx::{PgConnection, PgPool};
 
 use super::config::ThreadConfig;
 use super::history::{ChainHash, Entry};
-use super::plan::{Extension, Planned, Target, ThreadReads, Write, plan};
+use super::order::ReorderWindow;
+use super::plan::{Extension, Target, ThreadReads, Write};
 use super::reads::{Cursors, corpus_of, origin_text, outcome_text};
 use super::store::{
     ConversationStore, ResponseKey, StoredOrigin, StoredOutcome, ThreadInput, TranscriptEntry,
@@ -102,8 +111,8 @@ fn stored_origin(origin: ConversationOrigin) -> StoredOrigin {
 }
 
 /// A conversation's id, history length, head, last system message and
-/// update sequence.
-type HeadRow = (String, i32, Vec<u8>, Option<Vec<u8>>, i64);
+/// last turn's key (end, exchange).
+type HeadRow = (String, i32, Vec<u8>, Option<Vec<u8>>, i64, String);
 
 /// A transcript row: ordinal, message, role, exchange, history index,
 /// output, carried over.
@@ -167,8 +176,8 @@ impl ThreadReads for PgReads<'_> {
             .map(|(index, chain)| (*chain, index))
             .collect();
         let rows: Vec<HeadRow> = sqlx::query_as(
-            "SELECT id, history_len, head, last_system, updated FROM reconstruct.conversations \
-             WHERE head = ANY($1) AND agent = ANY($2)",
+            "SELECT id, history_len, head, last_system, last_ended_at, last_exchange \
+             FROM reconstruct.conversations WHERE head = ANY($1) AND agent = ANY($2)",
         )
         .bind(
             chains
@@ -179,8 +188,9 @@ impl ThreadReads for PgReads<'_> {
         .bind(ids(members))
         .fetch_all(&mut *self.conn)
         .await?;
-        let mut best: Option<(u32, i64, Extension)> = None;
-        for (id, len, head, last_system, updated) in rows {
+        let mut best: Option<(u32, (i64, String), Extension)> = None;
+        for (id, len, head, last_system, ended_at, exchange) in rows {
+            let latest = (ended_at, exchange);
             let len = count_of("conversations.history_len", len)?;
             let head = chain_of("conversations.head", &head)?;
             if position.get(&head).map(|index| index + 1) != Some(len as usize) {
@@ -193,10 +203,11 @@ impl ThreadReads for PgReads<'_> {
                     .map(|bytes| message_hash("conversations.last_system", &bytes))
                     .transpose()?,
             };
-            if best.as_ref().is_none_or(|(best_len, best_updated, _)| {
-                (len, updated) > (*best_len, *best_updated)
-            }) {
-                best = Some((len, updated, candidate));
+            if best
+                .as_ref()
+                .is_none_or(|(best_len, best_latest, _)| (len, &latest) > (*best_len, best_latest))
+            {
+                best = Some((len, latest, candidate));
             }
         }
         Ok(best.map(|(_, _, extension)| extension))
@@ -221,7 +232,7 @@ impl ThreadReads for PgReads<'_> {
             "SELECT c.id, e.history_index FROM reconstruct.conversation_entries e \
              JOIN reconstruct.conversations c ON c.id = e.conversation \
              WHERE e.chain = ANY($1) AND c.agent = ANY($2) \
-             ORDER BY e.history_index DESC, c.updated DESC LIMIT 1",
+             ORDER BY e.history_index DESC, c.last_ended_at DESC, c.last_exchange DESC LIMIT 1",
         )
         .bind(wanted)
         .bind(ids(members))
@@ -296,7 +307,7 @@ impl ThreadReads for PgReads<'_> {
             "SELECT c.id FROM reconstruct.conversation_entries e \
              JOIN reconstruct.conversations c ON c.id = e.conversation \
              WHERE e.message = $1 AND e.output AND c.agent = ANY($2) \
-             ORDER BY c.updated DESC LIMIT 1",
+             ORDER BY c.last_ended_at DESC, c.last_exchange DESC LIMIT 1",
         )
         .bind(hash_bytes(&message))
         .bind(ids(members))
@@ -319,7 +330,7 @@ impl ThreadReads for PgReads<'_> {
             "SELECT c.id FROM reconstruct.conversation_entries e \
              JOIN reconstruct.conversations c ON c.id = e.conversation \
              WHERE e.message = ANY($1) AND e.history_index IS NOT NULL AND c.agent = ANY($2) \
-             ORDER BY c.updated DESC LIMIT 1",
+             ORDER BY c.last_ended_at DESC, c.last_exchange DESC LIMIT 1",
         )
         .bind(hashes(messages))
         .bind(ids(members))
@@ -333,7 +344,7 @@ impl ThreadReads for PgReads<'_> {
     async fn latest(&mut self, members: &[AgentId]) -> Result<Option<ConversationId>, TxFailure> {
         let row: Option<(String,)> = sqlx::query_as(
             "SELECT id FROM reconstruct.conversations WHERE agent = ANY($1) \
-             ORDER BY updated DESC LIMIT 1",
+             ORDER BY last_ended_at DESC, last_exchange DESC LIMIT 1",
         )
         .bind(ids(members))
         .fetch_optional(&mut *self.conn)
@@ -397,14 +408,15 @@ async fn see(
     let seen = &write.seen;
     if !seen.is_empty() {
         sqlx::query(
-            "INSERT INTO reconstruct.seen_messages (agent, message, conversation, seen_at) \
-             SELECT $1, m, $3, $4 FROM UNNEST($2::bytea[]) AS t(m) \
-             ON CONFLICT (agent, message, conversation) \
-             DO UPDATE SET seen_at = GREATEST(seen_messages.seen_at, EXCLUDED.seen_at)",
+            "INSERT INTO reconstruct.seen_messages \
+             (agent, message, conversation, exchange, seen_at) \
+             SELECT $1, m, $3, $4, $5 FROM UNNEST($2::bytea[]) AS t(m) \
+             ON CONFLICT DO NOTHING",
         )
         .bind(id_text(input.agent))
         .bind(hashes(seen))
         .bind(id_text(write.conversation))
+        .bind(id_text(input.exchange))
         .bind(micros(input.at)?)
         .execute(&mut *conn)
         .await?;
@@ -426,6 +438,7 @@ async fn record_turn(
     write: &Write,
     id: &str,
     start: i32,
+    seq: i64,
 ) -> Result<(), TxFailure> {
     let (turns,): (i32,) =
         sqlx::query_as("SELECT turns FROM reconstruct.conversations WHERE id = $1 FOR UPDATE")
@@ -438,8 +451,8 @@ async fn record_turn(
     sqlx::query(
         "INSERT INTO reconstruct.conversation_turns \
          (conversation, turn, exchange, first_ordinal, entries, agent, started_at, outcome, \
-          history_end) \
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+          history_end, seq, ended_at, last_system) \
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
     )
     .bind(id)
     .bind(turns)
@@ -450,13 +463,19 @@ async fn record_turn(
     .bind(micros(input.at)?)
     .bind(outcome_text(write.outcome.kind()))
     .bind(history_end)
+    .bind(seq)
+    .bind(micros(input.ended_at)?)
+    .bind(write.last_system.as_ref().map(hash_bytes))
     .execute(&mut *conn)
     .await?;
     sqlx::query(
-        "UPDATE reconstruct.conversations SET turns = turns + 1, last_turn_at = $2 WHERE id = $1",
+        "UPDATE reconstruct.conversations SET turns = turns + 1, last_turn_at = $2, \
+         last_ended_at = $3, last_exchange = $4 WHERE id = $1",
     )
     .bind(id)
     .bind(micros(input.at)?)
+    .bind(micros(input.ended_at)?)
+    .bind(id_text(input.exchange))
     .execute(&mut *conn)
     .await?;
     Ok(())
@@ -468,7 +487,7 @@ async fn apply(
     write: &Write,
     cutoff: Timestamp,
 ) -> Result<(), TxFailure> {
-    let (updated,): (i64,) = sqlx::query_as("SELECT nextval('reconstruct.conversation_updates')")
+    let (seq,): (i64,) = sqlx::query_as("SELECT nextval('reconstruct.turn_seq')")
         .fetch_one(&mut *conn)
         .await?;
     let id = id_text(write.conversation);
@@ -485,9 +504,9 @@ async fn apply(
         } => {
             sqlx::query(
                 "INSERT INTO reconstruct.conversations \
-                 (id, agent, origin, history_len, head, last_system, updated, source, \
+                 (id, agent, origin, history_len, head, last_system, source, \
                   replay_corpus, origin_kind, origin_of, started_at, last_turn_at, turns) \
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $12, 0)",
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $11, 0)",
             )
             .bind(&id)
             .bind(id_text(agent))
@@ -495,7 +514,6 @@ async fn apply(
             .bind(history_len)
             .bind(&head)
             .bind(&last_system)
-            .bind(updated)
             .bind(json(&input.source)?)
             .bind(corpus_of(&input.source))
             .bind(origin_text(origin.kind()))
@@ -537,13 +555,12 @@ async fn apply(
             .await?;
             sqlx::query(
                 "UPDATE reconstruct.conversations \
-                 SET history_len = $2, head = $3, last_system = $4, updated = $5 WHERE id = $1",
+                 SET history_len = $2, head = $3, last_system = $4 WHERE id = $1",
             )
             .bind(&id)
             .bind(history_len)
             .bind(&head)
             .bind(&last_system)
-            .bind(updated)
             .execute(&mut *conn)
             .await?;
             next
@@ -599,7 +616,7 @@ async fn apply(
         .execute(&mut *conn)
         .await?;
     }
-    record_turn(conn, input, write, &id, start).await?;
+    record_turn(conn, input, write, &id, start, seq).await?;
     sqlx::query(
         "INSERT INTO reconstruct.thread_records (exchange, conversation, outcome) VALUES ($1, $2, $3)",
     )
@@ -610,14 +627,16 @@ async fn apply(
     .await?;
     if let Some((key, len)) = &write.response {
         sqlx::query(
-            "INSERT INTO reconstruct.responses (upstream, scope, response, conversation, history_len) \
-             VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING",
+            "INSERT INTO reconstruct.responses \
+             (upstream, scope, response, conversation, history_len, exchange) \
+             VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING",
         )
         .bind(&key.upstream.0)
         .bind(json(&key.scope)?)
         .bind(&key.response.0)
         .bind(&id)
         .bind(i64::from(*len))
+        .bind(id_text(input.exchange))
         .execute(&mut *conn)
         .await?;
     }
@@ -630,6 +649,7 @@ pub struct PgConversations {
     pool: PgPool,
     retry: SerializableRetry,
     config: ThreadConfig,
+    window: ReorderWindow,
     cursors: Cursors,
 }
 
@@ -641,6 +661,7 @@ impl PgConversations {
             pool,
             retry: SerializableRetry::default(),
             config: ThreadConfig::default(),
+            window: ReorderWindow::default(),
             cursors: Cursors::default(),
         }
     }
@@ -665,16 +686,29 @@ impl PgConversations {
         self
     }
 
+    /// Keep each call for `window` to thread it again when an exchange
+    /// that ended before it arrives later.
+    pub fn with_reorder_window(mut self, window: ReorderWindow) -> Self {
+        self.window = window;
+        self
+    }
+
     /// Forget every agent's sightings older than the retention behind
     /// `now`, returning how many were forgotten. Threading forgets only the
     /// threaded cluster's; this sweeps agents that stopped calling.
     pub async fn forget_seen(&self, now: Timestamp) -> Result<u64, ThreadError> {
         let cutoff = self.config.seen_retention.cutoff(now);
         let sweep = async {
+            let cutoff = micros(cutoff)?;
+            // An unbatched retention delete: the session's longer
+            // retention bound.
+            let mut tx = self.pool.begin().await?;
+            crosstalk_store::raise_for_retention(&mut tx).await?;
             let done = sqlx::query("DELETE FROM reconstruct.seen_messages WHERE seen_at < $1")
-                .bind(micros(cutoff)?)
-                .execute(&self.pool)
+                .bind(cutoff)
+                .execute(&mut *tx)
                 .await?;
+            tx.commit().await?;
             Ok::<_, TxFailure>(done.rows_affected())
         };
         sweep
@@ -716,22 +750,16 @@ impl ExchangePlacements for PgConversations {
 impl ConversationStore for PgConversations {
     async fn thread(&self, input: ThreadInput) -> Result<ThreadOutcome, ThreadError> {
         let input = Arc::new(input);
-        let cutoff = self.config.seen_retention.cutoff(input.at);
+        let (retention, window) = (self.config.seen_retention, self.window);
         retry_serializable(&self.pool, &self.retry, |conn| {
             let input = Arc::clone(&input);
             Box::pin(async move {
-                let mut reads = PgReads {
-                    conn: &mut *conn,
-                    cutoff,
+                let mut step = rewind::Step {
+                    conn,
+                    retention,
+                    window,
                 };
-                let planned = plan(&mut reads, &input).await.map_err(tx)?;
-                match planned {
-                    Planned::Recorded(outcome) => Ok(outcome),
-                    Planned::Write(write) => {
-                        apply(conn, &input, &write, cutoff).await.map_err(tx)?;
-                        Ok(write.outcome)
-                    }
-                }
+                super::order::thread(&mut step, &input).await.map_err(tx)
             })
         })
         .await

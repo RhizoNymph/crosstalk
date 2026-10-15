@@ -4,6 +4,7 @@
 //!
 //! ```text
 //! waiting_for_database ─▶ migrations checked (behind: stop) ─▶ pipeline lock (held elsewhere: wait)
+//!   ─▶ fencing (the epoch bumped; earlier incarnations' connections closing)
 //!   ─▶ recovering: recovering_bus ─▶ relaying_outboxes ─▶ restoring_flow ─▶ rebuilding_nodes
 //!                  ─▶ subscribing ─▶ running
 //! running (lock held) ─ lock lost ─▶ abandoning (lock lost) ─▶ waiting_for_database ─▶ ...
@@ -11,7 +12,7 @@
 //!
 //! A lost lock never stops the process: the pipeline incarnation is
 //! abandoned and the walk starts over, counted in the report
-//! (`lock_losses`, `last_loss`, `incarnation`).
+//! (`lock_losses`, `last_loss`, `incarnation`, `epoch`).
 //!
 //! The process that walks it ([`super::pg`]) reports each step through a
 //! [`StatusReporter`]; the ops listener reads [`PipelineStatus`] snapshots.
@@ -19,6 +20,8 @@
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::watch;
+
+use crate::store::fence::Epoch;
 
 /// Whether every layer's applied migrations are its embedded head.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -83,6 +86,10 @@ pub enum PipelinePhase {
     WaitingForMigrations,
     /// Another process holds the pipeline lock.
     WaitingForLock,
+    /// The lock is taken and the epoch bumped; waiting until every
+    /// connection of an earlier pipeline incarnation (of any process) is
+    /// gone (`store::fence`). Never gives up.
+    Fencing,
     Recovering(RecoveryStep),
     Running,
     /// The lock was lost: the incarnation's tasks are being aborted and
@@ -140,6 +147,10 @@ pub struct RecoveryReport {
     /// first.
     #[serde(default)]
     pub incarnation: u64,
+    /// The pipeline epoch this process last took the lock under (the
+    /// running or fencing incarnation's); 0 before its first take.
+    #[serde(default)]
+    pub epoch: Epoch,
     /// How often this process lost the pipeline lock.
     #[serde(default)]
     pub lock_losses: u64,
@@ -198,6 +209,7 @@ impl PipelineStatus {
             PipelinePhase::WaitingForDatabase => "waiting_for_database".to_owned(),
             PipelinePhase::WaitingForMigrations => "waiting_for_migrations".to_owned(),
             PipelinePhase::WaitingForLock => "waiting_for_lock".to_owned(),
+            PipelinePhase::Fencing => "fencing".to_owned(),
             PipelinePhase::Recovering(_) => "recovering".to_owned(),
             PipelinePhase::Running => "running".to_owned(),
             PipelinePhase::Abandoning => "abandoning".to_owned(),
@@ -212,6 +224,7 @@ impl PipelineStatus {
             | PipelinePhase::WaitingForDatabase
             | PipelinePhase::WaitingForMigrations
             | PipelinePhase::WaitingForLock
+            | PipelinePhase::Fencing
             | PipelinePhase::Abandoning => "pending".to_owned(),
             PipelinePhase::Recovering(step) => step.label().to_owned(),
             PipelinePhase::Running => "done".to_owned(),
@@ -224,7 +237,8 @@ impl PipelineStatus {
     /// by a process that never held it (a standby). A process resuming
     /// after a loss stays ready, degraded, through `lost`, `abandoning`
     /// and `held elsewhere`: it still forwards and captures durably, as at
-    /// its start.
+    /// its start. `fencing` holds the lock: ready, degraded, as
+    /// recovering is.
     pub fn blocks_readiness(&self) -> bool {
         matches!(self.migrations, MigrationState::Behind(_))
             || (self.lock == LockState::HeldElsewhere && self.report.lock_losses == 0)
@@ -368,6 +382,53 @@ mod tests {
         let json = serde_json::to_value(status.report).expect("encodes");
         assert_eq!(json["lock_losses"], 1);
         assert_eq!(json["last_loss"]["reason"], "ping_timed_out");
+    }
+
+    /// Fencing (the lock taken, waiting for an earlier incarnation's
+    /// connections to close) is on the way to running: ready, degraded,
+    /// recovery pending, the lock held; for a standby taking over and for
+    /// an owner resuming after a loss alike.
+    #[test]
+    fn fencing_is_ready_degraded_with_recovery_pending() {
+        let mut status = PipelineStatus::waiting();
+        status.migrations = MigrationState::AtHead;
+        status.lock = LockState::Held;
+        status.phase = PipelinePhase::Fencing;
+        status.report.epoch = Epoch::new(4);
+        assert_eq!(status.pipeline_text(), "fencing");
+        assert_eq!(status.recovery_text(), "pending");
+        assert_eq!(status.lock_text(), "held");
+        assert!(status.degraded() && !status.blocks_readiness());
+        status.report.lock_losses = 2;
+        assert!(status.degraded() && !status.blocks_readiness());
+    }
+
+    /// The report's epoch: a number, 0 before the first take, decoded
+    /// strictly beside the other fields.
+    #[test]
+    fn the_report_carries_the_epoch() {
+        let report = RecoveryReport {
+            incarnation: 2,
+            epoch: Epoch::new(7),
+            lock_losses: 1,
+            ..RecoveryReport::default()
+        };
+        let json = serde_json::to_value(report).expect("encodes");
+        assert_eq!(json["epoch"], 7);
+        assert_eq!(json["incarnation"], 2);
+        let decoded: RecoveryReport = serde_json::from_value(json.clone()).expect("decodes");
+        assert_eq!(decoded, report);
+        assert_eq!(RecoveryReport::default().epoch, Epoch::new(0));
+        let mut without = json.clone();
+        without.as_object_mut().expect("an object").remove("epoch");
+        let decoded: RecoveryReport = serde_json::from_value(without).expect("decodes");
+        assert_eq!(decoded.epoch, Epoch::new(0), "absent: 0");
+        let mut negative = json.clone();
+        negative["epoch"] = serde_json::json!(-1);
+        assert!(serde_json::from_value::<RecoveryReport>(negative).is_err());
+        let mut surprise = json;
+        surprise["epochs"] = serde_json::json!(1);
+        assert!(serde_json::from_value::<RecoveryReport>(surprise).is_err());
     }
 
     #[test]
