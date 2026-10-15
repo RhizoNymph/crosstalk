@@ -298,7 +298,7 @@ delegated-from, traffic-counts.
     be matched several times in one reader exchange.
 14. `ConversationTraffic` counts content-holding transmissions only.
 15. `exchange_turns` returns `ExchangePlacement { agent, conversation,
-    turn }` (agreed with crosstalk-eval), not `TurnPoint`; L3's `locate`
+    turn }` (agreed with the crosstalk-eval session), not `TurnPoint`; L3's `locate`
     returns the same type with the agent as recorded.
 16. `StoredExchange::warnings` are empty for exchanges the live process
     keeps: `ExchangeCaptured` carries no normalizer warnings.

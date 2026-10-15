@@ -167,3 +167,76 @@ groups:
             bounded at about 56s with the default shutdown config, so it is
             stuck: /readyz is 503 and new proxy connections are refused.
             Restart the container.
+
+  # ------------------------------------------------------------------ spool
+  # Postgres mode only: while the database is unreachable, captures are
+  # written to <data dir>/spool and drained once it is back. The thresholds
+  # assume the default spool.max_bytes of 1 GiB.
+  - name: crosstalk-gateway-spool
+    rules:
+      - alert: CrosstalkSpoolRejecting
+        expr: |
+          sum by (job, instance, reason) (
+            increase(crosstalk_spool_rejected_total{job="crosstalk"}[5m])
+          ) > 0
+        labels:
+          severity: critical
+        annotations:
+          summary: "crosstalk is rejecting captures at the spool ({{ $labels.reason }})"
+          description: >-
+            {{ $value | humanize }} captures were rejected by the spool in the
+            last 5 minutes (reason {{ $labels.reason }}: spool_full means the
+            spool hit its size limit while Postgres was down, spool_io a disk
+            error). Those exchanges were forwarded to the client but are lost
+            to detection.
+
+      - alert: CrosstalkSpoolFilling
+        expr: max by (job, instance) (crosstalk_spool_bytes{job="crosstalk"}) > 0.8 * 1073741824
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "crosstalk's capture spool is over 80% full"
+          description: >-
+            The spool holds {{ $value | humanize1024 }}B of captures waiting for
+            Postgres (default limit 1 GiB). Once full, new captures are
+            rejected. Check the postgres service.
+
+      - alert: CrosstalkSpoolStale
+        expr: max by (job, instance) (crosstalk_spool_oldest_age_seconds{job="crosstalk"}) > 300
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "crosstalk captures have waited in the spool for over 5 minutes"
+          description: >-
+            The oldest spooled capture is {{ $value | humanizeDuration }} old:
+            the database has been unreachable (or draining stalled) for that
+            long, so detection is behind.
+
+      - alert: CrosstalkSpoolTruncated
+        expr: sum by (job, instance) (increase(crosstalk_spool_truncated_bytes_total{job="crosstalk"}[5m])) > 0
+        labels:
+          severity: warning
+        annotations:
+          summary: "crosstalk truncated a torn tail of its capture spool"
+          description: >-
+            {{ $value | humanize1024 }}B were truncated from the end of the
+            spool in the last 5 minutes: a record torn by a crash mid-append.
+            The capture in it is lost; the spool itself is fine and keeps
+            draining. A corrupt record elsewhere in the spool is a different,
+            worse case (CrosstalkSpoolCorrupt).
+
+      - alert: CrosstalkSpoolCorrupt
+        expr: max by (job, instance) (crosstalk_spool_state{job="crosstalk", state="corrupt"}) == 1
+        labels:
+          severity: critical
+        annotations:
+          summary: "crosstalk's capture spool is corrupt; detection is stalled"
+          description: >-
+            The spool holds a corrupt record, so draining has stopped:
+            /readyz answers 503 and nothing spooled reaches the pipeline, so
+            detection is stalled until someone acts. Inspect the gateway logs,
+            then run `crosstalk spool --discard-corrupt` (in the crosstalk
+            container, with its config) to drop the corrupt record and resume
+            draining; the captures in that record are lost.

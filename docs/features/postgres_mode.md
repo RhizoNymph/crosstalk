@@ -669,8 +669,14 @@ What happens to a held row nobody acks (`crates/transport/src/pg/reaper.rs`,
   answers. That exposure is closed at L2 for the restart case. Other
   redeliveries in a live process (a nack, an ack timeout, a dropped
   subscription, the stale-hold sweep) keep their backoff and can still
-  reorder; making L3 tolerate a reordered arrival is being done
-  separately.
+  reorder. L3's conversation stores hold the turn-key-order result
+  whatever the arrival order, within the reorder window
+  (`reconstruct.thread.order-independent`,
+  [reconstruct](reconstruct.md#delivery-order)): an earlier turn arriving
+  second rewinds the later one and both land in one conversation. What
+  arrival order still decides: the later turn's delta was published when
+  it arrived (L4 and L5 keep it), and a new agent's id and first-seen
+  time come from the first of its exchanges L3 handled.
 
 So a single lost race delays an event by at most about 95 s and loses
 nothing; only five losses of one delivery dead-letter it. With every
@@ -711,7 +717,11 @@ by its backoff and the drained fourth exchange, taken first, started the
 conversation the third should have (an extra conversation, agent B's id
 minted from the fourth exchange). `recover_held` now makes that delivery
 ready at once, so the third exchange is taken first
-(`integration::pg_recovered_hold_is_ready_and_taken_first`). `Live::abandon` stops as a killed process would (every task
+(`integration::pg_recovered_hold_is_ready_and_taken_first`); and L3 threads
+the third into the conversation it opens, before the fourth, whatever
+order they arrive in (`reconstruct.thread.order-independent`;
+`crates/e2e/tests/reorder`), though B's id would still come from the
+fourth. `Live::abandon` stops as a killed process would (every task
 aborted and joined, nothing acked or checkpointed, the bus's tasks and
 takes stopped and joined without touching its tables): what a lost lock
 does to its incarnation; `Live::kill`, for restart tests, is it with a
@@ -1113,6 +1123,7 @@ on `crates/api/tests/support/pg_world.rs`:
 | `crates/e2e/tests/common/{mod,gateway}.rs` | the Postgres-mode harness and the gateway outage harness | `start_pg`, `uninterrupted`, `Gateway`, `Run`, `outage` |
 | `crates/e2e/tests/restart/main.rs` | kill and restart, cursors, ids (W9) | tests |
 | `crates/e2e/tests/{spool,spool_outage,spool_outage_twice,spool_kill,spool_outage_serve_runtime}/main.rs` | the spool through the gateway (W9) | tests |
+| `crates/e2e/tests/reorder/main.rs` | the relay's third exchange delivered after its fourth, memory and Postgres mode: the in-order threads and the uninterrupted answers, agents by role | tests |
 | `crates/e2e/tests/lock_loss/{main,harness,partition,rival,repeated,standby}.rs` | the lock lost while the gateway runs: no refused connect, no owner write after the abandon, no leak, a standby taking over with no older-epoch write | tests, `Prober`, `Sampler`, `epoch_of` |
 | `crates/gateway/src/integration/pool_close.rs` | why a shutdown across a partition hung: sqlx's `Pool::close` | test |
 | `crates/gateway/src/main.rs`, `crates/gateway/src/gateway/mod.rs` | `serve` runs until SIGINT or SIGTERM; nothing else stops it | `Running::shutdown`, `Running::shutdown_bound` |
@@ -1199,7 +1210,7 @@ on `crates/api/tests/support/pg_world.rs`:
   No database: `live::recovery::tests::a_resuming_process_stays_ready_degraded_after_a_loss`,
   `crosstalk_transport::pg::progress::tests::aborted_takes_are_gone_once_none_by_returns`,
   `crosstalk_transport::pg::tests::a_publish_only_bus_refuses_subscriptions`.
-- Memory mode unchanged: every `ct-eval replay` of the bench runs is
+- Memory mode unchanged: every `ct-eval replay` (since retired) of the bench runs was
   byte-identical to the base build (export, evidence, score, report).
 
 - W9 suite (Postgres unless noted; every wait bounded at five minutes

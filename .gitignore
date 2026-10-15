@@ -3,3 +3,4 @@
 /deploy/.env
 /.env.test
 /deploy/bench/
+/deploy/SOURCE_COMMIT

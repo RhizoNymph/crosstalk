@@ -25,6 +25,10 @@ pub enum ThreadConfigError {
     ZeroRetention,
     #[error("the seen-message retention must fit in u64 microseconds")]
     RetentionTooLong,
+    #[error("the reorder window must be non-zero")]
+    ZeroReorderWindow,
+    #[error("the reorder window must fit in u64 microseconds")]
+    ReorderWindowTooLong,
 }
 
 /// How long a message an agent saw (received in a request, or produced as

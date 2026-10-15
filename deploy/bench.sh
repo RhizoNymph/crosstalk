@@ -6,17 +6,22 @@
 #
 # Steps, in order (each is one function below):
 #   1. confirm_restart          say what restarts; ask unless --yes
+#      fresh_database           a new database for the run (crosstalk_bench_<run>)
 #   2. start_stack              `up -d --build` with the demo override
-#   3. require_detection        fail fast unless /readyz has `live` and `api`
+#   3. require_detection        Postgres mode: wait for recovery done, lock
+#                               held, capture durable; then fail fast unless
+#                               /readyz has `live` and `api`
 #                               running and the API takes the token
 #   4. fresh_world              restart wiki and crosstalk, wait for health,
 #                               check step 3 again
 #   5. run_swarm                the swarm, writing ground truth v2
 #   6. wait_caught_up           /healthz `live.watermark_micros` past the
 #                               swarm's end (exports are cut at the watermark)
-#   7. fetch_detections         ct-eval swarm-fetch (export + evidence)
+#   7. fetch_detections         ct-bench-detect swarm-fetch (export + evidence)
 #      snapshot_inputs          copy the exchange log and blobs into the run dir
-#   8. score                    ct-eval swarm, headline, ct-eval's exit code
+#      bench_detect_inputs      ct-bench-detect fetch (/query answers) and from-export
+#   8. score                    a2a-bench export + score (bench_ref), headline,
+#                               score's exit code
 # Nothing after step 4 may restart or recreate crosstalk: its detection
 # state is in memory. Every `compose run` here passes --no-deps for that.
 
@@ -25,7 +30,7 @@ bench_api_url="http://crosstalk:8081"
 # Where the `data` volume is mounted (read-only) in the bench container;
 # the gateway's data directory (blobs.root's parent).
 bench_data_dir="/var/lib/crosstalk"
-bench_gates="/usr/local/share/crosstalk-eval/gates.toml"
+bench_gates="/usr/local/share/a2a-bench/gates/crosstalk-gateway-export.toml"
 # Seeds at or above this are reserved for holdout runs (the n-th holdout run
 # uses 1_000_000 + n); development runs stay below it, so a dev run can never
 # spend a holdout seed.
@@ -106,9 +111,12 @@ confirm_restart() {
 run.sh bench is about to:
   - start the demo stack (`up -d --build` with compose.demo.yaml); services
     whose image or config changed are recreated;
-  - restart `wiki`: its pages live in memory and are lost (a fresh world);
-  - restart `crosstalk`: its detection state lives in memory and is lost.
-The exchange log and blobs on the `data` volume are kept.
+  - create a fresh database for the run (crosstalk_bench_<run>), migrate it
+    and point `crosstalk` at it, so earlier runs' detection state (kept in
+    their own databases, never deleted) cannot affect this one;
+  - restart `wiki`: its pages live in memory and are lost (a fresh world).
+The exchange log and blobs on the `data` volume are kept. A later plain
+`run.sh up` points crosstalk back at the `crosstalk` database.
 EOF
     [[ "$yes" == 1 ]] && return 0
     [[ -t 0 ]] || bench_fail "stdin is not a terminal; pass --yes to restart without asking"
@@ -116,9 +124,35 @@ EOF
     [[ "$answer" =~ ^([yY]|[yY][eE][sS])$ ]] || bench_fail "not confirmed; nothing was restarted"
 }
 
-# 2. The demo stack, built (the image must carry ct-eval) and running.
+# 2. The demo stack, built (the image must carry the bench tools) and running.
 start_stack() {
     compose up -d --build
+}
+
+# How many per-run bench databases exist and their total size, so whoever
+# asks the user about dropping old ones knows when it matters. Nothing here
+# drops anything.
+bench_database_tally() {
+    compose exec -T postgres psql -At -U crosstalk -d crosstalk -c \
+        "SELECT count(*) || ' bench databases, ' || pg_size_pretty(coalesce(sum(pg_database_size(datname)), 0)) FROM pg_database WHERE datname LIKE 'crosstalk\_bench\_%'" \
+        2>/dev/null || echo "bench databases: unknown (postgres not reachable)"
+}
+
+# A fresh database for run `stamp`, so nothing earlier runs left in Postgres
+# (fingerprints, token observations, transmissions) reaches this one. The
+# gateway and `migrate` read its name from CROSSTALK_DB_NAME (compose.yaml's
+# DATABASE_URL); start_stack then migrates it and recreates crosstalk on it.
+fresh_database() {
+    local stamp="$1" name
+    name="crosstalk_bench_${stamp,,}"
+    compose up -d postgres
+    wait_healthy postgres 120
+    compose exec -T postgres psql -v ON_ERROR_STOP=1 -q -U crosstalk -d crosstalk \
+        -c "CREATE DATABASE \"${name}\"" \
+        || bench_fail "could not create the run's database ${name}"
+    CROSSTALK_DB_NAME="$name"
+    export CROSSTALK_DB_NAME
+    echo "run.sh bench: database ${name}" >&2
 }
 
 # Wait for a compose service's container to report healthy.
@@ -142,15 +176,48 @@ ready_task() {
     grep -Eq "\"name\":[[:space:]]*\"$1\",[[:space:]]*\"running\":[[:space:]]*true" <<<"$2"
 }
 
-# 3. Fail fast, before a run's worth of traffic: the gateway must run the
+# /readyz string field `$1` ("" when absent: memory mode leaves the
+# Postgres-mode fields out).
+readyz_field() {
+    sed -n "s/.*\"$1\":[[:space:]]*\"\([^\"]*\)\".*/\1/p" <<<"$2"
+}
+
+# Postgres mode (a `store` section): the pipeline recovers after the process
+# starts, with /readyz already 200 (degraded). Wait until recovery is done,
+# this process holds the pipeline lock and capture writes straight to the
+# bus, so the run's first exchange is not measured against a recovering
+# pipeline. Memory mode has no `recovery` field and returns at once. Prints
+# the last /readyz body.
+wait_pipeline_recovered() {
+    local timeout="$1" ready deadline recovery lock capture
+    deadline=$((SECONDS + timeout))
+    while true; do
+        ready="$(curl -sS --max-time 5 "$(ops_url)/readyz")" \
+            || bench_fail "$(ops_url)/readyz did not answer"
+        recovery="$(readyz_field recovery "$ready")"
+        [[ -z "$recovery" ]] && break
+        lock="$(readyz_field pipeline_lock "$ready")"
+        capture="$(readyz_field capture "$ready")"
+        [[ "$recovery" == done && "$lock" == held && "$capture" == durable ]] && break
+        if ((SECONDS >= deadline)); then
+            echo "run.sh bench: the Postgres-mode pipeline is not ready after ${timeout}s (recovery ${recovery}, pipeline_lock ${lock}, capture ${capture})" >&2
+            echo "  /readyz: ${ready}" >&2
+            exit 1
+        fi
+        sleep 2
+    done
+    printf '%s\n' "$ready"
+}
+
+# 3. Fail fast, before a run's worth of traffic: in Postgres mode, once the
+# pipeline has recovered (wait_pipeline_recovered), the gateway must run the
 # Live detection pipeline (`live`: every layer stage task running) and serve
 # the operator API (`api`: listener bound), and the API must take our token.
 # Without `live` the export is empty and the score a real but meaningless
 # zero; without `api` there is no export at all.
 require_detection() {
     local ready code
-    ready="$(curl -sS --max-time 5 "$(ops_url)/readyz")" \
-        || bench_fail "$(ops_url)/readyz did not answer"
+    ready="$(wait_pipeline_recovered 180)"
     if ! ready_task api "$ready"; then
         echo "run.sh bench: the gateway does not expose detections (no running \`api\` task in /readyz); see docs/features/bench.md" >&2
         echo "  /readyz: ${ready}" >&2
@@ -241,7 +308,7 @@ fetch_detections() {
         compose --profile bench run --rm --no-deps -T bench \
             swarm-fetch --api "$bench_api_url" --token-env CROSSTALK_API_TOKEN \
             --truth "/bench/${run}/truth.jsonl" --out "/bench/${run}" \
-            || bench_fail "ct-eval swarm-fetch failed; the detection state is still in crosstalk until it restarts"
+            || bench_fail "ct-bench-detect swarm-fetch failed; the detection state is still in crosstalk until it restarts"
         return
     fi
     # Holdout: swarm-fetch's own output summarises the detector (rows per
@@ -254,7 +321,7 @@ fetch_detections() {
     if ((rc != 0)); then
         printf '%s\n' "$out" >"${dir}/fetch.err"
         echo "swarm-fetch failed (exit ${rc}); output in fetch.err" >"${dir}/fetch.log"
-        bench_fail "ct-eval swarm-fetch failed (exit ${rc}); see ${dir}/fetch.err (not a usable holdout run)"
+        bench_fail "ct-bench-detect swarm-fetch failed (exit ${rc}); see ${dir}/fetch.err (not a usable holdout run)"
     fi
     {
         echo "swarm-fetch ok"
@@ -265,8 +332,8 @@ fetch_detections() {
 }
 
 # After the export: copy the gateway's exchange log and blob store into the
-# run directory, so the run can be re-scored anywhere (ct-eval swarm needs
-# the truth, the exchange log, the blobs and the export). Both accumulate
+# run directory, so the run can be re-scored anywhere (ct-bench-detect
+# from-export reads them beside the truth and the export). Both accumulate
 # across runs (blobs are content-addressed), so this copies everything so
 # far; the importer joins on the run's sessions.
 snapshot_inputs() {
@@ -278,25 +345,66 @@ snapshot_inputs() {
         || bench_fail "could not copy the exchange log and blobs into ${dir}"
 }
 
-# 8. Score offline against the exchange log and blobs read in place on the
-# data volume; print the headline and return ct-eval's exit code (2: a gate
-# failed).
+# One ct-bench-detect step in the bench container; its output goes to
+# <run>/<name>.log, and to the terminal too unless this is a holdout run.
+bench_detect_step() {
+    local run="$1" quiet="$2" name="$3" dir rc=0 out
+    dir="${here}/bench/${run}"
+    shift 3
+    out="$(compose --profile bench run --rm --no-deps -T \
+        --entrypoint /usr/local/bin/ct-bench-detect bench "$@" 2>&1)" || rc=$?
+    if [[ "$quiet" == 1 ]]; then
+        printf '%s\n' "$out" >"${dir}/${name}.log"
+    else
+        printf '%s\n' "$out" | tee "${dir}/${name}.log"
+    fi
+    ((rc == 0)) || bench_fail "ct-bench-detect ${name} failed (exit ${rc}); see ${dir}/${name}.log"
+}
+
+# After the snapshot, while the gateway still holds the run's detections:
+# `ct-bench-detect fetch` saves the gateway's /query answers
+# (exchange-turns.json, span-points.json) beside the export, which only a
+# live gateway can give; `from-export` turns the run directory into
+# a2a-transmission-bench input (bench-input/: manifest.json, messages.jsonl,
+# exchanges.jsonl, predictions.jsonl). Neither scores anything.
+bench_detect_inputs() {
+    local run="$1" quiet="$2"
+    bench_detect_step "$run" "$quiet" detect-fetch \
+        fetch --api "$bench_api_url" --token-env CROSSTALK_API_TOKEN \
+        --truth "/bench/${run}/truth.jsonl" --out "/bench/${run}"
+    bench_detect_step "$run" "$quiet" from-export \
+        from-export --run "/bench/${run}" --out "/bench/${run}/bench-input"
+}
+
+# 8. Score with a2a-bench, the bench repo's scorer, at the release tag the
+# demo image was built with (bench_ref in bench.env): `export` turns the
+# ground truth and bench-input/ into the bench's export (bench-export/:
+# labels joined to the captured exchanges by session and tool-use id),
+# `score` scores bench-input/predictions.jsonl against it with the bench's
+# gates for the gateway's export. Prints the headline and returns score's
+# exit code (2: a gate failed).
+bench_a2a() {
+    compose --profile bench run --rm --no-deps -T \
+        --entrypoint /usr/local/bin/a2a-bench bench "$@"
+}
+
 score() {
     local run="$1" rc=0 dir="${here}/bench/${run}"
-    compose --profile bench run --rm --no-deps -T bench \
-        swarm --truth "/bench/${run}/truth.jsonl" \
-        --exchanges "${bench_data_dir}/exchanges/exchange-log.jsonl" \
-        --blobs "${bench_data_dir}/blobs" \
-        --export "/bench/${run}/export.jsonl" \
-        --evidence "/bench/${run}/evidence.jsonl" \
+    bench_a2a export --dataset demo-swarm \
+        --inputs "/bench/${run}/bench-input" \
+        --truth "/bench/${run}/truth.jsonl" \
+        --out "/bench/${run}/bench-export" >"${dir}/bench-export.log" 2>&1 \
+        || bench_fail "a2a-bench export failed; see ${dir}/bench-export.log"
+    bench_a2a score --export "/bench/${run}/bench-export" \
+        --predictions "/bench/${run}/bench-input/predictions.jsonl" \
         --gates "$bench_gates" \
-        --out "/bench/${run}/report" >"${dir}/score.txt" || rc=$?
+        --out "/bench/${run}/report" >"${dir}/score.txt" 2>&1 || rc=$?
     if ((rc != 0 && rc != 2)); then
-        echo "run.sh bench: ct-eval swarm failed (exit ${rc}); output in ${dir}/score.txt" >&2
+        echo "run.sh bench: a2a-bench score failed (exit ${rc}); output in ${dir}/score.txt" >&2
         return "$rc"
     fi
     echo
-    echo "bench ${run} ($(sed -n 's/^scenario=//p' "${dir}/bench.env"))"
+    echo "bench ${run} ($(sed -n 's/^scenario=//p' "${dir}/bench.env"), $(sed -n 's/^bench_ref=//p' "${dir}/bench.env"))"
     grep -m 1 '^overall:' "${dir}/report/report.txt" || true
     if grep -q '^gates:' "${dir}/report/report.txt"; then
         sed -n '/^gates:/,/^$/p' "${dir}/report/report.txt"
@@ -306,6 +414,17 @@ score() {
     if ((rc == 2)); then echo "result: GATE FAILED"; else echo "result: pass"; fi
     echo "report: ${dir}/report/report.txt"
     return "$rc"
+}
+
+# The bench release the demo image carries (its REF file: bench_ref and
+# bench_commit lines), for bench.env.
+bench_ref_lines() {
+    local id out
+    id="$(docker create crosstalk-demo:dev)" || bench_fail "could not create a container from crosstalk-demo:dev"
+    out="$(docker cp "${id}:/usr/local/share/a2a-bench/REF" - 2>/dev/null | tar -xO 2>/dev/null)"
+    docker rm "$id" >/dev/null
+    [[ -n "$out" ]] || bench_fail "crosstalk-demo:dev has no /usr/local/share/a2a-bench/REF; rebuild it (deploy/demo.Dockerfile)"
+    printf '%s\n' "$out"
 }
 
 bench() {
@@ -349,12 +468,15 @@ bench() {
     mkdir -p "${here}/bench"
 
     confirm_restart "$yes"
+    local stamp
+    stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+    fresh_database "$stamp"
     start_stack
     wait_healthy crosstalk 180
     require_detection
     fresh_world
 
-    run="$(date -u +%Y%m%dT%H%M%SZ)"
+    run="$stamp"
     if ((holdout == 1)); then
         mkdir -p "${here}/bench/holdout"
         run="holdout/${run}"
@@ -367,11 +489,16 @@ bench() {
         echo "scenario=${scenario}"
         echo "seed=${seed}"
         echo "holdout=${holdout}"
+        # The crosstalk commit this checkout was synced from (the sync
+        # writes deploy/SOURCE_COMMIT; a rsynced copy has no .git).
+        echo "crosstalk_commit=$(cat "${here}/SOURCE_COMMIT" 2>/dev/null || echo unknown)"
+        echo "database=${CROSSTALK_DB_NAME}"
         echo "swarm=${swarm_args[*]} ${extra[*]}"
         echo "evidence_window_ms=$(demo_flow_ms evidence_window_ms)"
         echo "suspected_ttl_ms=$(demo_flow_ms suspected_ttl_ms)"
         echo "crosstalk_image=$(docker image inspect --format '{{.Id}}' crosstalk:dev)"
         echo "demo_image=$(docker image inspect --format '{{.Id}}' crosstalk-demo:dev)"
+        bench_ref_lines
     } >"${here}/bench/${run}/bench.env"
     echo "run.sh bench: run ${run} (scenario ${scenario}) -> deploy/bench/${run}/" >&2
 
@@ -383,6 +510,8 @@ bench() {
     wait_caught_up "$run" "$end_ms" "$timeout"
     fetch_detections "$run" "$holdout"
     snapshot_inputs "$run"
+    echo "run.sh bench: $(bench_database_tally)" >&2
+    bench_detect_inputs "$run" "$holdout"
     if ((holdout == 1)); then
         # Holdout: no scoring, no report/, no metrics; just say what was saved.
         echo "holdout run ${run#holdout/} (scenario ${scenario}, seed ${seed}) saved, unscored:"
