@@ -69,17 +69,17 @@ The same release also scores crosstalk on public multi-agent datasets (SALT, Age
 
 ### Durability in Postgres mode
 
-Fault runs on 2026-10-14 on the deployed compose stack in Postgres mode, at the same content as staging `d6d69bc`. Each is one boilerplate demo swarm run (one headline run for the restart), with a fresh database and no manual intervention, scored by `a2a-bench-v1.1.1`. Faults were injected mid-run: a 30 s silent network partition between the gateway and Postgres (`docker network disconnect`), or Postgres stopped for 30 s.
+Fault runs on 2026-10-14 on the deployed compose stack in Postgres mode, at the same content as staging `d6d69bc`. Each is one boilerplate demo swarm run (one headline run for the restart), with a fresh database and no manual intervention, scored by `a2a-bench-v1.1.1`. Faults were injected mid-run: a silent network partition between the gateway and Postgres (`docker network disconnect`) of 42 to 44 s, or Postgres stopped for 37 s. Durations are wall-clock, to within a second.
 
-| Fault | Requests refused by the proxy | Gateway exits | Pipeline running again | Dead letters | Detection gates |
+| Fault | Requests refused by the proxy | Gateway exits | Pipeline running again, after the fault ended | Dead letters | Detection gates |
 |---|---|---|---|---|---|
-| Partition, 30 s | 0 of 245 | 0 | 46 s after the fault | 0 | pass |
-| Partition, 30 s | 0 of 238 | 0 | 46 s | 0 | pass |
-| Partition, 30 s | 0 of 256 | 0 | 45 s | 0 | false positives 121.1 against 115 |
-| Postgres stopped, 30 s | 0 of 252 | 0 | 39 s | 0 | pass |
-| Gateway restarted (`docker restart`) | 66 of 310, over 9.8 s | 1 (the restart) | 12 s | 0 | pass (headline 1.000 / 1.000) |
+| Partition, 44 s | 0 of 245 | 0 | 2.0 s after reconnecting | 0 | pass |
+| Partition, 44 s | 0 of 238 | 0 | 2.2 s | 0 | pass |
+| Partition, 42 s | 0 of 256 | 0 | 2.7 s | 0 | false positives 121.1 against 115 |
+| Postgres stopped, 37 s | 0 of 252 | 0 | 1.1 s after Postgres was ready | 0 | pass |
+| Gateway restarted (`docker restart`) | refused for 9.8 s; 66 of 310 requests unsent | 1 (the restart) | 11.7 s after the restart | 0 | pass (headline 1.000 / 1.000) |
 
-During a fault the proxy keeps forwarding and the capture spool holds what it captured (up to about 90 exchanges here). The spool drains within a few seconds of the database answering. In every partition the gateway noticed it had lost its pipeline lock before Postgres released it, so no second gateway could have taken the lock while this one still ran its pipeline. Most of the third partition's false positives came from reads before the fault, so its gate miss reflects the boilerplate scenario's run-to-run variance, not the partition.
+During a fault the proxy keeps forwarding and the capture spool holds what it captured (up to about 90 exchanges here). The spool drains within a few seconds of the database answering. In every partition the gateway noticed it had lost its pipeline lock 6 to 8 s into the fault, before Postgres released it at 23 to 26 s, so no second gateway could have taken the lock while this one still ran its pipeline. Most of the third partition's false positives came from reads before the fault, so its gate miss reflects the boilerplate scenario's run-to-run variance, not the partition.
 
 ## Known limitations
 
@@ -87,7 +87,7 @@ During a fault the proxy keeps forwarding and the capture spool holds what it ca
 - **Template-heavy pages.** In the boilerplate scenario crosstalk reports roughly 60 to 140 false positives per 1,000 exchanges, varying from run to run, so its gates (115 per 1,000, precision 0.86) fail on some runs. One known source: when a page is rewritten from shared template text, a read of the new version can also be credited to the writer of an older version, through text both versions kept.
 - **An occasional dropped read.** In about 2 of 12 development runs, a live read of a wiki page did not reach flow detection, so a channel transmission was reported as direct messages instead. Replaying the same capture offline detects it correctly.
 - **Planned restarts.** A restart (SIGTERM) closes the proxy while the old process drains its open streams and the new one starts: about 10 s in the run above. Outages and partitions do not close it.
-- **One gateway per database.** The pipeline lock lets a second gateway wait as a standby. If the lock's session is reset while the database stays reachable, two gateways could overlap for up to 5 s. The compose stack runs one gateway.
+- **One gateway per database.** The pipeline lock lets a second gateway wait as a standby, but a takeover does not work yet: each gateway keeps the message bodies it captured on its own volume, so a standby that takes the lock cannot read them. In two-gateway tests on a development branch, the standby took over within seconds, but two runs could not be scored, because reconstruction failed on 157 and 167 exchanges whose bodies it could not find. If the lock's session is reset while the database stays reachable, two gateways could also overlap for up to 5 s. The compose stack runs one gateway.
 
 Fixes to detection will be judged on fresh development runs and then on a new held-out release, not on the runs above.
 
