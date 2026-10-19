@@ -10,6 +10,12 @@
 //! turns ≥ MAX_TURNS              → compaction: history = [summary] ++ last 2 messages
 //! chance FORK, ≥ 3 replies       → fork: history cut after an earlier reply
 //! ```
+//!
+//! Requests are causal: a request carries only outputs of exchanges that
+//! had ended when it started. When an exchange starts, the session's
+//! previous completed exchange, whose output its history ends with, is
+//! made to have finished (and to have sent its first chunk) no later than
+//! that start. Starts are not moved: they are the world's event times.
 
 use crosstalk_spec::derived::provenance::matching::Carrier;
 use crosstalk_spec::ids::{AgentId, ExchangeId, MessageHash};
@@ -59,6 +65,8 @@ struct Session {
     replies: Vec<usize>,
     turns: u32,
     last: Timestamp,
+    /// Where the session's latest completed exchange is in the output.
+    replied: Option<usize>,
 }
 
 /// Builds one agent's exchanges.
@@ -197,6 +205,7 @@ impl<'a> Sessions<'a> {
                 replies: Vec::new(),
                 turns: 0,
                 last: event.at,
+                replied: None,
             });
             return Ok(());
         }
@@ -250,6 +259,30 @@ impl<'a> Sessions<'a> {
         minus(at, step).max(last).min(at)
     }
 
+    /// Make the session's latest completed exchange end no later than
+    /// `at`, when a request starting then carries history: the request
+    /// carries that exchange's output only once it has ended.
+    fn end_before(&mut self, at: Timestamp) {
+        let Some(session) = self.session.as_ref() else {
+            return;
+        };
+        if session.history.is_empty() {
+            return;
+        }
+        let Some(wire) = session.replied.and_then(|index| self.out.get_mut(index)) else {
+            return;
+        };
+        if let ExchangeOutcome::Completed {
+            first_chunk_at,
+            finished_at,
+            ..
+        } = &mut wire.exchange.outcome
+        {
+            *finished_at = (*finished_at).min(at);
+            *first_chunk_at = (*first_chunk_at).min(*finished_at);
+        }
+    }
+
     fn request(&self, inputs: &[MessageHash]) -> Vec<MessageHash> {
         let Some(session) = &self.session else {
             return inputs.to_vec();
@@ -295,6 +328,7 @@ impl<'a> Sessions<'a> {
         response: MessageHash,
         stop: StopReason,
     ) -> Result<(), WorldError> {
+        self.end_before(at);
         let request = self.request(&inputs);
         let usage = self.usage(request.len())?;
         let first_chunk_at = plus(at, 400_000 + self.rng.below(SECOND));
@@ -317,7 +351,9 @@ impl<'a> Sessions<'a> {
             exchange,
         });
         self.steps += 1;
+        let index = self.out.len() - 1;
         if let Some(session) = self.session.as_mut() {
+            session.replied = Some(index);
             session.history.extend(inputs);
             session.history.push(response);
             session.replies.push(session.history.len());
@@ -329,6 +365,7 @@ impl<'a> Sessions<'a> {
 
     /// An attempt the upstream refused: the same request is sent again.
     fn failed(&mut self, id: ExchangeId, at: Timestamp, inputs: Vec<MessageHash>) {
+        self.end_before(at);
         let request = self.request(&inputs);
         let exchange = Exchange {
             meta: self.meta(id, at),

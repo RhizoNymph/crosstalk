@@ -391,14 +391,14 @@ Done: the capture slice above. Next: factor the gateway's composition into a
 library entry, `crosstalk_gateway::pipeline::Pipeline::build(config, stores,
 clock)`, and split the capture stage so a pre-normalized exchange can enter
 through `Pipeline::ingest(NormalizedExchange, at)`. `ingest` stores the blobs,
-then publishes `ExchangeCaptured`. `crosstalk-eval` (a Composer in
-`Role::of`) drives the real layers through it on dataset corpora under sim
-time. Depends on P3; P4 and P5 consume it. Ingested exchanges carry
+then publishes `ExchangeCaptured`. `crosstalk-bench-adapter` (a Composer
+in `Role::of`; formerly `crosstalk-eval`) drives the real layers through it
+on the a2a-transmission-bench's datasets. Depends on P3; P4 and P5 consume it. Ingested exchanges carry
 `IngressMode::Replay { corpus: CorpusId }`, which the proxy never produces
 (INV-972) and L3 keeps apart from live agents and other corpora (INV-973).
 
-- [x] `Pipeline::build(Settings, Deps, clock)` and `Pipeline::ingest`, the capture stage calling `ingest` after L1, every `serve` role built on it, and `crosstalk-eval` registered as a Composer (`docs/features/gateway.md`, [Pipeline](features/gateway.md#pipeline-the-library-entry-point)).
-- [ ] `crosstalk-eval` driving the real layers through it on dataset corpora. The eval side is ready: corpus exchanges are replayed under `IngressMode::Replay`, predictions read the spec's `SpanIndex`, `AccessStore` and channel reads, and `detect::live::LiveDetector` scores any `LiveBackend` (tested over crosstalk-memory's stores). Left: the `Live` adapter (`crates/eval/src/detect/live/gateway.rs.in`), wiring only once `crosstalk_gateway::live::Live` merges with `settle`, `TransmissionStore::list` and an L3 exchange-attribution read (`docs/features/eval.md`, "The live seam").
+- [x] `Pipeline::build(Settings, Deps, clock)` and `Pipeline::ingest`, the capture stage calling `ingest` after L1, every `serve` role built on it, and the evaluation crate registered as a Composer (`docs/features/gateway.md`, [Pipeline](features/gateway.md#pipeline-the-library-entry-point)).
+- [x] The real layers driven through it on dataset corpora: `detect::live::LiveDetector` over `GatewayBackend` (`crosstalk_gateway::live::Live`), first in ct-eval (#83), now in `ct-bench-detect`, crosstalk's detector for the a2a-transmission-bench, which owns the datasets, labels, scoring and gates (`docs/features/bench_adapter.md`).
 
 ## P4 Identity and provenance (parallel)
 

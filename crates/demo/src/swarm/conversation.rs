@@ -162,9 +162,10 @@ impl Conversation {
         }
     }
 
-    /// The turn ordinal of a request about to be sent: 0 for the first
-    /// generation request of this conversation, counting every request sent
-    /// before it, failed and retried ones included.
+    /// The turn ordinal of a request that may have reached the gateway: 0
+    /// for the first generation request of this conversation, counting every
+    /// such request before it, failed and retried ones included. A request
+    /// refused before it was sent claims none.
     pub fn claim_turn(&mut self) -> u32 {
         let turn = self.sent;
         self.sent = self.sent.saturating_add(1);

@@ -107,6 +107,12 @@ what grow.
 
 - `postgres` (pgvector 0.8.6, Postgres 18) with `pg_stat_statements`
   preloaded and a read-only `crosstalk_monitor` role for the exporter.
+  Server TCP keepalives (`tcp_keepalives_idle=10`, `_interval=5`,
+  `_count=3`) and `tcp_user_timeout=25000` reap a client that vanished
+  without closing (a partition, a killed host) in about 25 s. Its session's
+  advisory locks go with it, so a restarted gateway can take the pipeline
+  lock instead of waiting at `pipeline_lock: held elsewhere` until the
+  kernel's default timeouts (hours idle, ~15 min with data in flight).
 - `migrate` runs `crosstalk migrate` once, then exits; `crosstalk` starts
   only after it succeeds. Upgrades are therefore: build, `up -d` (migrate
   runs first), and the strict wire contract is safe because the in-process
@@ -159,7 +165,7 @@ dashboards meanwhile. `demo down` stops it. Details and knobs:
 | Postgres connections, TPS, cache hits, size, slow statements | postgres-exporter + `pg_stat_statements` | same |
 | Every container's logs | Alloy → Loki (7 days), `level` lifted from JSON logs | Grafana Explore / logs row |
 | Alerts | Prometheus rules (`deploy/prometheus/rules/`) | Prometheus and Grafana UIs (no Alertmanager) |
-| The gateway itself | `crosstalk:9464/metrics` (capture, pipeline and exchange log counters, draining) and its WARN/ERROR logs | Grafana "crosstalk / gateway"; alerts in `deploy/prometheus/rules/gateway.yml` |
+| The gateway itself | `crosstalk:9464/metrics` (capture, pipeline, spool and exchange log counters, draining) and its WARN/ERROR logs | Grafana "crosstalk / gateway"; alerts in `deploy/prometheus/rules/gateway.yml` |
 
 Application metrics (proxy added latency, capture drops, bus queue depth,
 L7 watermark lag, embedding queue) belong to the application and arrive on

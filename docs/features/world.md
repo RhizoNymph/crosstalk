@@ -223,6 +223,14 @@ sessions::Sessions    per agent, oldest first, full-history requests:
   the only text one agent's inputs share with another's outputs is what
   the transmissions carried (and the bodies' shared filler, which L4's
   boilerplate rules handle).
+- **Requests are causal.** A request carries only outputs of exchanges
+  that had ended when it started: when an exchange starts with history,
+  the session's previous completed exchange is clamped to finish (and to
+  send its first chunk) no later than that start (`Sessions::end_before`).
+  Starts stay the world's event times. Without it, an agent's next
+  request could carry a reply still streaming, which L3's turn-key order
+  (`reconstruct.thread.order-independent`, threading by when exchanges
+  ended) threads as a new conversation.
 - **Attribution is stated.** `WireExchange::agent` is the world's agent
   (as attributed then: an alias keeps its id after its merge). The
   `ClientContext` follows the agent's family and evidence (route,
