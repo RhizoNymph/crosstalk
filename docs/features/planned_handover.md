@@ -189,7 +189,7 @@ the process exits.
   `live::pg::pump::tests::acks_after_the_subscription_ended_still_land`,
   `live::recovery::tests::a_handover_is_not_ready_and_names_its_step`,
   `ops::handover_tests::readyz_and_healthz_name_the_handover_step`.
-- Postgres (written; node0 runs pending): `crosstalk-transport`
+- Postgres (run on node0): `crosstalk-transport`
   `integration::handover::{pg_released_holds_are_ready_at_once_on_the_same_attempt,
   pg_a_release_with_nothing_held_releases_nothing}`; `crosstalk-e2e`
   `lock_loss::handover::a_planned_shutdown_hands_the_pipeline_to_the_standby_cleanly`
