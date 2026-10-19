@@ -17,7 +17,7 @@ This is an early-stage project. The design is fully specified and detection runs
 | Specification (`spec/`) | Done. Types, per-layer traits and invariants, plus the JSON wire contract with golden files. `scripts/inv_check.py` validates the invariants. |
 | Capture and serving (`crosstalk` binary) | Working. Reverse proxy for Anthropic Messages over HTTP/SSE; Claude Code pointed at it through `ANTHROPIC_BASE_URL` works unchanged, including with Claude Code's OAuth login. `serve --role all` runs the proxy, the detection pipeline and the HTTP API together. |
 | Transport, store, blob store | Working. The gateway runs every detection layer on its own Postgres store (the default in the compose stack) over a durable Postgres bus. Capture goes through an on-disk spool, so it keeps going while the database is down. Restarts recover in place, and a lost pipeline lock is resumed inside the process. An in-memory mode remains for tests and the benchmark adapter. |
-| Detection (L3–L7: reconstruct, provenance, flow, analysis, topology) | Wired end to end through `Live`. On held-out demo swarm runs, the headline scenario scores recall 1.000 and precision 1.000, and the template-heavy boilerplate scenario recall 1.000 and precision 0.890 ([Results](#results)). |
+| Detection (L3–L7: reconstruct, provenance, flow, analysis, topology) | Wired end to end through `Live`. On held-out demo swarm runs, the headline scenario scores recall 1.000 and precision 1.000, and the template-heavy boilerplate scenario recall 1.000 and precision 0.887 ([Results](#results)). |
 | Surface service (L8) | Working, in process and over HTTP (`api.listen`, bearer token). It covers queries, operator actions, the live feed and export, and passes all 65 tests of the L8 conformance suite. |
 | Evaluation (`crates/bench-adapter`, `ct-bench-detect`) | The datasets, labels, scoring and gates live in the standalone benchmark [a2a-transmission-bench](#benchmark-a2a-transmission-bench). `ct-bench-detect` is crosstalk's detector for it: the live composition over a bench input directory, and saved node0 bench runs as bench inputs and predictions. crosstalk's own scorer (formerly `ct-eval`) is retired. |
 | Operator UI (`ui/`) | Runs against a live gateway over HTTP, or on a synthetic fixture world (optionally in replay mode). Includes follow mode for the overview and topology, and a per-agent conversation view. |
@@ -36,7 +36,7 @@ Since then (586 commits, PRs #23 to #129):
 - **Postgres mode.** A Postgres store for every layer (transport, reconstruct, provenance, flow, analysis, topology, surface), wired into the gateway. It has restart recovery, a capture spool for database outages, and a single-writer pipeline lock that is resumed in process when lost. Restart, outage, partition and conformance suites cover it, and fault runs on the deployed stack confirm it.
 - **Claude Code OAuth.** Claude Code logged in with OAuth works through the proxy.
 - **Operations.** Grafana panels and alerts for the gateway's capture spool.
-- **The benchmark split out** into its own repository, described next, and a held-out release scored by it.
+- **The benchmark split out** into its own repository, described next, and held-out releases scored by it.
 
 ### Benchmark: a2a-transmission-bench
 
@@ -48,46 +48,46 @@ The step-by-step plan and current progress are in [`docs/roadmap.md`](docs/roadm
 
 All results below are on synthetic traffic: crosstalk's demo swarm, whose agents read and write a shared wiki through the real gateway, with known ground truth. They are scored by [a2a-transmission-bench](#benchmark-a2a-transmission-bench), not by crosstalk's own code.
 
-These results apply to the build tagged [`post-2026-10`](https://github.com/RhizoNymph/crosstalk/tree/post-2026-10) (staging `5295fdd`). The fault runs used the same code as that tag. The held-out runs used an earlier build with the same detection, described below. Changes merged after the tag are not covered until the next measurement.
+These results apply to staging [`a74f808`](https://github.com/RhizoNymph/crosstalk/commit/a74f808). The held-out runs used that build. The fault runs used `c316505`, which differs from it only in one test file. Changes merged after it are not covered until the next measurement.
 
 ### Held-out detection
 
-Six demo swarm runs on seeds no development run used (1000001–1000006). They were saved without scoring and never inspected on crosstalk's side, then scored once by the bench, against its naive reference matcher. The full report, with provenance and the commands to reproduce it, is the bench's [release results](https://github.com/RhizoNymph/a2a-transmission-bench/blob/main/docs/results/release-2026-10.md).
+Eight demo swarm runs on seeds no development run used (1000007–1000014). They were saved without scoring and never inspected on crosstalk's side, then scored once by the bench, against its naive reference matcher. The full report, with provenance and the commands to reproduce it, is the bench's [release results](https://github.com/RhizoNymph/a2a-transmission-bench/blob/main/docs/results/release-2026-10-r2.md).
 
-| Scenario (3 runs each) | Detector | Recall | Precision | False positives per 1,000 exchanges | Runs passing every gate |
+| Scenario (4 runs each) | Detector | Recall | Precision | False positives per 1,000 exchanges | Runs passing every gate |
 |---|---|---:|---:|---:|---|
-| headline | crosstalk | 1.000 (153/153) | 1.000 | 0.0 | 3/3 |
-| headline | reference | 1.000 (153/153) | 0.927 | 15.9 | (no gates) |
-| boilerplate | crosstalk | 1.000 (139/139) | 0.890 | 96.1 | 2/3 |
-| boilerplate | reference | 1.000 (139/139) | 0.044 | 19,997.3 | (no gates) |
+| headline | crosstalk | 1.000 (214/214) | 1.000 | 0.0 | 4/4 |
+| headline | reference | 0.977 (209/214) | 0.981 | 4.1 | (no gates) |
+| boilerplate | crosstalk | 1.000 (195/195) | 0.887 | 97.2 | 3/4 |
+| boilerplate | reference | 1.000 (195/195) | 0.044 | 20,649.3 | (no gates) |
 
-`headline` traffic writes wiki pages with distinctive text. `boilerplate` fills them with shared template sentences, the hard case for content matching. One boilerplate run failed the false-positive gate (115 per 1,000), which was set from development runs before these were made.
+`headline` traffic writes wiki pages with distinctive text. `boilerplate` fills them with shared template sentences, the hard case for content matching. One boilerplate run failed the false-positive gate (115 per 1,000) and the precision gate (0.86), both set from development runs before these were made. Summed over the four runs, both are inside their bounds.
 
-These runs used staging [`7d678e2`](https://github.com/RhizoNymph/crosstalk/commit/7d678e2) with the gateway in memory mode, scored by bench tag `a2a-bench-v1.0.1`. The tagged build has the same detection, plus one fix: it closes a rare race in which a match and a classification landing on one transmission at the same moment could lose one of them. The fix can only keep matched content that the held-out build might have dropped. It never changes which transmissions are found or how they are attributed.
+These runs used the gateway in Postgres mode with a fresh database per run, scored by bench tag `a2a-bench-v1.1.1`. They are the second held-out release. The [first](https://github.com/RhizoNymph/a2a-transmission-bench/blob/main/docs/results/release-2026-10.md) (seeds 1000001–1000006, staging `7d678e2` in memory mode, before order-tolerant threading) scored headline 1.000 / 1.000 and boilerplate recall 1.000, precision 0.890, 96.1 false positives per 1,000. The two are different samples of traffic, not the same runs scored twice.
 
 The same release also scores crosstalk on public multi-agent datasets (SALT, AgentDojo, τ², AI Village and others). crosstalk was developed and tuned on those, so they are development numbers, not held-out ones.
 
 ### Durability in Postgres mode
 
-Fault runs on 2026-10-14 on the deployed compose stack in Postgres mode, at the same content as staging `d6d69bc`. Each is one boilerplate demo swarm run (one headline run for the restart), with a fresh database and no manual intervention, scored by `a2a-bench-v1.1.1`. Faults were injected mid-run: a silent network partition between the gateway and Postgres (`docker network disconnect`) of 42 to 44 s, or Postgres stopped for 37 s. Durations are wall-clock, to within a second.
+Fault runs on 2026-10-15 on the deployed compose stack in Postgres mode, at staging `c316505`. Each is one boilerplate demo swarm run (one headline run for the restart), with a fresh database and no manual intervention, scored by `a2a-bench-v1.1.1`. Faults were injected mid-run and held for 30 s of wall-clock time: a silent network partition between the gateway and Postgres (`docker network disconnect`), or Postgres stopped.
 
 | Fault | Requests refused by the proxy | Gateway exits | Pipeline running again, after the fault ended | Dead letters | Detection gates |
 |---|---|---|---|---|---|
-| Partition, 44 s | 0 of 245 | 0 | 2.0 s after reconnecting | 0 | pass |
-| Partition, 44 s | 0 of 238 | 0 | 2.2 s | 0 | pass |
-| Partition, 42 s | 0 of 256 | 0 | 2.7 s | 0 | false positives 121.1 against 115 |
-| Postgres stopped, 37 s | 0 of 252 | 0 | 1.1 s after Postgres was ready | 0 | pass |
-| Gateway restarted (`docker restart`) | refused for 9.8 s; 66 of 310 requests unsent | 1 (the restart) | 11.7 s after the restart | 0 | pass (headline 1.000 / 1.000) |
+| Partition | 0 of 251 | 0 | 1.1 s | 0 | pass |
+| Partition | 0 of 255 | 0 | 2.6 s | 0 | pass |
+| Partition | 0 of 255 | 0 | 1.2 s | 0 | false positives 129.4 against 115 |
+| Postgres stopped | 0 of 247 | 0 | 1.8 s | 0 | pass |
+| Gateway restarted (`docker restart`) | refused for 9.6 s; 57 of 293 requests unsent | 1 (the restart) | 11.6 s after the restart | 0 | pass (headline 1.000 / 1.000) |
 
-During a fault the proxy keeps forwarding and the capture spool holds what it captured (up to about 90 exchanges here). The spool drains within a few seconds of the database answering. In every partition the gateway noticed it had lost its pipeline lock 6 to 8 s into the fault, before Postgres released it at 23 to 26 s, so no second gateway could have taken the lock while this one still ran its pipeline. Most of the third partition's false positives came from reads before the fault, so its gate miss reflects the boilerplate scenario's run-to-run variance, not the partition.
+During a fault the proxy keeps forwarding and the capture spool holds what it captured (59 to 73 exchanges here). The spool drains within 1 to 3 s of the database answering. Every exchange the swarm completed reached the exchange log, with no duplicates. In every partition the gateway noticed it had lost its pipeline lock 7 to 8 s into the fault, before Postgres released it at 27 s, and recovered inside the process under a new pipeline epoch; no epoch overlapped the one before it. No database statement hit its timeout. The third partition's false positives are of the kind described under template-heavy pages below: on this seed, boilerplate false positives ranged from 45.6 to 201.6 per 1,000 across 30 fault runs, 7 of them above 115, so the gate miss reflects run-to-run variance, not the partition.
 
 ## Known limitations
 
 - **Real traffic is unmeasured.** Every number above comes from synthetic or dataset traffic. How crosstalk does on real agents' traffic has not been measured.
-- **Template-heavy pages.** In the boilerplate scenario crosstalk reports roughly 60 to 140 false positives per 1,000 exchanges, varying from run to run, so its gates (115 per 1,000, precision 0.86) fail on some runs. One known source: when a page is rewritten from shared template text, a read of the new version can also be credited to the writer of an older version, through text both versions kept.
+- **Template-heavy pages.** In the boilerplate scenario crosstalk's false positives vary widely from run to run (45 to 200 per 1,000 exchanges across 30 runs on one seed), so its gates (115 per 1,000, precision 0.86) fail on some runs. One known source: when a page is rewritten from shared template text, a read of the new version can also be credited to the writer of an older version, through text both versions kept.
 - **An occasional dropped read.** In about 2 of 12 development runs, a live read of a wiki page did not reach flow detection, so a channel transmission was reported as direct messages instead. Replaying the same capture offline detects it correctly.
 - **Planned restarts.** A restart (SIGTERM) closes the proxy while the old process drains its open streams and the new one starts: about 10 s in the run above. Outages and partitions do not close it.
-- **One gateway per database.** The pipeline lock lets a second gateway wait as a standby, but a takeover does not work yet: each gateway keeps the message bodies it captured on its own volume, so a standby that takes the lock cannot read them. In two-gateway tests on a development branch, the standby took over within seconds, but two runs could not be scored, because reconstruction failed on 157 and 167 exchanges whose bodies it could not find. If the lock's session is reset while the database stays reachable, two gateways could also overlap for up to 5 s. The compose stack runs one gateway.
+- **One gateway per database.** The pipeline lock lets a second gateway wait as a standby, but a takeover does not work yet: each gateway keeps the message bodies it captured on its own volume, so a standby that takes the lock cannot read them. In two-gateway tests on a development branch, the standby took over within seconds, but two runs could not be scored, because reconstruction failed on 157 and 167 exchanges whose bodies it could not find. The lock itself is fenced: each taking of it starts a new pipeline epoch and waits until every connection of the previous holder is gone, so a gateway that lost the lock cannot write pipeline results after another has taken it. The compose stack runs one gateway.
 
 Fixes to detection will be judged on fresh development runs and then on a new held-out release, not on the runs above.
 
