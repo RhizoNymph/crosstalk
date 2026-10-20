@@ -1036,8 +1036,9 @@ Features Index:
     description: >
       A clean pipeline handover when the lock's holder is stopped on
       purpose (SIGTERM, docker stop, a rolling restart) in Postgres mode.
-      After the proxy's and capture's existing drain, the shutdown hands a
-      running incarnation over in an order its types fix
+      Starting at SIGTERM, beside the proxy's drain (whose late captures
+      publish through capture's own bus for the next holder), the shutdown
+      hands a running incarnation over in an order its types fix
       (Handover<Quiescing> ... Handover<PoolClosed>; only the last step can
       make the PoolsClosed proof PipelineLock::release takes): the bus stops
       handing out deliveries and each stage finishes the one it handles

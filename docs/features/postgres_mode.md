@@ -701,7 +701,8 @@ step committed before the earlier copy goes, so one that moves between
 two reads is seen by the later one. `Live::shutdown` drains the stages
 the same way, stops the bus, joins the stages (what harnesses call). The
 gateway's shutdown no longer drains on Postgres: a running incarnation is
-handed over ([planned_handover.md](planned_handover.md), INV-1242). No
+handed over ([planned_handover.md](planned_handover.md), INV-1242),
+starting at SIGTERM beside the proxy's drain (`PgRunning::hand_over`). No
 delivery is taken any more, each stage finishes the one it handles, L5
 answers L4's last inputs and then checkpoints and acks what it holds (the
 pump still serves acks after its subscription ended), what is still held
@@ -1244,7 +1245,9 @@ on `crates/api/tests/support/pg_world.rs`:
   `ops::handover_tests::readyz_and_healthz_name_the_handover_step`.
   Postgres (run on node0, 10× clean): `crosstalk-transport`
   `integration::handover::*` (two), `crosstalk-e2e`
-  `lock_loss::handover::a_planned_shutdown_hands_the_pipeline_to_the_standby_cleanly`.
+  `lock_loss::handover::a_planned_shutdown_hands_the_pipeline_to_the_standby_cleanly`;
+  `lock_loss::handover::the_handover_does_not_wait_for_the_proxy_drain`
+  (written; node0 runs pending).
 - Memory mode unchanged: every `ct-eval replay` (since retired) of the bench runs was
   byte-identical to the base build (export, evidence, score, report).
 

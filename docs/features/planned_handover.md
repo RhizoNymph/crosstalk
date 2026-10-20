@@ -30,10 +30,12 @@ and it runs about one lock retry (`RETRY`, 2 s) after the release
 
 ## Non-scope
 
-- The proxy and capture's shutdown: unchanged. The proxy stops accepting
-  and drains in-flight streams (`shutdown.drain_timeout_ms`), the capture
-  stage drains its channel into the spool or the bus, and with the
-  capture gate open (INV-1241) captures publish directly. The SIGTERM
+- The proxy and capture's shutdown: unchanged, except that the handover
+  now runs beside the proxy's drain instead of after it (see the flow).
+  The proxy stops accepting and drains in-flight streams
+  (`shutdown.drain_timeout_ms`), the capture stage drains its channel into
+  the spool or the bus, and with the capture gate open (INV-1241)
+  captures publish directly. The SIGTERM
   restart gap at the proxy (connections refused while the process stops
   and starts) is unchanged.
 - Draining the bus's backlog before stopping: the bus is durable and the
@@ -82,12 +84,13 @@ and it runs about one lock retry (`RETRY`, 2 s) after the release
 ## Data and control flow
 
 ```text
-SIGTERM ─▶ Running::shutdown: phase draining (/readyz 503)
-  ─▶ proxy stops accepting, in-flight streams drain (shutdown.drain_timeout_ms)
-  ─▶ API listener stops
-  ─▶ PgRunning::shutdown(deadline = now + shutdown.flush_timeout_ms):
-       capture stage drains its channel (into the spool or, gate open, the bus)
+SIGTERM ─▶ Running::shutdown: phase draining (/readyz 503), at once and joined:
+  ├─ proxy stops accepting, in-flight streams drain (shutdown.drain_timeout_ms); what they
+  │  capture meanwhile goes capture stage ─▶ spool ─▶ (gate open) capture's own bus: durable,
+  │  for the next holder
+  └─ PgRunning::hand_over(deadline = SIGTERM + shutdown.flush_timeout_ms):
        pipeline task told to stop ─▶ (Live<PgSet>, PipelineLock) when an incarnation runs
+       the API router cleared (the API answers 503 from here; its surface goes with the incarnation)
        hand_over(OutgoingIncarnation{live, bus, pool, lock}, status, quiesce_by = deadline - TAIL):
          Handover<Quiescing>      status pipeline handing_over, handover quiescing
            Live::quiesce(quiesce_by), backstop QUIESCE_BACKSTOP:
@@ -111,6 +114,10 @@ SIGTERM ─▶ Running::shutdown: phase draining (/readyz 503)
            pings, runs pg_advisory_unlock(PIPELINE_LOCK) (within PING_TIMEOUT), closes the session
            (refused, failed or late: the session dropped, which releases the lock)
          HandoverReport           pipeline_lock released, pipeline handed_over, handover done
+  ─▶ API listener stops
+  ─▶ PgRunning::shutdown(deadline = now + shutdown.flush_timeout_ms):
+       capture stage drains its channel (into the spool or, gate open, the bus)
+       (a pipeline not yet handed over is handed over here, the same way)
        ─▶ API surface task stopped ─▶ spool closed (records stay on disk) ─▶ capture's bus,
           capture's and the template pool closed
   ─▶ store probe closed ─▶ ops listener stopped (it answers until here)
@@ -126,6 +133,15 @@ consumes the handover and returns the next, reporting its step. Only
 field is private to the module, and `PipelineLock::release` takes one:
 releasing the lock before the quiesce (and so L5's last checkpoint), the
 release of the holds and the pool's close does not compile.
+
+**Beside the drain.** The handover starts at SIGTERM, not after the
+proxy's drain: on the fault cycle (h1, `docker stop` with traffic) the
+drain took 9.25 s and the handover 22 ms, so the standby ran 11.3 s after
+the stop instead of about 2 s. Nothing in the drain needs the pipeline:
+the holder's gate is open, so a capture finished during it publishes
+through capture's own bus and pool (not the incarnation's) into the
+durable groups, where the next holder takes it. The handover's deadline
+counts from SIGTERM, so a shutdown is no longer than before.
 
 **Bounds.** The quiesce ends at `quiesce_by` (its joins abort what runs
 past it), and `QUIESCE_BACKSTOP` (0.5 s) later at the latest; the release
@@ -168,8 +184,8 @@ the process exits.
 | `crates/gateway/src/gateway/postgres/handover/mod.rs` | the handover: steps as types, bounds, the proof the lock's release takes, the real outgoing incarnation | `hand_over`, `Handover`, `Quiescing`, `Quiesced`, `HoldsReleased`, `PoolClosed`, `PoolsClosed`, `Outgoing`, `OutgoingIncarnation`, `HandoverReport`, `Bounded`, `QUIESCE_BACKSTOP`, `RELEASE_HOLDS_BOUND`, `UNLOCK_BOUND`, `TAIL` |
 | `crates/gateway/src/gateway/postgres/handover/tests.rs` | the order and the bounds over a scripted incarnation on a paused clock | tests |
 | `crates/gateway/src/live/pg/quiesce.rs` | a Postgres live process stopping on purpose | `Live::<PgSet>::quiesce`, `Quiesced`, `QuiesceReport` |
-| `crates/gateway/src/gateway/postgres/mod.rs` | the shutdown that runs the handover; the lock retry the standby waits | `PgRunning::shutdown`, `PgStopped`, `RETRY` |
-| `crates/gateway/src/gateway/mod.rs` | the gateway's shutdown report | `ShutdownReport::handover` |
+| `crates/gateway/src/gateway/postgres/mod.rs` | the handover at SIGTERM and the rest of the shutdown; the lock retry the standby waits | `PgRunning::hand_over`, `PgRunning::handed_over`, `PgRunning::shutdown`, `PgStopped`, `RETRY` |
+| `crates/gateway/src/gateway/mod.rs` | the gateway's shutdown: the proxy's drain and the handover joined; its report | `Running::shutdown`, `ShutdownReport::handover` |
 | `crates/gateway/src/store/lock.rs` | the explicit unlock, on the holder's task | `PipelineLock::release`, `ReleaseError` |
 | `crates/transport/src/pg/mod.rs` | the release of every hold, attempt given back | `PgBus::release_held`, `HANDOVER_REASON` |
 | `crates/gateway/src/live/pg/pump.rs` | acks, nacks and releases served after the subscription ended | `pump`, `Pumped` |
@@ -200,7 +216,14 @@ the process exits.
   `recover_held`; every delivery the owner left or released taken again on
   the same attempt; 0 dead letters; no `late contribution`; each capture
   once in the bus log and once across the two exchange logs; the
-  uninterrupted run's answers).
+  uninterrupted run's answers);
+  `lock_loss::handover::the_handover_does_not_wait_for_the_proxy_drain`
+  (a response held 4 s by the upstream in flight through the owner as it
+  stops: the owner releases the lock, and the standby takes it, before
+  that response ends; the client gets it whole and unchanged; the handover
+  clean, no connection cut; its capture, published after the handover, in
+  the exchange logs once; 0 dead letters; the uninterrupted run's
+  answers).
 
 ## Invariants and constraints
 
