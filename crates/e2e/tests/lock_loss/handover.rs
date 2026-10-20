@@ -21,16 +21,25 @@ use crosstalk_memory::support::ManualClock;
 use crosstalk_spec::events::{Envelope, Subject};
 use crosstalk_store::TestDb;
 use crosstalk_store::sqlx;
+use crosstalk_testkit::client::{BodyEnd, HarnessClient};
+use crosstalk_testkit::upstream::{Pacing, Reply};
 use crosstalk_transport::HANDOVER_REASON;
 use tokio::time::Instant;
 
-use crate::common::gateway::{Gateway, Run, captured_in_log, config, run, scenario, start};
+use crate::common::gateway::{
+    Gateway, PREFIX, Run, captured_in_log, config, request, response, run, scenario, start,
+};
 use crate::common::{WAIT, big_stack, migrated};
 use crate::harness::{SLACK, epoch_of, expected, serial, sessions_by_name, wait_status};
 
 /// How long after the owner released the lock the standby may take to
 /// hold it: its next try (the pipeline task's retry) and the take itself.
 const TAKES_WITHIN: Duration = RETRY.saturating_add(SLACK);
+
+/// How long the upstream holds the in-flight response before its body:
+/// past a handover and the standby's next try ([`RETRY`]), within the drain timeout
+/// (5 s in the test config).
+const STREAM_HOLD: Duration = Duration::from_secs(4);
 
 /// How long after the release the standby may take to run: the take, then
 /// its recovery (the owner left nothing held, so nothing to wait for).
@@ -470,6 +479,203 @@ fn a_planned_shutdown_hands_the_pipeline_to_the_standby_cleanly() {
             &scenario,
             &expected,
             "the run handed over to a standby by a planned shutdown",
+        )
+        .await;
+    });
+}
+
+/// The owner shut down with a response still streaming through its proxy:
+/// the pipeline is handed over at once, beside the proxy's drain, not
+/// after it. The owner releases the lock, and the standby takes it, before
+/// that response's body has even begun; the client still gets the whole
+/// response unchanged, and its capture (published by the owner after the
+/// handover, through capture's own bus) is taken by the standby and in the
+/// exchange logs exactly once.
+#[test]
+fn the_handover_does_not_wait_for_the_proxy_drain() {
+    let _serial = serial();
+    big_stack(|| async {
+        const TEST: &str = "the_handover_does_not_wait_for_the_proxy_drain";
+        let scenario = scenario();
+        assert!(
+            scenario.exchanges.len() >= 3,
+            "the scenario has the exchanges to spread"
+        );
+        let Some(expected) = expected(TEST, &scenario).await else {
+            return;
+        };
+        let Some(db) = migrated(TEST).await else {
+            return;
+        };
+        let run = run(db).await;
+        let clock = ManualClock::at(scenario.start);
+        let owner = run.start(&clock).await;
+        owner.send(&run.upstream, &scenario.exchanges[..1], 1).await;
+        owner
+            .settled(&run.db, "the first exchange's pipeline")
+            .await;
+        let dir = tempfile::tempdir().expect("a temp dir");
+        let standby_dir = standby_data(&run, dir.path());
+        let standby = Gateway {
+            running: start(
+                &config(
+                    &run.upstream.base_url(),
+                    &standby_dir,
+                    serde_json::json!({}),
+                ),
+                run.url.clone(),
+                &clock,
+            )
+            .await,
+            clock: clock.clone(),
+        };
+        wait_status(
+            &standby.running,
+            "the standby standing by",
+            Duration::from_secs(30),
+            |status| {
+                status.lock == LockState::HeldElsewhere
+                    && status.phase == PipelinePhase::WaitingForLock
+            },
+        )
+        .await;
+
+        // The second exchange through the owner, its body held back by the
+        // upstream: in flight when the shutdown begins.
+        let slow = &scenario.exchanges[1];
+        clock.set(slow.ended_at);
+        let mut reply = Reply::from_response(&response(slow));
+        reply.pacing = Pacing {
+            first_chunk: STREAM_HOLD,
+            between_chunks: Duration::ZERO,
+        };
+        run.upstream.reply_next(reply).await.expect("scripted");
+        let client = HarnessClient::new(owner.running.proxy_addr().expect("role all proxies"))
+            .prefix(PREFIX);
+        let sent = request(slow);
+        let answering = tokio::spawn(async move {
+            let answered = client.send(&sent).await.expect("the gateway answers");
+            (Instant::now(), answered)
+        });
+        tokio::time::timeout(WAIT, async {
+            while run
+                .upstream
+                .received()
+                .await
+                .expect("the upstream log")
+                .len()
+                < 2
+            {
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .expect("the upstream got the second request");
+
+        let owner_status = owner
+            .running
+            .postgres()
+            .expect("postgres mode")
+            .status
+            .reader();
+        let released = tokio::spawn(when(
+            owner_status,
+            "the owner releasing the lock",
+            |status| status.lock == LockState::Released,
+        ));
+        let standby_status = standby
+            .running
+            .postgres()
+            .expect("postgres mode")
+            .status
+            .reader();
+        let held = tokio::spawn(when(
+            standby_status.clone(),
+            "the standby taking the lock",
+            |status| status.lock == LockState::Held,
+        ));
+        let Gateway { running, clock: _ } = owner;
+        let began = Instant::now();
+        let stopping = tokio::spawn(async move { running.shutdown().await });
+
+        let (released_at, _) = released.await.expect("the owner's status watch");
+        let (held_at, _) = held.await.expect("the standby's status watch");
+        let (answered_at, answered) = answering.await.expect("the client's task");
+        eprintln!(
+            "after the shutdown began: released {:?}, taken {:?}, the response ended {:?}",
+            released_at.saturating_duration_since(began),
+            held_at.saturating_duration_since(began),
+            answered_at.saturating_duration_since(began),
+        );
+        assert!(
+            released_at < answered_at,
+            "the owner released the lock only after the proxy's last response ended"
+        );
+        assert!(
+            held_at < answered_at,
+            "the standby took the lock only after the proxy's last response ended"
+        );
+        assert_eq!(answered.end, BodyEnd::Complete, "{}", slow.label);
+        assert_eq!(
+            answered.differences_from(&response(slow)),
+            Vec::new(),
+            "{}: the client's response changed",
+            slow.label
+        );
+
+        let report = tokio::time::timeout(WAIT, stopping)
+            .await
+            .expect("the owner's shutdown finishes")
+            .expect("the shutdown's task");
+        let handover = report
+            .handover
+            .clone()
+            .expect("the owner ran an incarnation: handed over");
+        assert!(handover.clean(), "a clean handover: {handover:?}");
+        assert_eq!(report.proxy.cut, 0, "no connection cut: {report:?}");
+        assert!(
+            report.capture_drained && report.stages_drained && report.log_drained,
+            "{report:?}"
+        );
+
+        when(standby_status, "the standby running", |status| {
+            status.lock == LockState::Held && status.phase == PipelinePhase::Running
+        })
+        .await;
+        let all = scenario.exchanges.len();
+        standby
+            .send(
+                &run.upstream,
+                &scenario.exchanges[2..],
+                u64::try_from(all - 2).expect("fits"),
+            )
+            .await;
+        standby
+            .settled(&run.db, "the standby's pipeline after the handover")
+            .await;
+
+        assert_eq!(dead_letters(&run.db).await, 0, "nothing dead-lettered");
+        let mut logged = logged_exchanges(&run.data).await;
+        logged.extend(logged_exchanges(&standby_dir).await);
+        let distinct: BTreeSet<&String> = logged.iter().collect();
+        assert_eq!(
+            logged.len(),
+            all,
+            "every capture logged once across both logs: {logged:?}"
+        );
+        assert_eq!(distinct.len(), all, "no capture logged twice: {logged:?}");
+        let all = i64::try_from(all).expect("fits");
+        assert_eq!(
+            captured_in_log(&run.db).await,
+            (all, all),
+            "every capture in the bus log once"
+        );
+
+        run.finish(
+            standby,
+            &scenario,
+            &expected,
+            "the run handed over while the owner's proxy drained",
         )
         .await;
     });

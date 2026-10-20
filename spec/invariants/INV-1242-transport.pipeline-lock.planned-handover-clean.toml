@@ -45,6 +45,7 @@ integration = [
     "crosstalk_transport::integration::handover::pg_released_holds_are_ready_at_once_on_the_same_attempt",
     "crosstalk_transport::integration::handover::pg_a_release_with_nothing_held_releases_nothing",
     "crosstalk_e2e::lock_loss::handover::a_planned_shutdown_hands_the_pipeline_to_the_standby_cleanly",
+    "crosstalk_e2e::lock_loss::handover::the_handover_does_not_wait_for_the_proxy_drain",
 ]
 
 [evidence-review]

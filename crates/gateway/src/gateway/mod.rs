@@ -22,7 +22,8 @@
 //! [`Running::shutdown`] stops in dependency order: the proxy listener
 //! (in-flight exchanges drain), the API listener, the live process (the
 //! capture channel drains, every group drains, the bus stops, the log is
-//! synced), then the ops listener.
+//! synced), then the ops listener. In Postgres mode a running pipeline is
+//! handed over beside the proxy's drain, from its start.
 //!
 //! With a `store` section (every role but `analysis`) the process runs in
 //! Postgres mode instead ([`postgres`]): the bus is `PgBus` behind the
@@ -639,6 +640,7 @@ async fn start_postgres(
             capture,
             capture_pipeline: side.pipeline,
             pipeline,
+            handed_over: None,
             api: api_surface,
             status,
             late,
@@ -814,7 +816,8 @@ impl Running {
     /// handle everything it was given (up to the flush timeout), stop the
     /// bus, close the log, stop the ops listener. In Postgres mode a running
     /// pipeline is handed over instead of drained (within the flush
-    /// timeout): `postgres::handover`.
+    /// timeout from the signal), beside the proxy's drain rather than after
+    /// it: `postgres::handover`.
     pub async fn shutdown(self) -> ShutdownReport {
         tracing::info!(role = %self.role, "gateway shutting down");
         // Fails only when no reader of the phase is left.
@@ -825,13 +828,29 @@ impl Running {
             stages_drained: true,
             ..ShutdownReport::default()
         };
-        if let Some(proxy) = self.proxy {
-            let _ = proxy.stop.send(true);
-            report.proxy = proxy.server.await.unwrap_or_else(|error| {
-                tracing::error!(error = %error, "the proxy task failed");
-                DrainReport::default()
-            });
-        }
+        // In Postgres mode the pipeline is handed over at once, beside the
+        // proxy's drain, so a standby takes it while the last streams end
+        // (`PgRunning::hand_over`); the rest of the shutdown waits for both.
+        let mut postgres = self.postgres;
+        let flush_by = Instant::now() + self.flush;
+        let proxy = async {
+            match self.proxy {
+                Some(proxy) => {
+                    let _ = proxy.stop.send(true);
+                    proxy.server.await.unwrap_or_else(|error| {
+                        tracing::error!(error = %error, "the proxy task failed");
+                        DrainReport::default()
+                    })
+                }
+                None => DrainReport::default(),
+            }
+        };
+        let handover = async {
+            if let Some(postgres) = &mut postgres {
+                postgres.hand_over(flush_by).await;
+            }
+        };
+        (report.proxy, ()) = tokio::join!(proxy, handover);
         if let Some(api) = self.api {
             let _ = api.stop.send(true);
             if let Err(error) = tokio::time::timeout(self.drain, api.server).await {
@@ -847,7 +866,7 @@ impl Running {
             report.log_drained = drained.log;
             report.stages_drained = drained.stages;
         }
-        if let Some(postgres) = self.postgres {
+        if let Some(postgres) = postgres {
             let stopped = postgres.shutdown(Instant::now() + self.flush).await;
             report.capture_drained = stopped.drained.capture;
             report.log_drained = stopped.drained.log;
