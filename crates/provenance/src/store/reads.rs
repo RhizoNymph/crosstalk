@@ -326,8 +326,8 @@ async fn indexed_spans<S: ProvenanceStore>(
     Ok(spans)
 }
 
-/// The spec's `SpanIndex` over L4's records ([`record_span`],
-/// [`indexed_spans`]).
+/// The spec's `SpanIndex` over L4's records (`record_span`,
+/// `indexed_spans`).
 impl SpanIndex for MemoryProvenanceStore {
     async fn record(&mut self, span: &OriginatedSpan) -> Result<(), SpanIndexError> {
         record_span(self, span).await

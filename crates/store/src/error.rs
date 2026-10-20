@@ -136,7 +136,7 @@ mod sqlstate {
 }
 
 /// Classifies a driver error. A statement cancelled at a bound is counted
-/// and logged ([`crate::timeouts`]): classify each failed statement once,
+/// and logged (`crate::timeouts`): classify each failed statement once,
 /// where it is converted.
 pub fn classify(err: &sqlx::Error) -> DbFailure {
     match err {
