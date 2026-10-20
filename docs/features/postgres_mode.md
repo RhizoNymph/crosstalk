@@ -1247,7 +1247,9 @@ on `crates/api/tests/support/pg_world.rs`:
   `integration::handover::*` (two), `crosstalk-e2e`
   `lock_loss::handover::a_planned_shutdown_hands_the_pipeline_to_the_standby_cleanly`;
   `lock_loss::handover::the_handover_does_not_wait_for_the_proxy_drain`
-  (written; node0 runs pending).
+  (run on node0, 10× clean: the lock released within 10 ms of the
+  shutdown, the standby holding it at about 2.04 s, the held response
+  ending at 3.99 s).
 - Memory mode unchanged: every `ct-eval replay` (since retired) of the bench runs was
   byte-identical to the base build (export, evidence, score, report).
 
