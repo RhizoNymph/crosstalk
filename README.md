@@ -65,7 +65,7 @@ Eight demo swarm runs on seeds no development run used (1000007–1000014). They
 
 These runs used the gateway in Postgres mode with a fresh database per run, scored by bench tag `a2a-bench-v1.1.1`. They are the second held-out release. The [first](https://github.com/RhizoNymph/a2a-transmission-bench/blob/main/docs/results/release-2026-10.md) (seeds 1000001–1000006, staging `7d678e2` in memory mode, before order-tolerant threading) scored headline 1.000 / 1.000 and boilerplate recall 1.000, precision 0.890, 96.1 false positives per 1,000. The two are different samples of traffic, not the same runs scored twice.
 
-The same release also scores crosstalk on public multi-agent datasets (SALT, AgentDojo, τ², AI Village and others). crosstalk was developed and tuned on those, so they are development numbers, not held-out ones.
+The [first release](https://github.com/RhizoNymph/a2a-transmission-bench/blob/main/docs/results/release-2026-10.md) also scores crosstalk on public multi-agent datasets (SALT, AgentDojo, τ², AI Village and others) at staging `6ba4bd8`. crosstalk was developed and tuned on those, so they are development numbers, not held-out ones.
 
 ### Durability in Postgres mode
 
