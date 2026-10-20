@@ -9,12 +9,12 @@
 //!
 //! A store keeps that by rewinding. Every threading call is numbered in
 //! the order the store took it (its `seq`) and keeps what it was given (a
-//! [`ThreadCall`]). An exchange `x` that arrives after turns of its cluster
+//! `ThreadCall`). An exchange `x` that arrives after turns of its cluster
 //! whose keys are greater than its own:
 //!
 //! 1. finds those turns and every turn of the cluster threaded after the
-//!    first of them ([`OrderedStore::later`]);
-//! 2. undoes them, newest first ([`OrderedStore::unthread`]): each is the
+//!    first of them (`OrderedStore::later`);
+//! 2. undoes them, newest first (`OrderedStore::unthread`): each is the
 //!    last turn of its conversation when it is undone, so undoing it
 //!    removes exactly what its write added (a conversation it opened, or
 //!    its entries, turn, record, filed response and sightings);
@@ -22,9 +22,9 @@
 //!
 //! When the stored state was the in-order result for the exchanges before
 //! `x`, it is the in-order result with `x` afterwards. A rewind is planned
-//! as a [`Rewind`], which exists only when it can be carried out: every
+//! as a `Rewind`, which exists only when it can be carried out: every
 //! undone turn's call is kept and the undone turns are the newest turns of
-//! each conversation they touch. Otherwise the arrival is [`Stranded`] and
+//! each conversation they touch. Otherwise the arrival is `Stranded` and
 //! `x` is threaded where it arrived, as before this module, with a warning:
 //!
 //! - a call older than the [`ReorderWindow`] behind a later arrival is

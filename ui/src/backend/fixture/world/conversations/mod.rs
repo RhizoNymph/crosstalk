@@ -5,7 +5,7 @@
 //!
 //! The traffic generator knows exchanges only as ids on content matches
 //! (the reader's exchange) and spans only as locations. This overlay gives
-//! each of them a turn ([`build`]):
+//! each of them a turn ([`build()`]):
 //!
 //! - a **reader turn** for each reader exchange: its inputs are the
 //!   messages the reader's copies arrived in (`ContentMatch::read_at`, the
@@ -201,7 +201,7 @@ impl LazyConversations {
 }
 
 /// Every conversation of the fixture. Empty (the default) until
-/// [`build`] runs.
+/// [`build()`] runs.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Conversations {
     records: BTreeMap<ConversationId, ConversationRecord>,
