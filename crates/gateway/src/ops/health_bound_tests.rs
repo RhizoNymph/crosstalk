@@ -125,21 +125,21 @@ fn the_bus_section_reads_groups_or_why_not() {
         read
     );
 
-    for (unavailable, expected) in [(
-        BusUnavailable::TimedOut { bound_ms: 2_000 },
-        serde_json::json!({"unavailable": {"timed_out": {"bound_ms": 2_000}}}),
-    )] {
-        let report = HealthReport {
-            bus: Some(BusSection::Unavailable { unavailable }),
-            ..report()
-        };
-        let json = serde_json::to_value(&report).expect("encodes");
-        assert_eq!(json["bus"], expected);
-        assert_eq!(
-            serde_json::from_value::<HealthReport>(json).expect("decodes"),
-            report
-        );
-    }
+    let timed_out = HealthReport {
+        bus: Some(BusSection::Unavailable {
+            unavailable: BusUnavailable::TimedOut { bound_ms: 2_000 },
+        }),
+        ..report()
+    };
+    let json = serde_json::to_value(&timed_out).expect("encodes");
+    assert_eq!(
+        json["bus"],
+        serde_json::json!({"unavailable": {"timed_out": {"bound_ms": 2_000}}})
+    );
+    assert_eq!(
+        serde_json::from_value::<HealthReport>(json).expect("decodes"),
+        timed_out
+    );
 
     let mut surprise = serde_json::to_value(&read).expect("encodes");
     surprise["bus"]["surprise"] = serde_json::json!(0);
