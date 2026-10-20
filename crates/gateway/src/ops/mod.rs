@@ -242,8 +242,8 @@ pub struct Readiness {
     /// `at_head`, `behind: <layer applied < head, ...>`, or `unknown`
     /// before the database answered (always `at_head` in memory mode).
     pub migrations: String,
-    /// Postgres mode, a pipeline role: `held`, `held elsewhere`, `lost` or
-    /// `not_taken`. `lost` and, after a loss, `held elsewhere` leave the
+    /// Postgres mode, a pipeline role: `held`, `held elsewhere`, `lost`,
+    /// `released` (a planned handover let it go) or `not_taken`. `lost` and, after a loss, `held elsewhere` leave the
     /// process ready, degraded: it resumes in process.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pipeline_lock: Option<String>,
@@ -255,12 +255,18 @@ pub struct Readiness {
     pub capture: Option<String>,
     /// Postgres mode: `running`, `abandoning` (the lock was lost),
     /// `waiting_for_database`, `waiting_for_migrations`, `waiting_for_lock`,
-    /// `recovering`, `stopped: <why>` (`not_run` for the `api` role).
+    /// `fencing`, `recovering`, `handing_over` and `handed_over` (a planned
+    /// shutdown), `stopped: <why>` (`not_run` for the `api` role).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pipeline: Option<String>,
     /// Postgres mode: `pending`, a recovery step, `done` or `failed: <why>`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub recovery: Option<String>,
+    /// Postgres mode, once a planned shutdown began handing the pipeline
+    /// over (`pipeline: handing_over`, then `handed_over`): `quiescing`,
+    /// `releasing_holds`, `closing_pool`, `releasing_lock` or `done`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub handover: Option<String>,
     /// Each task of the role and whether it runs.
     pub tasks: Vec<TaskState>,
 }
@@ -456,6 +462,7 @@ impl Ops {
                 capture: None,
                 pipeline: None,
                 recovery: None,
+                handover: None,
                 tasks,
             };
         };
@@ -500,6 +507,7 @@ impl Ops {
             capture: capture.map(|(text, _)| text),
             pipeline: Some(status.pipeline_text()),
             recovery: Some(status.recovery_text()),
+            handover: status.handover().map(|step| step.label().to_owned()),
             tasks,
         }
     }
@@ -558,6 +566,8 @@ fn json(status: StatusCode, body: Vec<u8>) -> Response<Full<Bytes>> {
     response
 }
 
+#[cfg(test)]
+mod handover_tests;
 #[cfg(test)]
 mod health_bound_tests;
 #[cfg(test)]

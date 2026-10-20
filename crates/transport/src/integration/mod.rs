@@ -13,6 +13,7 @@
 //! live here, at `crosstalk_transport::integration::<name>`.
 
 mod abandon;
+mod handover;
 mod release;
 
 use std::num::NonZeroUsize;

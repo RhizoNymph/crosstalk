@@ -130,15 +130,19 @@ pub enum StartError {
 }
 
 /// How the shutdown went.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct ShutdownReport {
     pub proxy: DrainReport,
     /// Whether the capture stage handled every queued exchange in time.
     pub capture_drained: bool,
-    /// Whether the exchange log consumed every published envelope in time.
+    /// Whether the exchange log consumed every published envelope in time
+    /// (Postgres mode: ended after its last append and ack, uncut).
     pub log_drained: bool,
-    /// Whether every layer stage's group was empty before the bus stopped.
+    /// Whether every layer stage's group was empty before the bus stopped
+    /// (Postgres mode: every stage finished its delivery, none cut short).
     pub stages_drained: bool,
+    /// Postgres mode, an incarnation running: the planned handover.
+    pub handover: Option<postgres::handover::HandoverReport>,
 }
 
 /// The proxy listener, when the role runs it.
@@ -808,7 +812,9 @@ impl Running {
     /// Stop gracefully: refuse new connections, let in-flight exchanges
     /// finish (up to the drain timeout), stop the API, let the live process
     /// handle everything it was given (up to the flush timeout), stop the
-    /// bus, close the log, stop the ops listener.
+    /// bus, close the log, stop the ops listener. In Postgres mode a running
+    /// pipeline is handed over instead of drained (within the flush
+    /// timeout): `postgres::handover`.
     pub async fn shutdown(self) -> ShutdownReport {
         tracing::info!(role = %self.role, "gateway shutting down");
         // Fails only when no reader of the phase is left.
@@ -842,10 +848,11 @@ impl Running {
             report.stages_drained = drained.stages;
         }
         if let Some(postgres) = self.postgres {
-            let drained = postgres.shutdown(Instant::now() + self.flush).await;
-            report.capture_drained = drained.capture;
-            report.log_drained = drained.log;
-            report.stages_drained = drained.stages;
+            let stopped = postgres.shutdown(Instant::now() + self.flush).await;
+            report.capture_drained = stopped.drained.capture;
+            report.log_drained = stopped.drained.log;
+            report.stages_drained = stopped.drained.stages;
+            report.handover = stopped.handover;
         }
         if let Some(store) = self.store {
             store.abort();

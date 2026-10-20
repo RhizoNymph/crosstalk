@@ -22,6 +22,13 @@
 //! for the next one; the bus's ack timeout (above the checkpoint interval,
 //! checked at start) redelivers them if the process dies first.
 //!
+//! When the bus stops handing out deliveries (a shutdown, a planned
+//! handover) the loop ends, but first answers every extracted batch until
+//! the L4 stage, which ends after the delta it handles, drops its sender:
+//! a batch left unanswered fails its delta with `NotDurable::Stopped`,
+//! which L4 nacks (an attempt spent). Then it checkpoints and acks what it
+//! holds, once.
+//!
 //! A checkpoint whose store stalled (a statement cancelled at its
 //! `statement_timeout` or `lock_timeout`) stops the loop taking new
 //! deliveries until a checkpoint is taken again: the held ones time out and
@@ -199,6 +206,17 @@ async fn run(
                     stalled = checkpoint_and_ack(&mut consumer, &mut subscription, &mut unacked, slot).await == Checkpointed::Stalled;
                 }
             }
+        }
+    }
+    // The bus stopped: L4 may still be handling a delta whose inputs wait
+    // for an answer. Answer until it ends (its sender dropped).
+    while inputs_open {
+        match InputSource::recv(&mut inputs).await {
+            Some(batch) => {
+                consumer.answer(batch).await;
+                activity.bump();
+            }
+            None => inputs_open = false,
         }
     }
     let last = checkpoint_and_ack(&mut consumer, &mut subscription, &mut unacked, slot).await;

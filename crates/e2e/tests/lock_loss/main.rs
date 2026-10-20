@@ -24,6 +24,11 @@
 //! - `gate`: a gateway that does not hold the lock publishes its captures
 //!   directly once every pipeline group exists (the lock holder's exchange
 //!   log writes them), and on a fresh database spools until they do.
+//! - `handover`: two gateways on one database, the owner shut down
+//!   gracefully with traffic flowing: it hands the pipeline over (in-flight
+//!   work finished or released, its pool closed, then the lock unlocked),
+//!   and the standby takes it within a retry, with nothing redelivered on a
+//!   later attempt, dead-lettered or logged twice.
 //!
 //! The tests take turns (`harness::serial`): each runs a gateway against
 //! its own database, and the loss detection's timing must not depend on
@@ -33,6 +38,7 @@
 mod common;
 
 mod gate;
+mod handover;
 mod harness;
 mod partition;
 mod repeated;

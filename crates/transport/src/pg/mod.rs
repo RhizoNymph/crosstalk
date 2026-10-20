@@ -67,6 +67,10 @@ pub use progress::{ReaperReport, TakeReport};
 pub use stats::GroupStats;
 pub use subscription::PgSubscription;
 
+/// The `last_error` a delivery released by [`PgBus::release_held`] carries:
+/// it was in flight when its holder handed the pipeline over.
+pub const HANDOVER_REASON: &str = "released at a planned handover";
+
 use self::reaper::{RESTART_REASON, ReaperMsg};
 use self::row::bus_error;
 use crate::StartError;
@@ -317,6 +321,33 @@ impl PgBus {
         );
         shared.wake_all();
         Ok(recovered)
+    }
+
+    /// Give back every delivery still `held`, as the lock's holder hands
+    /// the pipeline over on a planned stop: each becomes `ready` at once,
+    /// with no backoff, its attempt given back (the next take counts it
+    /// again), and none is dead-lettered for it. Takes go by `seq`, so a
+    /// released delivery is taken before anything published after it, as a
+    /// recovered one is. The mirror of [`PgBus::recover_held`], run by the
+    /// process that held them instead of the next one; it assumes, as that
+    /// does, that no other process holds deliveries (the pipeline lock).
+    /// Call it once every subscription has stopped and every take is
+    /// joined ([`PgBus::abandon`]): a hold committed after it stays held.
+    /// Returns how many it released.
+    pub async fn release_held(&self) -> Result<u64, BusError> {
+        let released = sqlx::query(
+            "UPDATE transport.deliveries SET state = 'ready', available_at = NULL, \
+             attempt = greatest(attempt - 1, 0), last_error = $1 \
+             WHERE state = 'held'",
+        )
+        .bind(HANDOVER_REASON)
+        .execute(&self.shared.pool)
+        .await
+        .map_err(|error| bus_error("release held deliveries", &error))?
+        .rows_affected();
+        tracing::info!(released, "held deliveries released for a handover");
+        self.shared.wake_all();
+        Ok(released)
     }
 
     /// The bus's dead-letter store.
