@@ -28,6 +28,13 @@
 //! settle that keeps sending drain commands could lose it again on every
 //! redelivery (the restart e2e's settles hung on `live-surface-relay`
 //! holding one delivery). The next `next` call awaits the same reply.
+//!
+//! Once the subscription ends (the bus stopped handing out deliveries: a
+//! shutdown or a planned handover), every later pull answers `None` at
+//! once, but the pump keeps serving acks, nacks and releases until the
+//! stage drops it: the durable flow consumer checkpoints and acks what it
+//! holds after its last pull, and those acks must still land, or every
+//! delivery the checkpoint covers would be redelivered.
 
 use std::time::Duration;
 
@@ -112,10 +119,16 @@ async fn settle<S: Subscription>(
 async fn run<S: Subscription>(mut subscription: S, mut requests: mpsc::UnboundedReceiver<Request>) {
     // A delivery fetched for a pull whose caller had gone.
     let mut kept: Option<Item> = None;
+    // The subscription answered `None`: it hands out nothing more.
+    let mut ended = false;
     while let Some(request) = requests.recv().await {
         let Some(mut reply) = settle(&mut subscription, request).await else {
             continue;
         };
+        if ended {
+            let _ = reply.send(None);
+            continue;
+        }
         let item = match kept.take() {
             Some(item) => item,
             None => loop {
@@ -152,9 +165,8 @@ async fn run<S: Subscription>(mut subscription: S, mut requests: mpsc::Unbounded
         {
             kept = Some(unsent);
         }
-        if closed {
-            return;
-        }
+        // Settles are still served: see the module docs.
+        ended = closed;
     }
 }
 
@@ -253,6 +265,57 @@ mod tests {
             _reason: String,
         ) -> Result<(), BusError> {
             Ok(())
+        }
+    }
+
+    /// A subscription that hands out one delivery, then ends (`None`, as a
+    /// stopped bus does), counting acks.
+    struct Ending {
+        delivery: Option<Delivery>,
+        acked: Arc<AtomicU32>,
+    }
+
+    impl Subscription for Ending {
+        async fn next(&mut self) -> Option<Result<Delivery, BusError>> {
+            self.delivery.take().map(Ok)
+        }
+
+        async fn ack(&mut self, _id: DeliveryId) -> Result<(), BusError> {
+            self.acked.fetch_add(1, Ordering::SeqCst);
+            Ok(())
+        }
+
+        async fn nack(
+            &mut self,
+            _id: DeliveryId,
+            _retry_after: Duration,
+            _reason: String,
+        ) -> Result<(), BusError> {
+            Ok(())
+        }
+    }
+
+    /// The durable flow consumer pulls past the bus's end, then checkpoints
+    /// and acks what it holds: those acks still land, and every later pull
+    /// answers `None` at once. Before, the pump ended with the subscription
+    /// and the acks failed `Disconnected`: every delivery the last
+    /// checkpoint covered was redelivered, an attempt spent.
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
+    async fn acks_after_the_subscription_ended_still_land() {
+        let acked = Arc::new(AtomicU32::new(0));
+        let mut pumped = pump(Ending {
+            delivery: Some(delivery()),
+            acked: Arc::clone(&acked),
+        });
+        let held = pumped.next().await.expect("open").expect("a delivery");
+        assert!(pumped.next().await.is_none(), "the subscription ended");
+        pumped.ack(held.id).await.expect("the ack still lands");
+        assert_eq!(acked.load(Ordering::SeqCst), 1);
+        for _ in 0..3 {
+            let next = tokio::time::timeout(Duration::from_millis(10), pumped.next())
+                .await
+                .expect("answered at once");
+            assert!(next.is_none(), "ended for good");
         }
     }
 

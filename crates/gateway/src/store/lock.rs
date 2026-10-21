@@ -46,6 +46,17 @@
 //! only then, with its [`Epoch`] ([`PipelineLock::epoch`]). The wait does
 //! not count against [`TAKE_TIMEOUT`] and never gives up; a lock session
 //! that fails while waiting is a [`TakeError::Lost`].
+//!
+//! # Releasing on a planned stop
+//!
+//! A planned handover ends with [`PipelineLock::release`]: the holder
+//! unlocks (`pg_advisory_unlock`) on its own session and closes it, so a
+//! standby's next try finds the lock free without waiting for the session
+//! to end. It takes the handover's [`PoolsClosed`] proof, which only the
+//! handover's last step can make: the lock cannot be released before the
+//! incarnation's checkpoints are persisted and its pool is closed
+//! (`gateway::postgres::handover`). A lock dropped instead is released
+//! when its session ends.
 
 use std::time::Duration;
 
@@ -57,6 +68,7 @@ use tokio::task::JoinHandle;
 
 use super::fence::wait::{FenceWaitError, Fenced, wait_for_fence};
 use super::fence::{self, Epoch, FenceError};
+use crate::gateway::postgres::handover::PoolsClosed;
 use crate::live::recovery::LossReason;
 
 /// The advisory lock key (`crosstal` in ASCII).
@@ -160,12 +172,36 @@ impl From<FenceWaitError> for TakeError {
     }
 }
 
+/// Why [`PipelineLock::release`] did not unlock explicitly. The session
+/// is dropped either way, and the server releases the lock as it ends it.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum ReleaseError {
+    /// The lock's session had already failed (its loss was reported, or
+    /// its holder stopped): nothing left to unlock.
+    #[error("the lock's session was already gone: {0}")]
+    Lost(LockLoss),
+    /// `pg_advisory_unlock` answered that the session did not hold it.
+    #[error("pg_advisory_unlock found the pipeline lock not held by its session")]
+    NotHeld,
+    /// The unlock failed.
+    #[error("unlocking the pipeline lock failed: {failure}")]
+    Failed { failure: DbFailure },
+    /// The unlock did not answer within [`PING_TIMEOUT`].
+    #[error("unlocking the pipeline lock did not answer within {after:?}")]
+    TimedOut { after: Duration },
+}
+
+/// A request to the holder task: unlock, close, answer.
+type ReleaseRequest = oneshot::Sender<Result<(), ReleaseError>>;
+
 /// The held lock: a task owning the connection, and the epoch its take
-/// bumped to. Dropped, it releases.
+/// bumped to. Dropped, it releases (the session dropped); released with
+/// [`PipelineLock::release`], it unlocks first.
 #[derive(Debug)]
 pub struct PipelineLock {
     holder: JoinHandle<()>,
     lost: Option<oneshot::Receiver<LockLoss>>,
+    release: Option<oneshot::Sender<ReleaseRequest>>,
     epoch: Epoch,
 }
 
@@ -224,12 +260,44 @@ impl PipelineLock {
             "pipeline lock taken; earlier incarnations fenced"
         );
         let (lost_tx, lost) = oneshot::channel();
-        let holder = tokio::spawn(hold(connection, lost_tx));
+        let (release, released) = oneshot::channel();
+        let holder = tokio::spawn(hold(connection, lost_tx, released));
         Ok(Some(Self {
             holder,
             lost: Some(lost),
+            release: Some(release),
             epoch,
         }))
+    }
+
+    /// Release the lock explicitly, the last step of a planned handover:
+    /// the holder unlocks on its session (`pg_advisory_unlock`, within
+    /// [`PING_TIMEOUT`]) and closes it, so the next taker finds it free at
+    /// its next try. Only a handover whose incarnation's pool is closed
+    /// can call it ([`PoolsClosed`]). Not unlocked (the session already
+    /// lost, the unlock refused or not answering): the session is dropped
+    /// and the server releases the lock as it ends it. Cancel safe: dropped
+    /// before its answer, the lock is dropped, and with it the session.
+    pub async fn release(mut self, _closed: PoolsClosed) -> Result<(), ReleaseError> {
+        let Some(release) = self.release.take() else {
+            return Err(ReleaseError::Lost(LockLoss::HolderStopped));
+        };
+        let (reply, answer) = oneshot::channel();
+        if release.send(reply).is_err() {
+            return Err(ReleaseError::Lost(self.reported_loss()));
+        }
+        match answer.await {
+            Ok(released) => released,
+            Err(_) => Err(ReleaseError::Lost(self.reported_loss())),
+        }
+    }
+
+    /// The loss the holder reported, if it did; else that it stopped.
+    fn reported_loss(&mut self) -> LockLoss {
+        self.lost
+            .as_mut()
+            .and_then(|lost| lost.try_recv().ok())
+            .unwrap_or(LockLoss::HolderStopped)
     }
 
     /// The epoch this taking of the lock bumped to: the one its
@@ -281,12 +349,27 @@ async fn take(url: &DatabaseUrl) -> Result<Option<(PgConnection, Epoch)>, TakeEr
 
 /// Keep `connection` alive, pinging it every [`PING`] with a deadline of
 /// [`PING_TIMEOUT`]; report the first failure or timeout, then end,
-/// dropping the connection.
-async fn hold(mut connection: PgConnection, lost: oneshot::Sender<LockLoss>) {
+/// dropping the connection. Asked to release between two pings: unlock,
+/// close, answer and end.
+async fn hold(
+    mut connection: PgConnection,
+    lost: oneshot::Sender<LockLoss>,
+    mut release: oneshot::Receiver<ReleaseRequest>,
+) {
     let mut ticker = tokio::time::interval(PING);
     ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     let loss = loop {
-        ticker.tick().await;
+        tokio::select! {
+            biased;
+            request = &mut release => {
+                // The lock dropped without a release (its task is being
+                // aborted): the session goes with this task.
+                let Ok(reply) = request else { return };
+                let _ = reply.send(unlock(connection).await);
+                return;
+            }
+            _ = ticker.tick() => {}
+        }
         match tokio::time::timeout(PING_TIMEOUT, connection.ping()).await {
             Ok(Ok(())) => {}
             Ok(Err(error)) => {
@@ -314,6 +397,41 @@ async fn hold(mut connection: PgConnection, lost: oneshot::Sender<LockLoss>) {
     drop(connection);
 }
 
+/// Unlock on the lock's own session, then close it politely; a session
+/// whose unlock failed or did not answer is dropped instead (a close would
+/// wait on the same link), which ends it and the lock with it.
+async fn unlock(mut connection: PgConnection) -> Result<(), ReleaseError> {
+    let unlocked = tokio::time::timeout(
+        PING_TIMEOUT,
+        sqlx::query_scalar::<_, bool>("SELECT pg_advisory_unlock($1)")
+            .bind(PIPELINE_LOCK)
+            .fetch_one(&mut connection),
+    )
+    .await;
+    let released = match unlocked {
+        Ok(Ok(true)) => Ok(()),
+        Ok(Ok(false)) => Err(ReleaseError::NotHeld),
+        Ok(Err(error)) => Err(ReleaseError::Failed {
+            failure: crosstalk_store::classify(&error),
+        }),
+        Err(_) => Err(ReleaseError::TimedOut {
+            after: PING_TIMEOUT,
+        }),
+    };
+    match &released {
+        Ok(()) => {
+            if tokio::time::timeout(PING_TIMEOUT, connection.close())
+                .await
+                .is_err()
+            {
+                tracing::warn!("the pipeline lock's session did not close in time; dropped");
+            }
+        }
+        Err(_) => drop(connection),
+    }
+    released
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -334,6 +452,7 @@ mod tests {
         let mut lock = PipelineLock {
             holder: tokio::spawn(std::future::pending()),
             lost: Some(lost),
+            release: None,
             epoch: Epoch::new(1),
         };
         assert!(

@@ -34,6 +34,7 @@ pub mod l5;
 pub mod l6;
 pub mod l7;
 pub mod pump;
+pub mod quiesce;
 
 use std::num::NonZeroU16;
 use std::sync::Arc;

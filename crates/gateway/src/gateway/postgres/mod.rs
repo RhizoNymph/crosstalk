@@ -16,6 +16,8 @@
 //!               checks e) and a PgBus of its own ─▶ Live::start_pg (recovery; the gate
 //!               opens; the spool drains) ─▶ the API router and the ops handles set
 //!   running:    until shutdown, or until the lock is lost
+//!   shutdown:   a planned handover (`handover`): no delivery taken, in-flight work finished or
+//!               released, L5 checkpointed, the pool closed, then the lock unlocked explicitly
 //!   abandoning: lost: the handles cleared, the pool closed (the fence), every task aborted
 //!               and joined, nothing drained ─▶ waiting
 //! api task (role api):
@@ -33,6 +35,7 @@
 
 mod api;
 pub mod gate_watch;
+pub mod handover;
 mod pipeline;
 
 use std::sync::Arc;
@@ -52,6 +55,7 @@ use tokio::task::JoinHandle;
 use tokio::time::Instant;
 
 pub use self::api::{ApiStart, spawn_api};
+use self::handover::{HandoverReport, OutgoingIncarnation, TAIL};
 pub use self::pipeline::{application_name, spawn_pipeline};
 use super::StartError;
 use super::late::{LateRouter, LateValue};
@@ -74,8 +78,10 @@ use crate::tasks::Tasks;
 /// `Live::start_pg` instead.
 pub const SERVE_IDS: PgIds = PgIds::Entropy;
 
-/// How long the tasks wait between two looks at the database.
-const RETRY: Duration = Duration::from_secs(2);
+/// How long the tasks wait between two looks at the database, and a
+/// standby between two tries of the pipeline lock: after a planned
+/// handover it takes the lock within about this.
+pub const RETRY: Duration = Duration::from_secs(2);
 
 /// How long a reachability probe waits for a pooled connection.
 const PROBE: Duration = Duration::from_secs(2);
@@ -151,8 +157,8 @@ pub struct ApiBinding {
 /// What the pipeline task hands back when told to stop: the running live
 /// process and the lock it holds, `None` when none runs (it never started,
 /// or its lock was lost and the next one had not started yet). The live
-/// process's pool (`live.layers().pool`) is its incarnation's own: close
-/// it once the live process stopped.
+/// process's pool (`live.layers().pool`) is its incarnation's own: the
+/// shutdown hands both over ([`handover`]).
 pub type PipelineHeld = Option<(Live<PgSet>, PipelineLock)>;
 
 /// The process's Postgres side.
@@ -171,6 +177,9 @@ pub struct PgRunning {
     pub capture: Option<JoinHandle<()>>,
     pub capture_pipeline: Option<Arc<Pipeline<LiveBlobs, LiveBus>>>,
     pub pipeline: Option<StopHandle<PipelineHeld>>,
+    /// The planned handover's report, once [`PgRunning::hand_over`] ran
+    /// one (the pipeline task is then gone).
+    pub handed_over: Option<HandoverReport>,
     pub api: Option<StopHandle<()>>,
     pub status: StatusReporter,
     pub late: Late,
@@ -232,14 +241,54 @@ pub async fn close_bounded(pool: &PgPool, what: &'static str) {
     }
 }
 
+/// How [`PgRunning::shutdown`] went.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PgStopped {
+    pub drained: LiveDrained,
+    /// The planned handover, when an incarnation ran.
+    pub handover: Option<HandoverReport>,
+}
+
 impl PgRunning {
+    /// Hand the pipeline over now ([`handover`]: no delivery taken,
+    /// in-flight work finished or released, L5 checkpointed, its pool
+    /// closed, the lock unlocked), by `deadline` (its quiesce by `deadline`
+    /// minus [`TAIL`]). The shutdown runs this at once, beside the proxy's
+    /// drain: what the proxy still captures meanwhile publishes through
+    /// capture's own bus (the gate is open while an incarnation runs), so
+    /// it waits durably for the next holder instead of keeping this one.
+    /// The API answers `503` from the handover's start, its surface going
+    /// with the incarnation. Nothing to do when no incarnation runs or it
+    /// was handed over already.
+    pub async fn hand_over(&mut self, deadline: Instant) {
+        let Some(pipeline) = self.pipeline.take() else {
+            return;
+        };
+        let Some(Some((live, lock))) = pipeline.stop_by(deadline).await else {
+            return;
+        };
+        self.late.router.clear();
+        let now = Instant::now();
+        let quiesce_by = deadline.checked_sub(TAIL).unwrap_or(now).max(now);
+        self.handed_over = Some(
+            handover::hand_over(
+                OutgoingIncarnation::new(live, lock),
+                self.status.clone(),
+                quiesce_by,
+            )
+            .await,
+        );
+    }
+
     /// Stop in dependency order: capture drains its channel (the proxy is
-    /// gone), the live process drains and stops, the API surface stops,
-    /// the spool's drainer stops (its files stay), the bus and the pools
-    /// close. Every step that touches the database is bounded: by
-    /// `deadline` (the drains) or [`CLOSE_BOUND`] (each pool's close).
-    pub async fn shutdown(self, deadline: Instant) -> LiveDrained {
-        let capture = match self.capture {
+    /// gone), a running incarnation is handed over if
+    /// [`PgRunning::hand_over`] has not already, the API surface stops, the
+    /// spool's drainer stops (its files stay), the bus and the pools close.
+    /// Every step that touches the database is bounded: the capture's
+    /// drain by `deadline`, a handover here by `deadline` too, each other
+    /// pool's close by [`CLOSE_BOUND`].
+    pub async fn shutdown(mut self, deadline: Instant) -> PgStopped {
+        let capture = match self.capture.take() {
             Some(task) => {
                 let mut task = task;
                 match tokio::time::timeout_at(deadline, &mut task).await {
@@ -253,21 +302,20 @@ impl PgRunning {
             }
             None => true,
         };
-        let mut drained = LiveDrained {
-            capture,
-            stages: true,
-            log: true,
+        self.hand_over(deadline).await;
+        let handover = self.handed_over.take();
+        let (stages, log) = match handover.as_ref().map(|report| &report.quiesce) {
+            None => (true, true),
+            Some(handover::Bounded::Done(quiesced)) => {
+                (quiesced.stages_aborted == 0, quiesced.log_finished)
+            }
+            Some(handover::Bounded::TimedOut { .. }) => (false, false),
         };
-        if let Some(pipeline) = self.pipeline
-            && let Some(Some((live, lock))) = pipeline.stop_by(deadline).await
-        {
-            let pool = live.layers().pool.clone();
-            let live_drained = live.shutdown(deadline).await;
-            drained.stages = live_drained.stages;
-            drained.log = live_drained.log;
-            drop(lock);
-            close_bounded(&pool, "pipeline").await;
-        }
+        let drained = LiveDrained {
+            capture,
+            stages,
+            log,
+        };
         if let Some(api) = self.api {
             api.stop_by(deadline).await;
         }
@@ -277,7 +325,7 @@ impl PgRunning {
         self.bus.shutdown();
         close_bounded(&self.capture_pool, "capture").await;
         close_bounded(&self.pool, "template").await;
-        drained
+        PgStopped { drained, handover }
     }
 }
 
