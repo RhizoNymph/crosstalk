@@ -273,7 +273,7 @@ Everything is re-exported at the crate root (`crosstalk_sim::*`).
 ## Writing a `dst` test
 
 ```rust
-// crates/transport/src/dst.rs (cfg(test)), with crosstalk-sim as a dev-dependency
+// a layer's cfg(test) dst module (as crates/provenance/src/dst.rs), with crosstalk-sim as a dev-dependency
 use std::sync::Arc;
 use crosstalk_sim::{BusFaults, CheckFailed, SubjectFaults, sim_test};
 

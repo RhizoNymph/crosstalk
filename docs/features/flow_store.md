@@ -15,8 +15,9 @@ model-tested against the `crosstalk-memory` reference stores.
   record_transmission, set_detection), `ChannelReads` (channel, channels,
   transmissions) and `ChannelDirectory` (canonical). `D` is the
   `AgentDirectory` agents are resolved through at every read.
-- `PgTransmissionStore<D>`: `TransmissionStore` (save, transmission) and
-  `TransmissionVerdicts` (set, log, quality).
+- `PgTransmissionStore<D>`: `TransmissionStore` (save, modify,
+  transmission, list, holding) and `TransmissionVerdicts` (set, log,
+  quality).
 - The access store: accesses (a write's `WriteOutcome` also in the
   `write_outcome` column) recorded through `ChannelTraffic::record_access`
   and read by `resource_use`; indexed by id for the coming
@@ -37,9 +38,10 @@ model-tested against the `crosstalk-memory` reference stores.
 
 ## Non-scope
 
-- `ResourceExtractor`, `Correlator` and the flow bus consumer (sibling
-  branches `feat/flow-extract`, `feat/flow-correlator`). The consumer calls
-  these stores; the stores never call it.
+- `ResourceExtractor`, `Correlator` and the flow bus consumer (same crate,
+  `extract`, `correlate`, `consumer`; see [flow_extract.md](flow_extract.md)
+  and [flow_correlator.md](flow_correlator.md)). The consumer calls these
+  stores; the stores never call it.
 - `AccessStore::accesses` on Postgres (the table is shaped for it:
   accesses by id). `PgTransmissionStore::list` is implemented (P7.3 W8):
   one `REPEATABLE READ` snapshot of `flow.transmissions`, the window on
@@ -50,9 +52,14 @@ model-tested against the `crosstalk-memory` reference stores.
   `store::tests::list::pg_list_agrees_with_the_memory_reference` (a query
   matrix of windows, state sets, channels including a superseded and an
   unknown one, page sizes 1, 3 and 100).
-- Retention of old rows, and cursor pruning on a schedule (the function
-  exists; nothing calls it yet).
-- Gateway wiring.
+- Retention of old rows, and cursor pruning on a schedule (`prune_cursors`
+  exists, and runs its unbatched delete under the longer retention
+  statement bound, `crosstalk_store::raise_for_retention`, INV-1240;
+  nothing calls it yet).
+- Gateway wiring: `crosstalk_api::pg` composes the stores
+  (`PgChannels<E>`, `PgTransmissions<E>` over `PgAgentStore` and
+  `PgFlowSink`) and the gateway's Postgres mode runs them; see
+  [postgres_mode.md](postgres_mode.md).
 
 ## Decisions
 
@@ -234,6 +241,8 @@ recorded, not what was saved.
 | File | Role | Key exports |
 | --- | --- | --- |
 | `crates/flow/migrations/0001_flow_store.sql` | Schema `flow` | — |
+| `crates/flow/migrations/0002_transmission_matches.sql` | The matches each transmission holds (`holding`) | — |
+| `crates/flow/migrations/0004_extract_ledger.sql` | The extraction step's ledger | — |
 | `crates/flow/src/store/mod.rs` | Module docs, re-exports, migrations | `MIGRATIONS`, `migrate`, every type below |
 | `crates/flow/src/store/codec.rs` | Ids, times and JSON to columns and back | `CodecError` |
 | `crates/flow/src/store/error.rs` | `Fault` inside bodies, mapping into spec errors | `FlowStoreError` |
@@ -245,6 +254,7 @@ recorded, not what was saved.
 | `crates/flow/src/store/shards.rs` | Shard tick records, read (`of`, `ticked_through`) | `PgShardTicks` |
 | `crates/flow/migrations/0003_restart.sql` | Outbox stamps, recording order, resolutions, tool calls, held writes, checkpoints | — |
 | `crates/flow/src/store/restart.rs` | The consumer's durability | `PgFlowDurability` (`new`, `reset_correlator`) |
+| `crates/flow/src/store/ledger.rs` | The extraction ledger on Postgres (`expire` under the retention bound) | `PgExtractionLedger` |
 | `crates/flow/src/integration/checkpoint.rs` | `PgFlowDurability` over Postgres (INV-1216) | - |
 | `crates/flow/src/store/registry/mod.rs` | The registry and its trait impls | `PgChannelRegistry` |
 | `crates/flow/src/store/registry/rows.rs` | Row reads and writes, lookup, policy history | — |

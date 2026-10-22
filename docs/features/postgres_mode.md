@@ -264,10 +264,10 @@ Starting{lock}: incarnation n = a pool of its own (application_name crosstalk-pi
                 + PgBus::new over it ─▶ Live::start_pg ─▶ Late set
    the lock lost (or a stop) during the start: the start future is dropped, its pool fenced,
    its bus abandoned ─▶ Waiting
-Running(Incarnation): until the stop (handed back for the graceful drain) or the loss
+Running(Incarnation): until the stop (handed back for the planned handover) or the loss
 Abandoning{incarnation, loss}:
    status at once: pipeline_lock lost, pipeline abandoning, lock_losses + 1, last_loss
-   Late cleared: the API answers 503 "starting", /healthz has no live section
+   Late cleared: the API answers 503 (Unserved::LockLost), /healthz has no live section
    the pool fenced: Pool::close called, not awaited (every acquire fails from now on; a
      connection an aborted task returns is closed, never pinged); the close itself runs
      bounded (CLOSE_BOUND, 1 s) in a task of its own
@@ -307,7 +307,9 @@ holds the live process's reporter, stage flags and exchange-log tasks for
 the ops listener, and `LateRouter` the API router; each incarnation sets
 them, and a loss clears them. While none is set the `live` and
 `exchange_log` task probes read running (nothing to stop) and the API
-answers `503` with "the surface is starting".
+answers `503` with the `Unserved` cause as the `Store` reason: `Starting`
+before the first incarnation, `LockLost` after a loss, `HandedOver` from
+the start of a planned handover.
 
 **The bound must stay below the server's reap (INV-1236).** The server
 releases a partitioned session's advisory lock when it reaps the session,
@@ -398,7 +400,7 @@ gateway's).
 that drops a `next` future (a command won its `select!`) after the pump
 answered no longer loses the delivery until the ack timeout; settles that
 kept draining could lose it on every redelivery and hang.
-`transport.stage-pump.no-dropped-delivery` (INV-X; the layer prefix is the transport consumer contract the gateway's pump implements) pins it:
+`transport.stage-pump.no-dropped-delivery` (INV-1231; the layer prefix is the transport consumer contract the gateway's pump implements) pins it:
 `live::pg::pump::tests::a_next_dropped_after_its_answer_keeps_the_delivery`
 drives the pump (generic over `Subscription`) with a scripted
 subscription on a paused clock, drops a `next` after its answer, and
@@ -710,9 +712,32 @@ goes back ready on the same attempt (`PgBus::release_held`), the
 incarnation's pool closes, and only then is the lock unlocked on its own
 session (`PipelineLock::release`, which takes the handover's
 `PoolsClosed` proof). The whole handover ends within
-`shutdown.flush_timeout_ms`; the gateway then closes the spool's drainer,
-capture's bus and pool and the template pool, each close bounded by
-`CLOSE_BOUND`. Before, the shutdown drained the groups (a moving target
+`shutdown.flush_timeout_ms` counted from the signal.
+
+The gateway's shutdown order in Postgres mode (`Running::shutdown`):
+
+```text
+SIGTERM ─▶ phase draining (/readyz 503); flush_by = now + shutdown.flush_timeout_ms
+  ─▶ joined, both at once:
+       the proxy stops accepting and drains in-flight streams (shutdown.drain_timeout_ms);
+       what they capture meanwhile goes through capture's own bus (the gate is open)
+       PgRunning::hand_over(flush_by): the pipeline task stopped by flush_by ─▶ the API
+       router cleared (the API answers 503) ─▶ handover::hand_over (quiesce by flush_by - TAIL,
+       release holds, close the pool, unlock) ─▶ PgRunning::handed_over
+  ─▶ the API listener stops (within drain_timeout_ms)
+  ─▶ PgRunning::shutdown(now + flush_timeout_ms): the capture stage drains its channel;
+       a pipeline not handed over yet is handed over here; the API surface task stopped;
+       the spool's drainer closed (its files stay); capture's bus stopped; capture's and
+       the template pool closed (each within CLOSE_BOUND)
+  ─▶ the store probe's pool closed (CLOSE_BOUND) ─▶ the ops listener stops
+```
+
+So the handover no longer waits for the proxy's drain: the lock is free,
+and the standby takes it within about `RETRY`, while the last streams
+still run (`lock_loss::handover::the_handover_does_not_wait_for_the_proxy_drain`).
+`ShutdownReport::handover` carries the `HandoverReport`;
+`stages_drained` and `log_drained` read from its quiesce (no stage
+aborted, the exchange log finished). Before, the shutdown drained the groups (a moving target
 while another gateway captures), dropped the lock before closing the pool,
 left held deliveries for the next holder's recovery with their attempt
 counted, and L5's last acks failed (`Disconnected`).
@@ -1129,18 +1154,18 @@ on `crates/api/tests/support/pg_world.rs`:
 | `crates/gateway/src/store/fence/mod.rs` | the epoch, a pipeline connection joining the fence, the bump | `Epoch`, `EpochError`, `FenceError` (`Fenced`, `Fencing`), `join`, `read_epoch`, `FENCE_POLL`, `FENCE_REPORT` |
 | `crates/gateway/src/store/fence/wait.rs` | a new holder's wait for the fence, over any `FenceSession` (the lock's `PgConnection`) | `wait_for_fence`, `FenceSession`, `Fenced`, `FenceWaitError`, `Blocker` |
 | `crates/transport/migrations/0003_pipeline_epoch.sql` | the one-row epoch table | - |
-| `crates/gateway/src/store/timeouts/mod.rs` | the pipeline's statement and lock bounds: checked, defaulted, read from `store.pipeline_timeouts`, set on each pipeline connection | `PipelineTimeouts` (`new`, `statement`, `lock`, `session_settings`, `apply`, `DEFAULT_STATEMENT`, `DEFAULT_LOCK`), `InvalidPipelineTimeouts` |
+| `crates/gateway/src/store/timeouts/mod.rs` | the pipeline's statement and lock bounds: checked, defaulted, read from `store.pipeline_timeouts`, set on each pipeline connection | `PipelineTimeouts` (`new`, `statement`, `lock`, `retention`, `check_ack_timeout`, `session_settings`, `apply`, `DEFAULT_STATEMENT`, `DEFAULT_LOCK`, `DEFAULT_RETENTION`), `InvalidPipelineTimeouts` |
 | `crates/store/src/retention.rs` | the longer bound retention deletes raise their transaction to | `raise_for_retention`, `restore_after_retention`, `STATEMENT_BOUND`, `RETENTION_BOUND` |
 | `crates/store/src/timeouts/mod.rs` | a statement cancelled at a bound: its kind, the process's counts | `TimeoutKind`, `TimeoutCounts`, `statement_timeouts`; `DbFailure::TimedOut`, `DbFailure::{is_timeout, is_transient}` (`error.rs`) |
 | `crates/gateway/src/integration/statement_timeouts.rs` | Postgres: the bounds on the pipeline pools only, a statement and a lock wait cancelled, a blocked stage write retried, the reaper past a blocked sweep, `/healthz` within its bound | tests |
-| `crates/gateway/src/gateway/postgres/mod.rs` | Postgres-mode start: the template and capture pools, the incarnation pools that set the statement and lock bounds and join the fence, capture's publish-only bus and spool, the bounded shutdown (a running incarnation handed over) | `PgRunning`, `PgStopped`, `RETRY`, `CaptureSide`, `capture_side`, `derived_pool`, `incarnation_pool`, `incarnation_pool_bounded`, `close_bounded`, `StopHandle::stop_by`, `PipelineStart`, `Late`, `SERVE_IDS`, `LOST_SHUTDOWN`, `LOST_REPORTED`, `CLOSE_BOUND`, `CAPTURE_CONNECTIONS` |
+| `crates/gateway/src/gateway/postgres/mod.rs` | Postgres-mode start: the template and capture pools, the incarnation pools that set the statement and lock bounds and join the fence, capture's publish-only bus and spool, the bounded shutdown (a running incarnation handed over) | `PgRunning` (`hand_over`, `handed_over`, `shutdown`), `PgStopped`, `RETRY`, `CaptureSide`, `capture_side`, `derived_pool`, `incarnation_pool`, `incarnation_pool_bounded`, `close_bounded`, `StopHandle::stop_by`, `PipelineStart`, `Late`, `SERVE_IDS`, `LOST_SHUTDOWN`, `LOST_REPORTED`, `CLOSE_BOUND`, `CAPTURE_CONNECTIONS` |
 | `crates/gateway/src/gateway/postgres/handover/{mod,tests}.rs` | the planned handover on a graceful shutdown: steps as types, bounds, the proof the lock's release takes ([planned_handover.md](planned_handover.md)) | `hand_over`, `Handover`, `PoolsClosed`, `Outgoing`, `OutgoingIncarnation`, `HandoverReport`, `Bounded`, `TAIL` |
 | `crates/gateway/src/live/pg/quiesce.rs` | a Postgres live process stopping on purpose: no delivery taken, every stage finishing its own | `Live::<PgSet>::quiesce`, `Quiesced`, `QuiesceReport` |
 | `crates/transport/src/integration/handover.rs` | Postgres: released holds ready at once on the same attempt | tests |
 | `crates/e2e/tests/lock_loss/handover.rs` | two gateways: the owner shut down gracefully with traffic flowing, the standby taking over | tests |
 | `crates/gateway/src/gateway/postgres/pipeline.rs` | the pipeline task: waiting (and fencing), starting, running and abandoning incarnations, each with its own pool and bus under the lock's epoch; the gate's watch spawned beside it | `spawn_pipeline`, `application_name`, `runs_exchange_log` |
 | `crates/gateway/src/gateway/postgres/api.rs` | the `api` role's surface | `spawn_api`, `ApiStart` |
-| `crates/gateway/src/gateway/late.rs` | what an incarnation sets and a loss clears: the API router (503 before), the ops handles | `LateRouter`, `LateValue` |
+| `crates/gateway/src/gateway/late.rs` | what an incarnation sets and a loss clears: the API router (503 before), the ops handles | `LateRouter`, `LateValue`, `Unserved` |
 | `crates/transport/src/pg/{mod,progress,subscription}.rs` | the bus an incarnation owns: abandon with every take joined; a planned handover's release of every hold; the publish-only bus capture appends through | `PgBus::abandon`, `Abandoned`, `PgBus::release_held`, `HANDOVER_REASON`, `PgBus::publisher` |
 | `crates/gateway/src/ops/{mod,metrics}.rs` | readiness, health (the bus read bounded), metrics | `PgOps`, `BusSection`, `BusUnavailable`, `BusReport`, `StatementTimeoutsReport`, `HEALTH_BUS_BOUND`, `SpoolReport` |
 | `crates/gateway/src/config/sections.rs` | `store.bus`, `store.pipeline_timeouts`, `spool` | `SpoolSection`, `StoreSection::MIN_CONNECTIONS`, `StoreSection::pipeline_timeouts` |
@@ -1150,9 +1175,9 @@ on `crates/api/tests/support/pg_world.rs`:
 | `crates/e2e/tests/restart/main.rs` | kill and restart, cursors, ids (W9) | tests |
 | `crates/e2e/tests/{spool,spool_outage,spool_outage_twice,spool_kill,spool_outage_serve_runtime}/main.rs` | the spool through the gateway (W9) | tests |
 | `crates/e2e/tests/reorder/main.rs` | the relay's third exchange delivered after its fourth, memory and Postgres mode: the in-order threads and the uninterrupted answers, agents by role | tests |
-| `crates/e2e/tests/lock_loss/{main,harness,partition,rival,repeated,standby}.rs` | the lock lost while the gateway runs: no refused connect, no owner write after the abandon, no leak, a standby taking over with no older-epoch write | tests, `Prober`, `Sampler`, `epoch_of` |
+| `crates/e2e/tests/lock_loss/{main,harness,partition,rival,repeated,standby}.rs` (and `gate.rs`, `handover.rs`, above) | the lock lost while the gateway runs: no refused connect, no owner write after the abandon, no leak, a standby taking over with no older-epoch write | tests, `Prober`, `Sampler`, `epoch_of` |
 | `crates/gateway/src/integration/pool_close.rs` | why a shutdown across a partition hung: sqlx's `Pool::close` | test |
-| `crates/gateway/src/main.rs`, `crates/gateway/src/gateway/mod.rs` | `serve` runs until SIGINT or SIGTERM; nothing else stops it | `Running::shutdown`, `Running::shutdown_bound` |
+| `crates/gateway/src/main.rs`, `crates/gateway/src/gateway/mod.rs` | `serve` runs until SIGINT or SIGTERM; nothing else stops it; the shutdown joins the proxy's drain with the handover | `Running::shutdown`, `Running::shutdown_bound`, `ShutdownReport::handover` |
 | `crates/api/tests/support/pg_world.rs`, `crates/{api,client}/tests/conformance_pg.rs` | conformance over Postgres (W9): a clone of the template per test | `Databases`, `provision`, `PgWorld`, `Forwarding`, `SeedClock`, `WAIT`, `TEMPLATE_WAIT`, `CLONE_IDS` |
 | `crates/api/tests/support/pg_world/template.rs` | the template seeded once per process and access config | `template`, `Template`, `PgSeeding`, `RecordingBlobs` |
 | `crates/store/src/test_db/template.rs` | template databases: create, freeze, clone, stale cleanup | `TemplateDb`, `TestDb::{create_template, freeze}`, `drop_stale_templates` |
@@ -1281,8 +1306,8 @@ on `crates/api/tests/support/pg_world.rs`:
 | INV-1237 `ingress.capture.never-stopped-by-lock-loss` | integration `crosstalk_e2e::lock_loss::partition::{a_silent_partition,a_postgres_stop,a_partition_past_the_server_reap}_never_stops_capture_and_resumes_in_process` (run on node0) |
 | INV-1238 `transport.pipeline-lock.no-owner-write-after-abandon` | unit `crosstalk_transport::pg::progress::tests::aborted_takes_are_gone_once_none_by_returns` (ran); integration `crosstalk_e2e::lock_loss::rival::a_terminated_lock_session_and_a_rival_holder_leave_no_owner_write_after_the_abandon`, `crosstalk_e2e::lock_loss::repeated::repeated_lock_losses_leave_no_pool_listener_or_task_behind`, `crosstalk_transport::integration::abandon::pg_an_abandoned_bus_joins_its_takes_and_leaves_its_holds_for_recovery` (run on node0) |
 | INV-1239 `transport.pipeline-lock.no-write-from-an-older-epoch` | unit `crosstalk_gateway::store::fence::tests::the_wait_never_gives_up_and_completes_once_the_fence_is_free`, `a_try_without_an_answer_is_a_lock_loss_within_the_ping_deadline`, `a_failed_try_while_waiting_is_a_lock_loss` (ran); integration `crosstalk_gateway::integration::fence::*` (four) and `crosstalk_e2e::lock_loss::standby::*` (two) (run on node0) |
-| INV-1241 `ingress.capture.gate-opens-once-groups-exist` | unit `crosstalk_gateway::gateway::postgres::gate_watch::tests::*` (seven), `crosstalk_gateway::live::pg::groups::tests::*` (four) (ran); integration `crosstalk_gateway::integration::gate::*` (four) and `crosstalk_e2e::lock_loss::gate::*` (two) (run on node0) |
-| INV-1242 `transport.pipeline-lock.planned-handover-clean` | unit `crosstalk_gateway::gateway::postgres::handover::tests::*` (five), `crosstalk_gateway::live::pg::pump::tests::acks_after_the_subscription_ended_still_land`, `crosstalk_gateway::live::recovery::tests::a_handover_is_not_ready_and_names_its_step`, `crosstalk_gateway::ops::handover_tests::readyz_and_healthz_name_the_handover_step` (ran); integration `crosstalk_transport::integration::handover::*` (two) and `crosstalk_e2e::lock_loss::handover::a_planned_shutdown_hands_the_pipeline_to_the_standby_cleanly` (run on node0) |
+| INV-1241 `ingress.capture.gate-opens-once-groups-exist` | unit `crosstalk_gateway::gateway::postgres::gate_watch::tests::*` (eight), `crosstalk_gateway::live::pg::groups::tests::*` (four) (ran); integration `crosstalk_gateway::integration::gate::*` (four) and `crosstalk_e2e::lock_loss::gate::*` (two) (run on node0) |
+| INV-1242 `transport.pipeline-lock.planned-handover-clean` | unit `crosstalk_gateway::gateway::postgres::handover::tests::*` (five), `crosstalk_gateway::live::pg::pump::tests::acks_after_the_subscription_ended_still_land`, `crosstalk_gateway::live::recovery::tests::a_handover_is_not_ready_and_names_its_step`, `crosstalk_gateway::ops::handover_tests::readyz_and_healthz_name_the_handover_step` (ran); integration `crosstalk_transport::integration::handover::*` (two), `crosstalk_e2e::lock_loss::handover::a_planned_shutdown_hands_the_pipeline_to_the_standby_cleanly` and `crosstalk_e2e::lock_loss::handover::the_handover_does_not_wait_for_the_proxy_drain` (run on node0) |
 | INV-1240 `transport.pipeline.statements-bounded` | unit `crosstalk_store::timeouts::tests::*`, `crosstalk_transport::pg::row::timeout_tests::*`, `crosstalk_provenance::pg::timeout_tests::*`, `crosstalk_gateway::store::timeouts::tests::*`, `crosstalk_gateway::ops::health_bound_tests::healthz_answers_within_its_bound_while_the_bus_read_stalls` (ran); integration `crosstalk_gateway::integration::statement_timeouts::*` (nine; run on node0) |
 | INV-1233 `transport.settle.quiet-covers-unadmitted` | integration `crosstalk_gateway::integration::pg_quiet_counts_entries_no_group_admitted_yet` (ran on node0; failed before the fix) |
 | INV-1221 `ingress.proxy.forwarding-independent-of-capture-store` | `crosstalk_gateway::postgres_down::proxy_forwards_through_outage_and_full_spool` (ran) |

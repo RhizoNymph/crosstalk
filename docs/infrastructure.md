@@ -14,14 +14,14 @@ them and the contract the `crosstalk` binary implements for them.
 | Area | Now | Later (the seam) |
 |---|---|---|
 | Deployment | docker compose on one machine (`deploy/compose.yaml`) | Same images split by role; Kubernetes only if multi-node needs it |
-| Process shape | One `crosstalk` binary, `serve --role all` | `--role proxy\|pipeline\|api\|analysis` on separate containers |
-| Bus | In-process `MpscBus` | NATS JetStream adapter behind `EventBus` (P9) |
+| Process shape | One `crosstalk` binary, `serve --role all`, one gateway per database | `--role proxy\|pipeline\|api\|analysis` on separate containers; a standby gateway on the same database (the pipeline lock is fenced and handed over on shutdown, but blobs must be shared first) |
+| Bus | `PgBus` on Postgres (schema `transport`) behind the on-disk publish spool, since the config has a `store` section (Postgres mode); in-process `MpscBus` without one | NATS JetStream adapter behind `EventBus` (P9) |
 | Structured state | Postgres 18 + pgvector + pg_trgm, one schema per layer | Read replica for `api`; hash-partitioned fingerprints |
 | Time series (D3) | Plain Postgres, no TimescaleDB | Native range partitions on time-bucketed tables |
 | Bodies | `FsBlobStore` on the `data` named volume (`/var/lib/crosstalk/blobs`) | S3-compatible store behind `BlobStore` |
 | Body retention | Per-message blobs kept indefinitely (issue #38); raw request bodies are never stored | Retention jobs dropping old message blobs |
-| Embeddings | A hosted OpenAI-compatible endpoint, so embedding never waits on a slow local model: OpenAI `text-embedding-3-small` in `deploy/config/crosstalk.json`'s `embeddings` block, keyed by `CROSSTALK_EMBEDDINGS_API_KEY` in `deploy/.env`. Another hosted provider is a `base_url` and `model` change | A local model on the deployment host's GPU, behind the same config block; scaling hosted compute is the provider's problem, not ours |
-| Topics / UMAP (D1) | Behind the L6 traits; batch, not streaming | A Python batch worker (umap-learn, HDBSCAN) if Rust options fall short |
+| Embeddings | A hosted OpenAI-compatible endpoint, so embedding never waits on a slow local model: OpenAI `text-embedding-3-small` in `deploy/config/crosstalk.json`'s `embeddings` block, keyed by `CROSSTALK_EMBEDDINGS_API_KEY` in `deploy/.env`. Another hosted provider is a `base_url` and `model` change. `serve` does not call the embedder yet | A local model on the deployment host's GPU, behind the same config block; scaling hosted compute is the provider's problem, not ours |
+| Topics / UMAP (D1) | A Python sidecar (`sidecar/topics/`, image `deploy/topics.Dockerfile`: UMAP, HDBSCAN, c-TF-IDF) behind the L6 traits; batch, not streaming. Not yet a compose service or wired into `serve` | A `topics` service in compose and the gateway config |
 | API server (D5) | axum (on the workspace's hyper 1.11.1) | — |
 | Infra observability | Prometheus, Grafana, Loki, Alloy, node-exporter, cAdvisor, postgres-exporter | Same stack; app metrics join on the ops port |
 | Backups | None | WAL-G or pgBackRest to object storage; bucket versioning for blobs |
@@ -31,9 +31,11 @@ them and the contract the `crosstalk` binary implements for them.
 
 **Postgres** holds every structured record: agents, threads, fingerprints,
 matches, resources, channels, transmissions, verdicts, alerts, the audit log,
-edge buckets, embeddings (pgvector) and search (pg_trgm). Each layer owns a
+edge buckets, embeddings (pgvector) and search (pg_trgm), plus the bus
+(event log, groups, deliveries, dead letters), the L5 correlator's
+checkpoints and the pipeline lock's epoch. Each layer owns a
 schema and its own migrations table (`crates/store`). Without TimescaleDB,
-the tables that grow with time (exchanges, transmissions, L7 buckets) are
+the tables that grow with time (bus events, transmissions, L7 buckets) are
 the candidates for native range partitioning when retention arrives;
 dropping a partition is then the retention job. L7 already pre-aggregates
 into buckets, so continuous aggregates would add little.
@@ -45,6 +47,14 @@ harnesses resend the whole conversation every turn, so this is what keeps
 storage linear: the repeated prefix of a conversation is the same set of
 message hashes, and only the new turn costs bytes. Raw request bodies are
 not kept; per-message content is enough.
+
+**The rest of the `data` volume** (`/var/lib/crosstalk`, the parent of
+`blobs.root`) holds the exchange log, `exchanges/exchange-log.jsonl`, one
+line per captured exchange written by its bus consumer, and in Postgres mode
+the publish spool, `spool/` (fsynced segments of envelopes captured while the
+database was unreachable, drained in order once it answers; `spool` section,
+1 GiB by default). The volume belongs to one gateway: a second gateway with
+its own volume cannot read the first one's bodies.
 
 Cheap later wins: zstd-compress blob files (tool output compresses 3–5×),
 and store embeddings as `halfvec` to halve their size.
@@ -61,7 +71,8 @@ One binary, one process, every role, as the compose service `crosstalk`:
 agents ──HTTP──▶ :8080 proxy (L0) ──▶ upstream APIs
                     │ capture tee (never slows the client)
                     ▼
-               in-process bus ──▶ L1 … L7 consumers ──▶ Postgres, blobs
+          publish spool ──▶ PgBus ──▶ L3 … L7 consumers ──▶ Postgres, blobs
+          (data volume)    (Postgres)
                                                           ▲
 operator UI ──▶ :8081 API (L8, SSE) ─────────────────────┘
 Prometheus ──▶ :9464 ops (/metrics, /healthz, /readyz)
@@ -75,11 +86,16 @@ The roles the binary will split into later:
 | `pipeline` | L1–L7 consumers | Postgres, blobs | JetStream consumers sharded by key |
 | `api` | L8 (QueryApi, SSE, export) | reads Postgres | replicas + a read replica |
 | `analysis` | topics, projections, rule batches | Postgres | scheduled jobs |
-| `all` | everything, in-process bus | | one machine |
+| `all` | everything in one process | Postgres, blobs, spool | one machine |
 
 The proxy is on every agent's critical path, so it must never wait on the
 database or the bus to forward: capture is a bounded tee, and a full capture
-channel costs that exchange's capture, not the agent's request.
+channel costs that exchange's capture, not the agent's request. In
+Postgres mode capture publishes through the spool, which takes what the
+database cannot and drains it later, so an outage or partition costs no
+captured exchange until the spool is full; the pipeline waits for the
+database, migrations at head and the pipeline lock, and resumes in process
+when the lock is lost (`docs/features/postgres_mode.md`).
 
 ## Sizing for 100–200 agents
 
@@ -115,16 +131,27 @@ what grow.
   kernel's default timeouts (hours idle, ~15 min with data in flight).
 - `migrate` runs `crosstalk migrate` once, then exits; `crosstalk` starts
   only after it succeeds. Upgrades are therefore: build, `up -d` (migrate
-  runs first), and the strict wire contract is safe because the in-process
-  bus never holds messages across a restart.
-- `crosstalk` (`serve --role all`), healthy when `/readyz` answers.
+  runs first), and the pipeline starts only once every layer's applied
+  migrations match the binary's. The Postgres bus keeps undelivered
+  envelopes across a restart, so an upgrade that changes a bus event's wire
+  shape should let the bus drain first: decoding is strict.
+- `crosstalk` (`serve --role all`, Postgres mode), healthy when `/readyz`
+  answers. `CROSSTALK_DB_NAME` picks its database (default `crosstalk`;
+  `run.sh bench` gives each run its own). On SIGTERM it stops accepting and
+  drains in-flight streams (`shutdown.drain_timeout_ms`, 45 s by default)
+  while it hands the pipeline over (`shutdown.flush_timeout_ms`, 10 s:
+  stages quiesced, held deliveries released, the lock unlocked;
+  `docs/features/planned_handover.md`), inside the 60 s
+  `stop_grace_period`.
 - `ui` (profile `ui`, added by `run.sh` whenever `ui/` exists): the operator
   UI on its HTTP backend, reading the gateway's API at `crosstalk:8081` with
   `CROSSTALK_API_TOKEN`; it starts once `crosstalk` is healthy.
 - The observability stack (below).
 
-Only the proxy binds beyond localhost; the API, UI, Grafana, Prometheus and
-Postgres bind 127.0.0.1 (reach them over SSH forwarding, or change the bind).
+Only the proxy binds beyond localhost by default (`CROSSTALK_PROXY_BIND`,
+0.0.0.0); the API, ops port, UI, Grafana, Prometheus, Alloy and Postgres bind
+`CROSSTALK_BIND`, 127.0.0.1 by default (reach them over SSH forwarding, or
+set it to the host's tailnet IP or 0.0.0.0).
 node-exporter runs on the host network on port 19100. Every published host
 port is a `deploy/.env` variable, so the stack fits beside other projects
 on a shared machine; `docs/features/deploy.md` ("Running on a shared host")
@@ -137,7 +164,7 @@ Accepted for now, for the hackathon, each with what replaces it:
 | Risk | Now | What changes it |
 |---|---|---|
 | Plain HTTP on the proxy | Agents' requests, credentials included, cross the network unencrypted; the proxy belongs on a trusted network | A TLS terminator in front of the proxy |
-| Unbounded disk growth | Bodies are kept (issue #38) and nothing deletes blobs or rows; see the growth figures under sizing | Retention jobs: dropping time partitions in Postgres and unreferenced blobs |
+| Unbounded disk growth | Bodies are kept (issue #38) and nothing deletes blobs. In Postgres only the bus log (7 days behind its slowest group) and the fingerprint index's observations age out; transmissions and most other tables grow. See the growth figures under sizing | Retention jobs: dropping time partitions in Postgres and unreferenced blobs |
 | No backups | Losing the host's disk loses Postgres and the blobs | WAL-G (or pgBackRest) to object storage, and bucket versioning once blobs move to S3 |
 
 ## Demo and load testing
@@ -154,7 +181,9 @@ fake upstream. `bash deploy/run.sh demo up`, then `demo run [--agents N
 ...]`, prints throughput, client-observed latency percentiles and the
 expected cross-agent transmissions. Watch the stack in the usual Grafana
 dashboards meanwhile. `demo down` stops it. Details and knobs:
-`docs/features/demo.md`.
+`docs/features/demo.md`. `bash deploy/run.sh bench` runs one scored
+detection benchmark on the same stack, each run on a fresh database
+(`docs/features/bench.md`).
 
 ## Observability (infrastructure)
 
@@ -176,8 +205,10 @@ already there for them.
 
 1. **One box (now).** Everything above.
 2. **Split roles.** Stateless `proxy` replicas behind a load balancer, one
-   `pipeline`, a separate `api`; NATS JetStream replaces the in-process bus;
-   the S3-compatible blob store replaces the volume; a Postgres read replica
+   `pipeline`, a separate `api`; NATS JetStream replaces `PgBus` across
+   nodes; the S3-compatible blob store replaces the volume (also what a
+   standby gateway needs to take over the pipeline: today each gateway's
+   bodies are on its own volume); a Postgres read replica
    serves `api`. Put the wire version in JetStream stream names so a new
    version consumes a fresh stream while the old pipeline drains the old
    one: strict decoding then loses nothing across an upgrade.

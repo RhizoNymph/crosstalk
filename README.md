@@ -16,7 +16,7 @@ This is an early-stage project. The design is fully specified and detection runs
 |---|---|
 | Specification (`spec/`) | Done. Types, per-layer traits and invariants, plus the JSON wire contract with golden files. `scripts/inv_check.py` validates the invariants. |
 | Capture and serving (`crosstalk` binary) | Working. Reverse proxy for Anthropic Messages over HTTP/SSE; Claude Code pointed at it through `ANTHROPIC_BASE_URL` works unchanged, including with Claude Code's OAuth login. `serve --role all` runs the proxy, the detection pipeline and the HTTP API together. |
-| Transport, store, blob store | Working. The gateway runs every detection layer on its own Postgres store (the default in the compose stack) over a durable Postgres bus. Capture goes through an on-disk spool, so it keeps going while the database is down. Restarts recover in place, and a lost pipeline lock is resumed inside the process. An in-memory mode remains for tests and the benchmark adapter. |
+| Transport, store, blob store | Working. The gateway runs every detection layer on its own Postgres store (the default in the compose stack) over a durable Postgres bus. Capture goes through an on-disk spool, so it keeps going while the database is down. Restarts recover in place, a lost pipeline lock is resumed inside the process, and a planned shutdown hands the pipeline to a standby gateway. An in-memory mode remains for tests and the benchmark adapter. |
 | Detection (L3–L7: reconstruct, provenance, flow, analysis, topology) | Wired end to end through `Live`. On held-out demo swarm runs, the headline scenario scores recall 1.000 and precision 1.000, and the template-heavy boilerplate scenario recall 1.000 and precision 0.887 ([Results](#results)). |
 | Surface service (L8) | Working, in process and over HTTP (`api.listen`, bearer token). It covers queries, operator actions, the live feed and export, and passes all 65 tests of the L8 conformance suite. |
 | Evaluation (`crates/bench-adapter`, `ct-bench-detect`) | The datasets, labels, scoring and gates live in the standalone benchmark [a2a-transmission-bench](#benchmark-a2a-transmission-bench). `ct-bench-detect` is crosstalk's detector for it: the live composition over a bench input directory, and saved node0 bench runs as bench inputs and predictions. crosstalk's own scorer (formerly `ct-eval`) is retired. |
@@ -27,13 +27,15 @@ This is an early-stage project. The design is fully specified and detection runs
 
 The hackathon submission and demo were made from `staging` at [`79dd38b`](https://github.com/RhizoNymph/crosstalk/commit/79dd38b), pushed on 2026-10-04 at 17:52 PDT. At that point the capture path, flow detection (L5) and L3 reconstruct were on `staging`. The demo was the operator UI replaying a scripted fixture world, so it showed what an operator would see but ran no detection code.
 
-Since then (586 commits, PRs #23 to #129):
+Since then (653 commits, PRs #23 to #143):
 
 - **Detection wired end to end.** L4 provenance, L6 analysis and L7 topology landed, composed with L3 and L5 in `Live`. The e2e tests confirm that one agent's output read by another becomes a transmission and a channel edge.
 - **Detection measured.** `run.sh bench` drives the demo swarm through the real gateway and scores the export against the swarm's ground truth, with regression gates and a held-out split. Fixes to L4 match quality (template and boilerplate handling, short broadcasts) took the headline precision of the first live run from 0.175 to 1.000.
 - **Operator UI.** Merged into `staging` (#23), connected to the gateway over HTTP, with a gateway-unreachable page, follow mode, the conversation view and an export of unconfirmed transmissions.
 - **Surface over HTTP.** The real L8 surface passes the full conformance suite, in process and over HTTP.
 - **Postgres mode.** A Postgres store for every layer (transport, reconstruct, provenance, flow, analysis, topology, surface), wired into the gateway. It has restart recovery, a capture spool for database outages, and a single-writer pipeline lock that is resumed in process when lost. Restart, outage, partition and conformance suites cover it, and fault runs on the deployed stack confirm it.
+- **Order-tolerant threading.** L3 threads a conversation's exchanges in the order their turns ended, whatever order they arrive in, so a late delivery (a retry, or one recovered after a restart or outage) no longer opens an extra conversation or joins the wrong one.
+- **Groundwork for a standby gateway.** Taking the pipeline lock is fenced by an epoch, pipeline statements have time limits, a standby keeps capturing while it waits, and a planned shutdown hands the pipeline over at SIGTERM, beside the proxy's drain.
 - **Claude Code OAuth.** Claude Code logged in with OAuth works through the proxy.
 - **Operations.** Grafana panels and alerts for the gateway's capture spool.
 - **The benchmark split out** into its own repository, described next, and held-out releases scored by it.
@@ -48,7 +50,7 @@ The step-by-step plan and current progress are in [`docs/roadmap.md`](docs/roadm
 
 All results below are on synthetic traffic: crosstalk's demo swarm, whose agents read and write a shared wiki through the real gateway, with known ground truth. They are scored by [a2a-transmission-bench](#benchmark-a2a-transmission-bench), not by crosstalk's own code.
 
-These results apply to staging [`a74f808`](https://github.com/RhizoNymph/crosstalk/commit/a74f808). The held-out runs used that build. The fault runs used `c316505`, which differs from it only in one test file. Changes merged after it are not covered until the next measurement.
+These results apply to staging [`a74f808`](https://github.com/RhizoNymph/crosstalk/commit/a74f808). The held-out runs used that build. The fault runs used `c316505`, which differs from it only in one test file. Changes merged after it are not covered until the next measurement: so far the planned handover (#139, #141), which changes only the gateway's shutdown path.
 
 ### Held-out detection
 
@@ -86,8 +88,8 @@ During a fault the proxy keeps forwarding and the capture spool holds what it ca
 - **Real traffic is unmeasured.** Every number above comes from synthetic or dataset traffic. How crosstalk does on real agents' traffic has not been measured.
 - **Template-heavy pages.** In the boilerplate scenario crosstalk's false positives vary widely from run to run (45 to 200 per 1,000 exchanges across 30 runs on one seed), so its gates (115 per 1,000, precision 0.86) fail on some runs. One known source: when a page is rewritten from shared template text, a read of the new version can also be credited to the writer of an older version, through text both versions kept.
 - **An occasional dropped read.** In about 2 of 12 development runs, a live read of a wiki page did not reach flow detection, so a channel transmission was reported as direct messages instead. Replaying the same capture offline detects it correctly.
-- **Planned restarts.** A restart (SIGTERM) closes the proxy while the old process drains its open streams and the new one starts: about 10 s in the run above. Outages and partitions do not close it.
-- **One gateway per database.** The pipeline lock lets a second gateway wait as a standby, but a takeover does not work yet: each gateway keeps the message bodies it captured on its own volume, so a standby that takes the lock cannot read them. In two-gateway tests on a development branch, the standby took over within seconds, but two runs could not be scored, because reconstruction failed on 157 and 167 exchanges whose bodies it could not find. The lock itself is fenced: each taking of it starts a new pipeline epoch and waits until every connection of the previous holder is gone, so a gateway that lost the lock cannot write pipeline results after another has taken it. The compose stack runs one gateway.
+- **Planned restarts.** A restart (SIGTERM) closes the proxy while the old process drains its open streams and the new one starts: about 10 s in the run above. Outages and partitions do not close it. A standby gateway takes over the pipeline during that gap, but not the restarted gateway's proxy traffic.
+- **One gateway per database.** The pipeline lock lets a second gateway wait as a standby, and a planned shutdown hands the pipeline over to it. But each gateway keeps the message bodies it captured on its own volume, so a standby that takes the lock cannot read them. In two-gateway tests on a development branch with separate volumes, the standby took over within seconds, but two runs could not be scored, because reconstruction failed on 157 and 167 exchanges whose bodies it could not find. With a shared body volume (a test-only setup, not in the compose stack), a planned shutdown had the standby running the pipeline 1.8 s after SIGTERM, against 11.3 s when the handover waited for the proxy's drain, with no dead letters or duplicates (one development run each). The lock itself is fenced: each taking of it starts a new pipeline epoch and waits until every connection of the previous holder is gone, so a gateway that lost the lock cannot write pipeline results after another has taken it. The compose stack runs one gateway.
 
 Fixes to detection will be judged on fresh development runs and then on a new held-out release, not on the runs above.
 
@@ -103,9 +105,12 @@ crates/        one crate per layer or tool (crosstalk-<dir>)
   surface, api, client        L8 surface service and its bindings
   gateway                     the `crosstalk` binary and pipeline composition
   memory, sim, testkit, world reference stores, simulation, fixtures, seeded world
-  eval, e2e, demo             bench adapter (ct-bench-detect), end-to-end smoke, demo swarm
-sidecar/topics  Python sidecar for topic modelling and layout (UMAP, HDBSCAN)
+  conformance                 L8 conformance suite
+  bench-adapter, e2e, demo    bench adapter (ct-bench-detect), end-to-end tests, demo swarm
+sidecar/topics Python sidecar for topic modelling and layout (UMAP, HDBSCAN)
+ui/            operator UI
 deploy/        compose stack, Dockerfiles, observability config, run.sh
+scripts/       check.sh, inv_check.py, test-database and loop helpers
 docs/          overview, roadmap, per-feature docs
 ```
 

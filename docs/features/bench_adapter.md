@@ -61,7 +61,7 @@ a2a-bench run --export <export dir> --out <run dir> \
 
 # a node0 bench run (run.sh bench's run directory)
 ct-bench-detect swarm-fetch --api URL --token-env VAR --truth <run>/truth.jsonl --out <run>   # export, evidence
-ct-bench-detect fetch       --api URL --token-env VAR --truth <run>/truth.jsonl --out <run>   # conversation reads (optional)
+ct-bench-detect fetch       --api URL --token-env VAR --truth <run>/truth.jsonl --out <run>   # conversation reads (optional for from-export; run.sh bench always runs it)
 ct-bench-detect from-export --run <run> --out <out>      # input view + crosstalk-gateway-export predictions
 ct-bench-detect replay      --run <run> --out <out>      # the same through Live in memory: crosstalk-live
 a2a-bench score …  over <out> with the bench's demo-swarm labels and gates/crosstalk-gateway-export.toml
@@ -117,7 +117,12 @@ ct-bench-detect swarm-fetch --api URL [--token-env VAR] [--truth FILE | --since-
   `run.sh bench`'s holdout mode keeps out of its log). It is what `ct-eval
   swarm-fetch` was, unchanged. `deploy/demo.Dockerfile` builds
   `ct-bench-detect` into the demo image, and it is the compose `bench`
-  service's entrypoint, so `run.sh bench`'s fetch step runs it.
+  service's entrypoint, so `run.sh bench`'s fetch step runs it. The same
+  run then runs `fetch` and `from-export` (`bench_detect_inputs`, logs
+  `detect-fetch.log` and `from-export.log`), holdout runs included, so
+  every saved run carries its query answers and `bench-input/`; scoring
+  is `a2a-bench` at the image's pinned tag (`A2A_BENCH_REF`,
+  `a2a-bench-v1.1.1`), never this crate.
 
 ## Header
 

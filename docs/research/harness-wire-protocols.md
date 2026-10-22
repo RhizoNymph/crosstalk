@@ -1,5 +1,13 @@
 # Harness and server wire protocols
 
+Status (2026-10-21): the client, upstream, credential and transport
+types are in `spec/types/observed/client.rs` and
+`spec/types/observed/exchange.rs`. Only the Anthropic Messages adapter is
+built (`crates/ingress/src/adapter/anthropic.rs`, [ingress.md](../features/ingress.md));
+the OpenAI Chat and Responses adapters and the WebSocket taps are roadmap
+P8. Claude Code's subscription traffic is covered in
+[claude_code_oauth.md](../features/claude_code_oauth.md).
+
 What each supported harness and inference server sends over the wire, as of
 2026-10-03. This is the basis for the client, upstream, credential and
 transport types in `spec/types/observed/client.rs` and

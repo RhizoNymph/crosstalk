@@ -822,6 +822,13 @@ never connect again: "the only writer" holds across processes, which
 makes a standby gateway safe. Capture's publisher pool and the `api` role
 never join the fence.
 
+A holder that stops on purpose (SIGTERM) hands the lock over instead of
+dropping it ([planned_handover.md](planned_handover.md), INV-1242): it
+stops taking deliveries, lets each stage finish its delivery, gives back
+what is still held on the same attempt (`PgBus::release_held`), closes
+its incarnation's pool and only then unlocks the lock on its own
+session, beside the proxy's drain rather than after it.
+
 ### Cursor keys and id generators
 
 - Page cursors that the Postgres stores issue are table rows (`flow.cursors`,
@@ -1406,7 +1413,20 @@ The proposal as reviewed:
    traits.
 
 The coordinator numbered them in the P7.3 block (INV-1200 to INV-1249);
-S used INV-1200 to INV-1221.
+S used INV-1200 to INV-1221. The numbers the proposals above got:
+`transport.consumer.derived-envelope-ids` INV-1202,
+`transport.durability.pg-publish-persisted` INV-1203,
+`transport.publish.idempotent-on-id` INV-1204,
+`transport.restart.held-redelivered` INV-1205, the `transport.spool.*`
+five INV-1206 to INV-1210, the four `*.outbox.stable-envelope-id`
+INV-1211 (reconstruct) to INV-1214 (topology),
+`flow.consumer.restore-equivalent` INV-1215,
+`flow.checkpoint.ticks-with-state` INV-1216,
+`topology.frontier.covers-spool` INV-1217,
+`surface.audit.no-silent-effect` INV-1218,
+`surface.cursor.survives-restart` INV-1219,
+`surface.ids.unique-across-restart` INV-1220 and
+`ingress.proxy.forwarding-independent-of-capture-store` INV-1221.
 
 ## Implementation plan
 
@@ -1489,14 +1509,15 @@ The user decided every question after reviewing PR #103:
 
 ## Files
 
-What the implementation touches (planned; nothing exists yet unless
-marked):
+What the implementation touched (planned here, now landed; the current
+files, roles and exports are in [pg_bus.md](pg_bus.md),
+[publish_spool.md](publish_spool.md) and [postgres_mode.md](postgres_mode.md)):
 
 | File | Role | Key exports |
 | --- | --- | --- |
 | `crates/transport/migrations/0001_bus.sql` | bus log, groups, deliveries, dead letters | - |
-| `crates/transport/src/pg/{mod,publish,subscribe,dead_letters,prune,stats}.rs` | `PgBus` | `PgBus`, `PgSubscription`, `PgDeadLetters`, `GroupStats`, `PgBusConfig` |
-| `crates/transport/src/spool/{mod,segment,record,cursor,drain,state}.rs` | the publish spool | `SpoolingBus`, `SpoolConfig`, `SpoolState`, `SpoolStats`, `SpoolError` (`Locked`, `Corrupt`, `Io`) |
+| `crates/transport/src/pg/{mod,publish,subscription,reaper,listen,progress,dead_letters,prune,stats,row,config}.rs` | `PgBus` | `PgBus`, `PgSubscription`, `PgDeadLetters`, `GroupStats`, `PgBusConfig` |
+| `crates/transport/src/spool/{mod,log,record,cursor,drain,state,config,error}.rs` | the publish spool | `SpoolingBus`, `SpoolConfig`, `SpoolState`, `SpoolStats`, `SpoolError` (`Locked`, `Corrupt`, `Cursor`, `Io`, `Interrupted`) |
 | `crates/testkit/src/db_link.rs` | a cuttable TCP relay to the test database | `DbLink` (`start`, `url`, `cut`, `restore`) |
 | `crates/reconstruct/migrations/0005_outbox_ids.sql`; `src/agents/outbox.rs`; `src/publish.rs`; `src/thread/pg.rs`; `src/ids.rs` (W2, implemented) | stable outbox ids; `ExchangePlacements`; cursor keys from the secret | `PgConversations: ExchangePlacements`, `EventSink::stamp`, `Stamp`, `PgAgents::open_with_secret`, `cursor_key` |
 | `crates/provenance/src/store/{mod,memory,pg,reads}.rs`, `src/engine.rs` (W3, done) | `SpanIndex` (in `reads.rs`), `started_at` | `PgProvenanceStore: SpanIndex`, `ProvenanceStore::started_at`, `Provenance::started_at` |
@@ -1505,8 +1526,8 @@ marked):
 | `crates/topology/migrations/0002_outbox_ids.sql`; `src/outbox.rs` | stable ids | - |
 | `crates/surface/migrations/0001_surface.sql`; `src/pg/{audit,operators,sinks}.rs`; `src/cursor.rs` | L8 stores, key derivation | `PgAuditLog`, `PgOperatorStore`, `PgSinkRegistry`, `CursorKey::derive` |
 | `crates/api/src/pg/{mod,evidence}.rs` | the Postgres store bundle | `PgStores`, `PgEvidence` |
-| `crates/gateway/src/live/{mod,store_set,recovery,frontier}.rs`, `src/store.rs`, `src/ops/mod.rs`, `src/config/sections.rs`, `src/cli.rs` | composition, recovery, frontier, readiness, the `spool` section and `spool` subcommand | `LiveStoreSet`, `PgFrontierSource`, `Recovery`, `PipelineLock`, `SpoolSection` |
-| `crates/e2e/src/restart.rs`, `crates/e2e/tests/restart/**` | restart tests | - |
+| `crates/gateway/src/live/{mod,store_set,recovery,frontier}.rs`, `src/store/{mod,lock,migrations}.rs`, `src/spool.rs`, `src/ops/mod.rs`, `src/config/sections.rs`, `src/cli.rs` | composition, recovery, frontier, readiness, the `spool` section and `spool` subcommand | `LiveStoreSet`, `PgFrontierSource`, `RecoveryReport`, `StatusReporter`, `PipelineLock`, `SpoolSection`, `discard_corrupt` |
+| `crates/e2e/src/answers.rs`, `crates/e2e/tests/restart/**` | restart tests | `answers` |
 | `spec/types/ids.rs`, `spec/types/ids/secret.rs` (exist) | derived envelope ids, derived keys | `EventId::derive`, `KeyedHasher::derive_key`, `DerivedKey` |
 | `spec/types/interfaces/l2_transport.rs` (exists) | bus docs, spool error | `BusError::SpoolFull` |
 | `spec/types/interfaces/l8_surface/audit.rs` (exists) | write-ahead intents | `AuditOutcome::Interrupted`, `INTERRUPTED_REASON`, `AuditIntent`, `AuditIntents` |

@@ -52,6 +52,7 @@ Layer prefixes, one per layer of the abstraction stack (`spec/types/interfaces/`
 | `surface` | L8 | query API, operator actions, alert delivery |
 
 An invariant belongs to the layer whose component must uphold it.
+`scripts/inv_check.py` refuses any other prefix.
 
 ### `kind`
 
@@ -123,7 +124,9 @@ A path starts with the library name of the crate that holds the evidence:
   layer's own crate: `crosstalk_ingress`, `crosstalk_canonical`,
   `crosstalk_transport`, `crosstalk_reconstruct`, `crosstalk_provenance`,
   `crosstalk_flow`, `crosstalk_analysis`, `crosstalk_topology` and
-  `crosstalk_surface`, for example `crosstalk_surface::tests::foo`.
+  `crosstalk_surface`, for example `crosstalk_surface::tests::foo`. A
+  directory with a hyphen is named with an underscore
+  (`crosstalk_bench_adapter` for `crates/bench-adapter`).
 
 The old single-crate form `crosstalk::<layer>::...` is not used.
 
@@ -150,9 +153,45 @@ Evidence that does not exist yet is `{ agent = "false", human = "false" }`.
 python3 scripts/inv_check.py spec/invariants                  # what scripts/check.sh runs
 python3 scripts/inv_check.py spec/invariants --allow-pending  # also accept INV-X-<id>.toml
 python3 scripts/inv_check.py spec/invariants --layer flow     # one layer's prefix only
+python3 scripts/inv_check.py spec/invariants --root <repo>    # crates/ and spec/types/tests from another root
 ```
 
 It checks every file against this page (names, fields, kinds, evidence keys
 and reviews, unique ids and numbers) and the evidence path rules above. Its
 last line is `<files> files, <errors> errors`, and it exits non-zero on any
 error.
+
+## Current set
+
+979 invariants, numbered from INV-1 to INV-1242 (numbers are never reused,
+so some are unassigned; the next is INV-1243).
+
+| Layer | Invariants |
+| --- | ---: |
+| `ingress` | 60 |
+| `canonical` | 80 |
+| `transport` | 60 |
+| `reconstruct` | 97 |
+| `provenance` | 72 |
+| `flow` | 158 |
+| `analysis` | 132 |
+| `topology` | 91 |
+| `surface` | 229 |
+
+By kind: 596 `domain` (434 `postcondition`, 62 `invariant`, 58
+`metamorphic`, 37 `model-based`, 5 `inductive`), 188 `coordination`, 134
+`representation`, 41 `confidentiality`, 20 `performance`.
+
+The newest are the Postgres-mode pipeline lock and its takeovers:
+INV-1236 (`transport.pipeline-lock.loss-detected-before-reap`), INV-1237
+(`ingress.capture.never-stopped-by-lock-loss`), INV-1238
+(`transport.pipeline-lock.no-owner-write-after-abandon`), INV-1239
+(`transport.pipeline-lock.no-write-from-an-older-epoch`: each taking of
+the lock bumps the epoch, and no older incarnation commits a pipeline
+write), INV-1240 (`transport.pipeline.statements-bounded`: every pipeline
+statement runs under `statement_timeout` and `lock_timeout`), INV-1241
+(`ingress.capture.gate-opens-once-groups-exist`: the capture gate of a
+standby opens once every pipeline group exists) and INV-1242
+(`transport.pipeline-lock.planned-handover-clean`: a planned stop hands
+the pipeline over in a fixed, bounded order); and INV-1235
+(`reconstruct.thread.order-independent`), order-tolerant threading.

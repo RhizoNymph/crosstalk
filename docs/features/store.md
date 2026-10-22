@@ -21,7 +21,11 @@ classifies it `Open`), and it depends on no layer crate, only on
   migrations)`, which runs one layer's migrations in its own schema with its
   own migrations table.
 - `ensure_extensions`: `vector` (pgvector) and `pg_trgm`.
-- `StoreError`, `DbFailure` and `classify(&sqlx::Error)`.
+- `StoreError`, `DbFailure` and `classify(&sqlx::Error)`, including a
+  statement cancelled at `statement_timeout` or `lock_timeout`
+  (`DbFailure::TimedOut`, counted by kind, observable per task) and the
+  longer bound retention deletes raise their transaction to
+  (`raise_for_retention`, INV-1240).
 - `retry_serializable`: a `SERIALIZABLE` transaction with bounded retries.
 - `ColumnWindow`: a spec `TimeWindow` as bounds on a `bigint` time column,
   which every layer's windowed reads bind.
@@ -224,7 +228,13 @@ succeed) for any of the three. A timeout is not retried inside
 Each timeout `classify` sees is counted by kind
 (`statement_timeouts() -> TimeoutCounts`, process-wide: the gateway's
 `crosstalk_pg_statement_timeouts_total{kind}`), so a failure is
-classified once, where it is converted. The gateway sets both bounds on
+classified once, where it is converted. `observe_timeouts(work)`
+(`timeouts::observe`) runs a future in a task-local scope and returns,
+with its output, the kind of the last timeout `classify` saw on that task
+while it ran: a consumer stage uses it to tell a store that stalled
+(release the delivery on the same attempt) from a message that failed
+(nack it), whatever error type the layer reported it through; a timeout
+classified in a task the future spawned is not seen. The gateway sets both bounds on
 its pipeline connections ([postgres_mode.md](postgres_mode.md),
 "Bounded statements"), and records both its statement bound and a longer
 retention bound as session settings (`crosstalk.statement_timeout`,
@@ -496,7 +506,7 @@ checks still run.
 | `crates/store/src/extensions.rs` | Required extensions | `Extension`, `InstalledExtension`, `ensure_extensions`, `ensure_extension` |
 | `crates/store/src/error.rs` | Errors and classification | `StoreError`, `DbFailure`, `ExtensionProblem`, `classify` |
 | `crates/store/src/retention.rs` | The longer statement bound retention deletes run under | `raise_for_retention`, `restore_after_retention`, `STATEMENT_BOUND`, `RETENTION_BOUND` |
-| `crates/store/src/timeouts/mod.rs` | A statement cancelled at a bound: kinds and the process's counts | `TimeoutKind` (`sqlstate`, `label`), `TimeoutCounts`, `statement_timeouts` |
+| `crates/store/src/timeouts/mod.rs` | A statement cancelled at a bound: kinds and the process's counts | `TimeoutKind` (`ALL`, `sqlstate`, `label`), `TimeoutCounts` (`of`), `statement_timeouts`, `observe` (re-exported as `observe_timeouts`) |
 | `crates/store/src/window.rs` | A `TimeWindow` as bounds on a `bigint` time column | `ColumnWindow` (`of`, `bounds`, `contains`), `ColumnBounds` (`start`, `end`, `contains`) |
 | `crates/store/src/retry.rs` | Serializable retries | `retry_serializable`, `SerializableRetry`, `InvalidSerializableRetry`, `TxError`, `TxFuture`, `SerializableError` |
 | `crates/store/src/test_db/mod.rs` | Test database harness | `TestDb`, `TestDbName`, `TestDbError`, `RuntimeProblem`, `TEST_DB_PREFIX`, `test_server` |
@@ -508,7 +518,7 @@ checks still run.
 
 ## Tests
 
-Unit tests (no database), 66 of them:
+Unit tests (no database), 78 of them:
 
 - `config`: URL parsing and scheme checks, missing and non-unicode
   variables, no password in `Debug` or errors, `PoolSettings` JSON shapes
@@ -517,7 +527,9 @@ Unit tests (no database), 66 of them:
   `is_retryable` and `is_unavailable`; `StoreError::failure` and the
   `From<sqlx::Error>` conversion.
 - `timeouts`: `57014` and `55P03` typed by kind, transient but not
-  retryable, displayed with their SQLSTATE, counted by kind.
+  retryable, displayed with their SQLSTATE, counted by kind (and nothing
+  else counted); a timeout classified inside an `observe` scope is seen,
+  one classified in another task is not.
 - `layer`: distinct, lowercase schemas and tables.
 - `migrate`: the layer migrator's table, schema and lock; the future is
   `Send + 'static`.

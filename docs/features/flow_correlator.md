@@ -43,22 +43,25 @@ datasets with corpus timestamps.
 
 ## Non-scope
 
-- `ResourceExtractor` (feat/flow-extract) and the step that turns a
-  `ConversationDelta`'s tool calls and results into extracted accesses: its
-  output reaches the consumer as the local input `Extracted` (see Spec
-  gaps).
-- The Postgres stores (feat/flow-store). Development and tests run against
-  the `crosstalk-memory` reference stores, through the traits only.
+- `ResourceExtractor` and the step that turns a `ConversationDelta`'s tool
+  calls and results into extracted accesses (`crosstalk_flow::extract`,
+  [flow_extract.md](flow_extract.md)): its output reaches the consumer as
+  the local input `Extracted` (see Spec gaps).
+- The Postgres stores ([flow_store.md](flow_store.md)). The consumer's own
+  tests run against the `crosstalk-memory` reference stores, through the
+  traits only.
 - Channel detection beyond what `record_transmission` does: turning
   dormant, `DeclaredChannelUnused`, idle windows
   (`flow.channel.dormant-by-timestamp`, `flow.channel.unused-by-timestamp`).
 - Policy: `PolicyChanged`, `set_policy`, policy routing of confirmed
   transmissions (`flow.policy.*`).
-- Wiring the consumer into `crosstalk_gateway::pipeline` (a later step).
-  The consumer follows the exchange log's pattern: a group name, a subject
-  list and a `run` over a `Subscription`.
-- Wiring the durable consumer into the gateway (W8): the gateway's L5
-  stage still runs the volatile consumer and acks each delivery at once.
+- Gateway wiring. The gateway runs the consumer in its own L5 task
+  (`crosstalk_gateway::live::layers::l5`: the volatile consumer over the
+  memory stores, each delivery acked once its steps are queued;
+  `live::pg::l5` in Postgres mode: the durable consumer over
+  `PgFlowDurability`, restored before its group subscribes, acking only
+  after a checkpoint). Both call `retry_backlog` on every drain. See
+  [postgres_mode.md](postgres_mode.md).
 - Correlation across processes: two consumer processes correlate their
   own inputs; the registry keeps one channel per resource between them.
 
@@ -205,7 +208,9 @@ extraction step ──deliver(batch)──▶ FlowInputs (DurableInputs: mpsc + 
                                ─▶ access_recorded (accesses.resolved_channel) ─▶ AccessRecorded ─▶ shards
                 Release / settle tick ─▶ record_access ─▶ Unhold (row deleted)
                 ToolCalled ─▶ tool_calls row ─▶ shards
-  reply Ok once the queue is empty, Backlogged otherwise (the caller retries its delta)
+  reply Ok once the queue is empty, Backlogged otherwise (the caller retries its delta),
+        Stalled(kind) when the waiting step's store statement was cancelled at its
+        statement or lock timeout (the caller releases its delta without spending an attempt)
 bus delivery ─▶ handle_event ─▶ shards; the delivery stays unacked (durable)
 checkpoint (every checkpoint_every, or max_unacked deliveries waiting; only with an empty queue)
   Shards::checkpoint ─▶ FlowDurability::save: one transaction writes every shard's
@@ -314,8 +319,10 @@ TOML files use where they fit:
 - **Parent links.** No event carries `Agent::parent`; the consumer reads
   `AgentReads::cluster` for both agents of a match and drops what it knows
   on `AgentMerged`/`AgentUnmerged`.
-- **Access store.** The eval PR's batched `AccessStore` is not on this
-  base; accesses are recorded with `ChannelTraffic::record_access`.
+- **Access store.** Accesses are recorded with
+  `ChannelTraffic::record_access`; the spec's `AccessStore::accesses` only
+  reads them back by id (the evidence page), and the consumer does not
+  use it.
 
 ## Files
 
@@ -332,7 +339,7 @@ TOML files use where they fit:
 | `crates/flow/src/correlate/medium.rs` | One medium's evidence | `Medium` |
 | `crates/flow/src/correlate/decide.rs` | Pairing (access and content), opening and deciding channel transmissions | `pair`, `settle` |
 | `crates/flow/src/correlate/windowed.rs` | The shard's correlator | `WindowedCorrelator` (`new`, `with_retention`, `state`, `from_state`), `CorrelatorState`, `Decided`, `ReadPart`, `MediumEvidence`, `UNKNOWN_TOOL` |
-| `crates/flow/src/consumer/mod.rs` | The consumer: steps, events, ticks, batches, run loop with deferred acks | `FlowConsumer` (`new`, `with_durability`, `handle_batch`, `answer`, `run`), `FlowDeps`, `GROUP`, `group`, `SUBJECTS` |
+| `crates/flow/src/consumer/mod.rs` | The consumer: steps, events, ticks, batches, backlog retries, run loop with deferred acks | `FlowConsumer` (`new`, `with_durability`, `handle_event`, `handle_extracted`, `handle_batch`, `retry_backlog`, `tick`, `answer`, `run`, `backlog`), `FlowDeps`, `GROUP`, `group`, `SUBJECTS` |
 | `crates/flow/src/consumer/input.rs` | The local input and the extraction step's seam | `Extracted`, `Observed`, `WriteCall`, `ReadResult`, `ToolCalled`, `FlowInputs`, `NotDurable`, `DurableInputs`, `ExtractedBatch`, `InputSource` |
 | `crates/flow/src/consumer/durability.rs` | What survives a restart: the port | `FlowDurability`, `Volatile`, `MemoryDurability`, `Recovered`, `Recorded`, `Resolved`, `DurabilityError` |
 | `crates/flow/src/consumer/checkpoint.rs` | Snapshot types and errors | `Checkpoint`, `ShardSnapshot`, `StoredCheckpoint`, `SNAPSHOT_FORMAT`, `Incompatible`, `FlowRestoreError`, `CheckpointError` |
@@ -380,19 +387,19 @@ unchanged.
   `correlate::tests::rereads`.
   `flow.coaccess.within-window` (INV-250) holds for both: a co-access's
   lag never exceeds the window it was built with.
-- New (INV-X): `flow.consumer.stored-transmission-never-regresses`,
-  `flow.correlator.settles-on-the-injected-clock`,
-  `flow.consumer.resource-evidence-follows-its-channel`.
+- `flow.consumer.stored-transmission-never-regresses` (INV-1045),
+  `flow.correlator.settles-on-the-injected-clock` (INV-1046),
+  `flow.consumer.resource-evidence-follows-its-channel` (INV-1044).
 - Restart: `flow.consumer.restore-equivalent` (INV-1215, dst, flipped),
   `flow.checkpoint.ticks-with-state` (INV-1216: checked after every DST
   checkpoint; its Postgres evidence `integration::checkpoint` awaits a run
   against node0), INV-1202's flow path
-  (`dst::redelivery_republishes_the_same_envelope_ids`). New (INV-X):
-  `flow.restore.refeed-in-recorded-medium`,
-  `flow.correlator.handoff-carries-exchange-starts`,
-  `flow.checkpoint.incompatible-refuses-start`,
-  `flow.consumer.acks-after-checkpoint`,
-  `flow.consumer.held-writes-survive-restart`. `PgShardTicks` has no
+  (`dst::redelivery_republishes_the_same_envelope_ids`);
+  `flow.restore.refeed-in-recorded-medium` (INV-1225),
+  `flow.correlator.handoff-carries-exchange-starts` (INV-1226),
+  `flow.checkpoint.incompatible-refuses-start` (INV-1227),
+  `flow.consumer.acks-after-checkpoint` (INV-1228),
+  `flow.consumer.held-writes-survive-restart` (INV-1229). `PgShardTicks` has no
   writer of its own: the checkpoint's transaction is the only one.
 - `flow.correlator.no-io` (INV-251) holds by construction (no clock, no
   store, no channel in `correlate/`); its lint does not exist yet, so its
@@ -406,8 +413,14 @@ unchanged.
   reads or matches. A match for an exchange whose start never arrives
   waits indefinitely.
 - A transient store or bus failure stalls the queue at that step until the
-  next input or tick retries it; a permanent one is logged at error and
-  dropped. Events are published at least once.
+  next input, tick or `retry_backlog` retries it (the gateway calls
+  `retry_backlog` on every drain: a decision a tick took has no input
+  behind it, and a checkpoint is refused while it waits); a permanent one
+  is logged at error and dropped. Events are published at least once.
+- Extending and reconfirming a stored transmission go through
+  `TransmissionStore::modify` (INV-1230), so a classification analysis
+  stores meanwhile is kept and the consumer's extension is not lost to
+  it ([flow_store.md](flow_store.md#concurrent-writers)).
 
 ## Tests
 
@@ -430,7 +443,8 @@ unchanged.
   dead drop read a day later confirmed.
 - `consumer::tests::rules`: held and rejected writes, a declared channel,
   late confirmation after a promotion, delegation from `AgentReads`, retries
-  in order, stale updates, config.
+  in order, stale updates, a tick's failed decision retried on a drain
+  (`a_tick_decision_that_failed_is_retried_on_a_drain`), config.
 - `consumer::tests::dst`: `crosstalk-sim` under paused time with matches
   and exchanges reordered, duplicated, dropped, redelivered and late, 24
   seeds each.

@@ -46,7 +46,15 @@ be a layer depending on the gateway, which the rule refuses.
     and the channel the cross-agent transmission created, listed and
     confirmed. None is ignored;
   - the determinism test: the scenario fed and settled twice gives
-    identical transmissions, at least one confirmed.
+    identical transmissions, at least one confirmed;
+  - `serve --role all` end to end (`tests/smoke/serve.rs`): the gateway's
+    own start on ephemeral ports, the scenario ingested through its live
+    pipeline and read back over HTTP with `crosstalk-client` (the
+    transmissions export and the evidence page).
+- **The scenario's whole answer set** (`answers`): every read the
+  durability suites compare, and `Answers::renamed`, which renames ids
+  drawn from a random source so two runs of the same traffic compare
+  exactly.
 
 ## Non-scope
 
@@ -55,6 +63,10 @@ be a layer depending on the gateway, which the rule refuses.
 - **The network path.** The proxy on a socket and a fake upstream are
   `crates/gateway/tests/e2e`. Here capture runs the same L0 functions
   without a socket.
+- **The Postgres-mode suites' own subject.** The crate also holds the
+  Postgres-mode durability suites (below); what they prove is
+  [postgres_mode.md](postgres_mode.md)'s, [pipeline_fence.md](pipeline_fence.md)'s
+  and [planned_handover.md](planned_handover.md)'s.
 - **Volume and realism.** That is the a2a-transmission-bench's job,
   which crosstalk runs through `ct-bench-detect`
   ([bench_adapter.md](bench_adapter.md)). The
@@ -174,8 +186,9 @@ read (`eventually`, up to 10 s) until it shows what they expect.
 
 | File | Role | Key exports |
 | ---- | ---- | ----------- |
-| `crates/e2e/Cargo.toml` | The crate. It depends on spec, api, canonical, flow, gateway, ingress, memory, provenance, surface and transport. | |
-| `crates/e2e/src/lib.rs` | The crate root. | re-exports `Capture`, `compose`, `Composition`, `feed`, `Fed`, `Scenario`, `WireExchange` |
+| `crates/e2e/Cargo.toml` | The crate. It depends on spec, api, canonical, flow, gateway, ingress, memory, provenance, reconstruct, surface and transport; dev: client, store, testkit. | |
+| `crates/e2e/src/lib.rs` | The crate root. | re-exports `Capture`, `CaptureError`, `compose`, `compose_with`, `ComposeError`, `Composition`, `feed`, `Fed`, `FeedError`, `Scenario`, `WireExchange` |
+| `crates/e2e/src/answers.rs` | The scenario's whole answer set (agents, edges, the channel edge's transmissions, every stored transmission with summary and evidence, channels, watermark) and the id renaming that makes two runs comparable. | `answers`, `Answers` (`renamed`) |
 | `crates/e2e/src/scenario/mod.rs` | The wiki relay. | `Scenario`, `Scenario::wiki_relay`, `Scenario::wiki_relay_subscription`, `Scenario::ends_at`, `ScenarioAgent`, `WireExchange`, `Auth`, `SUBSCRIPTION_TOKENS`, `SENTENCE`, `DEFAULT_START` |
 | `crates/e2e/src/scenario/tools.rs` | The page and the `Write`/`Read` calls. | `WIKI_PAGE`, `write_call`, `read_call` |
 | `crates/e2e/src/scenario/wire.rs` | Claude Code request heads and bodies, and SSE responses. | `HttpRequest`, `HttpResponse`, `Block`, `Turn`, `SessionHeaders`, `Credential` (`ApiKey`, `Subscription`), `request`, `response` |
@@ -184,13 +197,31 @@ read (`eventually`, up to 10 s) until it shows what they expect.
 | `crates/e2e/src/feed.rs` | Ingests in time order. | `feed`, `Fed`, `FeedError` |
 | `crates/e2e/src/options.rs` | The composition's config: 5-minute buckets, the correlator timing (a 3 s evidence window, so B's read's window closes by the scenario's end, where the clock stops), L5's `FlowConfig`, and trusted access. | `in_process`, `timing`, `flow`, `BUCKET`, `EVIDENCE_WINDOW`, `OptionsError` |
 | `crates/e2e/src/read.rs` | Surface readers, and every stored transmission (`TransmissionStore::list`). | `window`, `agents`, `Agents`, `AgentRead`, `edges`, `channel_edge`, `edge_transmissions`, `summaries`, `evidence`, `channels`, `all_transmissions`, `ReadError` |
+| `crates/e2e/tests/smoke/main.rs`, `support.rs` | The smoke test binary and what its tests share. | |
 | `crates/e2e/tests/smoke/determinism.rs` | Two settled runs give identical transmissions. | |
+| `crates/e2e/tests/smoke/serve.rs` | `serve --role all` on ephemeral ports, read back over HTTP: the export and the evidence page show the confirmed A→B transmission. | |
 | `crates/e2e/tests/smoke/scenario.rs` | Determinism, time order, and the L0 identity. Also checks the history replay L3 threads by, the `Write` arguments carrying the sentence, and the read result and B's answer carrying it. | |
 | `crates/e2e/tests/smoke/extract.rs` | The scenario's `Write` and `Read` calls, with their results, through L5's `ToolExtractors` (crosstalk-flow, a dev-dependency) under the context the system prompt states: one delivered write and one read on the page's file locator. | |
 | `crates/e2e/tests/smoke/pipeline.rs` | Every body is stored, and every exchange is published in order, stamped at its end. | |
 | `crates/e2e/tests/smoke/subscription.rs` | The subscription relay: every credential `OauthAccessToken`, A's refresh changes its digest but not its session; through `Live`, two agents and the confirmed channel edge; no token window in any surface answer (INV-1157, INV-1158). | |
 | `crates/e2e/tests/smoke/surface.rs` | The surface answers for the scenario's window; two agents (L3); the A→B channel edge; the confirmed transmission; the evidence match; the channel created by the cross-agent transmission, listed and confirmed. | |
 | `crates/gateway/tests/architecture.rs` | `Composer::E2e`, and `e2e_composes_gateway_and_layers_and_no_layer_uses_it`. | |
+
+### Postgres-mode suites in the crate
+
+These feed the same wiki relay and compare every run's `answers` with an
+uninterrupted memory-mode run's. Most need the test database
+(`crosstalk-store`'s harness, `TEST_DATABASE_URL`); `reorder`'s memory-mode
+test and the full-spool test do not.
+
+| File | What it runs |
+| ---- | ------------ |
+| `tests/common/mod.rs`, `tests/common/gateway.rs` | Shared: a `Live::<PgSet>::start_pg` process over a test database, stopped or killed and restarted over the same database, blob store and spool; the gateway harness (`serve --role all` in Postgres mode to a `FakeUpstream`, the database behind a cuttable `DbLink`). |
+| `tests/postgres.rs` | Postgres mode against memory mode: equal answers, and equal again after a restart. |
+| `tests/restart/main.rs` | Processes killed or stopped mid-stream and restarted. |
+| `tests/reorder/main.rs` | `b1-read` delivered after `b2-repeat`, in memory and Postgres mode: order-tolerant threading (INV-1235) gives the uninterrupted answers. |
+| `tests/spool/main.rs`, `spool_kill/`, `spool_outage/`, `spool_outage_twice/`, `spool_outage_serve_runtime/` | The capture spool through the proxy: a full spool, a kill while it holds captures, one and two database outages, and an outage on the `serve` runtime. |
+| `tests/lock_loss/` (`partition.rs`, `rival.rs`, `repeated.rs`, `standby.rs`, `gate.rs`, `handover.rs`) | The pipeline lock lost (partition, rival, five losses in a row), a standby taking over under the epoch fence (INV-1239), a standby's capture gate (INV-1241), and the planned handover (INV-1242). |
 
 ## Running against `Live`
 

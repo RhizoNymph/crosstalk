@@ -19,31 +19,30 @@ Overview:
     GitHub Copilot, Gemini Code Assist) and self-hosted vLLM or SGLang, over
     HTTP, SSE and WebSocket.
 
-    Status: milestone M1 (capture) is reachable: the crosstalk binary
-    (crosstalk-gateway, roadmap P3) runs the capture slice in single-node
-    mode, so Claude Code pointed at it through ANTHROPIC_BASE_URL works
-    unchanged and every generation exchange is normalized, its bodies
-    stored, ExchangeCaptured published and the exchange persisted
-    (gateway). L2's in-process bus and blob store (transport) are
-    implemented. L3 (crosstalk-reconstruct) attributes and threads
-    exchanges: evidence derivation, the agent store on Postgres, the
-    threader over in-memory or Postgres conversations, and a bus consumer
-    of ExchangeCaptured not yet wired into the pipeline (reconstruct). L4
-    provenance (crosstalk-provenance: winnowing, decoders with escape
-    folding, the segmenter, the scanner and its bus consumer publishing
-    ContentMatched, the fingerprint index and L4's records on Postgres) is
-    implemented but not yet wired into the gateway (provenance). L5 flow
-    has its extractors, correlator and consumer (flow_extract,
-    flow_correlator) and its Postgres stores (flow_store); L7 has its
-    Postgres edge store and bus consumer (topology_store); L6 has its
-    remote adapters (analysis) and Postgres search, alerts, topic
-    catalog and projection store, plus the classification step
-    (search_alerts).
+    Status: detection runs end to end. The crosstalk binary
+    (crosstalk-gateway) proxies, captures and normalizes every generation
+    exchange, so Claude Code pointed at it through ANTHROPIC_BASE_URL works
+    unchanged, and serve --role all runs every detection layer behind it
+    in one Live process: L3 reconstruct (attribution and order-tolerant
+    threading), L4 provenance with L5's extraction step, L5 flow, an L6
+    classifier and L7 topology, consuming the bus, with the L8 surface over
+    the same stores (gateway). With a store section (the compose stack's
+    default) every layer runs on its Postgres store over the durable
+    PgBus, captures go through an on-disk publish spool that keeps
+    capturing while the database is down, a restart recovers in place, a
+    lost pipeline lock is resumed in process, taking the lock is fenced by
+    an epoch, and a planned shutdown hands the pipeline over at SIGTERM
+    (postgres_mode, pipeline_fence, planned_handover); without one it runs
+    on the memory stores and the in-process MpscBus. Detection is measured
+    by the separate a2a-transmission-bench (bench, bench_adapter), on
+    held-out demo swarm runs included (README.md, Results). L6's search and
+    alert consumers, a real embedder and topic model are not wired into
+    serve yet (search_alerts, analysis).
     The L8 surface service
     (crosstalk-surface: QueryApi, OperatorActions, LiveFeed, export and
     the graphs' node facts, generic over the spec's store traits) is
-    implemented and runs in process over the reference stores through
-    crosstalk-api's InProcess (surface_service). The data
+    implemented and runs in process over the reference or the Postgres
+    stores through crosstalk-api's InProcess (surface_service). The data
     model is specified in spec/types (crate crosstalk-spec), and the spec
     types are also the JSON wire format between the gateway, the operator
     UI and other gateway nodes. The root Cargo.toml is a virtual workspace
@@ -77,7 +76,8 @@ Overview:
     migrate, healthcheck, inspect; JSON config; JSON logs; an ops listener
     with /metrics, /healthz and /readyz): it wires the proxy to a capture
     stage that normalizes with L1, stores bodies in FsBlobStore and
-    publishes ExchangeCaptured on MpscBus, and persists each captured
+    publishes ExchangeCaptured on its bus (MpscBus, or in Postgres mode
+    the publish spool in front of PgBus), and persists each captured
     exchange through a bus consumer to an append-only exchange log, a P3
     stopgap because the spec has no exchange store (gateway). That
     composition is a library entry point, crosstalk_gateway::pipeline::
@@ -85,9 +85,10 @@ Overview:
     pre-normalized exchange enters it through Pipeline::ingest, the same
     path the capture stage takes after L1 (P3.1), so the bench adapter can
     drive the real layers under simulated time. crosstalk_gateway::live::
-    Live composes every layer in one process over the memory stores: L3
+    Live composes every layer in one process over the memory stores or,
+    in Postgres mode, the Postgres stores (a LiveStoreSet): L3
     reconstruct, L4 provenance with L5's extraction step, L5 flow, a
-    minimal L6 classifier and L7 topology as bus consumer slots, the store
+    L6 classifier and L7 topology as bus consumer slots, the store
     outboxes forwarded onto the bus, and crosstalk-api's InProcess surface
     over the same stores; Live::settle drives it deterministically to a
     fixed point (gateway). crosstalk-bench-adapter is crosstalk's side of
@@ -103,8 +104,7 @@ Overview:
     implemented by a fixture backend by default, by the in-process
     surface seeded with the synthetic world (dev and demos), or by the
     gateway's L8 HTTP API through crosstalk-client, the only path for real
-    data (ui). The other crates are
-    still empty. The phased implementation plan, with its
+    data (ui). The phased implementation plan, with its
     dependencies, milestones and current status, is docs/roadmap.md.
 
   subsystems:
@@ -121,11 +121,12 @@ Overview:
       unmerge and vetoes, renames, harness claims seen per agent,
       conversation threading, WebSocket increment resolution).
     transport: >
-      Crate crosstalk-transport. L2: the event bus (in-process channels on one node, NATS JetStream
-      across nodes) and the content-addressed blob store. The only path
+      Crate crosstalk-transport. L2: the event bus (in-process channels on one node, the durable
+      PgBus on Postgres behind an on-disk publish spool, NATS JetStream
+      across nodes later) and the content-addressed blob store. The only path
       between components. The in-process bus is one tokio task owning
-      every consumer group, delivery and dead letter; envelopes cross it
-      as their wire JSON and are decoded strictly on delivery.
+      every consumer group, delivery and dead letter; envelopes cross
+      either bus as their wire JSON and are decoded strictly on delivery.
     detect: >
       Crates crosstalk-provenance and crosstalk-flow. L4 provenance (span extraction, novelty classification, fingerprint
       index, content matching over part text only, strict decoding,
@@ -172,13 +173,14 @@ Overview:
       cookie only). crosstalk-surface implements the L8 service over the
       spec's store traits (surface_service).
     serve: >
-      Crates crosstalk-api (the HTTP and SSE server for the L8 surface;
-      today InProcess, the surface over the reference stores in one
-      process),
+      Crates crosstalk-api (the HTTP and SSE server for the L8 surface,
+      and InProcess, the surface hosted in one process over the memory
+      stores or the Postgres bundle PgStores),
       crosstalk-client (the L8 traits over HTTP, for the UI) and
       crosstalk-gateway (the crosstalk binary: config, wiring, process
-      roles, the ops listener, graceful shutdown; today the single-node
-      capture slice). The only crates allowed to depend on layer crates.
+      roles, the ops listener, Postgres mode with its recovery, pipeline
+      lock and planned handover, graceful shutdown). The only crates
+      allowed to depend on layer crates.
     support: >
       Crates crosstalk-store (Postgres through sqlx: the pool configured
       from DATABASE_URL, one schema and one migrations table per layer,
@@ -221,12 +223,14 @@ Overview:
       demos.
     deploy: >
       deploy/ (outside the workspace): docker compose on one machine with
-      Postgres, a migrate step, the crosstalk binary as --role all, the UI,
+      Postgres, a migrate step, the crosstalk binary as --role all (one
+      gateway, in Postgres mode: the config has a store section), the UI,
       and the infrastructure observability stack (Prometheus, Grafana, Loki,
       Alloy, node-exporter, cAdvisor, postgres-exporter). Where things are
       stored, how they run and how they scale is in docs/infrastructure.md.
-      run.sh bench drives one scored detection benchmark on that stack: the
-      demo swarm through the real gateway, its detections exported over the
+      run.sh bench drives one scored detection benchmark on that stack: a
+      fresh database for the run, the demo swarm through the real gateway,
+      its detections exported over the
       L8 API with ct-bench-detect swarm-fetch, turned into bench input with
       ct-bench-detect from-export, and scored by a2a-bench (the
       a2a-transmission-bench scorer) with the bench repo's gates, all
@@ -886,10 +890,10 @@ Features Index:
       implemented: PgStores, Live over a LiveStoreSet, recovery, the
       pipeline lock, PgFrontierSource, migrate for every layer, the spool
       section, readiness and health, see postgres_mode): detections that survive
-      a gateway restart. Surveys what is persisted today (serve runs Live
-      on memory stores and MpscBus; the L3 to L7 Postgres stores exist but
-      are unwired, and crosstalk migrate runs no layer migrations) and
-      proposes a durable PgBus (transport schema: event log, groups,
+      a gateway restart. Surveys what was persisted before W8 (serve ran
+      Live on memory stores and MpscBus; the L3 to L7 Postgres stores
+      existed but were unwired, and crosstalk migrate ran no layer
+      migrations) and proposes a durable PgBus (transport schema: event log, groups,
       deliveries, dead letters), outbox rows stamped with a stable
       envelope id before an idempotent publish, derived envelope ids for
       every consumer (EventId::derive), L5 correlator checkpoints with
@@ -1038,6 +1042,7 @@ Features Index:
       purpose (SIGTERM, docker stop, a rolling restart) in Postgres mode.
       Starting at SIGTERM, beside the proxy's drain (whose late captures
       publish through capture's own bus for the next holder), the shutdown
+      clears the API router (the API answers 503 from then on) and
       hands a running incarnation over in an order its types fix
       (Handover<Quiescing> ... Handover<PoolClosed>; only the last step can
       make the PoolsClosed proof PipelineLock::release takes): the bus stops
@@ -1192,7 +1197,8 @@ Features Index:
       draining; bounded by max_bytes (SpoolFull, never waits); LOCK per
       directory; oldest_at for the frontier; discard_corrupt for the
       operator. Unit, seeded DST with crashes, and integration tests over
-      PgBus through testkit's DbLink. Not yet built by serve (W8).
+      PgBus through testkit's DbLink. serve builds it in Postgres mode
+      (W8, postgres_mode) over <data dir>/spool, behind the capture gate.
     entry_points:
       - crates/transport/src/spool/mod.rs
       - crates/transport/src/spool/log.rs
@@ -1465,7 +1471,8 @@ Features Index:
       section serve runs in Postgres mode instead (postgres_mode: PgStores,
       PgBus behind the publish spool, recovery, the pipeline lock,
       PgFrontierSource; Live is generic over a LiveStoreSet, MemorySet or
-      PgSet). Without one, serve runs a
+      PgSet; SIGTERM also hands the pipeline over, planned_handover).
+      Without one, serve runs a
       Live process in every role but analysis (memory stores, wall clock,
       periodic ticks every flow.tick_ms), feeds it from the proxy, and in
       roles all and api mounts crosstalk-api's HttpApi on api.listen (bearer
@@ -1476,7 +1483,7 @@ Features Index:
     entry_points:
       - crates/gateway/src/main.rs
       - crates/gateway/src/gateway/mod.rs
-      - crates/gateway/src/gateway/postgres.rs
+      - crates/gateway/src/gateway/postgres/mod.rs
       - crates/gateway/src/pipeline/mod.rs
       - crates/gateway/src/pipeline/ingest.rs
       - crates/gateway/src/live/mod.rs
@@ -1635,8 +1642,9 @@ Features Index:
     description: >
       Single-machine deployment: images for the gateway and the UI, a docker
       compose stack (Postgres 18 with pgvector, pg_trgm and
-      pg_stat_statements; a migrate step; crosstalk serve --role all; the
-      UI), generated secrets in deploy/.env, and infrastructure
+      pg_stat_statements; a migrate step; one crosstalk serve --role all in
+      Postgres mode, its blobs, exchange log and publish spool on the data
+      volume; the UI), generated secrets in deploy/.env, and infrastructure
       observability (host, container, Postgres and log metrics, dashboards,
       alert rules). Defines the contract the crosstalk binary implements:
       serve/migrate/healthcheck commands, ports 8080/8081/9464, the ops
@@ -1698,25 +1706,31 @@ Features Index:
     description: >
       The live detection benchmark on the single-machine compose
       deployment (bash deploy/run.sh bench, implemented in deploy/bench.sh).
-      One run: restart wiki and crosstalk at the start (fresh world, empty
-      in-memory detection state), run the demo swarm through the real
-      gateway writing ground truth v2 to deploy/bench/<run>/ (gitignored,
-      run id a UTC timestamp), wait until /healthz live.watermark_micros
-      passes the swarm's end (exports are cut at the watermark), export the
-      gateway's detections with ct-bench-detect swarm-fetch over the L8
-      API, copy the exchange log and blobs into the run, turn the run into bench
-      input with ct-bench-detect, and score it with a2a-bench (the
-      a2a-transmission-bench scorer, at the release tag A2A_BENCH_REF in
-      deploy/demo.Dockerfile, recorded as bench_ref in bench.env) and the
-      bench repo's gates. Prints precision, recall and the gate result and
-      passes a2a-bench score's exit code through (2 = a gate failed). Fails
-      fast unless /readyz has the `live` and `api` tasks running and the
-      API takes the token. The bench tools ship in the crosstalk-demo
-      image. --scenario
+      One run: a fresh database for the run (crosstalk_bench_<run>, through
+      CROSSTALK_DB_NAME; earlier runs' databases are kept), the demo stack
+      started, wiki and crosstalk restarted (an empty wiki), and in
+      Postgres mode a wait until /readyz reports recovery done, the
+      pipeline lock held and capture durable; then the demo swarm through
+      the real gateway writing ground truth v2 to deploy/bench/<run>/
+      (gitignored, run id a UTC timestamp), a wait until /healthz
+      live.watermark_micros passes the swarm's end (exports are cut at the
+      watermark), the gateway's detections exported with ct-bench-detect
+      swarm-fetch over the L8 API, the exchange log and blobs copied into
+      the run, the run turned into bench input with ct-bench-detect fetch
+      and from-export, and a score by a2a-bench (the a2a-transmission-bench
+      scorer, at the release tag A2A_BENCH_REF in deploy/demo.Dockerfile,
+      recorded as bench_ref in bench.env) with the bench repo's gates.
+      Prints precision, recall and the gate result and passes a2a-bench
+      score's exit code through (2 = a gate failed). Fails fast unless
+      /readyz has the `live` and `api` tasks running and the API takes the
+      token. The bench tools ship in the crosstalk-demo image. --scenario
       headline (default, high-entropy prose: the headline precision and
       recall) or boilerplate (templated prose unrelated agents share: a
       regression scenario for false positives on shared text), recorded in
-      bench.env.
+      bench.env. --holdout makes a held-out run for the bench's release
+      scoring: a reserved seed (1000000 + n), written to
+      deploy/bench/holdout/<run>/, stopped after the fetch (no score, no
+      metrics printed); development seeds stay below 1000000.
     entry_points:
       - deploy/run.sh
       - deploy/bench.sh
@@ -1744,8 +1758,10 @@ Features Index:
       the last two through crosstalk_api::world (feature world: seed_world,
       serve_world) and the world binder over the store read traits. The
       real surface passes all 65 in process and over HTTP (SURFACE_FAILURES
-      is empty). Next: Postgres, and scenarios seeded through the write
-      traits.
+      is empty). It also runs over PgStores, in process and over HTTP
+      (crates/api/tests/conformance_pg.rs,
+      crates/client/tests/conformance_pg.rs; postgres_mode). Next:
+      scenarios seeded through the write traits.
     entry_points:
       - crates/conformance/src/lib.rs
       - crates/conformance/src/harness/mod.rs

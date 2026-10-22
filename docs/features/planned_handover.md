@@ -90,7 +90,7 @@ SIGTERM ─▶ Running::shutdown: phase draining (/readyz 503), at once and join
   │  for the next holder
   └─ PgRunning::hand_over(deadline = SIGTERM + shutdown.flush_timeout_ms):
        pipeline task told to stop ─▶ (Live<PgSet>, PipelineLock) when an incarnation runs
-       the API router cleared (the API answers 503 from here; its surface goes with the incarnation)
+       the API router cleared (the API answers 503, reason Unserved::HandedOver, from here; its surface goes with the incarnation)
        hand_over(OutgoingIncarnation{live, bus, pool, lock}, status, quiesce_by = deadline - TAIL):
          Handover<Quiescing>      status pipeline handing_over, handover quiescing
            Live::quiesce(quiesce_by), backstop QUIESCE_BACKSTOP:

@@ -499,7 +499,8 @@ impl ExportRequest {
     }
 }
 
-/// How large an export may be (config `export.max_rows`). The surface
+/// How large an export may be (no config key: the gateway uses
+/// [`ExportLimits::default`], [`ExportLimits::DEFAULT_MAX_ROWS`]). The surface
 /// counts the rows an export will hold before it streams any, so an export
 /// over the limit is refused whole rather than cut short.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

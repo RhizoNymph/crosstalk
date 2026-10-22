@@ -157,7 +157,10 @@ idle timeout). `send` collects everything into a `CollectedResponse`.
 
 `DbLink::start(host, port)` resolves the server, listens on
 `127.0.0.1:0` and relays every accepted connection to it, one pump per
-direction (`start_lossy` delays each chunk as a lossy link would). A test points its pool at `DbLink::host()` and
+direction (`start_lossy` delays each chunk as a lossy link would:
+`Lossy` stalls `loss_per_mille` chunks per 1000 by one to two `rto`s and
+jitters the rest, and `Lossy::tailscale_bad_day` is the node0 link, 15%
+stalled by 200–400 ms). A test points its pool at `DbLink::host()` and
 `DbLink::port()` (it takes them from the test database's
 `PgConnectOptions`; the link never sees the URL or its credentials).
 `cut()` resets every relayed connection (zero linger, so the client sees
@@ -171,7 +174,9 @@ unanswered without dialling the server. `restore()` heals it, the held
 bytes and closes crossing in order; `cut()` resets everything
 (`is_partitioned()` reports it). The gateway's lock tests partition the
 pipeline lock's own session with it. The server is never stopped, so other tests sharing it are not
-affected. The transport crate's spool integration tests use it.
+affected. Its users: the transport crate's integration tests, the
+gateway's lock and pool-close integration tests, and `crosstalk-e2e`'s
+Postgres-mode suites (`tests/common/`, `restart`, `spool`).
 
 ### Comparisons
 
@@ -186,8 +191,8 @@ ignoring `http::NOT_RECORDED`.
 
 | File | Role | Key exports |
 | --- | --- | --- |
-| `crates/testkit/Cargo.toml` | Manifest: spec, bytes, http-body-util, hyper (client, http1, server), hyper-util (tokio), serde, serde_json, thiserror, tokio (macros, net, rt, sync, time), tracing | — |
-| `src/lib.rs` | Crate doc and modules | `build`, `client`, `corpus`, `ids`, `time`, `upstream` |
+| `crates/testkit/Cargo.toml` | Manifest: spec, bytes, http-body-util, hyper (client, http1, server), hyper-util (tokio), serde, serde_json, thiserror, tokio (io-util, macros, net, rt, sync, time), tracing | — |
+| `src/lib.rs` | Crate doc and modules | `build`, `client`, `corpus`, `db_link`, `ids`, `time`, `upstream` |
 | `src/ids.rs` | Deterministic id and digest generator | `Ids` (`new`, `seeded`, `id::<I>`, `agent`, `exchange`, `conversation`, `span`, `resource`, `access`, `channel`, `transmission`, `topic`, `alert`, `rule`, `operator`, `event`, `merge`, `digest`, `message`, `prompt`, `credential`, `account`, `issued`), `EntityId`, `SECRET_VERSION` |
 | `src/time.rs` | The test epoch | `T0`, `at`, `after`, `secs`, `millis` |
 | `src/build/mod.rs` | Builder index and re-exports | every builder, `BuildError` |
@@ -210,7 +215,7 @@ ignoring `http::NOT_RECORDED`.
 | `src/upstream/script.rs` | Replies and routes | `Script` (`route`, `case`, `cases`, `fallback`), `Route` (`new`, `of`, `matches`), `Reply` (`from_response`, `from_case`, `json`, `error`, `header`, `paced`, `with_fault`, `body`), `Pacing` (`IMMEDIATE`, `every`), `Fault` (`Stall`, `Disconnect`, `NoResponse`), `Framing`, `error_type` |
 | `src/upstream/body.rs` | The served body and its feeder (private) | `ReplyBody`, `BodyCut`, `reply_body` |
 | `src/client.rs` | The fake harness | `HarnessClient` (`new`, `prefix`, `idle_timeout`, `send`, `open`), `ResponseStream` (`status`, `headers`, `next`, `collect`), `Next`, `ReceivedChunk`, `BodyEnd`, `CollectedResponse` (`events`, `differences_from`), `ClientError` |
-| `src/db_link.rs` | The cuttable database relay | `DbLink` (`start`, `start_lossy`, `host`, `port`, `addr`, `upstream`, `cut`, `partition`, `restore`, `is_cut`, `is_partitioned`), `Lossy` |
+| `src/db_link.rs` | The cuttable database relay | `DbLink` (`start`, `start_lossy`, `host`, `port`, `addr`, `upstream`, `cut`, `partition`, `restore`, `is_cut`, `is_partitioned`), `Lossy` (`seed`, `loss_per_mille`, `rto`, `jitter`; `tailscale_bad_day`) |
 | `src/tests/` | Builder validity, corpus loading and refusals, SSE framing, upstream round trips and faults | — |
 | `corpus/README.md` | The corpus: synthetic status, formats, cases, how to add redacted captures | — |
 | `corpus/anthropic/messages/*/` | 15 cases | — |

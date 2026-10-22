@@ -38,6 +38,10 @@ for agents, channels, transmissions and the overview are in
   exports, filtered by author, subject and time.
 - Read-time resolution of merged agents and superseded channels in every
   response and request.
+- The conversation reads (`conversations`, `conversation`,
+  `conversation_turns`, `span_readers`, `exchange_turns`, `span_points`,
+  `conversation_text`, `part_text`): designed in
+  [conversation_reads.md](conversation_reads.md).
 - Export's place in the contract: its permission, errors and audit entries
   (the design is in [export.md](export.md)).
 
@@ -158,8 +162,9 @@ deliver each alert to the sinks its rule lists.
 
 An `AuditEntry { id, at, body }` is either `AuditBody::Operator(OperatorRecord)`
 (a `CallerSnapshot` of the `Caller`, the `OperatorAction` and an `AuditOutcome`:
-`Succeeded(ActionOutcome)`, `Rejected(Rejection)` or `Forbidden { missing }`,
-the exact inverse of `act`'s result for every outcome and error) or
+`Succeeded(ActionOutcome)`, `Rejected(Rejection)`, `Forbidden { missing }`
+or `Interrupted`; the first three are the exact inverse of `act`'s result
+for every outcome and error) or
 `AuditBody::Config(ConfigRecord)` (the loaded config's `ConfigHash`, a
 typed `ConfigChange` and a `ConfigOutcome`) or `AuditBody::Export(ExportRecord)`
 (a `CallerSnapshot`, the `ExportRequest` and an `ExportEvent`: `Refused` with the
@@ -178,9 +183,14 @@ ids the outcome names (`ActionOutcome::subjects`: a created rule or merge
 record, or every channel a promotion superseded, so a superseded channel's
 audit history leads to the promotion that retired it), or for an export
 `AuditSubject::Export(id)` and, for a projection export,
-`AuditSubject::Projection(id)`. Operator entries are
-written in the action's transaction; config entries in the change's
-transaction, and only for real changes. A request the surface refuses
+`AuditSubject::Projection(id)`. An action's effect commits in the store
+of the layer that owns it, so a permitted call first records an
+`AuditIntent` (`AuditIntents::intend`), and its entry is appended and the
+intent removed in one transaction (`AuditIntents::complete`). At start,
+every intent a stopped process left becomes an `Interrupted` entry
+(`AuditIntents::recover_interrupted`): the effect may or may not have
+applied (`surface.audit.no-silent-effect`). Config entries are written in
+the change's transaction, and only for real changes. A request the surface refuses
 before it becomes an action (a merge naming one agent twice, `SelfMerge`)
 is not an action call and leaves no entry. The `AuditLog` is append-only;
 `QueryApi::audit(caller, AuditFilter { by, subject, window }, page)` reads
@@ -856,8 +866,9 @@ free-text classification: `Store`'s reason is diagnostic only.
 transmissions), `SinkRegistryError` (`sinks`), `OperatorStoreError`
 (`operators`), `BusError`, `BlobError`, `EvidenceError`, `AgentReadError`, `ExportPlanError`, `TooManyIds`, `InvalidSelection`, `InvalidWindow`, `UnsupportedFormat` (to `QueryError`), `RegistryError`, `VerdictError`, `CatalogError`, `PinError`, `PromotionRefusal`, `PromoteError`, `RuleError`, `ResolveError`, `SelfMerge` (to `ActionError`) and `DecodeError` (to both) |
 | `spec/types/interfaces/l8_surface/live.rs` | The live feed (SSE) and its framing | `LiveFeed`, `LiveStream`, `UiEvent` (`from(Changed)`, incl. `VerdictChanged` and `ProjectionReady { id: ProjectionId }`, `required_permission`, `visible_to`), `LiveCursor` (wire form: its text), `FeedEpoch`, `Resume`, `FeedWindow` (checked), `ResumePlan`, `ResyncReason`, `LiveItem` (`event_name`, `cursor`), `LiveEnd` (`EVENT_NAME`, client-only `Unreachable`, `served`, `is_client_only`), `LiveConfig` (checked) |
+| `spec/types/interfaces/l8_surface/conversation.rs`, `conversation/{turn,text}.rs` | The conversation reads' read models ([conversation_reads.md](conversation_reads.md)) | `ConversationFilter`, `ConversationRow`, `ConversationHead`, `SpanPoint`, `TurnPage`, `ConversationText`, `TextLimit` |
 | `spec/types/interfaces/l8_surface/export/` | Streamed exports with a manifest ([export.md](export.md)) | `ExportRequest`, `ExportDataset`, `ExportFormats` (checked; `check` gives `UnsupportedFormat`), `ExportHeader`, `ExportTrailer`, `ExportStream`, `ExportSealer`, `verify_export`, `ExportRecord`, `ExportPlanError` |
-| `spec/types/interfaces/l8_surface/audit.rs` | The audit log | `AuditLog`, `AuditEntry` (`by`, `subjects`), `AuditBody` (incl. `Export`), `OperatorRecord` (checked; keeps a `CallerSnapshot`), `ConfigRecord`, `ConfigChange` (incl. `SetSink`, `RemoveSink`, `SetTopicRetention`, `SetFrameRetention`), `ConfigOutcome`, `AuditAuthor`, `AuditSubject` (incl. `Sink`), `AuditOutcome`, `OutcomeKind`, `Rejection`, `AuditFilter`, `AuditError` |
+| `spec/types/interfaces/l8_surface/audit.rs` | The audit log | `AuditLog`, `AuditIntents` (`intend`, `complete`, `recover_interrupted`), `AuditIntent`, `AuditEntry` (`by`, `subjects`), `AuditBody` (incl. `Export`), `OperatorRecord` (checked; keeps a `CallerSnapshot`), `ConfigRecord`, `ConfigChange` (incl. `SetSink`, `RemoveSink`, `SetTopicRetention`, `SetFrameRetention`), `ConfigOutcome`, `AuditAuthor`, `AuditSubject` (incl. `Sink`), `AuditOutcome`, `OutcomeKind`, `Rejection`, `AuditFilter`, `AuditError` |
 | `spec/types/interfaces/l8_surface/operators.rs` | The operator directory and access config | `AccessConfig`, `AccessMode`, `TrustedOperator`, `OperatorConfig`, `OperatorName` (checked), `Operator`, `OperatorDirectory` (checked: `load`, `caller`), `RequestIdentity`, `Unauthenticated`, `InvalidAccessConfig` |
 | `spec/types/tests/` | Tests for the surface's invariants: `filter.rs`, `paging.rs`, `topic_version.rs`, `query_errors.rs`, `projection.rs`, `projection_frame.rs` (query surface); `live.rs`, `events.rs` (the feed and every event's source); `audit.rs`, `operators.rs`, `surface.rs` (audit log, callers, actions); `action_errors.rs` (the action refusals of the registry, verdict store and catalog); `alerts.rs` (alert state kinds); `verdicts.rs`, `quality.rs`; `retention.rs`, `watermark.rs`; `channels.rs`, `pattern_overlap.rs`, `graph.rs` (supersession, promotion, pattern overlap, graph nodes, the channel-centred graph). The read models' tests are listed in [read_models.md](read_models.md), export's in [export.md](export.md) | — |
 
@@ -903,7 +914,9 @@ transmissions), `SinkRegistryError` (`sinks`), `OperatorStoreError`
   unique and never all zero.
 - Every operator action call that returns `Ok` or an `ActionError` other
   than `Store` leaves exactly one operator `AuditEntry` whose outcome maps
-  back to that result (`AuditOutcome::of`, `AuditOutcome::result`). An
+  back to that result (`AuditOutcome::of`, `AuditOutcome::result`); a call
+  whose effect may have applied has an entry, `Interrupted` at worst
+  (`surface.audit.no-silent-effect`). An
   `OperatorRecord` is `Forbidden` exactly when its caller lacks the action's
   required permission, and then names it (`OperatorRecord::new`). Every
   change a config load makes is one config entry, committed with the

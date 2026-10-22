@@ -54,6 +54,18 @@ agent read models (`aggregates/agents/`), L7's store interface
   `AccessSubject` (which gains the channel's `confirmation`) stay off the
   wire.
 
+## Detection quality by carrier
+
+A `DetectionQuality` row's `match_kind` (`QualityMatch`) is adjacently
+tagged: `{"type": "content", "data": {"class": "exact", "carrier":
+"tool_result"}}` for a confirmed (or classified, or aggregated)
+transmission, `{"type": "suspected"}` or `{"type": "discarded"}`
+otherwise. `class` is the `MatchClass` of the transmission's strongest
+match and `carrier` that match's `CarrierKind` (the first match of the
+strongest class, in stored order: `MatchClass::strongest_match`), so
+precision can be read per carrier (`flow.quality.strongest-match`).
+Golden: `detection_quality`.
+
 ## Non-scope
 
 No wire root reaches these, so they have no serde: `AccessEdge`, `Edge`,

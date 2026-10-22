@@ -161,9 +161,12 @@ restarted gateway ends up where an uninterrupted one would.
 
 ## Non-scope (W5)
 
-- Wiring (W8, `crates/gateway`): building these stores over the gateway's
-  pool, `BusSink` over `PgBus`, and replacing the gateway's
-  `live::classify::Classifier` with `crosstalk_analysis::classify::Classifier`.
+- Wiring: `crosstalk_api::pg` builds these stores over the gateway's pool
+  (`PgCatalog`, `PgSearch`, `PgProjections`, the alert store, behind
+  `PgAnalysisSink`), and the gateway's Postgres mode runs
+  `crosstalk_analysis::classify::Classifier` as its L6 stage
+  (`live::pg::l6::PgClassify`); memory mode keeps the gateway's own
+  `live::classify::Classifier`. See [postgres_mode.md](postgres_mode.md).
 - A topic model in the classification step: a fresh classification is an
   outlier under the active version, as the gateway's minimal classifier
   decides today. Refits and re-classification are not here.
@@ -231,16 +234,20 @@ The projection store, one serializable transaction per call over
   and the frame in one transaction.
 - `fail`; `requeue_lapsed(now)` (`lease_until < now`); `expire(now)`
   (`fitted_at < now - frame_retention`, frame deleted); in id order.
+  `expire`'s unbatched delete runs under the longer retention statement
+  bound (`crosstalk_store::raise_for_retention`, INV-1240).
   `complete`, `fail` and each expiry publish `Changed::Projection`.
 
 The classification step:
 
 ```text
 TransmissionConfirmed (delivery d) ─▶ Classifier::classify(&d):
-  stored = TransmissionStore::transmission(id)
-  classification = stored Classified / Aggregated ? its classification
-                 : outlier under the active version, and, when stored is Confirmed,
-                   save Classified { confirmed, classification } before anything else
+  fresh = outlier under the catalog's active version
+  classification = TransmissionStore::modify(id, stored ─▶
+                     Confirmed           ? (Classified { confirmed, fresh }, fresh)
+                     Classified / Aggregated ? (unchanged, its classification)
+                     otherwise           ? (unchanged, fresh))      before anything else
+                   (not stored: fresh, logged at warn)
   TopicLifecycle::assign(id, classification.version, ..)
       Applied | Unchanged | Conflicting (warn) | VersionNotRetained (warn)
   ─▶ Some(Envelope { id: EventId::derive(d.id, "transmission-classified", 0), at: d.at,
@@ -248,7 +255,15 @@ TransmissionConfirmed (delivery d) ─▶ Classifier::classify(&d):
 composer: publish, then ack
 ```
 
-The gateway's classifier (`crates/gateway/src/live/classify.rs`) assigns,
+The read and the write are one `modify` (INV-1230
+`flow.transmission-store.modify-atomic`): the flow consumer may extend
+the transmission's content meanwhile, and the classified state keeps
+whatever content is stored when it is written (before, a read then
+`save` dropped matches extended in between; see
+[flow_store.md](flow_store.md#concurrent-writers)).
+
+The gateway's memory-mode classifier (`crates/gateway/src/live/classify.rs`,
+which also classifies through `modify` now) assigns,
 then saves, then publishes under a fresh id, re-reading the active version
 on every delivery. Read against the redelivery cases, it is not
 idempotent: a topic-model version activated between two deliveries of one

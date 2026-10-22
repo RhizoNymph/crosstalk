@@ -236,7 +236,13 @@ discovered channel and an unmerge lists it again with nothing rewritten.
 
 **L5 transmissions (`flow::verdicts`).** `VerdictTable` holds
 transmissions and one `VerdictLog` each. `TransmissionStore::save`
-replaces the stored transmission and keeps its log. `set` refuses an unknown transmission and one whose
+replaces the stored transmission and keeps its log. `modify` runs the
+change on the stored transmission and writes the state it returns under
+the store's write lock, so no other write runs between the read and the
+write (`flow.transmission-store.modify-atomic`, INV-1230;
+`flow::verdicts::race::race` drives one confirmed transmission extended
+from several tasks while it is classified, for any `TransmissionStore`,
+and the Postgres store's test reuses it). `set` refuses an unknown transmission and one whose
 state is not judgeable, appends through `VerdictLog::record`, and on
 `Appended(r)` publishes `VerdictSet` with revision `r` and
 `Changed::Verdict`. `quality` is `DetectionQuality::tally` over every
@@ -314,6 +320,7 @@ caught (the harness returns `ModelMismatch::Failed`).
 | `crates/memory/src/flow/registry/tests/mod.rs`, `tests/traffic.rs` | Registry reference tests; `traffic` covers discovery, resources on no channel, listings, merges hiding channels, the list order and a channel's transmissions | — |
 | `crates/memory/src/flow/verdicts/mod.rs` | The transmission and verdict store | `MemoryVerdicts` |
 | `crates/memory/src/flow/verdicts/model.rs` | Verdict harness, and the transmission fixtures the registry harness shares | `check_transmission_verdicts`, `run_case`, `VerdictStore`, `VerdictOp`, `state`, `state_between`, `co_access_between`, `content_between` |
+| `crates/memory/src/flow/verdicts/race.rs` | The `modify` race any `TransmissionStore` runs (INV-1230) | `race`, `race_transmission`, `race_match`, `RaceError` |
 | `crates/memory/src/flow/verdicts/tests.rs` | Verdict reference tests | — |
 
 ## Insight and surface stores (L6–L8)
@@ -333,8 +340,8 @@ caught (the harness returns `ModelMismatch::Failed`).
   graph, totals, the edge drill-down and agent traffic, all computed from
   the stored contributions; a `FrontierSource` the test sets, and
   `StaticNodes`, a `NodeFacts` the test sets.
-- L8 (`l8_surface*`): `AuditLog`, `OperatorStore`, `SinkRegistry` and an
-  `AlertSink` double.
+- L8 (`l8_surface*`): `AuditLog` and `AuditIntents`, `OperatorStore`,
+  `SinkRegistry` and an `AlertSink` double.
 - The model-based harnesses for all of the above (`model::analysis`,
   `model::topology`, `model::surface`).
 
@@ -455,6 +462,14 @@ caught (the harness returns `ModelMismatch::Failed`).
   or alert's revision (refused before any change when exhausted) and
   publishes `AlertRuleChanged`, `AlertOpened` or `AlertChanged` and the
   matching `Changed`.
+- **Audit intents.** `InMemoryAuditLog` also implements `AuditIntents`
+  (the write-ahead half, `surface.audit.no-silent-effect`): `intend` keeps
+  an intent beside the entries (the same intent again is a no-op; an id an
+  entry or another intent holds is `IdReused`), `complete` stores the
+  call's entry and removes its intent together (the entry must be the
+  intent's call), `append` refuses an id an intent reserves, and
+  `recover_interrupted` turns each open intent, oldest first, into its
+  `Interrupted` entry.
 - **Operators.** `InMemoryOperatorStore::load` runs
   `OperatorDirectory::load` against the stored directory and appends one
   applied config entry per change to the audit log, all or nothing,
@@ -481,6 +496,8 @@ tokio runtime, so `make` may be async (a Postgres pool). A failure is a
 | `model::topology::check_edge_store` | `EdgeSubject`: `EdgeStore + TopicLifecycle` (the catalog whose history the store reads) | `EdgeStoreConfig`, `EdgeWorld` (the `StaticDirectory` and `StaticNodes` the harness merges, supersedes and parents in) |
 | `model::surface::check_audit_log` | `AuditLog` | nothing |
 | `model::surface::check_operator_store` | `OperatorStoreSubject`: `OperatorStore + AuditLog` (config entries read back through `AuditLog::query`) | nothing |
+| `model::surface::check_audit_intents` | `AuditIntents` (intents, completions, appends over the same ids, recoveries, traversals; oracle: every accepted intent no completion removed has an `Interrupted` entry after a recovery) | nothing |
+| `model::surface::check_sink_registry` | `SinkRegistry` (deliveries to known and unknown sinks, `sinks`) | the configured `Vec<SinkConfig>` |
 
 Beyond equality, the harnesses keep their own oracles: the catalog's
 sizes against a count of the assignments
@@ -515,14 +532,14 @@ harness catches it, so none is vacuous.
 | `topology/reads.rs` | `EdgeStore` | — |
 | `topology/fold.rs` | The fold, edges, nodes, access edges | `edges`, `nodes`, `route_key`, `kind_index` |
 | `topology/env.rs` | What the edge store reads from other stores | `TopologyEnv`, `Env`, `StaticNodes` (a spec `NodeFacts`), `agent_facts`, `channel_facts` |
-| `surface/audit.rs` | The append-only audit log | `InMemoryAuditLog` |
+| `surface/audit.rs` | The append-only audit log and its intents | `InMemoryAuditLog` (`AuditLog`, `AuditIntents`) |
 | `surface/operators.rs` | `OperatorStore`: the directory and its config loads | `InMemoryOperatorStore` |
 | `surface/sinks.rs` | `SinkRegistry`, and a sink double | `InMemorySinkRegistry`, `SinkConfig`, `FakeSink` |
 | `model/mod.rs` | The harness runner every harness shares | `HarnessConfig`, `ModelMismatch`, `Divergence`, `run`, `same`, `holds` |
 | `model/build.rs` | Value builders the harnesses and tests share | id builders, `ts`, `window`, `unit`, `topic`, `catalog`, `timing`, `bucket_width` |
 | `model/analysis.rs`, `model/analysis/*.rs` | The L6 harnesses | see the table above, and `ReferenceCatalog` (`reference_catalog`), `ReferenceSearch`, `SearchWorld`, `ReferenceAlerts` (`reference_alerts`), `new_version_in`, `FilterSeed` |
 | `model/topology.rs`, `model/topology/*.rs` | The L7 harness | `check_edge_store`, `EdgeSubject`, `EdgeWorld`, `ReferenceEdges`, `catalog_ready`, `edge_config` |
-| `model/surface.rs` | The L8 harnesses | `check_audit_log`, `check_operator_store`, `OperatorStoreSubject`, `ReferenceOperators` |
+| `model/surface.rs` | The L8 harnesses | `check_audit_log`, `check_operator_store`, `check_audit_intents`, `check_sink_registry`, `OperatorStoreSubject`, `ReferenceOperators`, `AuditOp`, `OperatorOp`, `IntentOp`, `SinkOp` |
 
 Unit tests are in `analysis/tests/`, `topology/tests/`, `surface/tests.rs`;
 the harnesses run on the reference in `model/tests.rs` and against planted

@@ -1,11 +1,18 @@
 [invariant]
 id = "reconstruct.conversation.turn-index-stable"
-statement = "Once an exchange is threaded as turn i of a conversation, every later read names the same exchange at turn i, later threading only appends turns, and threading the same exchange again adds no turn."
+statement = "Once an exchange is threaded as turn i of a conversation, every later read names the same exchange at turn i, later threading only appends turns, and threading the same exchange again adds no turn, except when an exchange of the same agent cluster that ended earlier is threaded later within the store's reorder window (reconstruct.thread.order-independent): it rewinds the cluster's turns with greater turn keys and threads them again in turn-key order, which can move them to other indexes or conversations."
 kind = "coordination"
 requires = ["unit", "integration"]
 rationale = """
 A citeable turn link must open the same turn for everyone and forever; a
 redelivered ExchangeCaptured must not shift later turns.
+
+The exception is order-tolerant threading (INV-1235): a late exchange
+within the reorder window (a day by default) takes the place its turn key
+gives it, so the turns after it are threaded again and their indexes can
+change. A link to such a turn may open a different exchange afterwards.
+Beyond the window a late exchange is threaded where it lands and no
+earlier turn moves.
 """
 
 [evidence]

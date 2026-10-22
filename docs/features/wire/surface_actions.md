@@ -56,6 +56,18 @@ audit log ◀── OperatorRecord { caller: CallerSnapshot, action: OperatorAct
   record whose outcome contradicts its snapshot's permissions is a decode
   error. The constructors take `impl Into<CallerSnapshot>`: the surface
   passes the call's `Caller`, decoding the snapshot it read.
+- `AuditOutcome` has a fourth variant, `interrupted` (`{"type":
+  "interrupted"}`, no data): the process stopped between the call's
+  write-ahead intent and its entry, so the effect may or may not have
+  applied. Only start-up recovery records it
+  (`AuditIntents::recover_interrupted`); `AuditOutcome::of` never returns
+  it. Golden: `audit/entry_operator_interrupted`.
+- `AuditIntent` (`{"id", "at", "caller", "action"}`: the entry a call
+  will leave, but for its outcome) is stored by a durable surface before
+  the effect and removed with the entry's append (`AuditIntents::intend`,
+  `complete`). It decodes through `AuditIntent::new`, which refuses a
+  caller lacking the action's permission; it is stored, never served.
+  Golden: `audit/audit_intent`.
 - A config entry's `ConfigChange` covers sinks and retention as well as
   channels, agents, rules, the access mode and operators: `set_sink`
   (`{"sink", "kind", "name"}`, never the endpoint, which can carry a
@@ -86,9 +98,12 @@ data: {"type":"event","data":{"cursor":"7-1042","event":{"type":"alert_changed",
   `Resume::from_last_event_id` reads. Heartbeats carry one too.
 - `data` is the whole item as one line of JSON.
 - The stream's last event is named `end` (`LiveEnd::EVENT_NAME`), its
-  data the `LiveEnd` string (`"lagged"`), with no `id`, so the client's
-  resume point stays its last cursor
-  (`surface.live.sse-frame-matches-item`).
+  data the `LiveEnd` string (`"lagged"`, `"session_ended"`,
+  `"shutting_down"`), with no `id`, so the client's resume point stays its
+  last cursor (`surface.live.sse-frame-matches-item`). `"unreachable"` is
+  client-only (the client ran out of reconnect attempts); a server never
+  sends it: `LiveEnd::served` maps it to `shutting_down`. Golden:
+  `live/live_ends`.
 - The endpoint (`GET /live`), resuming from `Last-Event-ID` or a `cursor`
   query parameter, and the response headers are the
   [HTTP API](../http_api.md#live-feed)'s; `http::sse::event_frame` and
@@ -101,7 +116,8 @@ data: {"type":"event","data":{"cursor":"7-1042","event":{"type":"alert_changed",
 ## Operators, sinks, lists, overview
 
 - `Operator { id, name, permissions }`; a former operator's permissions
-  are `[]`. `OperatorName` is checked text (trimmed; `Blank`, `TooLong`,
+  are `[]`. `QueryApi::me` answers with the caller's own `Operator`
+  (golden `operators/me`). `OperatorName` is checked text (trimmed; `Blank`, `TooLong`,
   `ControlCharacter` refused). `PermissionSet` is an array in
   `Permission::ALL` order, decoded from any order with repeats counted
   once. `AccessMode` is a string.
@@ -127,7 +143,8 @@ data: {"type":"event","data":{"cursor":"7-1042","event":{"type":"alert_changed",
 `LiveConfig`, `AccessConfig`, `OperatorConfig`, `TrustedOperator`,
 `OperatorDirectory`, `RequestIdentity`, `Unauthenticated`,
 `InvalidAccessConfig` and the traits (`OperatorActions`, `AuditLog`,
-`LiveFeed`, `LiveStream`, `AlertSink`): no wire root reaches them.
+`AuditIntents`, `LiveFeed`, `LiveStream`, `AlertSink`): no wire root
+reaches them.
 
 ## Files
 
@@ -135,9 +152,10 @@ data: {"type":"event","data":{"cursor":"7-1042","event":{"type":"alert_changed",
 | --- | --- |
 | `spec/types/interfaces/l8_surface/actions/request.rs` | `ActionRequest` (a `WireRequest`): `into_action`, `of`, `kind` |
 | `spec/types/interfaces/l8_surface/permissions.rs` | `CallerSnapshot` (checked; `NoPermissions`), `PermissionSet` as an array in `Permission::ALL` order |
-| `spec/types/interfaces/l8_surface/live.rs` | `LiveItem::event_name`, `LiveEnd::EVENT_NAME`, `LiveCursor`'s text (no leading zeros) |
+| `spec/types/interfaces/l8_surface/live.rs` | `LiveItem::event_name`, `LiveEnd::EVENT_NAME`, `LiveEnd::served`, `LiveCursor`'s text (no leading zeros) |
+| `spec/types/interfaces/l8_surface/audit.rs` | `AuditEntry`, `AuditOutcome` (with `Interrupted`), `AuditIntent` (checked), `AuditIntents` |
 | `spec/types/tests/wire/surface_actions/` | `actions.rs`, `audit.rs`, `live.rs`, `lists.rs`, `operators.rs` |
-| `spec/types/tests/golden/surface_actions/{actions,audit,live,lists,operators}/` | 61 goldens: one per `ActionRequest` variant, every `OperatorAction`, every `AuditBody`, `ConfigChange`, `AuditSubject` and `UiEvent` |
+| `spec/types/tests/golden/surface_actions/{actions,audit,live,lists,operators}/` | 64 goldens: one per `ActionRequest` variant, every `OperatorAction`, every `AuditBody`, `AuditOutcome`, `ConfigChange`, `AuditSubject` and `UiEvent`, the audit intent, `me` |
 
 ## Invariants
 

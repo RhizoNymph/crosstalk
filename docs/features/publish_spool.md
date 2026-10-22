@@ -20,7 +20,10 @@ subcommand: W8, [postgres_mode](postgres_mode.md)).
 - Bounds (`max_bytes`, `SpoolFull`), stats (`SpoolStats`, `oldest_at`).
 - `discard_corrupt` for the operator command.
 - `DrainTarget`, what the decorator needs of its inner bus, implemented
-  for `PgBus` and `MpscBus`.
+  for `PgBus` and `MpscBus` here, and in the gateway for `Gated<PgBus>`
+  (`crates/gateway/src/spool.rs`), which answers `Disconnected` until the
+  capture gate opens, so the spool holds captures until every pipeline
+  group exists (INV-1241, [postgres_mode](postgres_mode.md), "The gate").
 
 ## Non-scope
 
@@ -128,7 +131,7 @@ at least one record and is no larger than `max_bytes`.
 
 | File | Role | Key exports |
 | --- | --- | --- |
-| `crates/transport/src/spool/mod.rs` | the decorator, `DrainTarget`, `discard_corrupt` | `SpoolingBus`, `DrainTarget`, `discard_corrupt` |
+| `crates/transport/src/spool/mod.rs` | the decorator, `DrainTarget`, `discard_corrupt` | `SpoolingBus` (`open`, `inner`, `state`, `watch_state`, `oldest_at`, `stats`, `close`), `DrainTarget` (`probe`, `publish_batch`), `discard_corrupt` |
 | `src/spool/drain.rs` | the drainer task | (crate) |
 | `src/spool/log.rs` | files, index, recovery, append, drain reads, cursor moves | `Discarded`; `SpoolLog` (crate) |
 | `src/spool/record.rs` | the record format | (crate) |

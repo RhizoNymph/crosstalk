@@ -50,17 +50,18 @@ only. `crosstalk-memory`, `crosstalk-sim`, `crosstalk-testkit` and
 - **Embeddings.** The semantic matcher stays a stub until P6.2. The scanner
   already calls `SemanticMatcher::lookup` and filters its hits, but nothing
   inserts embeddings yet.
-- **Wiring into the gateway.** `consumer::subscribe` and `consumer::run`
-  are shaped like the exchange log's stage (subscribe while building, then
-  spawn), but `crosstalk_gateway::pipeline` does not run them yet.
+- **Wiring into the gateway.** The gateway runs the engine in its own L4
+  stages, not under `consumer::run`, so eviction follows the process's
+  ticks: `crosstalk_gateway::live::layers::l4` over
+  `MemoryProvenanceStore` and `crosstalk-memory`'s
+  `MemoryFingerprintIndex`, and, in Postgres mode, `live::pg::l4` over
+  `PgProvenanceStore` and `PgFingerprintIndex`. Both subscribe to
+  `consumer::SUBJECTS`, read `Provenance::started_at` back for L5's
+  extraction step, and publish the engine's envelopes. See
+  [gateway](gateway.md) and [postgres_mode](postgres_mode.md).
 - **Shard routing across nodes.** The index refuses misrouted fingerprints
   (`WrongShard`), and the scanner only sends fingerprints this node owns. A
   multi-node fan-out of lookups is not built.
-- **Composing the Postgres stores into `serve`.** `PgProvenanceStore`
-  serves `SpanIndex`, `ProvenanceReads` and `ProvenanceStore::started_at`;
-  the gateway's L4 stage still runs over the memory store and keeps its
-  own map of exchange starts until P7.3's W8 switches it
-  ([postgres_stores.md](postgres_stores.md)).
 - **Coverage-guided fuzzing** (`fuzz` evidence) and the
   `span-state-written-only-by-advance` lint.
 
@@ -103,10 +104,9 @@ only. `crosstalk-memory`, `crosstalk-sim`, `crosstalk-testkit` and
     `\'` and `\xNN`; surrogate pairs are joined.
   - YAML string unescaping covers `''`, escaped line breaks and `\ `.
 - `Step` is `Codec(Codec)`, `JsonString` or `YamlString`. `Step::codec`
-  maps it to the spec `Codec`. Until the spec gains `Codec::JsonString`
-  and `Codec::YamlString` (eval PR #58), a match that only needed string
-  unescapes is reported as `MatchKind::Normalized` (`scan::kind`). Binding
-  the variants is a one-line change in `Step::codec`.
+  maps it to the spec `Codec` (`Codec::JsonString`, `Codec::YamlString`
+  for the string unescapes), so a match that needed string unescapes is
+  `MatchKind::Decoded` with them in its chain (`scan::kind`).
 - `DecodePipeline::layers(text)` returns the raw layer, then each decoder
   applied breadth first to every layer, at most `max_depth` steps deep and
   `max_layers` layers in all. A text already produced by a shorter chain is
@@ -384,8 +384,9 @@ writes.
      found, and a k-gram mostly over a forward never goes to an
      originated span;
   3. for an originated span that is a whole value (its whole text part,
-     trimmed, or one whole string value of a tool call's arguments) of 16
-     to 46 normalized characters, its short-span hash (INV-1092): one
+     trimmed, or one whole string value of a tool call's arguments) of
+     `short_spans.min_chars` to `max_chars` (24 to 46) normalized
+     characters, its short-span hash (INV-1092): one
      hash of its whole normalized text, domain-separated from k-grams.
   The index drops fingerprints above the cutoff, as for any posting.
 - **Observations.** One per span (its own winnowed fingerprints, as
@@ -534,6 +535,17 @@ boilerplate cutoff is a correlated count, on insert and on lookup.
 `PgProvenanceStore` writes each commit in one transaction with row locks,
 and changes span states only through `SpanState::advance`.
 
+**Statement bounds** (`transport.pipeline.statements-bounded`, INV-1240).
+In the gateway's Postgres mode every pipeline connection runs under the
+store section's statement and lock timeouts. A statement the server
+cancels at either bound is a transient failure (`pg::Failure::Transient`;
+the index's `IndexError::Store` reason carries `crosstalk_store::classify`),
+so the stage nacks and the delta is redelivered rather than acked as a
+refused write. The two unbatched retention deletes, the index's
+observation age-out and `ProvenanceStore::prune` of request lists, run
+under the longer retention bound (`crosstalk_store::raise_for_retention`;
+the index restores the transaction's bound after it).
+
 ## Configuration
 
 `ProvenanceConfig` (JSON, unknown fields refused, every field defaulted):
@@ -569,7 +581,9 @@ The run files are read in place, never copied. The ignored test
 - 10635 injection slots, of which 9949 were exposed to the agent;
 - 9948 of the exposed slots matched (100.0%): 1163 `Exact` and 8785
   `Normalized`. Python-repr `\n` escapes and YAML `''` quotes go through the
-  string unescapes, which `Normalized` reports until the spec codecs land.
+  string unescapes, which were reported as `Normalized` when this was
+  counted; they are now `Decoded` through `Codec::JsonString` and
+  `Codec::YamlString`.
 
 The single miss, a YAML escaped space (`\ `) after a folded line break, is
 fixed. A slot counts as exposed when a crude oracle finds it in the tool
@@ -642,6 +656,7 @@ span, and the evidence page failed with `span missing` on Postgres only
 | `src/segment/{mod,coverage,view}.rs` | The segmenter, input coverage, part views | `NovelRunSegmenter`, `Coverage`, `message_kgrams`, `runs`, `text_parts`, `view`, `PartKind` |
 | `src/scan/shadowed.rs` | Shadowed fragments: the agents present in one layer of a read, their extents and coverage | `Shadows`, `Shadows::shadower`, `holders` (crate) |
 | `src/scan/{mod,reads,output,hits,kind,cache,messages}.rs` | The scanner | `Scanner`, `Loaded`, `ScanEnv`, `IndexWork`, `ScanError`, `LiveSpans`, `match_kind`, `KGramCache`, `TokenCache` (`cache::Bounded`), `CoverageCache`, `MessageSource`, `BlobMessages` (`new`, `with_budget`), `MemoryMessages` |
+| `src/scan/inherited.rs` | Inherited fragments: what the origin span's own exchange was given, per carrying part | `Given`, `MIN_RUN_TOKENS` (module) |
 | `src/scan/nearer.rs` | The reader's nearer source: own output and direct reads of a forward's source | `Nearer`, `OwnCache` (`cache::Bounded`), `Scanner::nearer_hits` (crate) |
 | `src/scan/postings.rs` | What a span is posted under beyond its own fingerprints: context k-grams, short-span hashes | `Scanner::context_kgrams`, `Scanner::short_fingerprint` (crate) |
 | `src/engine.rs` | Processing, replay, eviction | `Provenance`, `Processed`, `EngineError`, `envelopes`, `exchange_record` |
@@ -674,19 +689,21 @@ span, and the evidence page failed with `span missing` on Postgres only
     awaits P6.2;
   - the lint for INV-227.
 - New invariants (also INV-1094 `provenance.match.cross-agent-spread`,
-  INV-1150 `provenance.match.skeleton-dropped`, and, numbers pending,
-  `provenance.match.inherited-fragment-dropped` and
+  INV-1150 `provenance.match.skeleton-dropped`, INV-1151
+  `provenance.match.inherited-fragment-dropped` and INV-1152
   `provenance.match.reader-output-rare-token`; INV-1093 and INV-1094
   restated to point at them):
-  - `provenance.decode.utf8-lossless`;
-  - `provenance.scan.status-terminal`;
+  - INV-1051 `provenance.decode.utf8-lossless`;
+  - INV-1052 `provenance.scan.status-terminal`;
   - INV-1090 `provenance.index.forwarded-indexed`;
   - INV-1091 `provenance.index.remainder-around-relay-matchable`;
   - INV-1092 `provenance.match.short-span-exact`;
   - INV-1093 `provenance.match.reader-output-strict`;
-  - `provenance.match.own-output-replay` and
-    `provenance.match.forward-direct-read` (INV-X, numbers pending).
-  - `provenance.match.shadowed-fragment-dropped` (INV-X, number pending).
+  - INV-1153 `provenance.match.own-output-replay` and INV-1154
+    `provenance.match.forward-direct-read`;
+  - INV-1159 `provenance.match.shadowed-fragment-dropped` (unit evidence
+    in `tests::bench_channel_template`);
+  - INV-1164 `provenance.span.coincident-template-originated`.
 - Restated for the nearer-source rules: INV-1090 (a peer's own read of a
   forward's source, the forwarding default and its measurements).
 - Restated for forwarded spans: INV-205 and INV-224 (what the index and
@@ -702,9 +719,9 @@ span, and the evidence page failed with `span missing` on Postgres only
 - Every time is an argument: the exchange's start for scans, the injected
   clock for eviction.
 - The Postgres store and index agree with the memory reference on every
-  match rule (`provenance.store.pg-agrees-with-memory`, INV-X), and a
+  match rule (`provenance.store.pg-agrees-with-memory`, INV-1223), and a
   restart over them loses no decision or start
-  (`provenance.restart.decisions-durable`, INV-X).
+  (`provenance.restart.decisions-durable`, INV-1224).
 - Span states change only through `SpanState::advance`.
 - No `unwrap` or `expect` outside tests, except one commented infallible
   default.
@@ -859,12 +876,12 @@ span, and the evidence page failed with `span missing` on Postgres only
 - **Reader-output rules** remove the one `ReaderOutput` match the
   `live_gateway` splice fixture's confirmed transmission rested on (a
   42-character `cd /workspace/... && python` command both agents ran). The
-  splice transmission itself needs a day's correlation window (eval
-  finding 9); `splice_worlds_are_confirmed_and_scored` and the splice run
-  of `two_live_runs_give_byte_identical_reports` fail under the 60 s
-  window. They are expected to pass once fix/l5-content-age (content-
-  confirmed channel transmissions not bounded by the correlation window)
-  is merged; the tests stay unchanged.
+  splice transmission itself needed a day's correlation window (eval
+  finding 9) until fix/l5-content-age (content-confirmed channel
+  transmissions not bounded by the correlation window) merged. The
+  bench adapter's live tests now cover it:
+  `crosstalk_bench_adapter`'s `live_gateway::splice_worlds_are_confirmed_and_written`
+  and the splice run of `two_live_runs_give_byte_identical_predictions`.
 
 - **Increments.** The segmenter's inputs are the exchange's `request` (the
   full history for `FullHistory`; for a WebSocket increment, only the

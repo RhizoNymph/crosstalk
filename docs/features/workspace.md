@@ -23,14 +23,15 @@ P1.2 and P0.5.
   roadmap items fill them (`crosstalk-transport`: [transport](transport.md);
   `crosstalk-canonical`: [canonical](canonical.md); `crosstalk-gateway`:
   [gateway](gateway.md)).
-- The UI (`ui/`), which is excluded from the workspace and keeps its own
-  package and lock.
+- The UI's own code (`ui/`, package `crosstalk-ui`): it is a workspace
+  member and shares the one lock, but its build and pages are
+  [ui.md](ui.md)'s.
 - CI configuration. `scripts/check.sh` is what CI runs once it exists.
 
 ## Layout
 
 ```text
-Cargo.toml                 virtual workspace: members spec + crates/*, excludes ui, resolver 3
+Cargo.toml                 virtual workspace: members spec, crates/* and ui; excludes crates/.claude; resolver 3
 Cargo.lock                 the one lock for every member
 rust-toolchain.toml        nightly-2026-10-02 with rustfmt, clippy, miri
 spec/                      crosstalk-spec: types, invariants, wire goldens (the boundary crate)
@@ -51,26 +52,34 @@ crates/
   api/                     crosstalk-api          P7.1   HTTP + SSE server for the L8 surface
   client/                  crosstalk-client       P7.2   L8 traits over HTTP, for the UI
   gateway/                 crosstalk-gateway      P3     the `crosstalk` binary; wiring
+  bench-adapter/           crosstalk-bench-adapter —     the `ct-bench-detect` binary: crosstalk's detector for a2a-transmission-bench (bench_adapter.md)
+  e2e/                     crosstalk-e2e          —      end-to-end smoke harness: harness traffic through the pipeline, read back through L8 (e2e_smoke.md)
+  conformance/             crosstalk-conformance  —      the L8 conformance suite, generic over the implementation
+  world/                   crosstalk-world        —      the synthetic seeded world the UI and tests share
   demo/                    crosstalk-demo         —      tool: fake upstream, wiki, agent swarm (demo.md)
+ui/                        crosstalk-ui                  operator UI (a workspace member; composes api, client, surface, world)
 scripts/
   check.sh                 every workspace check
   inv_check.py             the invariant validator
 ```
 
-Every crate is `crosstalk-<dir>` (library `crosstalk_<dir>`), inherits
+Every crate is `crosstalk-<dir>` (library `crosstalk_<dir>`; `ui/` is
+`crosstalk-ui`), inherits
 `version`, `edition` (2024) and `publish = false` from `[workspace.package]`
 and the lints from `[workspace.lints]`, and depends on `crosstalk-spec` by
 path. Each `lib.rs` holds the crate doc (what it implements, the spec
-interface module, the roadmap item), `use crosstalk_spec as _;` so the
-declared dependency is not reported unused before code uses it, and an
-empty `#[cfg(test)] mod tests {}`. `crosstalk-gateway` also has the binary
-target `crosstalk` (`crates/gateway/src/main.rs`).
+interface module, the roadmap item); a new crate starts with
+`use crosstalk_spec as _;` so the declared dependency is not reported
+unused before code uses it, and an empty `#[cfg(test)] mod tests {}`.
+Binary targets: `crosstalk` (`crates/gateway/src/main.rs`),
+`ct-bench-detect` (`crates/bench-adapter/src/bin/ct-bench-detect/main.rs`)
+and `crosstalk-demo` (`crates/demo/src/main.rs`).
 
 ## Manifests
 
 | File | Role |
 | --- | --- |
-| `Cargo.toml` | `[workspace]`: `members = ["spec", "crates/*"]`, `exclude = ["ui"]`, `resolver = "3"`. `[workspace.package]`: version, edition 2024, `publish = false`. `[workspace.lints]`: `unsafe_code = "forbid"`, clippy at its defaults. `[workspace.dependencies]`: the shared pins in use (`serde = "=1.0.229"` with `derive`, `serde_json = "=1.0.151"`; for `crosstalk-transport` (the bus and the blob store) `blake3 = "=1.8.7"`, `thiserror = "=2.0.21"`, `tokio = "=1.53.1"`, `tracing = "=0.1.44"`, and the test pins `proptest = "=1.11.0"` (std only) and `tempfile = "=3.27.0"`; for the store `sqlx = "=0.9.0"` without default features, with `postgres`, `runtime-tokio`, `migrate` and `macros`, see [store](store.md) for decision D2; for `crosstalk-canonical`, `base64 = "=0.22.1"` plus the shared `thiserror` and `tracing` (and `blake3`, `proptest`, `serde`, `serde_json` and `tokio` in tests); for the spec, the shared `blake3` (message, media and secret digests) and `proptest` in tests; for `crosstalk-testkit`, `bytes = "=1.12.1"`, `http-body-util = "=0.1.5"`, `hyper = "=1.11.1"` and `hyper-util = "=0.1.21"`, plus the shared `thiserror`, `tokio` and `tracing`, each the UI's resolved version) |
+| `Cargo.toml` | `[workspace]`: `members = ["spec", "crates/*", "ui"]`, `exclude = ["crates/.claude"]` (a tool's write-tracking directory the glob would otherwise take for a crate), `resolver = "3"`. `[workspace.package]`: version, edition 2024, `publish = false`. `[workspace.lints]`: `unsafe_code = "forbid"`, clippy at its defaults. `[workspace.dependencies]`: the shared pins in use (`serde = "=1.0.229"` with `derive`, `serde_json = "=1.0.151"`; for `crosstalk-transport` (the bus and the blob store) `blake3 = "=1.8.7"`, `thiserror = "=2.0.21"`, `tokio = "=1.53.1"`, `tracing = "=0.1.44"`, and the test pins `proptest = "=1.11.0"` (std only) and `tempfile = "=3.27.0"`; for the store `sqlx = "=0.9.0"` without default features, with `postgres`, `runtime-tokio`, `migrate` and `macros`, see [store](store.md) for decision D2; for `crosstalk-canonical`, `base64 = "=0.22.1"` plus the shared `thiserror` and `tracing` (and `blake3`, `proptest`, `serde`, `serde_json` and `tokio` in tests); for the spec, the shared `blake3` (message, media and secret digests) and `proptest` in tests; for `crosstalk-testkit`, `bytes = "=1.12.1"`, `http-body-util = "=0.1.5"`, `hyper = "=1.11.1"` and `hyper-util = "=0.1.21"`, plus the shared `thiserror`, `tokio` and `tracing`, each the UI's resolved version) |
 | `Cargo.lock` | The workspace lock. It replaced `spec/Cargo.lock` and resolves the identical third-party versions (serde 1.0.229, serde_core, serde_derive, serde_json 1.0.151, syn 3.0.6, quote, proc-macro2, unicode-ident, itoa, memchr, zmij), with the same checksums |
 | `spec/Cargo.toml` | `crosstalk-spec`; takes serde, serde_json and blake3 from the workspace pins, and proptest as its dev-dependency |
 | `crates/<dir>/Cargo.toml` | `crosstalk-<dir>`; `crosstalk-spec` by path, plus the workspace pins its implementation uses (`crates/store`: serde, sqlx, thiserror, tokio, tracing; `crates/testkit/Cargo.toml`: see `docs/features/testkit.md`; `crates/memory/Cargo.toml`: below) |
@@ -96,7 +105,7 @@ gateway (and the composers beside it). The roles:
 | Role | Crates |
 | --- | --- |
 | layer | `ingress`, `canonical`, `transport`, `reconstruct`, `provenance`, `flow`, `analysis`, `topology`, `surface` |
-| composition | `api`, `bench-adapter`, `client`, `e2e`, `gateway` (`e2e` is the end-to-end smoke harness, `crates/e2e`: it composes the gateway's pipeline with the surface, so it is a composer rather than test support, and no layer may depend on it) |
+| composition | `api`, `bench-adapter`, `client`, `e2e`, `gateway`, `ui` (`e2e` is the end-to-end smoke harness, `crates/e2e`: it composes the gateway's pipeline with the surface, so it is a composer rather than test support, and no layer may depend on it) |
 | test support | `conformance`, `memory`, `sim`, `testkit`, `world` |
 | tool | `demo` |
 | open | `spec`, `store`, and every third-party crate |
@@ -105,7 +114,7 @@ The rules, applied to every declared dependency (normal, dev and build,
 including optional and target-specific ones) of every workspace member:
 
 1. A layer crate never depends on another layer crate, nor on `api`,
-   `client`, `e2e`, `bench-adapter` or `gateway`, under any kind, except that it may depend on
+   `client`, `e2e`, `bench-adapter`, `gateway` or `ui`, under any kind, except that it may depend on
    `transport` as a dev-dependency. `transport` is infrastructure as well as
    L2: layers publish through the spec's `EventBus` trait, and use the
    in-process bus only in their tests.
@@ -136,6 +145,9 @@ parses the JSON with `serde_json`.
   `the_bench_adapter_composes_gateway_and_layers` checks that
   `bench-adapter` (`crosstalk-bench-adapter`, formerly `crosstalk-eval`)
   may depend on the gateway and every layer and no layer on it.
+- `ui_is_an_application_that_may_compose_layers` checks that
+  `crosstalk-ui` is a composer that may depend on `spec`, `surface`, `api`
+  and `client`, and that no layer may depend on it.
 - `e2e_composes_gateway_and_layers_and_no_layer_uses_it` checks that
   `e2e` may depend on the gateway and every layer, and that a layer's
   dependency on it, of any kind, is `LayerOnComposer`.
@@ -258,7 +270,8 @@ any error.
 | `Cargo.toml` | The virtual workspace | `[workspace.package]`, `[workspace.lints]`, `[workspace.dependencies]` |
 | `Cargo.lock` | The workspace lock | — |
 | `rust-toolchain.toml` | Pinned nightly and its components | — |
-| `crates/*/Cargo.toml`, `crates/*/src/lib.rs` | One library per layout entry, with its crate doc; empty until its roadmap item fills it (`sim`: [sim.md](sim.md)) | crates `crosstalk_<dir>` |
+| `crates/*/Cargo.toml`, `crates/*/src/lib.rs` | One library per layout entry, with its crate doc (`sim`: [sim.md](sim.md)) | crates `crosstalk_<dir>` |
+| `ui/Cargo.toml` | `crosstalk-ui`, the UI's package, a workspace member ([ui.md](ui.md)) | — |
 | `crates/gateway/src/main.rs` | The `crosstalk` binary ([gateway](gateway.md)) | `main` |
 | `crates/gateway/tests/architecture.rs` | The dependency rule over `cargo metadata` | `Role`, `DepKind`, `Edge`, `Violation`, `check`, `violations` (test-local) |
 | `scripts/check.sh` | Every workspace check, stopping at the first failure | — |

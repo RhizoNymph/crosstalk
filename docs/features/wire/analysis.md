@@ -29,8 +29,9 @@ and the insight bus events (L6): `aggregates/alert/rules.rs`,
 [`QueryApi::projection`](#queryapiprojection)). `AlertRuleSet`,
 `AlertRuleConfig`, `RuleDefinition`, `StaleReason`, `AlertDraft`,
 `TriageOutcome`, `PinChange`, `TopicVersionStatusKind`,
-`TopicAssignment`, `Assignment`, `SearchQuery`, `Sample`, the L6 traits
-and store errors are not on the wire: in-memory indexes, config,
+`TopicAssignment`, `Assignment`, `SearchQuery`, `Sample`, `FitDocument`
+(a topic fit's input), the L6 traits and store errors (`TopicError`,
+`LayoutError`, with the async fits' `Backend` failures) are not on the wire: in-memory indexes, config,
 in-process values, and errors that reach a client as the `QueryError`
 they map to.
 

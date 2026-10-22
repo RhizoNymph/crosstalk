@@ -21,21 +21,29 @@ Every type below is a response or bus payload; none is a `WireRequest`
   `UpstreamKind`, `Vendor`, `InferenceServer`,
   `CredentialRef`, `CredentialScheme`, `HarnessClaim`, `HarnessFamily`,
   `HarnessIds`, `RequestClass`, `PreviousDigests`, `RouteName`,
-  `UpstreamId`).
+  `UpstreamId`), and `TrafficSource` (`IngressMode::source`: `{"type":
+  "live"}` or `{"type": "replay", "data": {"corpus": ..}}`), which the
+  conversation reads carry.
 - `observed/agent.rs`, `agent/claims.rs`, `agent/merge.rs`: `Agent`,
   `AgentState`, `ActiveAgentState`, `IdentityEvidence`, `IdentityScope`,
   `MergeAuthor`, `MergedInto`, `SeenClaim`, `Reversal`, and the checked
   `MergeRequest`, `MergeRecord`, `MergeVeto`, `ClaimSet`. `MergeRequest`,
   `MergeAuthor`, `MergeRecord`, `Reversal` and `MergeVeto` are stamped
   (`wire/authority.rs`).
-- `observed/message.rs`: on the wire only `PartRef`, `ToolCallId` and
-  `ToolName`. `Message`, `MessageBody` and `MediaBlob` have serde in the
-  same conventions for `NormalizedExchange` (below) and the encoding, not
-  as wire values.
+- `observed/message.rs`: on the wire `PartRef`, `ToolCallId` and
+  `ToolName`, and, for the conversation reads, the string enums `Role`,
+  `MediaKind`, `ToolExecution` and `ToolOutcome` (snake_case). `Message`,
+  `MessageBody` and `MediaBlob` have serde in the same conventions for
+  `NormalizedExchange` (below) and the encoding, not as wire values.
+- `observed/conversation.rs`: `OriginKind` (`"root"`, `"fork"`,
+  `"compaction"`, `ConversationOrigin::kind`), for the conversation reads;
+  `ConversationOrigin` itself has no serde.
 - `interfaces/l1_canonical.rs`: `NormalizedExchange` and
   `NormalizeWarning`, in process only (normalizer to capture task); their
   serde pins the normalizers' goldens (`normalized_exchange_*.json` here,
-  and `crates/canonical/tests/golden/`).
+  and `crates/canonical/tests/golden/`). `interfaces/l1_canonical/exchanges.rs`:
+  `StoredExchange`, `{"exchange": <Exchange>, "warnings": [..]}`, a
+  `NormalizedExchange` without its bodies, as the exchange store keeps it.
 - `derived/provenance/span.rs`: `SpanLocation`, `RelaySource`.
 - `derived/provenance/matching.rs`: `ContentMatch` (checked), `Carrier`,
   `MatchKind`, `Codec` (with `json_string` and `yaml_string`),
@@ -116,7 +124,11 @@ cache (`cache_write` is `null` when the protocol does not report writes),
 [{"hash", "bytes"}]}`. A body is its canonical encoding's shape (adjacently
 tagged parts, canonical JSON inside as strings; see
 [spec_primitives](../spec_primitives.md)); a media blob's bytes are
-lower-case hex. Decoding checks what `NormalizedExchange::check` checks:
+lower-case hex. A tool call's `signature`, added after P0.7, is omitted
+when absent rather than written as `null`, so a call without one keeps its
+bytes and hash; the canonical decoder refuses an explicit `null`
+(`Reasoning::Visible`'s `signature`, from P0.7, is written as `null`).
+Decoding checks what `NormalizedExchange::check` checks:
 each message's hash is its body's, each blob's hash its bytes', messages
 are distinct and exactly the ones the exchange names, and media is in
 ascending hash order, once each, exactly the blobs the `Media` parts name
@@ -141,7 +153,7 @@ names still encode as `open_ai…`.
 | `spec/types/interfaces/l1_canonical.rs` | `NormalizedExchange` decoded through `check` (`InvalidNormalizedExchange`) |
 | `spec/types/tests/wire/observed/{mod,exchange,identity,ingest,normalized}.rs` | Goldens and rejections for exchanges and client context, identity and the merge log, ingest events in envelopes, and normalized exchanges |
 | `spec/types/tests/wire/provenance.rs` | Goldens and rejections for span locations, relay sources and content matches |
-| `spec/types/tests/golden/observed/`, `golden/provenance/` | 42 and 7 goldens |
+| `spec/types/tests/golden/observed/`, `golden/provenance/` | 42 and 8 goldens |
 
 ## Invariants
 

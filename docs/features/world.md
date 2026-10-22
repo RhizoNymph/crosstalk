@@ -58,10 +58,10 @@ take it as a dev-dependency only. It depends on `crosstalk-spec`,
   stores' read traits, and `crosstalk-surface` over them, answer queries.
 - The UI fixture's `QueryApi`, `OperatorActions`, `LiveFeed` and export
   implementations, its conformance binder and its stand-in digests.
-- The conformance suite's named scenarios (`crosstalk-conformance` is not
-  on `integration/impl`). The world does not compose them yet; once the
-  suite lands, its seeder and this world should share the scenario
-  vocabulary.
+- The conformance suite's named scenarios. `crosstalk-conformance`
+  binds them to a seeded world from outside (`crosstalk_conformance::world::bind`,
+  from the world's handles and the stores' reads); the world itself knows
+  nothing of them.
 - Ingress and canonicalization: the wire traffic is generated as
   captured exchanges, never as HTTP bytes through a normalizer.
 - Threading and scanning the wire traffic: a host runs L3 and L4 over it
@@ -241,6 +241,18 @@ sessions::Sessions    per agent, oldest first, full-history requests:
   after capture: `Wire::dropped` keeps their bytes for the host's L3 and
   L4 (which read them at capture time); the seed never writes them, so
   the surface shows them dropped.
+- **The host's L1, L3 and L4.** `crosstalk_api::world` (feature `world`)
+  seeds with `World::seed_with_wire`, puts the wire bodies, then runs each
+  exchange in order through the code the gateway's stages run
+  (`conversations::record`): `ExchangeStore::put` (L1),
+  `Provenance::record_exchange`, `ConversationThreader::thread` under
+  `WireExchange::agent`, and `Provenance::process` of the delta, into
+  `WorldLayers` (`MemoryExchanges`, `MemoryConversations`,
+  `MemoryProvenanceStore`), which the surface's conversation reads read.
+  It does not attribute (the agent store is only read for clusters) and
+  publishes nothing: the world states L5's transmissions itself. L3 and L4
+  read bodies through `CaptureBlobs`, the surface's blob store plus
+  `Wire::dropped`.
 - **Not written by the seed.** `World::seed` writes the world's own
   bodies; the wire's own bodies come with `Wire::bodies` for the host to
   put.

@@ -6,7 +6,8 @@ implementation of the spec's L8 traits (`QueryApi`, `OperatorActions`,
 relies on (alias resolution, counting by confirmation time, bucket-aligned
 windows and the watermark, shares, filters and paging, permissions, the
 channel rules, action outcomes and audit) as `async` tests generic over the
-implementation. It runs against three implementations:
+implementation. It runs against three implementations, the real surface
+over two store sets:
 
 - **The UI's fixture backend** (`ui/src/backend/fixture`), in
   `cargo test -p crosstalk-ui`.
@@ -16,8 +17,14 @@ implementation. It runs against three implementations:
 - **The same surface over HTTP:** `crosstalk-api`'s server on a loopback
   port and `crosstalk-client`'s `HttpClient`, no gateway and no Postgres
   (`crates/client/tests/conformance.rs`).
+- **The real surface over Postgres**, in process and over HTTP: the same
+  world seeded into a fresh migrated database per world
+  (`crates/api/tests/conformance_pg.rs`,
+  `crates/client/tests/conformance_pg.rs`). Without `TEST_DATABASE_URL`
+  every test skips, passing (`Harness::unavailable`).
 
-The real surface passes all 65 tests, in process and over HTTP. A harness
+The real surface passes all 65 tests, in process and over HTTP, on the
+memory stores and on Postgres. A harness
 lists any known failures in `Harness::expected_failures`; the real
 surface's list (`SURFACE_FAILURES`) is empty, and the ten it once held are
 recorded with their root causes in "Findings".
@@ -114,6 +121,7 @@ pub trait Harness {
     async fn extent(&self, backend: &Self::Backend) -> TimeWindow; // aligned, covers every fact
     fn row_hasher(&self) -> Self::Hasher;      // verify_export's digest
     fn expected_failures(&self) -> &[ExpectedFailure] { &[] }
+    fn unavailable(&self) -> Option<String> { None } // a missing service: every test skips
 }
 ```
 
@@ -151,6 +159,11 @@ each listed test to fail (its panic is caught and the reason printed) and
 fails a listed test that passes (`RunError::UnexpectedPass`), so a fix
 shows up as a request to remove the entry, and nothing is silently
 skipped.
+
+**Unavailable.** `Harness::unavailable` names why a harness cannot run in
+this environment at all (the Postgres harnesses without
+`TEST_DATABASE_URL`). `run` then skips every test, passing, with the
+reason on stderr, before anything is provisioned.
 
 ### The scenario vocabulary (`conformance/src/scenario/`)
 
@@ -341,7 +354,7 @@ week from a seed. It provisions a named scenario by binding.
 - bucket width: five minutes;
 - `now`: the fixture clock;
 - extent: `[START, NOW + BUCKET)`;
-- hasher: the fixture's `RowDigest` stand-in.
+- hasher: `crosstalk_surface::export::Blake3RowHasher`, the spec's BLAKE3.
 
 ### Harnesses over the real surface
 
@@ -363,7 +376,8 @@ by any test or tool that wants the real surface over the synthetic world:
   see [conversation_reads.md](conversation_reads.md), "The world
   backend"). Both conformance harnesses set `Unrecorded`: the suite reads
   no conversation. It returns the `SeededWorld`: the `WorldInProcess`
-  (`InProcess<MemoryBlobStore, WorldLayers>`), the world's `Scenario`
+  (`InProcess<WorldMemoryStores>`, the memory stores over
+  `MemoryBlobStore` and `WorldLayers`), the world's `Scenario`
   handles, what recording did (`Recorded`), the access config.
 - `serve_world(SeededWorld, tokens)` serves its surface with `HttpApi` on
   `127.0.0.1:0`, each static bearer token authenticating its operator;
@@ -390,6 +404,15 @@ same world with an extra operator per partial permission set (62 of
 them, ids `OPERATOR_BASE | bits`), serves it with one token per
 operator, and routes each call to the `HttpClient` holding the caller's
 operator's token.
+
+**The Postgres harnesses** (`crates/api/tests/conformance_pg.rs`'s
+`PgHarness`, `crates/client/tests/conformance_pg.rs`'s `HttpPgHarness`):
+the same two shapes over `PgStores` (`crosstalk-surface` hosted by
+`InProcess::host`). `crates/api/tests/support/pg_world.rs` (included by
+path in both) seeds the world into a fresh migrated database per world
+(`Databases`, from `TEST_DATABASE_URL`) and binds it with the same world
+binder. Over HTTP the server authenticates against the directory stored in
+Postgres.
 
 ### Findings
 
@@ -433,8 +456,8 @@ The fixture passes all 65; it lists no expected failures.
 | File | Role | Key exports |
 | --- | --- | --- |
 | `crates/conformance/src/lib.rs` | Crate doc, re-exports | `Harness`, `Scenario`, `Bindings`, `run`, `suite!` |
-| `crates/conformance/src/harness/mod.rs` | The harness contract | `Harness`, `Provision`, `Knobs`, `Provisioned`, `ProvisionError`, `Operators` |
-| `crates/conformance/src/harness/callers.rs` | Callers from an authenticated directory | `Callers`, `CallerError` |
+| `crates/conformance/src/harness/mod.rs` | The harness contract | `Harness`, `Provision`, `Knobs`, `Provisioned`, `ProvisionError`, `ExpectedFailure` |
+| `crates/conformance/src/harness/callers.rs` | Callers from an authenticated directory | `caller`, `CallerError` |
 | `crates/conformance/src/scenario/{mod,roles,facts,bindings}.rs` | The vocabulary and validation | `Scenario`, `ScenarioBuilder`, `ScenarioError`, `Role<K>`, the `*Fact` types, `Evidence`, `Via`, `Timing`, `Bindings`, `Unbound` |
 | `crates/conformance/src/scenario/named/*.rs` | The named scenarios | one module per scenario, `all`, `everything` |
 | `crates/conformance/src/support/world.rs` | A provisioned world for a test | `World` |
@@ -449,9 +472,17 @@ The fixture passes all 65; it lists no expected failures.
 | `crates/api/src/world/conversations.rs` | The world's conversations through L1, L3 and L4 | `WorldLayers`, `CaptureBlobs`, `record`, `Recorded`, `RecordError` |
 | `crates/api/tests/conformance.rs` | The in-process harness | `InProcessHarness` |
 | `crates/client/tests/conformance.rs` | The HTTP harness | `HttpHarness` |
+| `crates/api/tests/conformance_pg.rs` | The in-process harness over Postgres | `PgHarness` |
+| `crates/client/tests/conformance_pg.rs` | The HTTP harness over Postgres | `HttpPgHarness` |
+| `crates/api/tests/support/pg_world.rs` | Seeding and binding the world on a fresh Postgres database per world | `Databases`, `PgWorld`, `Stores`, `provision`, `extent` |
 | `crates/gateway/tests/architecture.rs` | Registers `conformance` as TestSupport | `TestSupport::Conformance` |
 
 ## The redesign: seeding through the write traits
+
+Status: a plan, not built. The suite still binds through
+`Harness::provision`, and the fixture's binder
+(`ui/src/backend/fixture/conformance/`) is still in use. Steps 1 and 2 of
+"Next steps" are done.
 
 ### What `staging` has
 
@@ -505,8 +536,8 @@ The fixture passes all 65; it lists no expected failures.
 1. **Done: harnesses over the real surface**, in process and over HTTP,
    binding the named scenarios to the seeded world through the store read
    traits (above).
-2. **A Postgres harness.** The same binder over the Postgres stores once
-   the world can be seeded into them.
+2. **Done: a Postgres harness.** The same binder over the Postgres stores,
+   in process and over HTTP (`conformance_pg`, above).
 3. **A generic seeder.** The harness below, so the suite seeds its own
    (and new, composed) scenarios and any store set runs it.
 
@@ -598,7 +629,7 @@ through a `Timeline`:
   layer.
 - `World` (its fields come from the seeder instead of the harness),
   `collect`, `reads`, `windows`.
-- `suite!`, `run`, `Callers`, `Knobs`.
+- `suite!`, `run`, `caller`, `Knobs`.
 
 **Changes:**
 - **The harness.** `Harness::provision` is replaced by the
@@ -646,8 +677,9 @@ decided.** `crosstalk-world` is data plus a clock:
 - Its clock: a fixed one for tests, a live one for serving.
 - Its fixture-specific tests: world shape, determinism, generation speed.
 
-The UI's two gap traits (`Present`, `ExportFormats`) are answered by the
-surface service or its config once the spec adds them.
+The UI's two gap traits (`Present`, `ExportFormats`) are gone: the spec's
+`QueryApi::present` answers both (`Present::bucket_width`,
+`Present::export_formats`).
 
 ### End-to-end layer (later)
 
@@ -687,7 +719,8 @@ For the gateway's developers.
    - `expected_failures` lists what you know you fail, with reasons;
      start from `SURFACE_FAILURES` if you serve `crosstalk-surface`.
 3. In a test module, call
-   `crosstalk_conformance::suite!(path::to::YourHarness)`.
+   `crosstalk_conformance::suite!(crate::YourHarness)` (an expression
+   building your harness).
 4. Run `cargo test`. The `scenarios::*` tests fail first if a fact is not
    observable as the spec says. Fix those before reading other failures.
 

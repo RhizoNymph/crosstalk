@@ -323,8 +323,9 @@ permission, before the watermark is read;
 `UnalignedWindow` for edges and accesses; a projection through
 `ProjectionStoreError` as for `projection`); and
 `Conflict(ExportTooLarge { rows, limit })` from `ExportLimits::check`
-(config `export.max_rows`, default 10,000,000), counted before any row is
-sent, so an oversized export is refused whole rather than cut short. After
+(`ExportLimits::max_rows`, default `DEFAULT_MAX_ROWS` = 10,000,000; the
+gateway has no config key for it and uses the default), counted before
+any row is sent, so an oversized export is refused whole rather than cut short. After
 the header, failures are not `QueryError`s; the trailer records them.
 
 ### Audit

@@ -22,7 +22,9 @@ whenever a `store` is configured (wired by W8: [postgres_mode](postgres_mode.md)
 - Durability and restart: `publish` returning `Ok` means the envelope is
   in `transport.events`; groups and deliveries persist; `recover_held`
   returns deliveries a stopped process held, ready at once with no
-  backoff, attempt counted.
+  backoff, attempt counted; `release_held` gives back every hold the
+  stopping holder still has at a planned handover, ready at once with the
+  attempt given back (INV-1242, [planned_handover.md](planned_handover.md)).
 - Idempotent publish on `Envelope::id`.
 - `group_stats` (pending count, oldest pending `at`, dead letters, oldest
   dead letter `at` per group) for the frontier and `/healthz`.
@@ -124,6 +126,14 @@ recover_held()                                         at start, before consumer
   holding the delivery"); every other held row → ready at once, no backoff,
   available_at NULL (attempt as the dead holder was given it: the take
   counted it, as MpscBus counts a dropped holder; recovery adds none)
+
+release_held()                                         the holder itself, at a planned handover,
+                                                       after abandon (every take joined), before
+                                                       its pool closes, under the pipeline lock
+  UPDATE deliveries SET state ready, available_at NULL, attempt = greatest(attempt - 1, 0),
+  last_error = HANDOVER_REASON ("released at a planned handover") WHERE state held
+  ─▶ wake every waiter; returns how many (none is dead-lettered: the next take counts the
+     attempt again)
 
 PgDeadLetters
   put     → the envelope into events (routed = false if new) + upsert the letter
@@ -266,7 +276,7 @@ checkpoint interval; W8 checks that at start.
 | `crates/transport/migrations/0001_bus.sql` | the schema | - |
 | `crates/transport/migrations/0002_held_at.sql` | when each hold was taken (the stale-hold sweep) | - |
 | `crates/transport/migrations/0003_pipeline_epoch.sql` | the pipeline epoch (the gateway's fence; not the bus's) | - |
-| `src/pg/mod.rs` | the bus handle, tasks, recovery, abandon, the publish-only bus, trait impls | `PgBus`, `PgBus::{publisher, abandon}`, `Abandoned`, `Recovered`, `MIGRATIONS`, `migrate` |
+| `src/pg/mod.rs` | the bus handle, tasks, recovery, abandon, a planned handover's release, the publish-only bus, trait impls | `PgBus`, `PgBus::{publisher, recover_held, release_held, abandon, shutdown, group_stats, prune}`, `HANDOVER_REASON`, `Abandoned`, `Recovered`, `MIGRATIONS`, `migrate` |
 | `src/pg/progress.rs` | each take in flight: its phase, its abort handle; abort and join them all | `Takes::{attach, abort_all, none_by}` (crate), `TakeReport`, `ReaperReport` |
 | `src/pg/config.rs` | config and its checked decode | `PgBusConfig`, `InvalidPgBusConfig` |
 | `src/pg/publish.rs` | log appends, probe | `PUBLISH_LOCK`, `CHANNEL` (crate) |
@@ -280,6 +290,8 @@ checkpoint interval; W8 checks that at start.
 | `src/conformance/` | the bus conformance suite over `MpscBus` and `PgBus` | (tests) |
 | `src/integration/mod.rs` | Postgres-only tests and the spool over `PgBus` | (tests) |
 | `src/integration/abandon.rs` | an abandoned bus: takes joined, holds left for recovery | (tests) |
+| `src/integration/handover.rs` | a planned handover's release: ready at once on the same attempt | (tests) |
+| `src/integration/release.rs` | a stalled consumer's release: same attempt, never dead-lettered; an old hold's deadline never reaps a later one | (tests) |
 
 ## Tests
 
@@ -301,7 +313,10 @@ checkpoint interval; W8 checks that at start.
   `abandon::pg_an_abandoned_bus_joins_its_takes_and_leaves_its_holds_for_recovery`
   (a hold and a take in flight at the abandon: every take joined, the
   hold still held and nothing changed after it; the next bus readies it
-  at once).
+  at once), `handover::{pg_released_holds_are_ready_at_once_on_the_same_attempt,
+  pg_a_release_with_nothing_held_releases_nothing}`,
+  `release::{pg_a_released_delivery_keeps_its_attempt_and_is_never_dead_lettered,
+  pg_an_old_holds_deadline_never_reaps_the_hold_after_a_release}`.
 - No database: `pg::tests::a_publish_only_bus_refuses_subscriptions`,
   `pg::progress::tests::aborted_takes_are_gone_once_none_by_returns`.
 
@@ -313,9 +328,10 @@ checkpoint interval; W8 checks that at start.
 | INV-1204 `transport.publish.idempotent-on-id` | `integration::pg_publish_is_idempotent_on_id` |
 | INV-1205 `transport.restart.held-redelivered` | `integration::pg_held_delivery_redelivered_after_restart` |
 | INV-1234 `transport.restart.recovered-ready-first` | `integration::pg_recovered_hold_is_ready_and_taken_first` |
-| INV-X `transport.retention.prune-keeps-unfinished` | `integration::pg_prune_never_drops_an_unacked_event` |
+| INV-1222 `transport.retention.prune-keeps-unfinished` | `integration::pg_prune_never_drops_an_unacked_event` |
 | INV-1238 `transport.pipeline-lock.no-owner-write-after-abandon` (with the gateway) | `pg::progress::tests::aborted_takes_are_gone_once_none_by_returns`, `integration::abandon::pg_an_abandoned_bus_joins_its_takes_and_leaves_its_holds_for_recovery` |
-| INV-1240 `transport.pipeline.statements-bounded` (with the gateway) | `pg::row::timeout_tests::a_statement_or_lock_timeout_is_disconnected`, `crosstalk_gateway::integration::statement_timeouts::pg_the_reaper_survives_a_stalled_sweep` |
+| INV-1240 `transport.pipeline.statements-bounded` (with the gateway) | `pg::row::timeout_tests::a_statement_or_lock_timeout_is_disconnected`, `integration::release::*` (two), `crosstalk_gateway::integration::statement_timeouts::pg_the_reaper_survives_a_stalled_sweep` |
+| INV-1242 `transport.pipeline-lock.planned-handover-clean` (with the gateway) | `integration::handover::*` (two) |
 
 All four are Postgres integration tests, written but not run by the
 workstream (its sandbox could not reach the test server), so their

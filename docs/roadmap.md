@@ -14,6 +14,33 @@ This document is the plan: phases, work items, deliverables, todo lists and
 the dependencies between items. Items with no dependency between them run in
 parallel, each on its own branch and worktree.
 
+## Status (2026-10-21)
+
+Work lands on `integration/impl` and reaches `staging` through release PRs
+(the latest, #143, is staging `057023e3`). The todo lists further down are
+the original plans and are not ticked item by item; this table is the
+current state.
+
+| Item | State |
+|---|---|
+| P0.1–P0.9 spec follow-ups | merged (channel semantics ported onto the spec, INV-850..869; follow mode shipped slim, #106) |
+| P1.1–P1.5 workspace, checks, sim, testkit, store harness | merged |
+| P2.1–P2.6 bus, blobs, memory stores, L0 proxy, L1 normalizer, L8 surface service | merged |
+| P3 capture slice (**M1**), P3.1 `Pipeline::ingest` | merged |
+| P4.1 L3 reconstruction | merged, including `PgAgents`, `PgConversations` and order-tolerant threading (#133) |
+| P4.2 L4 provenance | merged, including its Postgres stores |
+| P5 L5 flow (**M2**) | merged. Shown on synthetic wiki traffic through the real gateway: the e2e smoke's two-agent relay and the demo swarm (`docs/features/e2e_smoke.md`, `docs/features/demo.md`) |
+| P6.1 L7 topology | merged, with its Postgres edge store |
+| P6.2 L6 search and alerts | stores and the classification step merged; the search and alert consumers are not wired into `serve` |
+| P6.3 L6 topics and projections | sidecar adapters, catalog and projection store merged; the sidecar is not in compose or the gateway config |
+| P7.1 HTTP API server, P7.2 HTTP client | merged; the real surface passes all 65 conformance tests in process and over HTTP |
+| P7.3 surface on Postgres (**M3**) | merged: Postgres mode (#126, #129: restart recovery, capture spool, lock loss resumed in process), the pipeline fence, bounded pipeline statements and the standby capture gate (#135, INV-1239–1241), the planned handover at SIGTERM (#139, #141, INV-1242). The compose UI reads the gateway's API (#85) |
+| P8 harness and upstream breadth | Claude Code OAuth merged; Codex, OpenAI-compatible chat, pi and the forward proxy not started |
+| P9 cluster and operations | dashboards, alerts and the compose deployment merged; groundwork for a standby gateway merged (fence, handover); shared blob storage for a standby is not merged, so compose runs one gateway; NATS and split roles not started |
+| Evaluation | moved to a2a-transmission-bench; crosstalk's `ct-eval` scoring retired (#122), `ct-bench-detect` kept as `crosstalk-bench-adapter`. Bench runs use a fresh database each (#117) and are scored with `a2a-bench-v1.1.1` at a pinned tag (#124, #127) |
+| Held-out releases | release 1 (seeds 1000001–1000006, staging `7d678e2`) and release 2 (seeds 1000007–1000014, staging `a74f808`, Postgres mode, `a2a-bench-v1.1.1`) scored by the bench; results in the README's Results section |
+| Next | the post; after it, the L4 follow-ups from the README's known limitations (older-version credit on template-heavy pages, the occasional dropped read), judged on fresh development runs and a new held-out release |
+
 ## Status (2026-10-04)
 
 Work lands on `integration/impl` (item PRs and branches merge there). A
@@ -68,7 +95,7 @@ main is reviewed after the hackathon.
 ## Workspace layout (target)
 
 ```text
-Cargo.toml                 virtual workspace; members spec + crates/*; excludes ui
+Cargo.toml                 virtual workspace; members spec + crates/* + ui (ui was excluded at first)
 spec/                      crosstalk-spec: types, invariants, wire goldens (exists)
 crates/
   sim/                     crosstalk-sim: virtual clock, seeded RNG, fault injection, DST driver
@@ -87,7 +114,12 @@ crates/
   api/                     crosstalk-api: HTTP + SSE server for the L8 surface (wire contract)
   client/                  crosstalk-client: implements the L8 traits over HTTP (for the UI)
   gateway/                 crosstalk-gateway: the `crosstalk` binary; config, wiring, process roles
-ui/                        crosstalk-ui (separate package and lock; links surface or client)
+  bench-adapter/           crosstalk-bench-adapter: ct-bench-detect, the a2a-transmission-bench detector (added later)
+  e2e/                     crosstalk-e2e: end-to-end smoke, restart, spool and lock-loss tests (added later)
+  conformance/             crosstalk-conformance: the L8 conformance suite (added later)
+  world/                   crosstalk-world: the synthetic week the UI and tests share (added later)
+  demo/                    crosstalk-demo: fake upstream, wiki and swarm for the demo and bench (added later)
+ui/                        crosstalk-ui (a workspace member since the UI merge; links surface or client)
 ```
 
 The dependency rule, enforced by a test that reads `cargo metadata`:
@@ -469,7 +501,7 @@ streams from testkit without waiting for P3.
 
 ### P7.3 Surface on Postgres
 Design: [docs/features/postgres_stores.md](features/postgres_stores.md) (survey, durable bus, publish spool, checkpoints, restart semantics, workstreams; reviewed in PR #103, decisions recorded; implementation starts with the spec workstream).
-- [ ] Wire the surface to the Postgres stores in the gateway.
+- [x] Wire the surface to the Postgres stores in the gateway: Postgres mode (`docs/features/postgres_mode.md`), with the pipeline fence (`docs/features/pipeline_fence.md`) and the planned handover (`docs/features/planned_handover.md`).
 - [ ] An end-to-end test: the wiki demo traffic, then the API, showing the graph, evidence and alert.
 
 ## P8 Harness and upstream breadth (after M2)
@@ -508,5 +540,5 @@ Design: [docs/features/postgres_stores.md](features/postgres_stores.md) (survey,
   bucket tables. The deployment runs plain Postgres 18 (pgvector, pg_trgm),
   no TimescaleDB.
 - **D4: simulation.** Decided: tokio paused time plus our own fault layer.
-- **D5: HTTP server.** axum over the UI's hyper version (proposed), or hyper
-  directly for the API too. The proxy uses hyper directly either way.
+- **D5: HTTP server.** Decided: axum (0.8, over the workspace's hyper
+  1.11.1) for the API (`crosstalk-api`). The proxy uses hyper directly.
