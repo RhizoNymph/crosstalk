@@ -127,8 +127,9 @@ as `written_formats()`, so no client is offered Parquet.
 - **Postgres mode** (a `store` section, [postgres_mode.md](postgres_mode.md)).
   The listener binds at start and serves `LateRouter::router()`
   (`crates/gateway/src/gateway/late.rs`). Until a router is set, every
-  request is answered `503` with the `QueryError::Store` JSON ("the surface
-  is starting: ...") and `no-store`. The pipeline task sets the router
+  request is answered `503` with the `QueryError::Store` JSON and
+  `no-store`; the reason names the cause (`late::Unserved`: starting, the
+  pipeline lock lost, or handed over on a planned shutdown). The pipeline task sets the router
   when an incarnation starts (`postgres/pipeline.rs`). The `api` role sets
   it once its hosted surface is built over the stores (`postgres/api.rs`).
   Either way the directory is the one stored in Postgres. With none stored,

@@ -58,7 +58,7 @@ pub use self::api::{ApiStart, spawn_api};
 use self::handover::{HandoverReport, OutgoingIncarnation, TAIL};
 pub use self::pipeline::{application_name, spawn_pipeline};
 use super::StartError;
-use super::late::{LateRouter, LateValue};
+use super::late::{LateRouter, LateValue, Unserved};
 use crate::config::GatewayConfig;
 use crate::live::pg::PgSet;
 use crate::live::recovery::{MigrationState, PipelinePhase, PipelineStatus, StatusReporter};
@@ -136,11 +136,11 @@ impl Late {
         self.log_tasks.set(live.tasks().clone());
     }
 
-    /// Forget the abandoned incarnation: the API answers `503` (starting),
+    /// Forget the abandoned incarnation: the API answers `503` (lock lost),
     /// `/healthz` has no live section and `/readyz` no stage tasks until
     /// the next one runs.
     fn clear(&self) {
-        self.router.clear();
+        self.router.clear(Unserved::LockLost);
         self.reporter.clear();
         self.stages.clear();
         self.log_tasks.clear();
@@ -267,7 +267,7 @@ impl PgRunning {
         let Some(Some((live, lock))) = pipeline.stop_by(deadline).await else {
             return;
         };
-        self.late.router.clear();
+        self.late.router.clear(Unserved::HandedOver);
         let now = Instant::now();
         let quiesce_by = deadline.checked_sub(TAIL).unwrap_or(now).max(now);
         self.handed_over = Some(

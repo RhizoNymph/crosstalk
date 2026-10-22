@@ -12,7 +12,10 @@
 //! parent's messages through the shared prefix, which carry the parent's
 //! exchanges) precede turn 0 and belong to no turn of the fork. A turn's
 //! index and exchange never change once threaded, and a redelivered
-//! exchange adds no turn (`reconstruct.conversation.turn-index-stable`).
+//! exchange adds no turn (`reconstruct.conversation.turn-index-stable`),
+//! except that an earlier exchange arriving late within the store's
+//! reorder window rewinds and rethreads the turns after it, which can
+//! renumber them (`reconstruct.thread.order-independent`).
 //! Turns are addressed by index ([`TurnWindow`]), not by cursor: the index
 //! range is already stable under appends, and a turn link is citeable.
 //!

@@ -1,6 +1,7 @@
 //! The conversation pages through the router: over the fixture (its seeded
-//! conversations), over the world backend (which records none), and over
-//! HTTP (the fixture behind the gateway API's binding).
+//! conversations), over the world backend (the conversations it recorded
+//! over its last day), and over HTTP (the fixture behind the gateway API's
+//! binding).
 
 use crosstalk_spec::ids::{AgentId, ConversationId};
 use crosstalk_spec::interfaces::l8_surface::Permission;

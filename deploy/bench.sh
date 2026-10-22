@@ -22,13 +22,14 @@
 #      bench_detect_inputs      ct-bench-detect fetch (/query answers) and from-export
 #   8. score                    a2a-bench export + score (bench_ref), headline,
 #                               score's exit code
-# Nothing after step 4 may restart or recreate crosstalk: its detection
-# state is in memory. Every `compose run` here passes --no-deps for that.
+# Nothing after step 4 may restart or recreate crosstalk: a run measures one
+# uninterrupted gateway, and a restart would refuse swarm requests while it
+# recovers. Every `compose run` here passes --no-deps for that.
 
 # Inside the compose network.
 bench_api_url="http://crosstalk:8081"
-# Where the `data` volume is mounted (read-only) in the bench container;
-# the gateway's data directory (blobs.root's parent).
+# The gateway's data directory inside its container (blobs.root's parent);
+# snapshot_inputs copies the exchange log and blobs out of it.
 bench_data_dir="/var/lib/crosstalk"
 bench_gates="/usr/local/share/a2a-bench/gates/crosstalk-gateway-export.toml"
 # Seeds at or above this are reserved for holdout runs (the n-th holdout run

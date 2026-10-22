@@ -267,7 +267,7 @@ Starting{lock}: incarnation n = a pool of its own (application_name crosstalk-pi
 Running(Incarnation): until the stop (handed back for the planned handover) or the loss
 Abandoning{incarnation, loss}:
    status at once: pipeline_lock lost, pipeline abandoning, lock_losses + 1, last_loss
-   Late cleared: the API answers 503 "starting", /healthz has no live section
+   Late cleared: the API answers 503 (Unserved::LockLost), /healthz has no live section
    the pool fenced: Pool::close called, not awaited (every acquire fails from now on; a
      connection an aborted task returns is closed, never pinged); the close itself runs
      bounded (CLOSE_BOUND, 1 s) in a task of its own
@@ -307,7 +307,9 @@ holds the live process's reporter, stage flags and exchange-log tasks for
 the ops listener, and `LateRouter` the API router; each incarnation sets
 them, and a loss clears them. While none is set the `live` and
 `exchange_log` task probes read running (nothing to stop) and the API
-answers `503` with "the surface is starting".
+answers `503` with the `Unserved` cause as the `Store` reason: `Starting`
+before the first incarnation, `LockLost` after a loss, `HandedOver` from
+the start of a planned handover.
 
 **The bound must stay below the server's reap (INV-1236).** The server
 releases a partitioned session's advisory lock when it reaps the session,
@@ -1163,7 +1165,7 @@ on `crates/api/tests/support/pg_world.rs`:
 | `crates/e2e/tests/lock_loss/handover.rs` | two gateways: the owner shut down gracefully with traffic flowing, the standby taking over | tests |
 | `crates/gateway/src/gateway/postgres/pipeline.rs` | the pipeline task: waiting (and fencing), starting, running and abandoning incarnations, each with its own pool and bus under the lock's epoch; the gate's watch spawned beside it | `spawn_pipeline`, `application_name`, `runs_exchange_log` |
 | `crates/gateway/src/gateway/postgres/api.rs` | the `api` role's surface | `spawn_api`, `ApiStart` |
-| `crates/gateway/src/gateway/late.rs` | what an incarnation sets and a loss clears: the API router (503 before), the ops handles | `LateRouter`, `LateValue` |
+| `crates/gateway/src/gateway/late.rs` | what an incarnation sets and a loss clears: the API router (503 before), the ops handles | `LateRouter`, `LateValue`, `Unserved` |
 | `crates/transport/src/pg/{mod,progress,subscription}.rs` | the bus an incarnation owns: abandon with every take joined; a planned handover's release of every hold; the publish-only bus capture appends through | `PgBus::abandon`, `Abandoned`, `PgBus::release_held`, `HANDOVER_REASON`, `PgBus::publisher` |
 | `crates/gateway/src/ops/{mod,metrics}.rs` | readiness, health (the bus read bounded), metrics | `PgOps`, `BusSection`, `BusUnavailable`, `BusReport`, `StatementTimeoutsReport`, `HEALTH_BUS_BOUND`, `SpoolReport` |
 | `crates/gateway/src/config/sections.rs` | `store.bus`, `store.pipeline_timeouts`, `spool` | `SpoolSection`, `StoreSection::MIN_CONNECTIONS`, `StoreSection::pipeline_timeouts` |
