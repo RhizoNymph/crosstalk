@@ -209,6 +209,13 @@ Writes:
   (conversation, turn, exchange, first ordinal, entry count, agent, start,
   outcome kind, history length after it); a new conversation records its
   traffic source and start.
+- L3 threading is order-tolerant (`reconstruct.thread.order-independent`,
+  INV-1235; [reconstruct.md](reconstruct.md)): an exchange that arrives
+  after turns of its cluster with greater turn keys (when each ended, then
+  its id) undoes those turns and threads them again after it, so the
+  stored conversations and turns are those of key order. Within the
+  reorder window a late arrival can therefore renumber the turns it is
+  threaded before; outside it the exchange is threaded where it arrived.
 - L4 already keeps every classified span (originated, relayed with its
   `RelaySource`, common) beside its matches and scan status; the reads
   serve them.
@@ -316,11 +323,12 @@ delegated-from, traffic-counts.
 | `crates/memory/src/flow/verdicts/mod.rs` | `holding` on `MemoryVerdicts` |
 | `crates/surface/src/stores.rs` | `SurfaceStores::{Exchanges, Conversations, Provenance}` |
 | `crates/surface/src/query/conversations/{mod,turns,marks,text}.rs` | the eight methods |
-| `crates/api/src/in_process/reads.rs` | `ConversationStores` (`MemoryStores<B, R = Unrecorded>`), `InProcess::start_with_reads` |
+| `crates/api/src/in_process/reads.rs`, `mod.rs` | `ConversationStores` and `Unrecorded` (`reads.rs`; `MemoryStores<B, R = Unrecorded>`), `InProcess::start_with_reads` (`mod.rs`) |
 | `crates/api/src/world/conversations.rs` | The world backend's conversation stores (`WorldLayers`: `MemoryExchanges`, `MemoryConversations`, `MemoryProvenanceStore`), filled by `record`: the world's wire traffic through L1's `ExchangeStore::put`, L3's `ConversationThreader` and L4's `Provenance` engine, as the gateway's stages run them (see "The world backend") |
 | `crates/api/src/http/dispatch.rs`, `crates/client/src/query.rs`, `crates/conformance/src/routed.rs` | routes, client methods, forwarding |
 | `crates/gateway/src/live/{stage,mod}.rs`, `layers/l3.rs` | `LayerStores` (exchanges, conversations, provenance) shared by the stages and the surface |
-| `ui/src/backend/{dispatch,fixture/surface}.rs`, `ui/src/error.rs` | forwarding; the fixture answers empty after the permission check (phase B seeds it) |
+| `ui/src/backend/{dispatch,fixture/surface}.rs`, `ui/src/error.rs` | forwarding |
+| `ui/src/backend/fixture/queries/conversations/{mod,turns,marks,text}.rs`, `ui/src/backend/fixture/world/conversations/` | the fixture's conversation reads over the conversations its world builds ([conversation_view.md](conversation_view.md)) |
 
 Tests: `crosstalk_reconstruct::tests::{conversation_reads,pg_conversation_reads}`,
 `crosstalk_provenance::tests::reads`, `crosstalk_provenance::integration::reads`,

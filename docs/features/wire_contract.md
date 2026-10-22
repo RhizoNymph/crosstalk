@@ -349,9 +349,10 @@ the spec types themselves:
   `serde_json::from_slice` into the method's result type (`Page<Alert,
   AlertList>`, `Option<Alert>`, …), and an error body into `QueryError` or
   `ActionError`.
-- It imports the spec's types for everything it reads and sends. What it
-  still declares itself (`ui/src/contract/`, its alert-state helper and
-  its workarounds) has a spec answer listed below, so those go too.
+- It imports the spec's types for everything it reads and sends. Its own
+  stand-ins (`ui/src/contract/`, its alert-state helper) are gone; the
+  spec answers that replaced them, and those for its workarounds, are
+  listed below.
 - It sends actions as `ActionRequest` (never `OperatorAction`, which holds
   a stamped merge author), and reads the audit log's callers as
   `CallerSnapshot` values, which never become a `Caller`.
@@ -362,6 +363,10 @@ the spec types themselves:
   change breaks the UI's build or tests in the same review.
 
 ### What replaces the UI's stand-ins
+
+Status: done for the stand-in module and helper. `ui/src/contract/` and
+`ui/src/backend/alert_state.rs` no longer exist; the UI reads the spec's
+answers below. The tables record what replaced what.
 
 For deleting what is left of the UI's own contract on `feat/ui`: the
 module `ui/src/contract/` (`present.rs`, `formats.rs`), the helper
@@ -462,7 +467,7 @@ is in its golden.
 | `spec/types/tests/wire/mod.rs` | The fixtures' ids and times, and the golden layout check | `id`, `ts`, `ULID_A`, `ULID_B`, `ULID_C` |
 | `spec/types/tests/wire/{ids,time,support,paging,alerts,errors,requests}.rs` | The reference area: goldens, rejections, reference values, `decode_request` | — |
 | `spec/types/tests/wire/{observed/,provenance.rs,flow/,topology/,agents.rs,bus.rs,analysis/,surface_actions/,surface_reads/}` | The areas' tests (see each [area page](#areas)) | — |
-| `spec/types/tests/golden/<area>/` | 388 goldens: 387 `.json`, 1 `.jsonl` (11 of them the HTTP binding's, under `http/`); plus `encoding/vectors.json`, the pinned message encodings ([spec_primitives.md](spec_primitives.md)) | — |
+| `spec/types/tests/golden/<area>/` | 419 goldens: 418 `.json`, 1 `.jsonl` (11 of them the HTTP binding's, under `http/`); plus `encoding/vectors.json`, the pinned message encodings ([spec_primitives.md](spec_primitives.md)) | — |
 
 ## Invariants and constraints
 

@@ -1,5 +1,13 @@
 # Handoff: conversation reads for the operator UI
 
+Status (2026-10-21): built. The reads landed in the spec and are served
+by the surface, the HTTP server and the client; what landed and where it
+differs from this proposal is in
+[conversation_reads.md](../features/conversation_reads.md) ("Deviations").
+The UI pages are [conversation_view.md](../features/conversation_view.md)
+(`ui/src/pages/conversation/`). This page is the design record and is not
+kept up to date: some file paths below have since moved.
+
 For `crosstalk-impl`, owner of the spec (`spec/types/`, `spec/invariants/`)
 on `integration/impl` / `staging`. Non-blocking: schedule it after the
 channel-semantics port, the surface service and the follow-mode P0s. The UI

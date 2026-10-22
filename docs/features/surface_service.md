@@ -30,6 +30,8 @@ The contract is the spec's ([query_surface](query_surface.md),
 - Export: refusals, plan, limits, header, sealed rows, trailer, the BLAKE3
   row hasher, and `SpecExportSource`, an `ExportSource` over the spec's read
   traits.
+- The conversation reads (`query/conversations/`) over the L1, L3 and L4
+  read stores in `SurfaceStores`: [Conversation reads](#conversation-reads).
 - `NodeCache` (the spec's `NodeFacts`) and `NodeFeeder`, which keeps it
   current from L3's and L5's events and rebuilds it from the stores.
 - `crosstalk_api::InProcess`: the surface over the memory stores, with the
@@ -84,7 +86,9 @@ crosstalk-api (composer)
 `Projections`, `Alerts` (`AlertReads`, `AlertActions`, `AlertRuleStore`),
 `Edges` (`EdgeStore`), `Audit` (`AuditIntents`, which is `AuditLog` with
 write-ahead intents), `Operators`, `Sinks`, `DeadLetters`, `Bus`
-(`EventBus`), `Blobs`, `Evidence` and `Export` (`ExportSource`). A store whose
+(`EventBus`), `Blobs`, `Evidence`, `Export` (`ExportSource`), and the
+conversation reads' `Exchanges` (`ExchangeReads`), `Conversations`
+(`ConversationReads`) and `Provenance` (`ProvenanceReads`). A store whose
 trait writes through `&mut self` is `Clone`, a handle on the same store: the
 surface clones it per write and holds no lock of its own across a store call.
 
@@ -382,6 +386,7 @@ stops the relay and the fitter and ends every stream with `ShuttingDown`.
 | `crates/surface/src/audit.rs` | Appending entries | (crate) `audit_append` |
 | `crates/surface/src/query/mod.rs` | `impl QueryApi`, one line per method | — |
 | `crates/surface/src/query/{channels,channel_rows,channel_traffic,agents,alerts,topology,topics,content,evidence,projections,admin}.rs` | Per-area handlers (`admin`: verdicts, quality, audit, `operators`, `me`) | (crate) `*_query`; `content::read_topics_under` (a row's topic under a version, shared with the export) |
+| `crates/surface/src/query/conversations/{mod,turns,marks,text}.rs` | The eight conversation reads ([conversation_reads.md](conversation_reads.md)) | — |
 | `crates/surface/src/actions/mod.rs` | `impl OperatorActions` (intent, effect, completion), `Surface::request`, `Surface::recover_interrupted` | — |
 | `crates/surface/src/actions/apply.rs` | Each action's store call | — |
 | `crates/surface/src/actions/errors.rs` | `BusError` for actions | — |
@@ -405,9 +410,10 @@ stops the relay and the fitter and ends every stream with `ShuttingDown`.
 | `crates/api/src/in_process/mod.rs` | The in-process surface, its relay and settle barrier; generic over a `HostedStores` bundle (the memory stores, or `PgStores`), `host` building the surface over stores already open (operators loaded, node facts rebuilt, a new feed epoch, the cursor key drawn or derived from the secret) | `InProcess<S = MemoryStores>` (`start`, `start_with`, `start_with_reads`, `host`, `settle`, `fit_projections` (memory), `caller`, `shutdown`), `HostedStores`, `CursorSecret`, `InProcessOptions`, `InProcessError` |
 | `crates/api/src/pg/{mod,evidence}.rs` | The Postgres store bundle (W8) | `PgStores`, `PgOpen`, `PgSettings`, `PgIds`, `PgEvidence` ([postgres_mode.md](postgres_mode.md)) |
 | `crates/api/src/in_process/stores.rs` | The memory stores as `SurfaceStores`; evidence records read from the registry and spans as recorded | `MemoryStores`, `MemoryEvidence` (`new`, `insert_span`, `SpanIndex`), `Directory` |
+| `crates/api/src/in_process/reads.rs` | The conversation reads' stores (L1 exchanges, L3 conversations, L4 records) an in-process surface reads; see [conversation_reads.md](conversation_reads.md) | `ConversationStores`, `Unrecorded` |
 | `crates/api/src/in_process/fitting.rs` | The opt-in in-process projection fitter | `ProjectionFitting`, `FitRunError`, (crate) `Fitter` |
 | `crates/api/src/tests/in_process.rs` | Settle, evidence reads and fitter passes | — |
-| `crates/api/src/world.rs` | Feature `world`: the in-process surface seeded with `crosstalk-world` (`seed_world`, the memory stores as `WorldStores`: `Seeding`), and served over HTTP on a loopback port with static bearer tokens (`serve_world`), for tests and tools; see [conformance](conformance.md) | `seed_world`, `serve_world`, `WorldOptions`, `WorldTime`, `SeededWorld`, `HttpWorld`, `Seeding` |
+| `crates/api/src/world/` | Feature `world`: the in-process surface seeded with `crosstalk-world` (`seed_world`, the memory stores as `WorldStores`: `Seeding`), the world's wire traffic run through L1, L3 threading and L4 provenance into `WorldLayers`, the conversation reads' stores (`conversations.rs`: `record`; `WorldOptions::conversations`), and served over HTTP on a loopback port with static bearer tokens (`serve_world`), for tests and tools; see [conformance](conformance.md) | `seed_world`, `serve_world`, `WorldOptions`, `WorldTime`, `WorldConversations`, `SeededWorld`, `HttpWorld`, `Seeding`, `WorldLayers`, `record` |
 | `crates/api/tests/conformance.rs` | The L8 conformance suite against the in-process surface (`--features world`) | `InProcessHarness` |
 
 ## Invariants and constraints

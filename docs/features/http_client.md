@@ -54,9 +54,11 @@ definitions.
 - Reading Parquet. `QueryApi::export` refuses a Parquet request with
   `InvalidInput(UnsupportedFormat)` before sending it; `download_export`
   passes Parquet through as bytes.
-- The follow-mode batch (`QueryApi::now`, `bucket_width`, the default
-  remap threshold, `DataRevision` ETags), which lands later. Each new
-  method or route is one more table-driven call (see "Adding a route").
+- The rest of the follow-mode batch (`DataRevision` ETags), which has not
+  landed. The present, the bucket width and the default remap threshold
+  arrived as one read, `QueryApi::present` (`Present`), called like any
+  other route. Each new method or route is one more table-driven call
+  (see "Adding a route").
 
 ## Data and control flow
 
@@ -204,6 +206,7 @@ is listed there, and checks the call against the table.
 | `crates/client/src/export/download.rs` | The raw download | `ExportDownload` |
 | `crates/client/src/hasher.rs` | BLAKE3 under `ROW_DIGEST_CONTEXT` as a `RowHasher` | `Blake3RowHasher` |
 | `crates/client/src/tests/` | A stub HTTP server that speaks the binding (`stub.rs`); tests per area, built on the spec's wire goldens | — |
+| `crates/client/tests/conformance.rs`, `crates/client/tests/conformance_pg.rs` | The L8 conformance suite over HTTP, on the memory stores and on Postgres ([conformance.md](conformance.md)) | `HttpHarness`, `HttpPgHarness` |
 | `crates/client/tests/me.rs` | `me` over HTTP against `serve_world`: each operator's token reads that operator, one without View too (INV-1077) | — |
 
 Dependencies, all already pinned in the workspace:

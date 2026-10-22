@@ -162,12 +162,12 @@ and why. `/metrics`: `crosstalk_pipeline_epoch`.
 | File | Role | Key exports |
 | --- | --- | --- |
 | `crates/transport/migrations/0003_pipeline_epoch.sql` | the one-row epoch table, seeded 0 | - |
-| `crates/gateway/src/store/lock.rs` | the lock: its take bumps the epoch and fences before handing the lock out | `PIPELINE_LOCK`, `PIPELINE_FENCE`, `PipelineLock::{try_take, try_take_reporting, epoch, lost}`, `TakeError::{Lost, Epoch, FenceNotHeld}`, `TAKE_TIMEOUT` |
+| `crates/gateway/src/store/lock.rs` | the lock: its take bumps the epoch and fences before handing the lock out | `PIPELINE_LOCK`, `PIPELINE_FENCE`, `PipelineLock::{try_take, try_take_reporting, epoch, lost, release}`, `TakeError::{Store, Epoch, TimedOut, Lost, FenceNotHeld}`, `ReleaseError`, `TAKE_TIMEOUT` |
 | `crates/gateway/src/store/fence/mod.rs` | the epoch, a connection joining the fence, the bump; the safety argument in its docs | `Epoch`, `EpochError`, `FenceError::{Fenced, Fencing}`, `join`, `read_epoch`, `FENCE_POLL`, `FENCE_REPORT` |
 | `crates/gateway/src/store/fence/wait.rs` | the new holder's wait over a `FenceSession` (the lock's `PgConnection`; a scripted one in the tests) | `wait_for_fence`, `FenceSession`, `Fenced`, `FenceWaitError`, `Blocker` |
 | `crates/gateway/src/store/fence/tests.rs` | the wait on a paused clock, the epoch | tests |
 | `crates/gateway/src/store/mod.rs` | the session setup every pooled connection runs | `session_setup`, `lazy_pool_named` |
-| `crates/gateway/src/gateway/postgres/mod.rs` | the pools: the incarnation's joins the fence, capture's never does | `incarnation_pool`, `derived_pool` |
+| `crates/gateway/src/gateway/postgres/mod.rs` | the pools: the incarnation's joins the fence, capture's never does | `incarnation_pool`, `incarnation_pool_bounded`, `derived_pool` |
 | `crates/gateway/src/gateway/postgres/pipeline.rs` | the pipeline task: the take reported as `fencing`, a loss while fencing counted, the incarnation built under the lock's epoch | `application_name(number, epoch)` |
 | `crates/gateway/src/live/recovery.rs` | the status | `PipelinePhase::Fencing`, `RecoveryReport::epoch` |
 | `crates/gateway/src/ops/metrics.rs` | the gauge | `crosstalk_pipeline_epoch` |

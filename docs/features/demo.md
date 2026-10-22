@@ -291,7 +291,8 @@ Each agent works like this:
   `i / agents-per-key`, and its `x-api-key` is `sk-ant-demoGGGG-<40 hex>`
   for group `GGGG`, derived from the seed and the run id. Its conversations'
   session ids are too, from their own random stream. So two runs with the
-  same seed (every bench run uses `--seed 42`) never share a key or a
+  same seed (a development bench run uses `--seed 42` unless given another)
+  never share a key or a
   session: a long-lived gateway does not thread a new run into an old
   run's conversations, and a scorer joining on sessions cannot mix runs.
   Everything else an agent does (tasks, pages, timing) depends on the seed
@@ -501,7 +502,8 @@ sent (the run stopped) is not reported at all.
 Every swarm request is a normal Anthropic Messages generation exchange.
 With the deployment defaults the gateway forwards and captures all of them.
 A local run of 437 requests through `crosstalk serve --role all` captured,
-published and logged all 437. Once L3 to L5 exist, the traffic carries:
+published and logged all 437. The traffic carries what the detection
+layers look for (`run.sh bench` scores what they find, [bench.md](bench.md)):
 
 - **Distinct credentials and agents.** One `x-api-key` per agent, or per
   group with `--agents-per-key`, so there is one credential digest per key.
@@ -603,7 +605,7 @@ demo services.
 | `crates/gateway/tests/architecture.rs` | Adds the `Tool` role (`demo`), `Violation::LayerOnTool`, and tests for it |
 | `deploy/demo.Dockerfile` (+ `.dockerignore`) | Builds `crosstalk-demo` like `crosstalk.Dockerfile` (same toolchain, cache mounts and distroless runtime), and the bench tools for `run.sh bench`: `ct-bench-detect` (`-p crosstalk-bench-adapter`) and `a2a-bench` with the bench repo's gates ([bench.md](bench.md)) |
 | `deploy/compose.demo.yaml` | Override: swaps the config mount of `migrate` and `crosstalk` to the demo config; adds `fake-upstream`, `wiki`, `swarm` (profile `swarm`, `restart: "no"`) and `bench` (ct-bench-detect, profile `bench`, see [bench.md](bench.md)) |
-| `deploy/demo/crosstalk.demo.json` | `deploy/config/crosstalk.json` with the Anthropic route's `base_url` set to `http://fake-upstream:8070` |
+| `deploy/demo/crosstalk.demo.json` | `deploy/config/crosstalk.json` with the Anthropic route's `base_url` set to `http://fake-upstream:8070`, and `flow.evidence_window_ms` 10000 and `flow.suspected_ttl_ms` 60000 for the bench ([bench.md](bench.md#flow-config-for-the-bench)) |
 | `deploy/run.sh` | `demo up`, `demo run [swarm options]`, `demo down`, `demo logs` |
 
 ## Tests
@@ -618,7 +620,7 @@ demo services.
 | `tests::truth_run` | Swarm runs over sockets against a recording model that fails the first attempt of about half the bodies (529). Every row is checked against the recorded requests: the header and clusters; `reader_turn` is the first request of the session carrying the result and `content.at` its exact block; the hashes are of those bytes, which are in the raw body; `writer_turn`'s request answers with the PUT whose body is the text; some ordinals count failed requests; the report's counts equal the rows; in both shapes; and all four read kinds appear. `refused_requests_claim_no_turn` runs against a port nothing listens on for the first 300 ms (a gateway down or restarting): the refused requests are `unsent`, the model received every other counted request, and every row still points at the requests it received |
 | `tests::units` | Spans, fractions, durations, the random stream, markers, page names, topics, the wiki store, nearest-rank percentiles, base URLs, and the CLI (accepted and refused lines) |
 | `tests::servers` | Over sockets: a paced stream (first byte, spread, same bytes twice); the JSON document, 401, 400, count_tokens, 404 and the healthcheck; the wiki (versions, authors, listing, limits); and a short swarm run whose report and ground-truth file show writes, reads and cross-agent transmissions with no failures |
-| `tests::deploy` | The demo config equals the deployment config except for the upstream URL |
+| `tests::deploy` | The demo config equals the deployment config except for the upstream URL and the two flow keys the bench shortens |
 
 ## Invariants and constraints
 
@@ -645,8 +647,8 @@ demo services.
   only report what they did.
 - **Never on by accident.** `up` never starts the swarm (profile `swarm`,
   `restart: "no"`). The demo config differs from the deployment's only in
-  the upstream URL (`tests::deploy`), and `deploy/config/crosstalk.json` is
-  unchanged.
+  the upstream URL and the bench's two flow keys (`tests::deploy`), and
+  `deploy/config/crosstalk.json` is unchanged.
 - **No real secrets.** API keys are fake (`sk-ant-demo…`) and the upstream
   never calls out.
 - Tokio only, typed errors (`thiserror`), structured `tracing` fields, no
@@ -654,19 +656,19 @@ demo services.
   crate depends on `crosstalk-demo` (architecture test, rule 3).
 - The `RUST_TOOLCHAIN` argument of `deploy/demo.Dockerfile` changes
   together with `rust-toolchain.toml`. Its `.dockerignore` mirrors
-  `crosstalk.Dockerfile.dockerignore`, so if `ui/` becomes a workspace
-  member, both must stop excluding `ui`.
+  `crosstalk.Dockerfile.dockerignore`; `ui/` is a workspace member, so
+  neither excludes it.
 
 ## Gaps found
 
-- **`role: "system"` inside `messages` is refused by L1.** The canonical
-  normalizer rejects it (`message 0 has role "system", not user or
-  assistant`), so every exchange with that shape is forwarded but counted
-  `pipeline.normalize_failed` and not captured. `--claude-code-shape`
-  reproduces this. It stays off by default until the gateway fix lands.
-- **Nothing detects the traffic yet.** L3 to L8 are not built. Today the
-  demo shows capture: the `/healthz` counters,
-  `crosstalk inspect --config /etc/crosstalk/crosstalk.json` inside the
-  container, and the bodies in the blob store.
-- **Only the Anthropic route exists**, so the swarm speaks only Anthropic
-  Messages.
+- **`role: "system"` inside `messages` was refused by L1** (closed). The
+  canonical normalizer used to reject it (`message 0 has role "system",
+  not user or assistant`), so every exchange with that shape was forwarded
+  but counted `pipeline.normalize_failed`. It now normalizes as a system
+  message (`crates/canonical/src/anthropic/request.rs`).
+  `--claude-code-shape` exercises it and is still off by default.
+- **Nothing detected the traffic** (closed). L3 to L8 now run in the
+  gateway (`Live` and the L8 API), and `run.sh bench` scores their
+  detections against the swarm's ground truth ([bench.md](bench.md)).
+- **Only the Anthropic route exists** in the deployment config, so the
+  swarm speaks only Anthropic Messages.

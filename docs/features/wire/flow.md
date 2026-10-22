@@ -3,7 +3,7 @@
 Part of the [wire contract](../wire_contract.md), whose conventions,
 harness and authority rules apply here unchanged. This page covers the
 flow area (`derived/flow/`, `interfaces/l5_flow.rs` and
-`l5_flow/verdicts.rs`, `events/detect.rs`): resources, accesses, channels,
+`l5_flow/`, `events/detect.rs`): resources, accesses, channels,
 transmissions, verdicts and the L4/L5 bus events, plus the crate-wide
 duration convention that started here.
 
@@ -35,7 +35,8 @@ duration convention that started here.
 carries its traffic and derives its listing), `Judgeable`, `NotJudgeable`, `CurrentVerdict`, `VerdictRecorded`,
 `Observed`, `PromotionPlan`, `Registered`, `PromotionRefusal`,
 `TrafficVerdict`, `Recorded`, `CorrelationTiming` (config), and
-everything in `l5_flow.rs` and `l5_flow/verdicts.rs` (traits,
+everything in `l5_flow.rs` and `l5_flow/{channels,transmissions,verdicts}.rs`
+(traits, `TransmissionQuery`, `MatchKey`,
 `ExtractedAccess`, `ExtractedOp`, `WritePayload`, `ChannelLookup`, `OpensOn`, `Discovery`, `Promoted`,
 `TransmissionUpdate`, `ChannelWithTraffic`, `DetectionUpdate`, the
 store errors that map into `ActionError` or `QueryError`): no wire root
@@ -121,7 +122,7 @@ is found in the coder's tool result.
 | `spec/types/wire/duration.rs` | The `_micros` duration encoding (`micros`, `UnfitDuration`), used through `#[serde(with)]` |
 | `spec/types/derived/flow/` | The flow types and their decode mirrors (`VerdictLog::from_records`, `InvalidVerdictLog`, `InvalidCoverage`) |
 | `spec/types/tests/wire/flow/` | `mod.rs` (fixtures), `resources.rs`, `channels.rs`, `transmissions.rs`, `verdicts.rs`, `events.rs` (detect envelopes), `duration.rs` (the convention and its source scan) |
-| `spec/types/tests/golden/flow/` | 53 goldens |
+| `spec/types/tests/golden/flow/` | 54 goldens |
 
 ## Invariants
 

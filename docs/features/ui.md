@@ -89,11 +89,11 @@ browser ────────────────────────
   directly on `app::AppBackend`, the enum over the configured backend
   (`backend::AppBackend`; see [Backends](#backends)). Beside them,
   `AppBackend::view_end(&Present)` says where a default view ends: the
-  present's `now`, unless the fixture replays up to a fixed end. The spec's methods are
-  native `async fn`s with no `Send` bounds; because the backend type is
-  concrete, every future a page awaits is concrete too, and its
-  `Send`-ness, which Topcoat's multi-threaded runtime needs, is inferred
-  and checked where each `#[page]`, shard and `#[route]` is registered.
+  present's `now`, unless the fixture replays up to a fixed end. The spec's methods
+  return `impl Future + Send`, which Topcoat's multi-threaded runtime
+  needs; because the backend type is concrete, every future a page awaits
+  is concrete too, and its `Send`-ness is checked where each `#[page]`,
+  shard and `#[route]` is registered.
   Shared helpers that only read (`pages::common::{topics, rules}`,
   `data::projection`) are generic over `B: QueryApi` and are instantiated
   with `AppBackend`.
@@ -199,6 +199,10 @@ fixture, all store or wiring gaps rather than UI code:
   memory stores record; reads the world seed cannot reach (stored
   assignments, a transmission listing) are as `docs/features/world.md`
   lists.
+- Conversations cover the last day only: `seed_world` records the wire
+  traffic of the transmissions since the anchor minus one day through L3
+  threading and L4 provenance (`WorldConversations::Recorded`), so an
+  agent with no traffic in that day has the empty conversation list.
 - Node labels, claims and policies come from the surface's node feeder,
   which `InProcess` rebuilds from the stores' events; it starts empty and
   fills as the seed's events are relayed.
@@ -1466,6 +1470,7 @@ and `alert_rules` (View).
 | Channels `/channels`, `/channels/{id}` | `channels`, `channel`, `channel_transmissions`, `channel_resources`, `policy_history`, `alerts` (by channel), `agent_names`, `alert_rules`, `operators`; `SetPolicy`, `SetVerdict` | `ChannelFilter` (`OriginFilter`, `listings`), `ChannelRow` (`ChannelCounts`, `CrossTraffic`, `Listing`, `Confirmation`), `ChannelTransmissionFilter`, `ChannelTransmission`, `ResourceUsePage`, `PolicyHistory`, `PolicyKind` | View; Govern for `SetPolicy`; Triage for `SetVerdict` |
 | Promotion `/channels/{id}/promote` | `channel`, `promotion_preview`, `channel_names`; `PromoteChannel` | `ResourcePattern`, `PromotionPreview`, `ActionOutcome::ChannelPromoted` | View for the preview; Govern to promote |
 | Agents `/agents`, `/agents/{id}` | `agents` (list; the sub-agent tree, one call per level), `agent`, `agent_names`, `operators`; `RenameAgent`, `Unmerge` | `AgentFilter`, `AgentRow`, `AgentDetail` (`AgentCluster`, `AgentLookup`), `MergeRecord`, `MergeVeto`, `AgentLabel` | View; Govern for actions |
+| Conversations `/agents/{id}/conversations`, `/conversations/{id}`, `/exchanges/{id}`, `/spans/{id}` | `agent`, `conversations`, `conversation`, `conversation_turns`, `conversation_text`, `span_points`, `span_readers`, `exchange_turns`, `agent_names`, `channel_names` | `ConversationFilter`, `ConversationHead`, `TurnWindow`, `TurnPage`, `TextLimit`, `OriginLink` | View; Content for `conversation_text` |
 | Merge `/agents/{id}/merge` | `agent` (both agents), `agents` (target choices); `MergeAgents` (`OperatorAction::merge_agents`) | `AgentDetail`, `MergeRequest`, `ActionOutcome::Merged` | View; Govern to merge |
 | Alerts `/alerts` | `alerts`, `alert_rules`, `operators`; `Acknowledge`, `Resolve` | `AlertFilter`, `AlertStateKind`, `Alert`, `AlertState`, `SuppressReason` | View; Triage for actions |
 | Alert page `/alerts/{id}` | `alert`, `alert_rules`, `operators`, `audit` (subject `al.<id>`); `Acknowledge`, `Resolve` | `Alert`, `AuditFilter`, `AuditEntry` | View; Audit for the history; Triage for actions |
@@ -1562,8 +1567,11 @@ them. What the spec still leaves out, the UI works around:
   `channel_names` call instead (`data::topology`).
 - **`EdgeTransmission` has no state or verdict.** The topology drawer
   drops those columns rather than making a second call per page.
-- **`MergedInto` has no time or author.** Alias rows on the agent page
-  find their merge record in `AgentCluster::merges()`.
+- **`MergedInto` has no time or author.** It names its merge record, and
+  the cluster always holds that record
+  (`surface.agent.alias-merge-record-present`). Alias rows on the agent page
+  find it in `AgentCluster::merges()` (`AgentCluster::merge_of` is the
+  spec's lookup).
 - **`Watermark`'s field is public,** so a watermark off a bucket boundary
   can be built although the docs promise a boundary. The UI trusts it
   (the timeline's `final` compares bucket ends with it).
@@ -1602,27 +1610,20 @@ Semantics the spec leaves open (the fixture's choice):
 
 Action errors (mapped locally in `backend::fixture::actions`):
 
-- **No `From<PinError>` or `From<CatalogError>` for `ActionError`.**
-  `TopicCatalog::pin` documents `CatalogError::VersionNotRetained` for a
-  dropped version, which `ActionError` cannot hold, while
-  `PinTopicVersion` promises `Conflict(TopicVersionDropped)`.
-  `pins::refusal` maps it as the action documents.
-- **No `From<VerdictError>` for `ActionError`** (only for `QueryError`).
-  `triage::set_verdict` builds the refusals `SetVerdict` documents.
-- **No `ActionError` mapping for `RegistryError`** (`SetPolicy` on a
-  superseded channel). `channels` checks the supersession and returns
-  `Conflict(ChannelSuperseded)`.
-- **`ConfigChange` has no variant for sinks or the retention policy,** so
-  the fixture's config audit entries cover the access mode, operators,
-  declared channels, registered agents and provisioned rules only.
-
-Async:
-
-- **No `Send` bounds.** `QueryApi`, `OperatorActions`, `LiveFeed`,
-  `ExportStream::next` and `LiveStream::next` are native `async fn`s
-  without `Send` bounds. That is fine for the concrete `AppBackend`,
-  whose futures' `Send`-ness is inferred; a client generic over the
-  traits would need return-type-notation bounds.
+- The spec now has `From<RegistryError>`, `From<VerdictError>`,
+  `From<CatalogError>` and `From<PinError>` for `ActionError`
+  (`spec/types/interfaces/l8_surface/query_errors.rs`,
+  `surface.action.refusals-read-as-queries`). The fixture still builds the
+  same refusals itself: `pins::refusal` (a dropped version is
+  `Conflict(TopicVersionDropped)`), `triage::set_verdict` (the refusals
+  `SetVerdict` documents), and `channels`, which checks the supersession
+  and returns `Conflict(ChannelSuperseded)`.
+- **The fixture records no sink or retention config entries.**
+  `ConfigChange` has `SetSink`, `RemoveSink`, `SetTopicRetention` and
+  `SetFrameRetention` (`surface.audit.config-sinks-and-retention`), and the
+  audit page describes them, but the fixture's config audit entries cover
+  the access mode, operators, declared channels, registered agents and
+  provisioned rules only.
 
 Not spec gaps, but stand-ins only the fixture has:
 

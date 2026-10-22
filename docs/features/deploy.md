@@ -14,8 +14,9 @@
 
 ## Non-scope
 
-- Application metrics and tracing inside the gateway (the ops port and the
-  scrape job are ready for them).
+- The gateway's own metrics, health and readiness (`docs/features/gateway.md`,
+  `docs/features/postgres_mode.md`): this feature scrapes them and ships
+  the dashboards and alert rules over them. Tracing export.
 - Multi-machine deployment, NATS JetStream, object storage, backups and
   retention jobs (roadmap P9; see `docs/infrastructure.md`).
 - TLS termination. The proxy speaks plain HTTP to agents; put it on a
@@ -27,7 +28,7 @@
 
 | Command | Behaviour |
 |---|---|
-| `crosstalk serve --role <all\|proxy\|pipeline\|api\|analysis> --config <path>` | Runs the role(s). `all` is the only role compose uses today. Exits non-zero on bad config. Handles SIGTERM by refusing new exchanges and letting in-flight streams finish (compose waits 60 s); `/readyz` is 503 from the signal on. In Postgres mode a running pipeline is then handed over within `shutdown.flush_timeout_ms`: in-flight work finished or released without spending an attempt, its pool closed, then the pipeline lock unlocked, so a standby takes it within about 2 s (`docs/features/planned_handover.md`). |
+| `crosstalk serve --role <all\|proxy\|pipeline\|api\|analysis> --config <path>` | Runs the role(s). `all` is the only role compose uses today. Exits non-zero on bad config. Handles SIGTERM by refusing new exchanges and letting in-flight streams finish (compose waits 60 s); `/readyz` is 503 from the signal on. In Postgres mode a running pipeline is handed over at the same time, beside the proxy's drain rather than after it, within `shutdown.flush_timeout_ms` of the signal: the API answers 503 from the handover's start, in-flight work is finished or released without spending an attempt, the pipeline's pool closed, then the pipeline lock unlocked, so a standby takes it within about 2 s while the last streams still finish (`docs/features/planned_handover.md`). |
 | `crosstalk migrate --config <path> [--reset-correlator]` | Ensures the extensions and runs every layer's migrations, each in its own schema (`transport`, `canonical`, `reconstruct`, `provenance`, `flow`, `analysis`, `topology`, `surface`), then exits 0. Idempotent. `--reset-correlator` also resets L5's checkpoint, after a start refused an incompatible one (decision Q2). `serve` never migrates and consumes only against a database at head. |
 | `crosstalk spool --config <path> --discard-corrupt` | With the gateway stopped: drops the corrupt record that stopped the publish spool's drain (`/readyz` `capture: spool corrupt: <segment>`) and everything after it in its segment. |
 | `crosstalk healthcheck --url <url>` | GETs the URL; exits 0 on 2xx, 1 otherwise. The runtime image is distroless (no shell, no curl), so the container healthcheck needs this. |
@@ -44,11 +45,11 @@ Environment:
 
 | Variable | Meaning |
 |---|---|
-| `DATABASE_URL` | Postgres URL (`crates/store::config::DATABASE_URL_VAR`). |
+| `DATABASE_URL` | Postgres URL (`crates/store::config::DATABASE_URL_VAR`). Compose builds it from `POSTGRES_PASSWORD` and `CROSSTALK_DB_NAME` (default `crosstalk`; `run.sh bench` gives each run its own `crosstalk_bench_<run>`). |
 | `CROSSTALK_SECRET_V1` | 64 hex digits, named by `ingress.secrets.current.env`. |
 | `CROSSTALK_API_TOKEN` | Named by `api.token.env`. |
 | `CROSSTALK_EMBEDDINGS_API_KEY` | Named by `embeddings.api_key.env`; may be empty for a keyless local endpoint. |
-| `RUST_LOG` | `tracing` filter. Logs are JSON on stdout, one object per line, with a top-level `level` field (Alloy lifts it into a Loki label). |
+| `RUST_LOG` | `tracing` filter, set from `CROSSTALK_LOG` in `deploy/.env` (default `info`). Logs are JSON on stdout, one object per line, with a top-level `level` field (Alloy lifts it into a Loki label). |
 
 Config (`deploy/config/crosstalk.json`): JSON in the spec's wire
 conventions (snake_case, unknown fields refused), secrets only by `{"env":
@@ -67,8 +68,9 @@ conventions (snake_case, unknown fields refused), secrets only by `{"env":
 Optional keys the gateway also accepts, all defaulted when absent: `bus`,
 `pipeline` (blob put retries), `shutdown` (`drain_timeout_ms` 45 000 +
 `flush_timeout_ms` 10 000, chosen to fit compose's 60 s
-`stop_grace_period`; in Postgres mode the pipeline's handover ends within
-the flush timeout, so the lock is unlocked explicitly by 55 s; keep
+`stop_grace_period`; in Postgres mode the pipeline's handover runs beside
+the proxy's drain and ends within the flush timeout of the signal, so the
+lock is unlocked explicitly by 10 s however long the drain takes; keep
 `drain_timeout_ms + flush_timeout_ms` below the grace period, or a
 SIGKILL ends the handover and the server releases the lock with the
 session, the next holder counting the attempts of what was in flight), `extract` (L5's extractor configuration,
@@ -467,7 +469,8 @@ the lock, until the server notices the dead peer: the gateway waits up to
 about 25 s for its old session's lock (`pipeline_lock: held elsewhere`,
 `/readyz` 200 degraded, forwarding and spooling meanwhile) with the
 server's `tcp_keepalives_idle=10`, `tcp_keepalives_interval=5` and
-`tcp_keepalives_count=3`, which deploy/postgres sets (crosstalk-infra).
+`tcp_keepalives_count=3`, which the `postgres` service's command in
+`deploy/compose.yaml` sets (with `tcp_user_timeout=25000`).
 Without them the wait follows the OS keepalive defaults, hours.
 
 The gateway notices a partition of its own lock session within 9 s (a

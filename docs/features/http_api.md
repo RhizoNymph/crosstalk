@@ -155,6 +155,14 @@ Arguments column, `?` marks an optional argument, `q` a query parameter,
 | GET | `/agents` | filter q, window q, page q | 200 JSON | View | `agents` |
 | GET | `/agents/{id}` | id p, window q | 200 JSON | View | `agent` |
 | POST | `/query/agent-names` | body `IdBatch<AgentId>` | 200 JSON | View | `agent_names` |
+| GET | `/conversations` | filter q, page q | 200 JSON | View | `conversations` |
+| GET | `/conversations/{id}` | id p | 200 JSON | View | `conversation` |
+| GET | `/conversations/{id}/turns` | id p, window q | 200 JSON | View | `conversation_turns` |
+| GET | `/spans/{id}/readers` | id p, page q | 200 JSON | View | `span_readers` |
+| POST | `/query/exchange-turns` | body `IdBatch<ExchangeId>` | 200 JSON | View | `exchange_turns` |
+| POST | `/query/span-points` | body `IdBatch<SpanId>` | 200 JSON | View | `span_points` |
+| GET | `/conversations/{id}/text` | id p, window q, limit q | 200 JSON | Content | `conversation_text` |
+| POST | `/query/part-text` | part f, slice f (`PartTextBody`) | 200 JSON | Content | `part_text` |
 | GET | `/alert-rules` | filter q, page q | 200 JSON | View | `alert_rules` |
 | GET | `/alert-rules/{id}` | id p | 200 JSON | View | `alert_rule` |
 | GET | `/sinks` | — | 200 JSON | Govern | `sinks` |
@@ -189,13 +197,18 @@ Arguments column, `?` marks an optional argument, `q` a query parameter,
 | POST | `/actions` | body `ActionRequest` | 200 JSON (`ActionOutcome`) | the kind's: Govern, Triage or Operate | `OperatorActions::act`, one route per `ActionKind` |
 | GET | `/live` | `last-event-id` header?, cursor query_text? | 200 `text/event-stream` | View | `LiveFeed::subscribe` |
 
-`GET /me` (`Route::Me`, index 38, right after `operators`) answers the
+`GET /me` (`Route::Me`, index 46, right after `operators`) answers the
 caller's own operator (INV-1077). It is the one query route with no
 permission: its `RoutePermission` is `AnyCaller`, which the route-table
 test reads from the method's documentation (`Any caller.`), and the
 golden lists it as `none: any caller`. Every authenticated caller is
 served, a caller without View too; an unauthenticated request is still
 401 before dispatch, as for every route.
+
+The conversation routes (`Route::Conversations` to `Route::PartText`,
+indexes 10 to 17, right after `agent_names`) serve the
+[conversation reads](conversation_reads.md). The two text reads need
+Content; the others need View.
 
 `POST /actions` is one endpoint with fourteen `Route::Action(kind)` rows.
 The kind comes from the body's `type`, and each row's permission is
@@ -233,7 +246,7 @@ An `ActionError` gets the status of `QueryError::from` of it.
 | `VersionNotRetained`, `ProjectionNotRetained` | 410 | The data existed and retention dropped it for good. |
 | `InvalidInput(_)`, any other input error | 422 | Read, but invalid whatever the state. This includes `UnsupportedFormat`, an export format outside `Present::export_formats`. |
 | `Conflict(ProjectionQueueFull)` | 429 | Capacity: retry later, unchanged. |
-| `Store` | 503 | A store or the bus failed; retrying may succeed. |
+| `Store` | 503 | A store or the bus failed; retrying may succeed. The gateway in Postgres mode also answers `Store` at 503 while it serves no surface: before the surface exists, after a lost pipeline lock, and from the start of a planned handover until the process stops ([http_server.md](http_server.md#wiring-the-gateways-roles-all-and-api)). |
 | `Unavailable { kind, reason }` (client-only) | never answered | Only a client produces it. Its status is 503, so a client relaying it can branch on it, but a server answers `served()` of every error: `Unavailable` goes out as `Store` with the same reason, at 503. It is not in the status goldens, and the client refuses an `unavailable` body as `UnexpectedResponse`. |
 
 These start from the UI's two mappings, `ui/src/data/errors.rs` for reads
@@ -412,12 +425,12 @@ footer does not open. HTTP trailers are not used.
 | `spec/types/interfaces/l8_surface/http/routes.rs` | The route table | `Route` (`all`, `index`, `spec`, `method`, `path`, `permission`) |
 | `spec/types/interfaces/l8_surface/http/path.rs` | Templates, matching, path parameters | `Target`, `PathParams`, `Segment`, `segments`, `match_template`, `resolve`, `PathArg` |
 | `spec/types/interfaces/l8_surface/http/request.rs` | Encoding a call, and reading a query string and body back | `RequestBuilder`, `EncodedRequest`, `EncodeError`, `QueryParams`, `check_body`, `MAX_BODY_BYTES` |
-| `spec/types/interfaces/l8_surface/http/bodies.rs` | The `POST` read bodies (`WireRequest`s) | `GraphBody`, `OverviewBody`, `EdgeTransmissionsBody`, `TransmissionsBody`, `SeriesBody`, `SearchBody`, `FitProjectionBody` |
+| `spec/types/interfaces/l8_surface/http/bodies.rs` | The `POST` read bodies (`WireRequest`s) | `GraphBody`, `OverviewBody`, `EdgeTransmissionsBody`, `TransmissionsBody`, `SeriesBody`, `SearchBody`, `FitProjectionBody`, `PartTextBody` |
 | `spec/types/interfaces/l8_surface/http/status.rs` | The status of every error | `Status`, `ErrorStatus`, `conflict_status`, `input_status` |
 | `spec/types/interfaces/l8_surface/http/auth.rs` | Credentials, verification, the caller or the 401 | `SESSION_COOKIE`, `REALM`, `Field`, `CredentialHeaders`, `Credential`, `Secret`, `MalformedCredential`, `Verification`, `authenticate`, `AuthError`, `AuthFailure` |
 | `spec/types/interfaces/l8_surface/http/sse.rs` | `GET /live` | `EVENT_STREAM`, `LAST_EVENT_ID`, `CURSOR_PARAM`, `HEADERS`, `resume`, `event_frame`, `end_frame` (writes `LiveEnd::served`), `Unencodable` |
 | `spec/types/interfaces/l8_surface/http/frame.rs` | `GET /projections/{id}/frame` | `OCTET_STREAM`, `MAX_AGE_LIMIT`, `FrameCache` (`of`, `etag`, `cache_control`, `not_modified`) |
-| `spec/types/interfaces/l8_surface/http/export.rs` | `POST /exports` | `JSONL`, `PARQUET`, `content_type`, `extension`, `dataset_name`, `file_name`, `content_disposition` |
+| `spec/types/interfaces/l8_surface/http/export.rs` | `POST /exports` | `JSONL`, `PARQUET`, `EITHER_CONTENT_TYPE`, `content_type`, `extension`, `dataset_name`, `file_name`, `content_disposition` |
 | `spec/types/interfaces/l8_surface/actions.rs` | `ActionKind::ALL`, `index`, `required_permission`, which `OperatorAction::required_permission` now returns | — |
 | `spec/types/tests/wire/http/` | `routes.rs` (golden, completeness, permissions from the methods' docs, ambiguity), `client.rs` (`TableClient`: a `QueryApi` over the table), `request.rs`, `status.rs`, `auth.rs`, `sse.rs`, `frame.rs`, `export.rs`, `bodies.rs` | `TableClient` |
 | `spec/types/tests/golden/http/` | `route_table`, `query_error_statuses`, `action_error_statuses`, `auth_errors`, `bodies/*` (seven bodies) | — |

@@ -292,10 +292,27 @@ operator ──HTTP──▶ crosstalk_api::http::serve (api listener): Auth (Be
      handed off; the capture stage drains it; every layer group and the
      exchange log's group drain (bus depth zero), the bus stops, the
      stages end and the consumer closes the log (flush and `fsync`).
-  5. The Postgres pool closes and the ops listener stops last.
+  5. The store probe's pool closes (within `CLOSE_BOUND`, 1 s) and the
+     ops listener stops last.
 
   Step 4 has one `flush_timeout_ms` deadline; a task still
   running at it is aborted and the report says so.
+
+  In Postgres mode a running pipeline is handed over, not drained
+  ([planned_handover.md](planned_handover.md)), and the handover starts at
+  once, beside step 2 rather than after it: `Running::shutdown` joins the
+  proxy's drain with `PgRunning::hand_over(flush_by)`, `flush_by` being
+  the signal plus `flush_timeout_ms`. The handover clears the API router
+  as it begins (the API answers 503 from then on), quiesces the
+  incarnation, releases what is still held, closes the incarnation's pool
+  and unlocks the pipeline lock, all by `flush_by`; what the proxy still
+  captures meanwhile publishes through capture's own bus. Once both are
+  done, step 3 runs, then `PgRunning::shutdown(now + flush_timeout_ms)`
+  takes step 4's place: the capture stage drains its channel, a pipeline
+  not yet handed over is handed over there, the API surface task stops,
+  the spool's drainer stops (its files stay), and capture's bus, capture's
+  pool and the template pool close (each within `CLOSE_BOUND`). Step 5
+  follows. `ShutdownReport::handover` carries the `HandoverReport`.
 
 ## Pipeline: the library entry point
 
@@ -611,8 +628,8 @@ gracefully.
 | `src/cli.rs` | The command line | `Command` (`parse`), `UsageError`, `USAGE` |
 | `src/config/mod.rs`, `sections.rs` | The config and its checked values | `GatewayConfig` (`from_json`, `load`, `data_dir`, `exchange_log_path`, `flow`), `ApiConfig`, `ApiOperator` (`ID`), `FlowConfig` (re-exported from crosstalk-flow), `OpsConfig`, `StoreSection`, `BlobsConfig`, `EmbeddingsConfig`, `PipelineConfig`, `ShutdownConfig`, `EnvRef`, `EnvVarName`, `HttpUrl`, `NonEmpty`, `ConfigError`, `exchange_log_path` |
 | `src/role.rs` | Roles and their tasks | `Role` (`runs_proxy`, `runs_pipeline`, `runs_live`, `runs_api`, `not_built`), `UnknownRole` |
-| `src/gateway/mod.rs` | Role wiring around a `Live` process: the proxy, API and ops listeners, start and shutdown; Postgres mode when `store` is configured | `start`, `start_on`, `Running` (`proxy_addr`, `api_addr`, `ops_addr`, `bus`, `blobs`, `live`, `postgres`, `health`, `health_full`, `readiness`, `shutdown`), `StartError`, `ShutdownReport` |
-| `src/gateway/postgres.rs`, `late.rs` | Postgres mode's start: capture side, pipeline and API tasks; the API router set once the surface exists | see [postgres_mode.md](postgres_mode.md) |
+| `src/gateway/mod.rs` | Role wiring around a `Live` process: the proxy, API and ops listeners, start and shutdown; Postgres mode when `store` is configured | `start`, `start_on`, `Running` (`role`, `proxy_addr`, `api_addr`, `ops_addr`, `data_dir`, `bus`, `blobs`, `live`, `postgres`, `health`, `health_full`, `readiness`, `shutdown_bound`, `shutdown`), `StartError`, `ShutdownReport` (`proxy`, `capture_drained`, `log_drained`, `stages_drained`, `handover`) |
+| `src/gateway/postgres/{mod,pipeline,api}.rs`, `postgres/gate_watch/`, `postgres/handover/`, `late.rs` | Postgres mode's start and shutdown: capture side, pipeline and API tasks, the capture gate's watch, the planned handover; the API router set once the surface exists | see [postgres_mode.md](postgres_mode.md), [planned_handover.md](planned_handover.md) |
 | `src/spool.rs` | The gated bus behind the publish spool; `crosstalk spool --discard-corrupt` | `Gate`, `Gated`, `LiveBus`, `discard_corrupt` |
 | `src/live/store_set.rs`, `pg/`, `frontier.rs`, `recovery.rs` | `Live` over a `LiveStoreSet`; the Postgres set, stages and recovery; the frontier; the recovery status | see [postgres_mode.md](postgres_mode.md) |
 | `src/store/migrations.rs`, `lock.rs` | Every layer's migrations and the head check; the pipeline lock | `LAYERS`, `migrate_all`, `check_heads`, `reset_correlator`; `PipelineLock` |
@@ -708,8 +725,10 @@ CROSSTALK_SIM_SEEDS=300 cargo test -p crosstalk-gateway tests::dst   # a wider s
   a `tokio::sync::Mutex`.
 - Nothing in the pipeline reads the system time: the injected `Clock` and
   tokio time only, so it runs under paused time.
-- Shutdown is bounded: `drain_timeout_ms` plus `flush_timeout_ms` plus a
-  second for the ops listener.
+- Shutdown is bounded: `Running::shutdown_bound` is `drain_timeout_ms`
+  plus `flush_timeout_ms` plus a 10 s margin for the listeners and the
+  pools. In Postgres mode the handover ends by the flush deadline counted
+  from the signal (INV-1242).
 - No `unwrap` or `expect` outside tests; errors are typed (`thiserror`).
 - `Live`: every slot's group subscribes before anything is published; a
   stage's derived events are published only after the store writes they

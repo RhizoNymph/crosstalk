@@ -45,12 +45,15 @@ crate: it depends on `crosstalk-spec` and `crosstalk-store` only;
 
 ## Non-scope
 
-- Wiring: the consumer is not added to `crosstalk_gateway::pipeline` here.
-  A later step subscribes `consumer::subjects()` in `consumer::group()`
-  and spawns `consumer::run`.
-- A `ConversationReads` surface: conversations are stored in order (every
-  message under an ordinal, system turns included, `transcript`) so one
-  can page them later without threading again.
+- Wiring: the gateway composes the consumer as its L3 stage
+  (`crosstalk_gateway::live::layers::l3::Reconstruct` over `MemoryAgents`
+  and `MemoryConversations`; `live::pg::l3::PgReconstruct` over
+  `PgAgentStore` and `PgConversations` in Postgres mode), keeping each
+  `ExchangeCaptured` in L1's exchange store before threading it. See
+  [gateway](gateway.md).
+- The HTTP side of conversation reads (`crosstalk-surface`, `crosstalk-api`);
+  this crate implements the store trait only (see
+  [Conversation reads](#conversation-reads)).
 - Replay corpora (`IngressMode::Replay`): not on this base. See
   [Replay isolation](#replay-isolation).
 - Multi-node coherence of the directory cache beyond `apply_event`.
@@ -283,7 +286,8 @@ arrival(later, turn counts, kept calls):
   front). `PgConversations` deletes the threaded cluster's rows older than
   the retention and the window behind the exchange in the threading
   transaction and offers `forget_seen(now)` to sweep agents that stopped
-  calling. A store may therefore forget a sighting an exchange arriving
+  calling (an unbatched retention delete, so it raises the transaction to
+  the store's longer retention statement bound, INV-1240). A store may therefore forget a sighting an exchange arriving
   more than the retention and the window out of order would still have
   counted.
 - Configuration: `MemoryConversations::with_config`,
@@ -338,7 +342,7 @@ stable per-corpus API key.
 | `src/thread/config.rs` | Typed threading configuration | `ThreadConfig`, `SeenRetention`, `ThreadConfigError` (also the reorder window's refusals), `DEFAULT_SEEN_RETENTION` |
 | `src/thread/{memory,pg}.rs` | Conversation stores, each with its seen-message set | `MemoryConversations` (`new`, `with_config`, `with_reorder_window`, `with_cursor_key`, `with_cursor_secret`), `PgConversations` (`new`, `with_retry`, `with_config`, `with_reorder_window`, `with_cursor_key`, `with_cursor_secret`, `forget_seen`); both `ExchangePlacements` |
 | `src/thread/messages.rs` | Message bodies and facts | `MessageReader`, `Facts`, `DEFAULT_SUMMARY_PREAMBLES` |
-| `src/consumer/{mod,attribute}.rs` | The bus consumer | `ReconstructConsumer`, `ConsumerParts`, `Handled`, `ConsumeError`, `run`, `group`, `subjects`, `GROUP`, `attribute`, `derive_parent`, `corroborated` |
+| `src/consumer/{mod,attribute}.rs` | The bus consumer | `ReconstructConsumer` (`new`, `handle`, `stats`, `agents`, `threader`), `ConsumerParts`, `ConsumerStats`, `ConsumerCounts`, `Handled`, `ConsumeError`, `run`, `group`, `subjects`, `GROUP`, `attribute`, `derive_parent`, `corroborated` |
 | `crates/reconstruct/migrations/000{1,2,3,4,5,6}_*.sql` | Schema `reconstruct`: agents, conversations, seen messages, conversation reads, outbox stamps, threading order and kept calls | — |
 | `src/tests/` | Tests by area (paths below) | — |
 | `src/tests/refresh.rs` | A rotating (OAuth) credential refreshed inside one harness session keeps the agent and its conversation; two sessions on one token are two agents (INV-1157, [claude_code_oauth](claude_code_oauth.md)) | — |
@@ -394,7 +398,9 @@ stable per-corpus API key.
   staged event once under its stamped id (INV-1211); an uncommitted row is
   never relayed; stamps increase; an agents list cursor keyed from the
   secret resolves after a reopen and is refused under another secret.
-- `tests::pg_placement` (gated): `ExchangePlacements` on `PgConversations`
+- `tests::placement`: `ExchangePlacements` on `MemoryConversations` (an
+  exchange reads back as the agent and conversation its threading
+  recorded). `tests::pg_placement` (gated): `ExchangePlacements` on `PgConversations`
   against `MemoryConversations` on generated scripts, every third exchange
   unthreaded.
 - `tests::pg_agents`, `tests::pg_props`, `tests::pg_threads` (gated on

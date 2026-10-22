@@ -1,5 +1,11 @@
 # Handoff: what counts as a channel
 
+Status (2026-10-21): built. The rules are in the spec and its
+implementations; the current statement is
+[channel_semantics.md](../features/channel_semantics.md). This page is the
+handoff as written and is not kept up to date: some file paths below have
+since moved.
+
 For the owner of the spec (`spec/types/`, `spec/invariants/`, working on
 `docs/ui-surface`, PR #16 and later). Branch `feat/ui-channel-semantics`
 (based on `feat/ui`) changes the spec, the fixture and the UI so that a

@@ -32,8 +32,9 @@ axum, to a surface and to a credential check.
 - How tokens and sessions are issued and stored. `CredentialVerifier` is
   the seam. `StaticTokens` verifies the deployment's fixed API tokens and
   knows no sessions.
-- Loading the operator directory. The gateway publishes it on a `watch`
-  channel (`Auth::new`).
+- Loading the operator directory. `Auth::new` reads it from a `watch`
+  channel, and `Auth::fixed` takes one that never changes, which is what
+  the gateway passes.
 - Parquet exports. The server writes JSONL only (`written_formats`).
 - TLS, CORS, compression and rate limiting, as in the binding.
 
@@ -109,24 +110,44 @@ before any byte is sent.
 
 ### Wiring (the gateway's roles `all` and `api`)
 
-The gateway mounts it over its `Live` process's surface
-(`crates/gateway/src/gateway.rs`, [gateway.md](gateway.md)): the token
-from the variable `api.token` names, mapped by `StaticTokens` to
-`api.operator` (`ApiOperator::ID`, default name `admin`, every
-permission), which the live process loads as its one operator in
-authenticated mode; the directory is fixed (`Auth::fixed`) since config
-does not change at runtime. Sketch:
+The gateway mounts the router over its surface
+(`crates/gateway/src/gateway/mod.rs`, [gateway.md](gateway.md)). The token
+comes from the variable `api.token` names (`api_token`, through
+`BearerToken::new`). `StaticTokens` maps it to `api.operator`
+(`ApiOperator::ID`, default name `admin`, every permission). The directory
+is fixed (`Auth::fixed`), since config does not change at runtime. The
+surface's `export_formats` is `["jsonl"]` (`live/defaults.rs`), the same
+as `written_formats()`, so no client is offered Parquet.
 
-```rust
-let token = BearerToken::from_env(&config.api.token.env)?;          // api.token {env}
-let auth = Auth::new(directory_rx, StaticTokens::new([(token, api_operator)]));
-let http = HttpConfig { frame_retention, clock: Arc::new(SystemClock) };
-let router = HttpApi::new(Arc::new(surface), auth, http).router();
-serve(bind(config.api.listen).await?, router, shutdown).await?;    // 8081 in deploy
-```
+- **Memory mode.** The live process starts before the listener serves.
+  The router is `HttpApi::new(surface, Auth::fixed(directory, tokens),
+  http).router()` over `Live::surface()`, with the directory from the
+  memory operator store. `serve(listener, router, shutdown)` runs it on
+  `api.listen` (8081 in deploy).
+- **Postgres mode** (a `store` section, [postgres_mode.md](postgres_mode.md)).
+  The listener binds at start and serves `LateRouter::router()`
+  (`crates/gateway/src/gateway/late.rs`). Until a router is set, every
+  request is answered `503` with the `QueryError::Store` JSON ("the surface
+  is starting: ...") and `no-store`. The pipeline task sets the router
+  when an incarnation starts (`postgres/pipeline.rs`). The `api` role sets
+  it once its hosted surface is built over the stores (`postgres/api.rs`).
+  Either way the directory is the one stored in Postgres. With none stored,
+  or when reading it fails, the API stays at `503`. The router is cleared,
+  and the API answers `503` again, when the pipeline lock is lost (the
+  abandoned incarnation's surface is never served again) and at the start
+  of a planned handover (`PgRunning::hand_over`,
+  [planned_handover.md](planned_handover.md)). Its surface goes with the
+  outgoing incarnation. A new incarnation in this process (after lock loss)
+  sets its own.
 
-The gateway should give the surface `written_formats()` as
-`Present::export_formats`, so no client is offered Parquet.
+**Shutdown.** `Running::shutdown` stops the API listener after the proxy's
+drain. In Postgres mode with a running incarnation it is also after the
+planned handover, which runs beside the drain: once the pipeline task has
+stopped, the router is cleared, so the API answers `503` for the rest of
+the drain and the handover. A standby already answers `503` (it never
+set a router); the `api` role holds no lock, and its router stays set
+until its listener stops. The listener's `shutdown` future fires, `serve` lets requests in flight finish,
+and the gateway waits up to `shutdown.drain_timeout_ms` for the task.
 
 ## Invariants and constraints
 

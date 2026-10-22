@@ -29,6 +29,10 @@ is in [query_surface.md](query_surface.md).
   aggregation): [type_spec.md](type_spec.md).
 - The linked views, projections, verdicts, the audit log and the live
   feed: [query_surface.md](query_surface.md).
+- Conversations, their turns and text, span readers and points
+  (`conversations`, `conversation_turns`, `exchange_turns`, `span_readers`,
+  `span_points`, `conversation_text`, `part_text`):
+  [conversation_reads.md](conversation_reads.md).
 - Bulk export of transmissions and other datasets, which reuses the
   transmission row and the evidence's quotes: [export.md](export.md).
 - The JSON these rows and pages travel as, and which arguments are client
@@ -497,7 +501,7 @@ through `AlertReads` (`l6_analysis/alerts.rs`).
 | `spec/types/observed/message/text.rs` | The text a span location indexes | `Message::part_text`, `Message::part_count`, `NoPartText`, `TOOL_RESULT_SEPARATOR` |
 | `spec/types/interfaces/l8_surface/channels.rs` | Channel read models | `ChannelRow` (checked; `traffic`, `listing`, `confirmation`, `created_at`), `InvalidChannelRow` (incl. `TrafficWithoutDetection`), `ChannelStanding`, `ChannelActivity`, `ChannelCounts` (`tally`, `routed`), `SupersededInto` (checked: `of`), `InvalidSupersededInto`, `ChannelName` (checked: `of`), `ChannelShape`, `InvalidChannelName`, `resolve_names`, `PromotionPreview` (`from_registry`, `conflict`, `covered_resources`, `uncovered_resources`, `superseded_channels`), `NotAPromotionConflict`. Wire: responses only; `ChannelRow` decodes through `new`, a `PromotionPreview` refuses a conflict no promotion is refused with, `SupersededInto` and `ChannelName` decode field by field ([wire/surface_reads.md](wire/surface_reads.md)) |
 | `spec/types/interfaces/l8_surface/lists.rs` (part) | The channel list filter | `ChannelFilter` (origin, detections, policies, counts-only window), `OriginFilter`; re-exports `AgentFilter` and `AgentText` |
-| `spec/types/interfaces/l8_surface/summary.rs` | Transmission rows | `TransmissionSummary` (`of`, `listed`), `SummaryState`, `Delivery`, `TopicUnder`, `TransmissionStateKind`, `TransmissionSelection` (checked), `InvalidSelection`, `TransmissionPage`. Wire: `TransmissionSelection` is a `WireRequest` (an array of ids, decoded through `new`); the rest are responses |
+| `spec/types/interfaces/l8_surface/summary.rs` | Transmission rows | `TransmissionSummary` (`of`, `listed`), `SummaryState`, `Delivery`, `TopicUnder`, `TransmissionStateKind`, `TransmissionSelection` (checked), `InvalidSelection`, `TransmissionPage`. Wire: `TransmissionSelection` is a `WireRequest` (an array of ids, decoded through `new`); `TransmissionStateKind` is its snake_case name (`"awaiting_content"`, the `type` tag of the matching `SummaryState`), which the transmissions export's states scope also takes; the rest are responses |
 | `spec/types/interfaces/l8_surface/evidence.rs` | The evidence behind a transmission | `TransmissionEvidence` (`assemble`), `MatchEvidence`, `MatchQuotes`, `AccessDetail` (checked), `InvalidEvidence`, `InvalidTransmissionEvidence`, `EvidenceError`, `EvidenceRecord`. Wire: responses; `TransmissionEvidence` decodes through `assemble`, `AccessDetail` through `new`; the error types are not wire data |
 | `spec/types/interfaces/l8_surface/excerpt.rs` | Excerpts cut from stored bodies | `ExcerptWindow` (checked; `DEFAULT`, `MATCH_ONLY`), `InvalidWindow`, `Excerpt` (checked; `cut`), `InvalidExcerpt`, `CutError`, `Excerpted` (`of`, `BodyDropped`), `ExcerptError`. Wire: `ExcerptWindow` is a `WireRequest` (`{"context": 256}`); `Excerpt` decodes through `new` |
 | `spec/types/interfaces/l8_surface/overview.rs` | The overview's counts | `OverviewCounts`, `QueueCounts` (`tally`; `unconfirmed_channels`) |

@@ -10,6 +10,24 @@ material, rejected writes, the shared upstream question), renumbered into
 this range, and the reads evaluation, the evidence page, the conversation
 view and the UI's world seed share (span records and accesses by batch).
 
+**Evaluation status.** Detection is now scored by the standalone
+a2a-transmission-bench, not by crosstalk (ct-eval is retired; see
+[bench_adapter.md](bench_adapter.md)). Closed since these rules were
+written: held-out measurement. Two held-out releases of demo swarm runs
+have been scored once each by the bench: the first (seeds
+1000001–1000006, staging `7d678e2`, memory mode) and the second (seeds
+1000007–1000014, staging `a74f808`, Postgres mode with a fresh database
+per run, `a2a-bench-v1.1.1`), the second at recall 1.000 / precision
+1.000 on headline and recall 1.000 / precision 0.887 on boilerplate
+(README "Results"). Still open (README "Known limitations"): real agent
+traffic is unmeasured, every number coming from synthetic or dataset
+traffic; the public datasets (SALT, AgentDojo, τ², AI Village and others)
+were scored at staging `6ba4bd8` but crosstalk was tuned on them, so
+those are development numbers; boilerplate false positives vary widely
+from run to run (45 to 200 per 1,000 exchanges across 30 runs on one
+seed), so its gates fail on some runs; and in about 2 of 12 development
+runs a live wiki read did not reach flow detection.
+
 ## Scope
 
 - **Unknown tool outcome.** `ToolOutcome::Unknown`, for protocols whose tool
@@ -59,8 +77,8 @@ view and the UI's world seed share (span records and accesses by batch).
 - Implementations: the extractors' per-tool content rules, the flow
   consumer's hold, the correlator, the decoders and the fingerprinter are
   `crosstalk-flow` and `crosstalk-provenance` (roadmap P4.2, P5); the
-  OpenAI Chat and Gemini normalizers are P8. Every evidence path except the
-  spec's own is a future test there.
+  OpenAI Chat and Gemini normalizers are P8. Their evidence lives in those
+  crates' tests.
 - A numeric confidence or weighting scheme. The spec has none (see
   "Confidence"), and this change adds none.
 - A per-agent-pair minimum of shared spans (a possible later configuration
@@ -294,7 +312,7 @@ argument is the spec change to make if that proves awkward.
 | `spec/types/derived/provenance/matching.rs` | String codecs and their semantics; carrier kinds | `Codec::JsonString`, `Codec::YamlString`, `CarrierKind`, `Carrier::kind` |
 | `spec/types/interfaces/l5_flow/channels.rs` | Accesses by batch | `AccessStore` (`accesses`), `AccessReadError` |
 | `spec/types/interfaces/l8_surface/evidence.rs` | Evidence read through the batch reads, every state | `EvidenceError` (`From<SpanIndexError>`, `From<AccessReadError>`) |
-| `spec/types/aggregates/quality.rs`, `export/digest.rs` | Quality rows by class and carrier | `QualityMatch::Content { class, carrier }`, `MatchClass::strongest_match` |
+| `spec/types/aggregates/quality.rs`, `spec/types/interfaces/l8_surface/export/digest.rs` | Quality rows by class and carrier | `QualityMatch::Content { class, carrier }`, `MatchClass::strongest_match` |
 | `spec/types/observed/client.rs` | Replayed corpora | `IngressMode::Replay`, `CorpusId` |
 | `spec/types/interfaces/l3_reconstruction.rs` | Corpora kept apart (docs) | — |
 | `crates/memory/src/provenance/index.rs`, `crates/memory/src/flow/registry/store.rs` | `SpanIndex` and `AccessStore` reference impls | — |
@@ -305,7 +323,7 @@ argument is the spec change to make if that proves awkward.
 | `spec/types/tests/wire/flow/resources.rs`, `golden/flow/write_outcomes.json` | `WriteOutcome` golden; a write without `outcome` is refused | — |
 | `crates/canonical/src/anthropic/blocks.rs` | Anthropic tool calls carry no signature; the outcome mapping documented | — |
 | `crates/testkit/src/build/flow.rs` | `AccessBuilder::write_outcome` | `AccessBuilder` |
-| `crates/memory/src/flow/registry/tests.rs` | `writes_of_every_outcome_are_recorded_and_listed` | — |
+| `crates/memory/src/flow/registry/tests/mod.rs` | `writes_of_every_outcome_are_recorded_and_listed` | — |
 
 ## Invariants and constraints
 
@@ -340,12 +358,13 @@ Changed: INV-694 (`canonical.part-text.defined`: never an id or signature;
 one more spec test), INV-255's rationale (a write without a result is
 `Unknown`), INV-193 (encoded chains hold at most one string codec), INV-519
 (`flow.quality.strongest-match`: the carrier too; two more spec tests) and
-INV-697 (one more spec test: both accesses in every state). Evidence that
-exists and passes: INV-958 (spec), INV-965, 967, 968 and 969's unit halves
-(`crosstalk-memory`), INV-970 (types) and INV-972 (`crosstalk-ingress`);
-every other new invariant's evidence is a future test in
-`crosstalk_canonical`, `crosstalk_provenance`, `crosstalk_flow`,
-`crosstalk_reconstruct` or `crosstalk_surface`.
+INV-697 (one more spec test: both accesses in every state). Every
+invariant in the range names its evidence in its toml file: the spec's
+(INV-958, INV-970), `crosstalk-memory`'s unit halves of INV-965, 967, 968
+and 969 (with Postgres integration tests for INV-965 and 968),
+`crosstalk-ingress`'s (INV-972), and tests in `crosstalk_canonical`,
+`crosstalk_provenance`, `crosstalk_flow` (unit, property and DST),
+`crosstalk_reconstruct` and `crosstalk_surface` for the rest.
 
 Constraints:
 

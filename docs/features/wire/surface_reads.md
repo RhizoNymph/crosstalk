@@ -5,7 +5,10 @@ channel, transmission and evidence read models, the gateway's present and
 config, and export
 (`interfaces/l8_surface/{channels,channel_traffic,summary,evidence,excerpt,present}.rs`,
 `interfaces/l8_surface/export/`). The export's line format is
-[export.md](../export.md#formats)'s; this page pins each line's JSON.
+[export.md](../export.md#formats)'s; this page pins each line's JSON. The
+conversation reads (`interfaces/l8_surface/conversation/`, goldens under
+`surface_reads/conversation/`) share this golden area; their wire forms are
+[conversation_reads.md](../conversation_reads.md)'s.
 
 ## Scope: what each type is on the wire
 
@@ -132,8 +135,8 @@ pin the framing and the canonical row encoding, not real digest values.
 | `spec/types/interfaces/l8_surface/present.rs` | `Present` |
 | `spec/types/interfaces/l8_surface/channel_traffic.rs` | `ChannelTransmission` (decoded through `RawChannelTransmission`, `InvalidChannelTransmission`), `ChannelTransmissionFilter` (a request), `ChannelTransmissionPage` |
 | `spec/types/interfaces/l8_surface/export/request.rs` | `ExportFormats` (checked), `UnsupportedFormat` |
-| `spec/types/tests/wire/surface_reads/` | `fixtures.rs`, `channels.rs`, `channel_traffic.rs`, `transmissions.rs`, `evidence.rs`, `export.rs` (including the JSONL golden and framing errors), `present.rs` |
-| `spec/types/tests/golden/surface_reads/` | 70 goldens (69 JSON, 1 JSONL) |
+| `spec/types/tests/wire/surface_reads/` | `fixtures.rs`, `channels.rs`, `channel_traffic.rs`, `transmissions.rs`, `evidence.rs`, `export.rs` (including the JSONL golden and framing errors), `export_states.rs` (the transmissions export's `states` scope), `present.rs`; `conversation.rs` (see [conversation_reads.md](../conversation_reads.md)) |
+| `spec/types/tests/golden/surface_reads/` | 95 goldens (94 JSON, 1 JSONL): 73 for this page's types, 22 under `conversation/` |
 
 ## Invariants
 

@@ -103,12 +103,17 @@ spec/types/
 ├── interfaces/            one module per layer: traits (read and write side) and their errors; mod.rs states the write-side, publication and time conventions
 │   ├── l0_ingress.rs      UpstreamRouter, ClientIdentifier (derivations at the exchange's start time), ProviderAdapter, HarnessRequest and BodyDecodeError (what capture decodes from a request body, in process; not the JSON wire's), ResponseHead, ResponseFramer, WebSocketTap
 │   ├── l1_canonical.rs    Normalizer, NormalizedExchange (with its media; check, applied on decode: InvalidNormalizedExchange; serde for goldens, in process only), NormalizeWarning
+│   ├── l1_canonical/
+│   │   └── exchanges.rs   ExchangeStore (put before capture publishes), ExchangeReads, StoredExchange (the record and its warnings, no bodies), ExchangeQuery, ExchangeStoreError
 │   ├── l2_transport.rs    EventBus (MpscBus, PgBus, SpoolingBus, JetStreamBus; durability and idempotent publish), Subscription, RetryPolicy, ConsumerGroup (a WireRequest), DeadLetter, DeadLetterStore (list, replay), BlobStore (None: dropped by retention), BusError (incl. SpoolFull)
 │   ├── l3_reconstruction.rs IdentityResolver (merge, unmerge, rename, resolve over derived evidence), EvidenceDeriver, AgentDirectory, ClaimStore, Threader, ExchangePlacements (placement by exchange), Placement, ResolveError (incl. MergeIntoSelf)
 │   ├── l3_reconstruction/
 │   │   ├── agents.rs      AgentReads (list, cluster, names), ActivityStore, AgentReadError
-│   │   └── lifecycle.rs   AgentLifecycle (create, advance, attach_evidence), NewAgent, AgentOrigin, Advance, AgentLifecycleError
+│   │   ├── lifecycle.rs   AgentLifecycle (create, advance, attach_evidence), NewAgent, AgentOrigin, Advance, AgentLifecycleError
+│   │   └── conversations.rs ConversationReads (the transcript by ordinal, system turns included: list, successors, turns by index window, batch locate), StoredConversation, StoredTurn, TranscriptEntry, TurnIndex, TurnPoint, TurnWindow, TurnSlice, ExchangePlacement, ThreadOutcomeKind, ReplayFilter, ConversationQuery, ConversationReadError
 │   ├── l4_provenance.rs   Segmenter, Decoder (strict UTF-8, one string codec per chain), Fingerprinter, FingerprintIndex (every call measuring retention takes now), SpanIndex (record, batch spans: IndexedSpan with exchange, author as recorded, location), SemanticMatcher
+│   ├── l4_provenance/
+│   │   └── reads.rs       ProvenanceReads (for the conversation view: each exchange's ScanStatus, its StoredSpans with current state, the matches read in it, a span's readers by ReaderPage), ScanFailureKind, ForwardStatus, ProvenanceReadError
 │   ├── l5_flow.rs         ResourceExtractor (ExtractedOp with write outcomes), ChannelLookup (NoChannel), OpensOn, Discovery, ChannelDirectory, ChannelRegistry (declare at a time, policy history, promote with supersession, promotion coverage, resource use), Correlator; write outcomes, shared upstream source; discovery on the first cross-agent transmission; detection follows resolution
 │   ├── l5_flow/
 │   │   ├── channels.rs    ChannelTraffic (add_resource on its lookup's channel or none, record_access, discover by a cross-agent transmission: publishes ChannelDiscovered, record_transmission, set_detection), DetectionUpdate, TrafficError; ChannelReads (a channel by id and filtered pages, newest created first, each a ChannelWithTraffic; a channel's crossing transmissions); AccessStore (batch accesses with their resources), AccessReadError
@@ -131,6 +136,8 @@ spec/types/
 │       ├── query_errors.rs the From impls: each store error, refused request value and undecodable request (DecodeError) to one QueryError or ActionError, every action's refusals included
 │       ├── lists.rs       ChannelFilter (a WireRequest, with OriginFilter, listings and a counts-only window; matches a ChannelRow, keeps a ChannelWithTraffic), AgentFilter (re-exported), AlertRuleFilter (a WireRequest), SearchRequest (a WireRequest), SearchMode (default Hybrid), TopicPage
 │       ├── channels.rs    ChannelRow (checked; listing, confirmation, created_at), ChannelStanding (in force with CrossTraffic), ChannelActivity, ChannelCounts (tally, routed), SupersededInto (checked), ChannelName (checked), ChannelShape, resolve_names, PromotionPreview (from_registry; decode refuses a non-promotion conflict); responses only
+│       ├── conversation.rs the conversation view's read models: ConversationFilter, ConversationRow, ConversationHead, ConversationTraffic, OriginLink, Successor, SuccessorKind, DelegationLink, SpanPoint
+│       ├── conversation/  turn.rs (TurnPage: a window of turns with structure and provenance marks, no text: Turn, TurnMessage, PartMarks, TransmissionMark, OutputSpan, ReadBy, …), text.rs (ConversationText aligned with the same window, PartText: one slice of a part, TextLimit, TextError)
 │       ├── channel_traffic.rs ChannelTransmission (of; senders; decode checks its senders), ChannelTransmissionFilter (a WireRequest), ChannelTransmissionPage: a channel's cross-agent transmissions for review
 │       ├── summary.rs     TransmissionSummary (of, listed), SummaryState (per-state shape), Delivery, TopicUnder, TransmissionStateKind, TransmissionSelection (checked; a WireRequest), TransmissionPage
 │       ├── evidence.rs    TransmissionEvidence (assemble; decoded through it), MatchEvidence, MatchQuotes, AccessDetail (checked), InvalidEvidence, InvalidTransmissionEvidence, EvidenceError

@@ -7,8 +7,9 @@ and `Subscription` (`MpscBus`, `MpscSubscription`), `DeadLetterStore`
 wrapper (`Dedup` over `HandledIds`), roadmap item P2.1; and the
 content-addressed `BlobStore` on the filesystem and in memory
 (`FsBlobStore`, `MemoryBlobStore`, in the `blob` module), roadmap item
-P2.2, described in [Blob store](#blob-store) below. The single-node
-gateway runs on it, and every layer's simulation tests use it (as a
+P2.2, described in [Blob store](#blob-store) below. The gateway runs on
+it in memory mode (no `store` section; Postgres mode runs on `PgBus`),
+and every layer's simulation tests use it (as a
 dev-dependency) with a seeded delivery order.
 
 The sections up to [Blob store](#blob-store) cover the in-process bus.

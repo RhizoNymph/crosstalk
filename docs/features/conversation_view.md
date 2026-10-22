@@ -1,6 +1,6 @@
 # Conversation view
 
-Status: **implemented** on `feat/ui-conversation` (from `staging`), over
+Status: **implemented** (`feat/ui-conversation`, PR #110, merged), over
 the spec's conversation reads (`docs/features/conversation_reads.md`,
 INV-1000..1029), which the fixture implements over its own conversations
 ([Fixture data](#fixture-data)) and the world and http backends serve
@@ -237,12 +237,14 @@ touches the mapping, not the layout.
   with part shapes from the bodies and marks from the match and span
   indexes (none while a turn's scan is pending), readers newest first,
   the batch locates, and text cut with `PartText::cut`.
-- **World**: the in-process surface starts with `Unrecorded` conversation
-  stores (`crosstalk_api::InProcess::start`), so the seeded world has no
-  conversations: an agent's list is the "No conversations recorded" empty
-  state, a conversation id is 404, and `/exchanges/{id}` says the exchange
-  is not threaded. Seeding conversations into the world is
-  `crates/world`'s to do.
+- **World**: `crosstalk_api::world::seed_world` starts the in-process
+  surface with the world's conversation stores (`WorldLayers`, through
+  `InProcess::start_with_reads`) and records the wire traffic of the last
+  day's transmissions through L3 threading and L4 provenance
+  (`WorldConversations::Recorded(WireScope::Since(anchor - 1 day))`, the
+  default). The pages render those conversations: lists, forks or
+  compactions, and `/exchanges/{id}` redirects. An unknown conversation id
+  is 404. With `WorldConversations::Unrecorded` the reads answer empty.
 - **Http**: `crosstalk-client` calls the gateway's routes; a gateway that
   threads exchanges serves real conversations. Router tests run the
   fixture behind the gateway API's binding (`testing::fixture_api`) as the
@@ -321,7 +323,7 @@ Tests cover: each route's status, 303s and 404s, 422 per bad key; the
 window arithmetic and a turn past the end; View-only rendering with no
 text; marks linking evidence and turns; the fork, compaction, replayed
 corpus, unseen increment, failed exchange, pending scan and delegation
-cases; the list's filters; the world backend's empty states; the same
+cases; the list's filters; the world backend's recorded conversations; the same
 pages over HTTP. A headless-Chrome check (light and dark) loaded a fork, a
 compaction, an agent's list, a replayed agent's list and a sender's turn
 reached from an evidence page through `/spans/{id}`, with no console

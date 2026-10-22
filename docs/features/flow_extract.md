@@ -384,8 +384,8 @@ ports, so `crosstalk-flow` depends on no other layer crate:
   implement it.
 - `SpanReader` (`exchange_spans`, `span_agent`) and `MessageReader`
   (`message`): provenance's spans and the message bodies. The gateway
-  adapts `MemoryProvenanceStore` and `BlobMessages<LiveBlobs>`; W8 adapts
-  `PgProvenanceStore`.
+  adapts `MemoryProvenanceStore` and `BlobMessages<LiveBlobs>` in memory
+  mode, and `PgProvenanceStore` in Postgres mode (`live::pg::l4`).
 
 ```text
 delta(delta, at, flow: impl FlowInputs)
@@ -409,8 +409,14 @@ consumer takes idempotently; a crash after it finds the delta done. A
 failed message or span read also leaves the ledger untouched (the gateway's
 in-memory step had already changed its maps by then). The gateway's
 memory mode delivers into an `UnboundedSender<Extracted>`, which confirms
-at once; W8 wires the consumer's durable reply and calls `expire` on the
-L4 stage's tick with the content retention.
+at once. Postgres mode (`crosstalk_gateway::live::pg::l4`) runs the step
+over `PgExtractionLedger`, delivers through `DurableInputs` (the durable
+consumer's reply; `NotDurable::Stalled` releases the delta without
+spending an attempt, any other `NotDurable` nacks it), and calls `expire`
+on the L4 stage's tick with the content retention.
+`PgExtractionLedger::expire`'s unbatched deletes run under the longer
+retention statement bound (`crosstalk_store::raise_for_retention`,
+INV-1240).
 
 Stored forms: a `ConversationContext` (with its `ShellState`, `Place`,
 `AbsolutePath`, `RepoBindings`, `RepoId`) is JSON, checked on the way back
@@ -585,10 +591,6 @@ JSON, in the spec's conventions (snake_case keys, enums tagged
   label case of `equivalent_urls_share_resource_id` (whose seed for the
   `xn--` flake is kept in
   `crates/flow/proptest-regressions/extract/resource/tests.txt`).
-- New (INV-X): `flow.extract.http-method-op`,
-  `flow.resource.http-url-tool-independent`,
-  `flow.resource.wiki-page-spelling-independent`,
-  `flow.resource.repo-file-clone-independent`.
 - `flow.extract.http-method-op` (INV-1047),
   `flow.resource.http-url-tool-independent` (INV-1048),
   `flow.resource.repo-file-clone-independent` (INV-1049),
@@ -604,14 +606,14 @@ JSON, in the spec's conventions (snake_case keys, enums tagged
   correlator's), `flow.extract.openhands-tools` (INV-1088).
 - A write's locators and payloads are a function of the call alone; only
   its outcome reads the result (INV-1084), including a refuted one.
-- New (INV-X): `flow.extract.shell-skipped-command-no-access` (an access of
+- `flow.extract.shell-skipped-command-no-access` (INV-1160: an access of
   a command the output shows skipped, or a reader's operand it shows
   failing, is no read and a `Rejected` write; INV-1085's statement amended
-  to say refutation comes first), `flow.extract.printed-remote-wins` (the
+  to say refutation comes first), `flow.extract.printed-remote-wins` (INV-1161: the
   `To`/`From` remote of a lone push or pull wins over the binding),
-  `flow.extract.shell-state-from-observed` (the shell state is replayable,
+  `flow.extract.shell-state-from-observed` (INV-1163: the shell state is replayable,
   home-normalized once the home is known, never invents a home, bounded,
-  per agent), `flow.extract.read-locates-its-result` (the gateway's: a
+  per agent), `flow.extract.read-locates-its-result` (INV-1162, the gateway's: a
   read names a result part of its exchange with text).
 - The extraction ledger changes only in `ExtractionLedger::commit`, once
   per delta, after the flow side confirmed the delta's inputs; a delta

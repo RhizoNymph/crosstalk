@@ -1,6 +1,6 @@
 # Follow mode
 
-Status: **slim subset built** (branch `feat/ui-follow-mode`). The rest
+Status: **slim subset built** (`feat/ui-follow-mode`, merged to staging). The rest
 of the design is **deferred**: it stays here, decided
 ([Decisions](#decisions)), and every section below says which part it is.
 This document is the full design and the requirements it puts on the
@@ -392,6 +392,10 @@ dev-refresh hook (`topcoat:dev-runtime:v1`, not a public API) for the page
 and swaps the region with `replaceWith`. Every element inside the region is
 rebuilt, so topology and explore declare nothing and never refresh. A pinned
 window re-renders the same window, so a `watermark` event shows no new data.
+
+This was the state before the slim build. The slim build keeps the swap,
+keeps `[data-live-keep]` elements (the topology graph and brush) across it,
+and paces followed pages ([Built](#built), item 4).
 
 ### Spike: a server-read signal re-renders and merges
 
